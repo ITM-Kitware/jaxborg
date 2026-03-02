@@ -60,6 +60,50 @@ def can_reach_subnet(
     return has_session & can_route
 
 
+def scan_sources_with_fallback(state: CC4State) -> chex.Array:
+    """Return scan-memory ownership matrix including legacy via fallback.
+
+    Legacy tests and some initialization paths still seed `red_scanned_hosts` and
+    `red_scanned_via` without populating `red_scanned_source_hosts`.
+    """
+    via = state.red_scanned_via
+    host_dim = state.red_scanned_source_hosts.shape[2]
+    via_idx = jnp.clip(via, 0, host_dim - 1)
+    via_one_hot = jax.nn.one_hot(via_idx, host_dim, dtype=jnp.bool_)
+    via_valid = state.red_scanned_hosts & (via >= 0)
+    via_sources = via_one_hot & via_valid[:, :, None]
+    return state.red_scanned_source_hosts | via_sources
+
+
+def recompute_scan_views_from_sources(scan_sources: chex.Array) -> tuple[chex.Array, chex.Array]:
+    """Derive scanned-host and primary-owner views from source ownership."""
+    red_scanned_hosts = jnp.any(scan_sources, axis=2)
+    primary_owner = jnp.argmax(scan_sources, axis=2).astype(jnp.int32)
+    red_scanned_via = jnp.where(red_scanned_hosts, primary_owner, -1)
+    return red_scanned_hosts, red_scanned_via
+
+
+def sync_scan_memory_fields(
+    state: CC4State,
+    const: CC4Const,
+    scan_sources: chex.Array | None = None,
+) -> CC4State:
+    """Project scan-memory ownership onto active abstract source sessions."""
+    sources = scan_sources if scan_sources is not None else scan_sources_with_fallback(state)
+    valid_sources = (
+        sources
+        & state.red_sessions[:, None, :]
+        & state.red_session_is_abstract[:, None, :]
+        & const.host_active[None, None, :]
+    )
+    red_scanned_hosts, red_scanned_via = recompute_scan_views_from_sources(valid_sources)
+    return state.replace(
+        red_scanned_source_hosts=valid_sources,
+        red_scanned_hosts=red_scanned_hosts,
+        red_scanned_via=red_scanned_via,
+    )
+
+
 def exploit_common_preconditions(
     state: CC4State,
     const: CC4Const,
@@ -68,11 +112,10 @@ def exploit_common_preconditions(
 ) -> chex.Array:
     is_active = const.host_active[target_host]
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
-    owns_target_scan = (
-        (source_host >= 0)
-        & state.red_scanned_hosts[agent_id, target_host]
-        & (state.red_scanned_via[agent_id, target_host] == source_host)
-    )
+    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
+    scan_sources = scan_sources_with_fallback(state)
+    owns_target_scan = (source_host >= 0) & scan_sources[agent_id, target_idx, source_idx]
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
     is_abstract = source_host >= 0
@@ -95,8 +138,13 @@ def select_scan_source_host(
     source_is_abstract = (source_host >= 0) & state.red_session_is_abstract[agent_id, source_idx]
 
     abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
-    has_fallback = jnp.any(abstract_hosts)
-    fallback = jnp.where(has_fallback, jnp.argmax(abstract_hosts), -1)
+    abstract_ranks = state.red_abstract_host_rank[agent_id]
+    rank_scores = jnp.where(abstract_hosts, abstract_ranks, jnp.int32(1_000_000))
+    has_rank_fallback = jnp.any(abstract_hosts & (abstract_ranks < jnp.int32(1_000_000)))
+    fallback_by_rank = jnp.argmin(rank_scores).astype(jnp.int32)
+    has_any_fallback = jnp.any(abstract_hosts)
+    fallback_any = jnp.where(has_any_fallback, jnp.argmax(abstract_hosts), -1)
+    fallback = jnp.where(has_rank_fallback, fallback_by_rank, fallback_any)
 
     return jnp.where(source_host >= 0, jnp.where(source_is_abstract, source_host, fallback), fallback)
 
@@ -177,15 +225,12 @@ def select_scan_execution_source_host(
     live abstract session; otherwise fall back to generic scan source selection.
     """
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
-    via = state.red_scanned_via[agent_id, target_idx]
-    via_idx = jnp.clip(via, 0, state.red_sessions.shape[1] - 1)
-    via_valid = (
-        (via >= 0)
-        & state.red_scanned_hosts[agent_id, target_idx]
-        & state.red_sessions[agent_id, via_idx]
-        & state.red_session_is_abstract[agent_id, via_idx]
-        & const.host_active[via_idx]
+    target_sources = scan_sources_with_fallback(state)[agent_id, target_idx]
+    active_abstract_sources = (
+        target_sources & state.red_sessions[agent_id] & state.red_session_is_abstract[agent_id] & const.host_active
     )
+    has_owner = jnp.any(active_abstract_sources)
+    owner_host = jnp.where(has_owner, jnp.argmax(active_abstract_sources), -1)
 
     # During duration processing, scans can be pre-bound to a specific source host.
     # Respect that explicit binding (including "bound to none") instead of recomputing
@@ -201,7 +246,7 @@ def select_scan_execution_source_host(
     has_pending_binding = pending_source != jnp.int32(-1)
 
     fallback = select_scan_source_host(state, const, agent_id)
-    computed = jnp.where(via_valid, via, fallback)
+    computed = jnp.where(has_owner, owner_host, fallback)
     return jnp.where(
         has_pending_binding,
         jnp.where(pending_valid, pending_source, jnp.int32(-1)),
@@ -219,7 +264,14 @@ def scan_via_owner_alive(
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
     via = state.red_scanned_via[agent_id, target_idx]
     via_idx = jnp.clip(via, 0, state.red_sessions.shape[1] - 1)
-    return (via >= 0) & state.red_sessions[agent_id, via_idx] & const.host_active[via_idx]
+    sources = scan_sources_with_fallback(state)
+    return (
+        (via >= 0)
+        & sources[agent_id, target_idx, via_idx]
+        & state.red_sessions[agent_id, via_idx]
+        & state.red_session_is_abstract[agent_id, via_idx]
+        & const.host_active[via_idx]
+    )
 
 
 def apply_exploit_success(

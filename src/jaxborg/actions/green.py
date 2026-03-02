@@ -124,6 +124,19 @@ def _apply_single_green(
         state.red_session_is_abstract.at[red_agent_idx, host_idx].set(True),
         state.red_session_is_abstract,
     )
+    abstract_rank_before = state.red_abstract_host_rank[red_agent_idx, host_idx]
+    next_abstract_rank = state.red_next_abstract_rank[red_agent_idx]
+    assigned_rank = jnp.where(abstract_rank_before < jnp.int32(1_000_000), abstract_rank_before, next_abstract_rank)
+    red_abstract_host_rank = jnp.where(
+        phish_creates_session,
+        state.red_abstract_host_rank.at[red_agent_idx, host_idx].set(assigned_rank),
+        state.red_abstract_host_rank,
+    )
+    red_next_abstract_rank = jnp.where(
+        phish_creates_session,
+        state.red_next_abstract_rank.at[red_agent_idx].set(next_abstract_rank + 1),
+        state.red_next_abstract_rank,
+    )
     new_pid = state.red_next_pid
     red_next_pid = state.red_next_pid + phish_creates_session.astype(jnp.int32)
     pid_row = state.red_session_pids[red_agent_idx, host_idx]
@@ -214,6 +227,8 @@ def _apply_single_green(
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
         red_session_is_abstract=red_session_is_abstract,
+        red_abstract_host_rank=red_abstract_host_rank,
+        red_next_abstract_rank=red_next_abstract_rank,
         red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,

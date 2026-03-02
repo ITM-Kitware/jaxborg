@@ -80,6 +80,7 @@ class CC4State:
     red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_scanned_via: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — session-host that obtained each scan
+    red_scanned_source_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS) bool
     red_scan_anchor_host: chex.Array  # (NUM_RED_AGENTS,) int — host owning CybORG-like scan memory session
 
     red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
@@ -102,6 +103,8 @@ class CC4State:
 
     red_session_sandboxed: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — sandboxed exploit sessions
     red_session_is_abstract: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — True for exploit-created sessions
+    red_abstract_host_rank: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — min abstract-session order per host
+    red_next_abstract_rank: chex.Array  # (NUM_RED_AGENTS,) int32 — next abstract-session order value
     red_session_pid: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — primary PID mirror for compatibility
     red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
     red_next_pid: chex.Array  # scalar int32 — next PID to allocate
@@ -178,6 +181,7 @@ def create_initial_state() -> CC4State:
         red_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scanned_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scanned_via=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
+        red_scanned_source_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
@@ -189,6 +193,8 @@ def create_initial_state() -> CC4State:
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_is_abstract=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_abstract_host_rank=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32),
+        red_next_abstract_rank=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_session_pid=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
         red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),

@@ -1,7 +1,7 @@
 import chex
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import bound_source_is_abstract
+from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
 from jaxborg.state import CC4Const, CC4State
@@ -47,6 +47,16 @@ def apply_privesc(
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
         state.red_suspicious_process_count,
     )
+    red_session_is_abstract = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_session_is_abstract.at[agent_id, target_host].set(False),
+        state.red_session_is_abstract,
+    )
+    red_abstract_host_rank = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(1_000_000)),
+        state.red_abstract_host_rank,
+    )
     red_session_pid = jnp.where(
         is_active & has_session & is_sandboxed,
         state.red_session_pid.at[agent_id, target_host].set(-1),
@@ -89,8 +99,17 @@ def apply_privesc(
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
     full_clear = cleared_all_sessions[:, None]
-    red_scanned_hosts = jnp.where(full_clear, False, state.red_scanned_hosts)
-    red_scanned_via = jnp.where(full_clear, -1, state.red_scanned_via)
+    scan_synced = sync_scan_memory_fields(
+        state.replace(
+            red_sessions=red_sessions,
+            red_session_is_abstract=red_session_is_abstract,
+            red_abstract_host_rank=red_abstract_host_rank,
+        ),
+        const,
+    )
+    red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
+    red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
+    red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
         is_active & has_session & is_sandboxed,
@@ -105,10 +124,13 @@ def apply_privesc(
         red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
+        red_session_is_abstract=red_session_is_abstract,
+        red_abstract_host_rank=red_abstract_host_rank,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered_hosts,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_via=red_scanned_via,
+        red_scanned_source_hosts=red_scanned_source_hosts,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,

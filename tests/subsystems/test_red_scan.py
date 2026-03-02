@@ -1549,3 +1549,49 @@ class TestDeferredScanSessionBinding:
         )
         assert int(new_state.red_scan_anchor_host[red_agent_id]) == non_abstract_host
         assert not bool(new_state.red_scanned_hosts[red_agent_id, target_host])
+
+    def test_scan_fallback_source_prefers_lowest_abstract_rank_matches_session_identity(self, jax_const):
+        choice = None
+        for red_agent_id in range(NUM_RED_AGENTS):
+            start_host = int(jax_const.red_start_hosts[red_agent_id])
+            subnet_id = int(jax_const.host_subnet[start_host])
+            subnet_hosts = [
+                h
+                for h in range(int(jax_const.num_hosts))
+                if bool(jax_const.host_active[h])
+                and not bool(jax_const.host_is_router[h])
+                and int(jax_const.host_subnet[h]) == subnet_id
+            ]
+            if len(subnet_hosts) < 3:
+                continue
+            choice = (red_agent_id, subnet_hosts[0], subnet_hosts[1], subnet_hosts[2])
+            break
+        assert choice is not None
+        red_agent_id, low_rank_host, high_rank_host, target_host = choice
+
+        state = create_initial_state().replace(host_services=jnp.array(jax_const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, low_rank_host]
+            .set(True)
+            .at[red_agent_id, high_rank_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, low_rank_host]
+            .set(1)
+            .at[red_agent_id, high_rank_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, low_rank_host]
+            .set(True)
+            .at[red_agent_id, high_rank_host]
+            .set(True),
+            red_abstract_host_rank=state.red_abstract_host_rank.at[red_agent_id, low_rank_host]
+            .set(1)
+            .at[red_agent_id, high_rank_host]
+            .set(8),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(-1),
+        )
+
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        new_state = process_red_with_duration(state, jax_const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host])
+        assert int(new_state.red_scanned_via[red_agent_id, target_host]) == low_rank_host

@@ -3,8 +3,10 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet,
+    scan_sources_with_fallback,
     scan_via_owner_alive,
     select_scan_execution_source_host,
+    sync_scan_memory_fields,
 )
 from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
@@ -25,8 +27,12 @@ def apply_scan(
     has_abstract_source = source_host >= 0
     success = is_active & is_discovered & can_reach & has_abstract_source
 
-    red_scanned_hosts = state.red_scanned_hosts.at[agent_id, target_host].set(
-        state.red_scanned_hosts[agent_id, target_host] | success
+    scan_sources = scan_sources_with_fallback(state)
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
+    scan_sources = jnp.where(
+        success,
+        scan_sources.at[agent_id, target_host, source_idx].set(True),
+        scan_sources,
     )
 
     current_owner_alive = scan_via_owner_alive(state, const, agent_id, target_host)
@@ -48,9 +54,10 @@ def apply_scan(
         state.red_scan_anchor_host,
     )
 
-    return state.replace(
-        red_scanned_hosts=red_scanned_hosts,
+    next_state = state.replace(
         red_scanned_via=red_scanned_via,
         red_scan_anchor_host=red_scan_anchor_host,
         red_activity_this_step=activity,
     )
+    next_state = sync_scan_memory_fields(next_state, const, scan_sources=scan_sources)
+    return next_state

@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
-from jaxborg.actions.red_common import recompute_scan_anchor_hosts
+from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
@@ -79,12 +79,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     had_any_sessions = jnp.any(session_count_before > 0, axis=1)
     has_any_sessions_now = jnp.any(new_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
-    sessions_lost_on_target = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
-    via_target = state.red_scanned_via == jnp.int32(target_host)
-    via_clear = sessions_lost_on_target[:, None] & via_target
     full_clear = cleared_all_sessions[:, None]
-    new_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
-    new_scanned_via = jnp.where(full_clear | via_clear, -1, state.red_scanned_via)
     any_suspicious_after = jnp.any(new_suspicious_count[:, target_host] > 0)
     new_suspicious_process = jnp.where(
         covers_host,
@@ -100,12 +95,31 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         abstract_update,
         state.red_session_is_abstract,
     )
+    rank_update = state.red_abstract_host_rank.at[:, target_host].set(
+        jnp.where(sessions_cleared_on_host, jnp.int32(1_000_000), state.red_abstract_host_rank[:, target_host])
+    )
+    red_abstract_host_rank = jnp.where(
+        covers_host,
+        rank_update,
+        state.red_abstract_host_rank,
+    )
     red_scan_anchor_host = recompute_scan_anchor_hosts(
         state.red_scan_anchor_host,
         new_sessions,
         red_session_is_abstract,
         const.host_active,
     )
+    scan_synced = sync_scan_memory_fields(
+        state.replace(
+            red_sessions=new_sessions,
+            red_session_is_abstract=red_session_is_abstract,
+            red_abstract_host_rank=red_abstract_host_rank,
+        ),
+        const,
+    )
+    new_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
+    new_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
+    new_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     return state.replace(
         red_sessions=new_sessions,
         red_session_count=new_session_count,
@@ -118,8 +132,10 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_scan_anchor_host=red_scan_anchor_host,
         red_scanned_hosts=new_scanned_hosts,
         red_scanned_via=new_scanned_via,
+        red_scanned_source_hosts=new_scanned_source_hosts,
         host_compromised=new_host_compromised,
         host_suspicious_process=new_suspicious_process,
         blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
         red_session_is_abstract=red_session_is_abstract,
+        red_abstract_host_rank=red_abstract_host_rank,
     )

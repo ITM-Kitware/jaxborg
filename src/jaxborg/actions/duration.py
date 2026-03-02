@@ -13,6 +13,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.red_common import (
     apply_red_session_check,
+    scan_sources_with_fallback,
     select_bound_source_host,
     select_scan_execution_source_host,
 )
@@ -46,24 +47,8 @@ def process_red_with_duration(
         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
         | (action_type == ACTION_TYPE_STEALTH_SCAN)
     )
-    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
-    via_host = state.red_scanned_via[agent_id, target_idx]
-    via_idx = jnp.clip(via_host, 0, state.red_sessions.shape[1] - 1)
-    source_from_scan_memory_for_new_action = (
-        is_scan_action
-        & state.red_scanned_hosts[agent_id, target_idx]
-        & (via_host >= 0)
-        & state.red_sessions[agent_id, via_idx]
-        & state.red_session_is_abstract[agent_id, via_idx]
-        & const.host_active[via_idx]
-    )
     pending_source = state.red_pending_source_host[agent_id]
     source_is_bound = pending_source != PENDING_SOURCE_UNSET
-    source_from_scan_memory = jnp.where(
-        is_busy | source_is_bound,
-        state.red_pending_source_from_scan_memory[agent_id],
-        source_from_scan_memory_for_new_action,
-    )
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
@@ -72,6 +57,17 @@ def process_red_with_duration(
             select_scan_execution_source_host(state, const, agent_id, target_host),
         ),
         PENDING_SOURCE_UNSET,
+    )
+    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
+    queued_source_idx = jnp.clip(queued_source_host, 0, state.red_sessions.shape[1] - 1)
+    scan_sources = scan_sources_with_fallback(state)
+    source_from_scan_memory_for_new_action = (
+        is_scan_action & (queued_source_host >= 0) & scan_sources[agent_id, target_idx, queued_source_idx]
+    )
+    source_from_scan_memory = jnp.where(
+        is_busy | source_is_bound,
+        state.red_pending_source_from_scan_memory[agent_id],
+        source_from_scan_memory_for_new_action,
     )
     effective_source_host = jnp.where(is_busy, pending_source, queued_source_host)
     anchor_source_host = select_bound_source_host(state, const, agent_id)

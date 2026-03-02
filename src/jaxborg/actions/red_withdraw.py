@@ -1,6 +1,7 @@
 import chex
 import jax.numpy as jnp
 
+from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import COMPROMISE_NONE
 from jaxborg.state import CC4Const, CC4State
@@ -42,6 +43,16 @@ def apply_withdraw(
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
         state.red_suspicious_process_count,
     )
+    red_session_is_abstract = jnp.where(
+        success,
+        state.red_session_is_abstract.at[agent_id, target_host].set(False),
+        state.red_session_is_abstract,
+    )
+    red_abstract_host_rank = jnp.where(
+        success,
+        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(1_000_000)),
+        state.red_abstract_host_rank,
+    )
     red_session_pid = jnp.where(
         success,
         state.red_session_pid.at[agent_id, target_host].set(-1),
@@ -77,8 +88,17 @@ def apply_withdraw(
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
     full_clear = cleared_all_sessions[:, None]
-    red_scanned_hosts = jnp.where(full_clear, False, state.red_scanned_hosts)
-    red_scanned_via = jnp.where(full_clear, -1, state.red_scanned_via)
+    scan_synced = sync_scan_memory_fields(
+        state.replace(
+            red_sessions=red_sessions,
+            red_session_is_abstract=red_session_is_abstract,
+            red_abstract_host_rank=red_abstract_host_rank,
+        ),
+        const,
+    )
+    red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
+    red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
+    red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
         success,
@@ -93,9 +113,12 @@ def apply_withdraw(
         red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
+        red_session_is_abstract=red_session_is_abstract,
+        red_abstract_host_rank=red_abstract_host_rank,
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_via=red_scanned_via,
+        red_scanned_source_hosts=red_scanned_source_hosts,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,

@@ -263,8 +263,11 @@ class CC4DifferentialHarness:
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
         start_scanned_via = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32)
+        start_scanned_source_hosts = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
+        start_abstract_rank = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32)
+        start_next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
         start_session_pids = jnp.full(
             (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
         )
@@ -287,7 +290,15 @@ class CC4DifferentialHarness:
                     start_session_count = start_session_count.at[red_idx, hidx].add(1)
                     start_discovered = start_discovered.at[red_idx, hidx].set(True)
                     if isinstance(sess, RedAbstractSession):
+                        sess_ident = int(getattr(sess, "ident", -1))
                         start_abstract = start_abstract.at[red_idx, hidx].set(True)
+                        if sess_ident >= 0:
+                            start_abstract_rank = start_abstract_rank.at[red_idx, hidx].set(
+                                jnp.minimum(start_abstract_rank[red_idx, hidx], jnp.int32(sess_ident))
+                            )
+                            start_next_abstract_rank = start_next_abstract_rank.at[red_idx].set(
+                                jnp.maximum(start_next_abstract_rank[red_idx], jnp.int32(sess_ident + 1))
+                            )
                     sess_pid = int(getattr(sess, "pid", -1))
                     if sess_pid >= 0:
                         max_pid_seen = max(max_pid_seen, sess_pid)
@@ -305,6 +316,9 @@ class CC4DifferentialHarness:
                         if scanned_host in self.mappings.hostname_to_idx:
                             scanned_hidx = self.mappings.hostname_to_idx[scanned_host]
                             start_scanned_via = start_scanned_via.at[red_idx, scanned_hidx].set(hidx)
+                            start_scanned_source_hosts = start_scanned_source_hosts.at[red_idx, scanned_hidx, hidx].set(
+                                True
+                            )
             if sessions:
                 primary = sessions.get(0)
                 if primary is None:
@@ -314,6 +328,10 @@ class CC4DifferentialHarness:
                     start_scan_anchor = start_scan_anchor.at[red_idx].set(anchor_host)
             if self.jax_const.red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
+                start_host = int(self.jax_const.red_start_hosts[red_idx])
+                start_scanned_source_hosts = start_scanned_source_hosts.at[red_idx, :, start_host].set(
+                    start_scanned[red_idx]
+                )
 
         for b in range(NUM_BLUE_AGENTS):
             blue_sessions = cyborg_state.sessions.get(f"blue_agent_{b}", {})
@@ -345,10 +363,13 @@ class CC4DifferentialHarness:
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
             red_scanned_via=start_scanned_via,
+            red_scanned_source_hosts=start_scanned_source_hosts,
             red_scan_anchor_host=start_scan_anchor,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
             red_session_is_abstract=start_abstract,
+            red_abstract_host_rank=start_abstract_rank,
+            red_next_abstract_rank=start_next_abstract_rank,
         )
 
         self.rng_key = jax.random.PRNGKey(self.seed)
@@ -508,17 +529,19 @@ class CC4DifferentialHarness:
                         jnp.int32(-1),
                     )
                     target_idx = jnp.clip(target_host, 0, self.jax_state.red_scanned_hosts.shape[1] - 1)
+                    source_idx = jnp.clip(bound_source, 0, self.jax_state.red_sessions.shape[1] - 1)
+                    source_known = self.jax_state.red_scanned_source_hosts[r, target_idx, source_idx]
                     via_host = self.jax_state.red_scanned_via[r, target_idx]
                     via_idx = jnp.clip(via_host, 0, self.jax_state.red_sessions.shape[1] - 1)
-                    via_valid = (
-                        is_scan_action
-                        & self.jax_state.red_scanned_hosts[r, target_idx]
+                    via_known = (
+                        self.jax_state.red_scanned_hosts[r, target_idx]
                         & (via_host >= 0)
                         & self.jax_state.red_sessions[r, via_idx]
                         & self.jax_state.red_session_is_abstract[r, via_idx]
                         & self.jax_const.host_active[via_idx]
+                        & (bound_source == via_host)
                     )
-                    prebound_source_from_scan_memory = via_valid & (bound_source == via_host)
+                    prebound_source_from_scan_memory = is_scan_action & (bound_source >= 0) & (source_known | via_known)
 
                 self.jax_state = self.jax_state.replace(
                     red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
@@ -583,12 +606,30 @@ class CC4DifferentialHarness:
 
         # Sync CybORG end-turn RedSessionCheck primary-session host choices.
         forced_primary_hosts = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
+        abstract_host_rank = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32)
+        next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
         for r in range(NUM_RED_AGENTS):
             sessions = cy_state.sessions.get(f"red_agent_{r}", {})
             primary = sessions.get(0)
             if primary is not None and primary.hostname in self.mappings.hostname_to_idx:
                 forced_primary_hosts = forced_primary_hosts.at[r].set(self.mappings.hostname_to_idx[primary.hostname])
+            for sid, sess in sessions.items():
+                if type(sess).__name__ != "RedAbstractSession":
+                    continue
+                host_idx = self.mappings.hostname_to_idx.get(sess.hostname)
+                if host_idx is None:
+                    continue
+                abstract_host_rank = abstract_host_rank.at[r, host_idx].set(
+                    jnp.minimum(abstract_host_rank[r, host_idx], jnp.int32(sid))
+                )
+                next_abstract_rank = next_abstract_rank.at[r].set(
+                    jnp.maximum(next_abstract_rank[r], jnp.int32(sid + 1))
+                )
         self.jax_state = self.jax_state.replace(red_session_check_forced_host=forced_primary_hosts)
+        self.jax_state = self.jax_state.replace(
+            red_abstract_host_rank=abstract_host_rank,
+            red_next_abstract_rank=next_abstract_rank,
+        )
 
         new_services_by_host = {}
         for hostname in cy_state.hosts:
