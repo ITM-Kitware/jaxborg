@@ -21,7 +21,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.actions.red_common import can_reach_subnet, select_new_primary_session_host
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     GLOBAL_MAX_HOSTS,
@@ -1480,3 +1480,72 @@ class TestDeferredScanSessionBinding:
             jax.random.PRNGKey(0),
         )
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
+
+    def test_deferred_scan_fails_when_primary_session_remap_selects_non_abstract_host(self, jax_const):
+        choice = None
+        for red_agent_id in range(NUM_RED_AGENTS):
+            start_host = int(jax_const.red_start_hosts[red_agent_id])
+            subnet_id = int(jax_const.host_subnet[start_host])
+            subnet_hosts = [
+                h
+                for h in range(int(jax_const.num_hosts))
+                if bool(jax_const.host_active[h])
+                and not bool(jax_const.host_is_router[h])
+                and int(jax_const.host_subnet[h]) == subnet_id
+                and h != start_host
+            ]
+            if len(subnet_hosts) < 3:
+                continue
+            choice = (red_agent_id, start_host, subnet_hosts[0], subnet_hosts[1], subnet_hosts[2])
+            break
+        assert choice is not None
+        red_agent_id, stale_source_host, non_abstract_host, abstract_host, target_host = choice
+
+        state = create_initial_state().replace(host_services=jnp.array(jax_const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, non_abstract_host]
+            .set(True)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, non_abstract_host]
+            .set(1)
+            .at[red_agent_id, abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, non_abstract_host]
+            .set(False)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(-1),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_source_host),
+        )
+
+        chosen_key = None
+        session_counts = state.red_session_count[red_agent_id]
+        for seed in range(2048):
+            probe_key = jax.random.PRNGKey(seed)
+            promoted = int(
+                select_new_primary_session_host(
+                    session_counts,
+                    jax_const.host_active,
+                    jax.random.fold_in(probe_key, jnp.int32(931)),
+                )
+            )
+            if promoted == non_abstract_host:
+                chosen_key = probe_key
+                break
+        assert chosen_key is not None
+
+        new_state = process_red_with_duration(
+            state,
+            jax_const,
+            red_agent_id,
+            RED_SCAN_START + target_host,
+            chosen_key,
+        )
+        assert int(new_state.red_scan_anchor_host[red_agent_id]) == non_abstract_host
+        assert not bool(new_state.red_scanned_hosts[red_agent_id, target_host])

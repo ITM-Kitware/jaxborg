@@ -6,7 +6,7 @@ list focused on remaining work.
 ## Open Session-Identity Gaps
 
 1. Remaining scan-memory parity gaps still appear in long random-policy fuzz runs
-   (example: `seed=0 step=211`, `red_scanned_hosts` mismatch for `red_agent_3`).
+   (examples: `seed=0 step=211`, `seed=2 step=215`; `red_scanned_hosts` mismatch for `red_agent_3`).
    This indicates there are still edge cases in session-id lifecycle binding for
    deferred/red FSM scan flows.
    - `src/jaxborg/actions/duration.py`

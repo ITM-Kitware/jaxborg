@@ -11,7 +11,11 @@ from jaxborg.actions.encoding import (
     decode_blue_action,
     decode_red_action,
 )
-from jaxborg.actions.red_common import select_bound_source_host, select_scan_execution_source_host
+from jaxborg.actions.red_common import (
+    apply_red_session_check,
+    select_bound_source_host,
+    select_scan_execution_source_host,
+)
 from jaxborg.state import CC4Const, CC4State
 
 PENDING_SOURCE_UNSET = jnp.int32(-1)
@@ -128,6 +132,9 @@ def process_red_with_duration(
             final_source_from_scan_memory
         ),
     )
+
+    session_check_key = jax.random.fold_in(jnp.asarray(key, dtype=jnp.uint32), jnp.int32(931))
+    new_state = apply_red_session_check(new_state, const, agent_id, session_check_key)
 
     return new_state
 

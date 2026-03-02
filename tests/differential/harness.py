@@ -581,6 +581,15 @@ class CC4DifferentialHarness:
 
         controller.step(cyborg_actions)
 
+        # Sync CybORG end-turn RedSessionCheck primary-session host choices.
+        forced_primary_hosts = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
+        for r in range(NUM_RED_AGENTS):
+            sessions = cy_state.sessions.get(f"red_agent_{r}", {})
+            primary = sessions.get(0)
+            if primary is not None and primary.hostname in self.mappings.hostname_to_idx:
+                forced_primary_hosts = forced_primary_hosts.at[r].set(self.mappings.hostname_to_idx[primary.hostname])
+        self.jax_state = self.jax_state.replace(red_session_check_forced_host=forced_primary_hosts)
+
         new_services_by_host = {}
         for hostname in cy_state.hosts:
             added = set(cy_state.hosts[hostname].services.keys()) - pre_services.get(hostname, set())

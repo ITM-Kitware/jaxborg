@@ -107,34 +107,62 @@ def recompute_scan_anchor_hosts(
     red_session_is_abstract: chex.Array,
     host_active: chex.Array,
 ) -> chex.Array:
-    """Recompute per-agent scan anchor as CybORG-like session-0 owner.
+    """Invalidate anchors that no longer reference a live session host.
 
-    If the prior anchor survives and is still abstract, keep it. Otherwise promote
-    to the first live abstract source host when available.
+    CybORG's `RedSessionCheck` promotes a new session 0 using RNG. Anchor
+    promotion is therefore handled in red turn processing, not here.
     """
+    del red_session_is_abstract
     anchor_idx = jnp.clip(prior_anchor_hosts, 0, red_sessions.shape[1] - 1)
     anchor_valid = (
         (prior_anchor_hosts >= 0)
         & red_sessions[jnp.arange(prior_anchor_hosts.shape[0]), anchor_idx]
         & host_active[anchor_idx]
     )
-    abstract_sources = red_sessions & red_session_is_abstract & host_active[None, :]
-    any_sources = red_sessions & host_active[None, :]
-    has_abstract_fallback = jnp.any(abstract_sources, axis=1)
-    has_any_fallback = jnp.any(any_sources, axis=1)
-    fallback_abstract = jnp.argmax(abstract_sources, axis=1)
-    fallback_any = jnp.argmax(any_sources, axis=1)
-    fallback = jnp.where(
-        has_abstract_fallback,
-        fallback_abstract,
-        jnp.where(has_any_fallback, fallback_any, -1),
-    )
-    has_any_sessions = jnp.any(red_sessions, axis=1)
-    return jnp.where(
-        has_any_sessions,
-        jnp.where(anchor_valid, prior_anchor_hosts, fallback),
-        -1,
-    )
+    has_any_sessions = jnp.any(red_sessions & host_active[None, :], axis=1)
+    return jnp.where(has_any_sessions & anchor_valid, prior_anchor_hosts, -1)
+
+
+def select_new_primary_session_host(
+    session_counts: chex.Array,
+    host_active: chex.Array,
+    key: jax.Array,
+) -> chex.Array:
+    """Mirror CybORG RedSessionCheck primary-session promotion.
+
+    CybORG randomly chooses a new session id from all active sessions when
+    session 0 is missing. We model that by sampling among host session slots
+    weighted by per-host session multiplicity.
+    """
+    active_counts = jnp.where(host_active, session_counts, jnp.int32(0))
+    total = jnp.sum(active_counts)
+    total_safe = jnp.maximum(total, jnp.int32(1))
+    draw = jax.random.randint(key, (), minval=0, maxval=total_safe, dtype=jnp.int32)
+    cumulative = jnp.cumsum(active_counts)
+    chosen_host = jnp.argmax(draw < cumulative)
+    return jnp.where(total > 0, chosen_host.astype(jnp.int32), jnp.int32(-1))
+
+
+def apply_red_session_check(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    key: jax.Array,
+) -> CC4State:
+    """Ensure each active red agent has a valid primary-session anchor host."""
+    session_counts = effective_session_counts(state)[agent_id]
+    has_any_sessions = jnp.any((session_counts > 0) & const.host_active)
+    anchor = state.red_scan_anchor_host[agent_id]
+    anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
+    anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
+    needs_primary = has_any_sessions & ~anchor_valid
+    forced = state.red_session_check_forced_host[agent_id]
+    forced_idx = jnp.clip(forced, 0, state.red_sessions.shape[1] - 1)
+    forced_valid = (forced >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
+    sampled = select_new_primary_session_host(session_counts, const.host_active, key)
+    promoted = jnp.where(forced_valid, forced, sampled)
+    next_anchor = jnp.where(has_any_sessions, jnp.where(needs_primary, promoted, anchor), jnp.int32(-1))
+    return state.replace(red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor))
 
 
 def select_scan_execution_source_host(

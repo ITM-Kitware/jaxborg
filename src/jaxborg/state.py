@@ -115,6 +115,7 @@ class CC4State:
     red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
     red_pending_source_host: chex.Array  # (NUM_RED_AGENTS,) int32 — queued scan source (anchor) host
     red_pending_source_from_scan_memory: chex.Array  # (NUM_RED_AGENTS,) bool — queued source came from scanned_via
+    red_session_check_forced_host: chex.Array  # (NUM_RED_AGENTS,) int32 — optional synced session-0 host override
 
     blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
     blue_pending_action: chex.Array  # (NUM_BLUE_AGENTS,) int32 — queued action index
@@ -206,6 +207,7 @@ def create_initial_state() -> CC4State:
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),
         red_pending_source_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_pending_source_from_scan_memory=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
+        red_session_check_forced_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
