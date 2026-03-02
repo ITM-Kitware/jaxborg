@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
+from jaxborg.actions.red_common import recompute_scan_anchor_hosts
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
@@ -84,14 +85,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     full_clear = cleared_all_sessions[:, None]
     new_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
     new_scanned_via = jnp.where(full_clear | via_clear, -1, state.red_scanned_via)
-    anchor_host_cleared = sessions_lost_on_target & (state.red_scan_anchor_host == jnp.int32(target_host))
-    removed_anchor = cleared_all_sessions | anchor_host_cleared
-    red_scan_anchor_host = jnp.where(
-        removed_anchor,
-        -1,
-        state.red_scan_anchor_host,
-    )
-    red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)
     any_suspicious_after = jnp.any(new_suspicious_count[:, target_host] > 0)
     new_suspicious_process = jnp.where(
         covers_host,
@@ -106,6 +99,12 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         covers_host,
         abstract_update,
         state.red_session_is_abstract,
+    )
+    red_scan_anchor_host = recompute_scan_anchor_hosts(
+        state.red_scan_anchor_host,
+        new_sessions,
+        red_session_is_abstract,
+        const.host_active,
     )
     return state.replace(
         red_sessions=new_sessions,

@@ -101,6 +101,42 @@ def select_scan_source_host(
     return jnp.where(source_host >= 0, jnp.where(source_is_abstract, source_host, fallback), fallback)
 
 
+def recompute_scan_anchor_hosts(
+    prior_anchor_hosts: chex.Array,
+    red_sessions: chex.Array,
+    red_session_is_abstract: chex.Array,
+    host_active: chex.Array,
+) -> chex.Array:
+    """Recompute per-agent scan anchor as CybORG-like session-0 owner.
+
+    If the prior anchor survives and is still abstract, keep it. Otherwise promote
+    to the first live abstract source host when available.
+    """
+    anchor_idx = jnp.clip(prior_anchor_hosts, 0, red_sessions.shape[1] - 1)
+    anchor_valid = (
+        (prior_anchor_hosts >= 0)
+        & red_sessions[jnp.arange(prior_anchor_hosts.shape[0]), anchor_idx]
+        & host_active[anchor_idx]
+    )
+    abstract_sources = red_sessions & red_session_is_abstract & host_active[None, :]
+    any_sources = red_sessions & host_active[None, :]
+    has_abstract_fallback = jnp.any(abstract_sources, axis=1)
+    has_any_fallback = jnp.any(any_sources, axis=1)
+    fallback_abstract = jnp.argmax(abstract_sources, axis=1)
+    fallback_any = jnp.argmax(any_sources, axis=1)
+    fallback = jnp.where(
+        has_abstract_fallback,
+        fallback_abstract,
+        jnp.where(has_any_fallback, fallback_any, -1),
+    )
+    has_any_sessions = jnp.any(red_sessions, axis=1)
+    return jnp.where(
+        has_any_sessions,
+        jnp.where(anchor_valid, prior_anchor_hosts, fallback),
+        -1,
+    )
+
+
 def select_scan_execution_source_host(
     state: CC4State,
     const: CC4Const,

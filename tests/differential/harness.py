@@ -486,19 +486,10 @@ class CC4DifferentialHarness:
                 fsm_actions.append(eff_fsm_act)
                 eligible_flags.append(eff_eligible)
                 prebound_source = self.jax_state.red_pending_source_host[r]
+                prebound_source_from_scan_memory = self.jax_state.red_pending_source_from_scan_memory[r]
                 if is_busy:
-                    pending_action = self.jax_state.red_pending_action[r]
-                    busy_type, _, busy_target_host = decode_red_action(pending_action, r, self.jax_const)
-                    busy_is_scan = (
-                        (busy_type == ACTION_TYPE_SCAN)
-                        | (busy_type == ACTION_TYPE_AGGRESSIVE_SCAN)
-                        | (busy_type == ACTION_TYPE_STEALTH_SCAN)
-                    )
-                    rebound_source = select_scan_execution_source_host(
-                        self.jax_state, self.jax_const, r, busy_target_host
-                    )
-                    rebound_source = jnp.where(rebound_source >= 0, rebound_source, jnp.int32(-1))
-                    prebound_source = jnp.where(busy_is_scan & (prebound_source < 0), rebound_source, prebound_source)
+                    prebound_source = self.jax_state.red_pending_source_host[r]
+                    prebound_source_from_scan_memory = self.jax_state.red_pending_source_from_scan_memory[r]
                 else:
                     action_type, _, target_host = decode_red_action(action, r, self.jax_const)
                     is_scan_action = (
@@ -516,11 +507,26 @@ class CC4DifferentialHarness:
                         ),
                         jnp.int32(-1),
                     )
+                    target_idx = jnp.clip(target_host, 0, self.jax_state.red_scanned_hosts.shape[1] - 1)
+                    via_host = self.jax_state.red_scanned_via[r, target_idx]
+                    via_idx = jnp.clip(via_host, 0, self.jax_state.red_sessions.shape[1] - 1)
+                    via_valid = (
+                        is_scan_action
+                        & self.jax_state.red_scanned_hosts[r, target_idx]
+                        & (via_host >= 0)
+                        & self.jax_state.red_sessions[r, via_idx]
+                        & self.jax_state.red_session_is_abstract[r, via_idx]
+                        & self.jax_const.host_active[via_idx]
+                    )
+                    prebound_source_from_scan_memory = via_valid & (bound_source == via_host)
 
                 self.jax_state = self.jax_state.replace(
                     red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
                     red_pending_target_host=self.jax_state.red_pending_target_host.at[r].set(eff_host),
                     red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source),
+                    red_pending_source_from_scan_memory=self.jax_state.red_pending_source_from_scan_memory.at[r].set(
+                        prebound_source_from_scan_memory
+                    ),
                 )
             else:
                 red_actions[r] = RED_SLEEP

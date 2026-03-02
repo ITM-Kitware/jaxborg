@@ -11,7 +11,7 @@ from jaxborg.actions.encoding import (
     decode_blue_action,
     decode_red_action,
 )
-from jaxborg.actions.red_common import select_scan_execution_source_host
+from jaxborg.actions.red_common import select_bound_source_host, select_scan_execution_source_host
 from jaxborg.state import CC4Const, CC4State
 
 PENDING_SOURCE_UNSET = jnp.int32(-1)
@@ -42,8 +42,24 @@ def process_red_with_duration(
         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
         | (action_type == ACTION_TYPE_STEALTH_SCAN)
     )
+    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
+    via_host = state.red_scanned_via[agent_id, target_idx]
+    via_idx = jnp.clip(via_host, 0, state.red_sessions.shape[1] - 1)
+    source_from_scan_memory_for_new_action = (
+        is_scan_action
+        & state.red_scanned_hosts[agent_id, target_idx]
+        & (via_host >= 0)
+        & state.red_sessions[agent_id, via_idx]
+        & state.red_session_is_abstract[agent_id, via_idx]
+        & const.host_active[via_idx]
+    )
     pending_source = state.red_pending_source_host[agent_id]
     source_is_bound = pending_source != PENDING_SOURCE_UNSET
+    source_from_scan_memory = jnp.where(
+        is_busy | source_is_bound,
+        state.red_pending_source_from_scan_memory[agent_id],
+        source_from_scan_memory_for_new_action,
+    )
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
@@ -54,10 +70,27 @@ def process_red_with_duration(
         PENDING_SOURCE_UNSET,
     )
     effective_source_host = jnp.where(is_busy, pending_source, queued_source_host)
-    rebound_source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
+    anchor_source_host = select_bound_source_host(state, const, agent_id)
     effective_source_host = jnp.where(
-        is_busy & is_scan_action & (effective_source_host == PENDING_SOURCE_UNSET),
-        rebound_source_host,
+        is_busy & is_scan_action & (effective_source_host == PENDING_SOURCE_UNSET) & (anchor_source_host >= 0),
+        anchor_source_host,
+        effective_source_host,
+    )
+    source_idx_pre = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
+    source_valid_pre = (
+        (effective_source_host >= 0)
+        & state.red_sessions[agent_id, source_idx_pre]
+        & state.red_session_is_abstract[agent_id, source_idx_pre]
+        & const.host_active[source_idx_pre]
+    )
+    effective_source_host = jnp.where(
+        is_busy
+        & is_scan_action
+        & (effective_source_host >= 0)
+        & ~source_valid_pre
+        & (anchor_source_host >= 0)
+        & ~source_from_scan_memory,
+        anchor_source_host,
         effective_source_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
@@ -72,21 +105,28 @@ def process_red_with_duration(
     should_execute = new_ticks <= 0
     requires_bound_source = is_scan_action
     can_execute = should_execute & ((~requires_bound_source) | source_valid)
+    state_with_source = state.replace(
+        red_pending_source_host=state.red_pending_source_host.at[agent_id].set(effective_source_host)
+    )
 
     new_state = jax.lax.cond(
         can_execute,
         lambda s: apply_red_action(s, const, agent_id, effective_action, effective_key),
         lambda s: s,
-        state,
+        state_with_source,
     )
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
     final_source_host = jnp.where(should_execute, PENDING_SOURCE_UNSET, effective_source_host)
+    final_source_from_scan_memory = jnp.where(should_execute, jnp.bool_(False), source_from_scan_memory)
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),
         red_pending_action=new_state.red_pending_action.at[agent_id].set(effective_action),
         red_pending_key=new_state.red_pending_key.at[agent_id].set(effective_key),
         red_pending_source_host=new_state.red_pending_source_host.at[agent_id].set(final_source_host),
+        red_pending_source_from_scan_memory=new_state.red_pending_source_from_scan_memory.at[agent_id].set(
+            final_source_from_scan_memory
+        ),
     )
 
     return new_state

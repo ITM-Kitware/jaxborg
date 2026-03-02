@@ -1102,3 +1102,381 @@ class TestDeferredScanSessionBinding:
 
         assert bool(state.red_scanned_hosts[red_agent_id, target_host])
         assert int(state.red_scanned_via[red_agent_id, target_host]) == source_host
+
+    def test_deferred_scan_uses_current_session_zero_host_when_prebound_source_stale_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+
+        controller = cyborg_env.environment_controller
+        cy_state = controller.state
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        stale_source_host = int(const.red_start_hosts[red_agent_id])
+        subnet_id = int(const.host_subnet[stale_source_host])
+        subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == subnet_id
+            and h != stale_source_host
+        ]
+        assert len(subnet_hosts) >= 2
+        session_zero_host = subnet_hosts[0]
+        target_host = subnet_hosts[1]
+
+        session_zero_hostname = mappings.idx_to_hostname[session_zero_host]
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        # Explicit CybORG mechanism setup: deferred action bound to session 0, but
+        # session 0 is now hosted on a different machine than the stale source host.
+        for host in cy_state.hosts.values():
+            host.sessions[red_agent_name] = [sid for sid in host.sessions.get(red_agent_name, []) if sid != 0]
+        cy_state.sessions[red_agent_name][0] = RedAbstractSession(
+            ident=0,
+            hostname=session_zero_hostname,
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.hosts[session_zero_hostname].sessions.setdefault(red_agent_name, []).append(0)
+        controller.actions_in_progress[red_agent_name] = {
+            "action": StealthServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip),
+            "remaining_ticks": 1,
+        }
+        controller.step(actions={}, skip_valid_action_check=True)
+        cy_scanned = any(
+            target_ip in getattr(sess, "ports", {}) for sess in cy_state.sessions.get(red_agent_name, {}).values()
+        )
+        assert cy_scanned
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, session_zero_host].set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, session_zero_host].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, session_zero_host].set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(session_zero_host),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_source_host),
+        )
+
+        new_state = process_red_with_duration(
+            state,
+            const,
+            red_agent_id,
+            RED_SCAN_START + target_host,
+            jax.random.PRNGKey(0),
+        )
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
+
+    def test_deferred_scan_does_not_rebind_from_unset_source_when_new_abstract_appears_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+
+        controller = cyborg_env.environment_controller
+        cy_state = controller.state
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        start_host = int(const.red_start_hosts[red_agent_id])
+        subnet_id = int(const.host_subnet[start_host])
+        subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == subnet_id
+            and h != start_host
+        ]
+        assert len(subnet_hosts) >= 2
+        abstract_host = subnet_hosts[0]
+        target_host = subnet_hosts[1]
+
+        start_hostname = mappings.idx_to_hostname[start_host]
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        # CybORG setup: queued scan is bound to session 0, but session 0 is non-abstract.
+        # Even if another abstract session now exists, deferred action should still fail.
+        cy_state.sessions[red_agent_name][0] = Session(
+            ident=0,
+            hostname=start_hostname,
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[abstract_host],
+                username="user",
+                agent=red_agent_name,
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        controller.actions_in_progress[red_agent_name] = {
+            "action": StealthServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip),
+            "remaining_ticks": 1,
+        }
+        controller.step(actions={}, skip_valid_action_check=True)
+        cy_scanned = any(
+            target_ip in getattr(sess, "ports", {}) for sess in cy_state.sessions.get(red_agent_name, {}).values()
+        )
+        assert not cy_scanned
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, start_host]
+            .set(True)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, start_host]
+            .set(1)
+            .at[red_agent_id, abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, start_host]
+            .set(False)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
+        )
+
+        new_state = process_red_with_duration(
+            state,
+            const,
+            red_agent_id,
+            RED_SCAN_START + target_host,
+            jax.random.PRNGKey(0),
+        )
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
+
+    def test_deferred_scan_uses_anchor_session_when_source_is_unset_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+
+        controller = cyborg_env.environment_controller
+        cy_state = controller.state
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        anchor_host = int(const.red_start_hosts[red_agent_id])
+        subnet_id = int(const.host_subnet[anchor_host])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == subnet_id
+            and h != anchor_host
+        )
+        anchor_hostname = mappings.idx_to_hostname[anchor_host]
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        cy_state.sessions[red_agent_name][0] = RedAbstractSession(
+            ident=0,
+            hostname=anchor_hostname,
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        controller.actions_in_progress[red_agent_name] = {
+            "action": StealthServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip),
+            "remaining_ticks": 1,
+        }
+        controller.step(actions={}, skip_valid_action_check=True)
+        cy_scanned = any(
+            target_ip in getattr(sess, "ports", {}) for sess in cy_state.sessions.get(red_agent_name, {}).values()
+        )
+        assert cy_scanned
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, anchor_host].set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, anchor_host].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, anchor_host].set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
+        )
+
+        new_state = process_red_with_duration(
+            state,
+            const,
+            red_agent_id,
+            RED_SCAN_START + target_host,
+            jax.random.PRNGKey(0),
+        )
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
+
+    def test_deferred_scan_does_not_rebind_stale_scan_memory_source_to_anchor_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+
+        controller = cyborg_env.environment_controller
+        cy_state = controller.state
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        anchor_host = int(const.red_start_hosts[red_agent_id])
+        subnet_id = int(const.host_subnet[anchor_host])
+        subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == subnet_id
+            and h != anchor_host
+        ]
+        assert len(subnet_hosts) >= 3
+        stale_scan_owner = subnet_hosts[0]
+        fallback_abstract_host = subnet_hosts[1]
+        target_host = subnet_hosts[2]
+
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+        cy_state.sessions[red_agent_name][0] = Session(
+            ident=0,
+            hostname=mappings.idx_to_hostname[anchor_host],
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[stale_scan_owner],
+                username="user",
+                agent=red_agent_name,
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[fallback_abstract_host],
+                username="user",
+                agent=red_agent_name,
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        controller.actions_in_progress[red_agent_name] = {
+            "action": StealthServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip),
+            "remaining_ticks": 1,
+        }
+        # Drop the stale scan owner before execution tick.
+        for sid, sess in list(cy_state.sessions[red_agent_name].items()):
+            if sess.hostname == mappings.idx_to_hostname[stale_scan_owner]:
+                cy_state.sessions[red_agent_name].pop(sid)
+                if sid in cy_state.hosts[sess.hostname].sessions.get(red_agent_name, []):
+                    cy_state.hosts[sess.hostname].sessions[red_agent_name].remove(sid)
+                break
+        controller.step(actions={}, skip_valid_action_check=True)
+        cy_scanned = any(
+            target_ip in getattr(sess, "ports", {}) for sess in cy_state.sessions.get(red_agent_name, {}).values()
+        )
+        assert not cy_scanned
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, anchor_host]
+            .set(True)
+            .at[red_agent_id, fallback_abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, anchor_host]
+            .set(1)
+            .at[red_agent_id, fallback_abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, anchor_host]
+            .set(False)
+            .at[red_agent_id, fallback_abstract_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(False),
+            red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(-1),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(fallback_abstract_host),
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(
+                encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_scan_owner),
+            red_pending_source_from_scan_memory=state.red_pending_source_from_scan_memory.at[red_agent_id].set(True),
+        )
+
+        new_state = process_red_with_duration(
+            state,
+            const,
+            red_agent_id,
+            RED_SCAN_START + target_host,
+            jax.random.PRNGKey(0),
+        )
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned

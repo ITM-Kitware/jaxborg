@@ -1,5 +1,6 @@
 import jax.numpy as jnp
 
+from jaxborg.actions.red_common import recompute_scan_anchor_hosts
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import COMPROMISE_NONE
 from jaxborg.state import CC4Const, CC4State
@@ -64,21 +65,18 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
-    removed_anchor_session = (
-        covers_host & (session_counts[:, target_host] > 0) & (state.red_scan_anchor_host == target_host)
-    )
     sessions_lost_on_target = (
         covers_host & (session_counts[:, target_host] > 0) & (red_session_count[:, target_host] == 0)
     )
     via_target = state.red_scanned_via == jnp.int32(target_host)
     via_clear = sessions_lost_on_target[:, None] & via_target
     full_clear = cleared_all_sessions[:, None]
-    red_scan_anchor_host = jnp.where(
-        cleared_all_sessions | removed_anchor_session,
-        -1,
+    red_scan_anchor_host = recompute_scan_anchor_hosts(
         state.red_scan_anchor_host,
+        red_sessions,
+        red_session_is_abstract,
+        const.host_active,
     )
-    red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)
     red_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
     red_scanned_via = jnp.where(
         full_clear | via_clear,
