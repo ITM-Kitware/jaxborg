@@ -8,6 +8,7 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import (
+    PENDING_SOURCE_SESSION_BINDING,
     process_blue_with_duration,
     process_red_with_duration,
 )
@@ -22,8 +23,8 @@ from jaxborg.actions.encoding import (
     decode_red_action,
 )
 from jaxborg.actions.green import apply_green_agents
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
-from jaxborg.actions.red_common import select_scan_execution_source_host
+from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.red_common import select_bound_source_host, select_scan_execution_source_host
 from jaxborg.agents.fsm_red import (
     fsm_red_get_action_and_info,
     fsm_red_init_states,
@@ -154,8 +155,15 @@ def _jit_reassign(state, const):
 
 
 @jax.jit
-def _jit_process_red_with_duration(state, const, agent_id, action_idx, key):
-    return process_red_with_duration(state, const, jnp.int32(agent_id), jnp.int32(action_idx), key)
+def _jit_process_red_with_duration(state, const, agent_id, action_idx, key, forced_primary_host):
+    return process_red_with_duration(
+        state,
+        const,
+        jnp.int32(agent_id),
+        jnp.int32(action_idx),
+        key,
+        forced_primary_host=jnp.int32(forced_primary_host),
+    )
 
 
 @jax.jit
@@ -377,15 +385,12 @@ class CC4DifferentialHarness:
                         start_blue_suspicious_pids = start_blue_suspicious_pids.at[b, hidx, slot].set(int(pid))
                         slot += 1
 
-        start_session_pid = jax.vmap(jax.vmap(first_valid_pid))(start_session_pids)
-        start_session_pid = jnp.where(start_session_count > 0, start_session_pid, -1)
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_session_count=start_session_count,
             red_session_multiple=start_session_count > 1,
             red_session_many=start_session_count > 2,
             red_privilege=start_priv,
-            red_session_pid=start_session_pid,
             red_session_pids=start_session_pids,
             red_next_pid=jnp.array(max_pid_seen + 1, dtype=jnp.int32),
             blue_suspicious_pids=start_blue_suspicious_pids,
@@ -537,11 +542,7 @@ class CC4DifferentialHarness:
                 fsm_actions.append(eff_fsm_act)
                 eligible_flags.append(eff_eligible)
                 prebound_source = self.jax_state.red_pending_source_host[r]
-                prebound_source_from_scan_memory = self.jax_state.red_pending_source_from_scan_memory[r]
-                if is_busy:
-                    prebound_source = self.jax_state.red_pending_source_host[r]
-                    prebound_source_from_scan_memory = self.jax_state.red_pending_source_from_scan_memory[r]
-                else:
+                if not is_busy:
                     action_type, _, target_host = decode_red_action(action, r, self.jax_const)
                     is_scan_action = (
                         (action_type == ACTION_TYPE_SCAN)
@@ -549,37 +550,31 @@ class CC4DifferentialHarness:
                         | (action_type == ACTION_TYPE_STEALTH_SCAN)
                     )
                     bound_source = select_scan_execution_source_host(self.jax_state, self.jax_const, r, target_host)
+                    target_idx = jnp.clip(target_host, 0, self.jax_state.red_scanned_hosts.shape[1] - 1)
+                    source_idx = jnp.clip(bound_source, 0, self.jax_state.red_sessions.shape[1] - 1)
+                    source_from_scan_memory = (
+                        (bound_source >= 0) & self.jax_state.red_scanned_source_hosts[r, target_idx, source_idx]
+                    )
+                    bound_anchor_source = select_bound_source_host(self.jax_state, self.jax_const, r)
+                    source_from_bound_session = (bound_source >= 0) & (bound_source == bound_anchor_source)
                     prebound_source = jnp.where(
                         is_scan_action,
                         jnp.where(
                             bound_source >= 0,
-                            bound_source,
+                            jnp.where(
+                                source_from_scan_memory | ~source_from_bound_session,
+                                bound_source,
+                                PENDING_SOURCE_SESSION_BINDING,
+                            ),
                             jnp.int32(-1),
                         ),
                         jnp.int32(-1),
                     )
-                    target_idx = jnp.clip(target_host, 0, self.jax_state.red_scanned_hosts.shape[1] - 1)
-                    source_idx = jnp.clip(bound_source, 0, self.jax_state.red_sessions.shape[1] - 1)
-                    source_known = self.jax_state.red_scanned_source_hosts[r, target_idx, source_idx]
-                    via_host = self.jax_state.red_scanned_via[r, target_idx]
-                    via_idx = jnp.clip(via_host, 0, self.jax_state.red_sessions.shape[1] - 1)
-                    via_known = (
-                        self.jax_state.red_scanned_hosts[r, target_idx]
-                        & (via_host >= 0)
-                        & self.jax_state.red_sessions[r, via_idx]
-                        & self.jax_state.red_session_is_abstract[r, via_idx]
-                        & self.jax_const.host_active[via_idx]
-                        & (bound_source == via_host)
-                    )
-                    prebound_source_from_scan_memory = is_scan_action & (bound_source >= 0) & (source_known | via_known)
 
                 self.jax_state = self.jax_state.replace(
                     red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
                     red_pending_target_host=self.jax_state.red_pending_target_host.at[r].set(eff_host),
                     red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source),
-                    red_pending_source_from_scan_memory=self.jax_state.red_pending_source_from_scan_memory.at[r].set(
-                        prebound_source_from_scan_memory
-                    ),
                 )
             else:
                 red_actions[r] = RED_SLEEP
@@ -655,7 +650,6 @@ class CC4DifferentialHarness:
                 next_abstract_rank = next_abstract_rank.at[r].set(
                     jnp.maximum(next_abstract_rank[r], jnp.int32(sid + 1))
                 )
-        self.jax_state = self.jax_state.replace(red_session_check_forced_host=forced_primary_hosts)
         self.jax_state = self.jax_state.replace(
             red_abstract_host_rank=abstract_host_rank,
             red_next_abstract_rank=next_abstract_rank,
@@ -693,7 +687,14 @@ class CC4DifferentialHarness:
         # Red actions
         for r in range(NUM_RED_AGENTS):
             action_idx = self._resolve_red_action(controller, r, red_actions.get(r, RED_SLEEP))
-            self.jax_state = _jit_process_red_with_duration(self.jax_state, self.jax_const, r, action_idx, subkeys[r])
+            self.jax_state = _jit_process_red_with_duration(
+                self.jax_state,
+                self.jax_const,
+                r,
+                action_idx,
+                subkeys[r],
+                forced_primary_hosts[r],
+            )
 
         self.jax_state = _jit_reassign(self.jax_state, self.jax_const)
 

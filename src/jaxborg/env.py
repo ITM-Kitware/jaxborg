@@ -48,7 +48,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_via = state.red_scanned_via
     red_scanned_source_hosts = state.red_scanned_source_hosts
-    red_session_pid = state.red_session_pid
     red_session_pids = state.red_session_pids
     red_next_pid = state.red_next_pid
 
@@ -79,11 +78,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             is_active,
             red_next_abstract_rank.at[r].set(1),
             red_next_abstract_rank,
-        )
-        red_session_pid = jnp.where(
-            is_active,
-            red_session_pid.at[r, start_host].set(red_next_pid),
-            red_session_pid,
         )
         pid_row = red_session_pids[r, start_host]
         red_session_pids = jnp.where(
@@ -144,7 +138,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,
     )

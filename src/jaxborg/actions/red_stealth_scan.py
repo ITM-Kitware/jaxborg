@@ -4,7 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet,
-    scan_sources_with_fallback,
+    scan_sources,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
 )
@@ -31,12 +31,12 @@ def apply_stealth_scan(
     has_abstract_source = source_host >= 0
     success = is_active & is_discovered & can_reach & has_abstract_source
 
-    scan_sources = scan_sources_with_fallback(state)
+    source_matrix = scan_sources(state)
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
-    scan_sources = jnp.where(
+    source_matrix = jnp.where(
         success,
-        scan_sources.at[agent_id, target_host, source_idx].set(True),
-        scan_sources,
+        source_matrix.at[agent_id, target_host, source_idx].set(True),
+        source_matrix,
     )
 
     rand_val, state = sample_detection_random(state, key)
@@ -57,5 +57,5 @@ def apply_stealth_scan(
         red_scan_anchor_host=red_scan_anchor_host,
         red_activity_this_step=activity,
     )
-    next_state = sync_scan_memory_fields(next_state, const, scan_sources=scan_sources)
+    next_state = sync_scan_memory_fields(next_state, const, source_matrix=source_matrix)
     return next_state

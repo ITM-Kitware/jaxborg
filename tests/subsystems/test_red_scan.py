@@ -13,7 +13,11 @@ from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.duration import PENDING_SOURCE_NONE, process_red_with_duration
+from jaxborg.actions.duration import (
+    PENDING_SOURCE_NONE,
+    PENDING_SOURCE_SESSION_BINDING,
+    process_red_with_duration,
+)
 from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
     RED_SCAN_START,
@@ -607,7 +611,8 @@ class TestDifferentialWithCybORG:
             .set(True),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(True),
             red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(target_host),
-            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host].set(True),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host]
+            .set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
             .set(True)
@@ -1176,7 +1181,9 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
-            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_source_host),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(
+                PENDING_SOURCE_SESSION_BINDING
+            ),
         )
 
         new_state = process_red_with_duration(
@@ -1470,7 +1477,6 @@ class TestDeferredScanSessionBinding:
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_scan_owner),
-            red_pending_source_from_scan_memory=state.red_pending_source_from_scan_memory.at[red_agent_id].set(True),
         )
 
         new_state = process_red_with_duration(

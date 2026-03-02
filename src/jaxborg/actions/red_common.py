@@ -2,7 +2,7 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_SUBNETS
 from jaxborg.state import CC4Const, CC4State
@@ -60,7 +60,7 @@ def can_reach_subnet(
     return has_session & can_route
 
 
-def scan_sources_with_fallback(state: CC4State) -> chex.Array:
+def scan_sources(state: CC4State) -> chex.Array:
     """Return scan-memory ownership matrix.
 
     CybORG tracks per-session source ownership for each scanned target through
@@ -71,10 +71,10 @@ def scan_sources_with_fallback(state: CC4State) -> chex.Array:
     return state.red_scanned_source_hosts
 
 
-def recompute_scan_views_from_sources(scan_sources: chex.Array) -> tuple[chex.Array, chex.Array]:
+def recompute_scan_views_from_sources(source_matrix: chex.Array) -> tuple[chex.Array, chex.Array]:
     """Derive scanned-host and primary-owner views from source ownership."""
-    red_scanned_hosts = jnp.any(scan_sources, axis=2)
-    primary_owner = jnp.argmax(scan_sources, axis=2).astype(jnp.int32)
+    red_scanned_hosts = jnp.any(source_matrix, axis=2)
+    primary_owner = jnp.argmax(source_matrix, axis=2).astype(jnp.int32)
     red_scanned_via = jnp.where(red_scanned_hosts, primary_owner, -1)
     return red_scanned_hosts, red_scanned_via
 
@@ -82,7 +82,7 @@ def recompute_scan_views_from_sources(scan_sources: chex.Array) -> tuple[chex.Ar
 def sync_scan_memory_fields(
     state: CC4State,
     const: CC4Const,
-    scan_sources: chex.Array | None = None,
+    source_matrix: chex.Array | None = None,
 ) -> CC4State:
     """Project scan-memory ownership onto active source sessions.
 
@@ -90,7 +90,7 @@ def sync_scan_memory_fields(
     not gated on JAX-specific abstract-session bookkeeping, so scan-memory
     validity should depend on live source sessions and active hosts only.
     """
-    sources = scan_sources if scan_sources is not None else scan_sources_with_fallback(state)
+    sources = source_matrix if source_matrix is not None else scan_sources(state)
     valid_sources = (
         sources
         & state.red_sessions[:, None, :]
@@ -114,8 +114,8 @@ def exploit_common_preconditions(
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
-    scan_sources = scan_sources_with_fallback(state)
-    owns_target_scan = (source_host >= 0) & scan_sources[agent_id, target_idx, source_idx]
+    source_matrix = scan_sources(state)
+    owns_target_scan = (source_host >= 0) & source_matrix[agent_id, target_idx, source_idx]
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
     is_abstract = source_host >= 0
@@ -196,6 +196,7 @@ def apply_red_session_check(
     const: CC4Const,
     agent_id: int,
     key: jax.Array,
+    forced_primary_host: chex.Array = jnp.int32(-1),
 ) -> CC4State:
     """Ensure each active red agent has a valid primary-session anchor host."""
     session_counts = effective_session_counts(state)[agent_id]
@@ -204,11 +205,10 @@ def apply_red_session_check(
     anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
     anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
     needs_primary = has_any_sessions & ~anchor_valid
-    forced = state.red_session_check_forced_host[agent_id]
-    forced_idx = jnp.clip(forced, 0, state.red_sessions.shape[1] - 1)
-    forced_valid = (forced >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
+    forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
+    forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
     sampled = select_new_primary_session_host(session_counts, const.host_active, key)
-    promoted = jnp.where(forced_valid, forced, sampled)
+    promoted = jnp.where(forced_valid, forced_primary_host, sampled)
     next_anchor = jnp.where(has_any_sessions, jnp.where(needs_primary, promoted, anchor), jnp.int32(-1))
     return state.replace(red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor))
 
@@ -225,7 +225,7 @@ def select_scan_execution_source_host(
     live abstract session; otherwise fall back to generic scan source selection.
     """
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
-    target_sources = scan_sources_with_fallback(state)[agent_id, target_idx]
+    target_sources = scan_sources(state)[agent_id, target_idx]
     active_abstract_sources = (
         target_sources & state.red_sessions[agent_id] & state.red_session_is_abstract[agent_id] & const.host_active
     )
@@ -344,11 +344,6 @@ def apply_exploit_success(
         state.red_session_pids.at[agent_id, target_host].set(pid_row_updated),
         state.red_session_pids,
     )
-    red_session_pid = jnp.where(
-        success,
-        state.red_session_pid.at[agent_id, target_host].set(first_valid_pid(pid_row_updated)),
-        state.red_session_pid,
-    )
     blue_suspicious_pids = state.blue_suspicious_pids
     for b in range(NUM_BLUE_AGENTS):
         covers = const.blue_agent_hosts[b, target_host]
@@ -365,7 +360,6 @@ def apply_exploit_success(
         red_session_many=red_session_many,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,
         host_compromised=host_compromised,

@@ -17,7 +17,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.constants import (
     ACTIVITY_EXPLOIT,
     COMPROMISE_NONE,
@@ -163,15 +163,12 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
                     row = row.at[i].set(int(pid))
                 blue_suspicious_pids = blue_suspicious_pids.at[b, hidx].set(row)
 
-    red_session_pid = jax.vmap(jax.vmap(first_valid_pid))(red_session_pids)
-    red_session_pid = jnp.where(red_session_count > 0, red_session_pid, -1)
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
         red_privilege=red_privilege,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=jnp.int32(max_pid),
         blue_suspicious_pids=blue_suspicious_pids,
@@ -211,7 +208,6 @@ class TestApplyBlueRemove:
         assert blue_idx is not None
         test_pid = 6001
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
@@ -239,7 +235,6 @@ class TestApplyBlueRemove:
         assert blue_idx is not None
         test_pid = 6002
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
@@ -258,7 +253,6 @@ class TestApplyBlueRemove:
         assert blue_idx is not None
         test_pid = 6002
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
@@ -290,7 +284,6 @@ class TestApplyBlueRemove:
         assert blue_idx is not None
         test_pid = 6002
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid).at[1, target].set(7001),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
@@ -323,7 +316,6 @@ class TestApplyBlueRemove:
         assert blue_idx is not None
         test_pid = 6003
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
@@ -356,7 +348,6 @@ class TestRemoveViaDispatch:
         assert blue_idx is not None
         test_pid = 6004
         state = state.replace(
-            red_session_pid=state.red_session_pid.at[0, target].set(test_pid),
             red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )

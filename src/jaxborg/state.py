@@ -106,7 +106,6 @@ class CC4State:
     red_session_is_abstract: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — True for exploit-created sessions
     red_abstract_host_rank: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — min abstract-session order per host
     red_next_abstract_rank: chex.Array  # (NUM_RED_AGENTS,) int32 — next abstract-session order value
-    red_session_pid: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — primary PID mirror for compatibility
     red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS) int32
     red_next_pid: chex.Array  # scalar int32 — next PID to allocate
     blue_suspicious_pids: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
@@ -118,8 +117,6 @@ class CC4State:
     red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
     red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
     red_pending_source_host: chex.Array  # (NUM_RED_AGENTS,) int32 — queued scan source (anchor) host
-    red_pending_source_from_scan_memory: chex.Array  # (NUM_RED_AGENTS,) bool — queued source came from scanned_via
-    red_session_check_forced_host: chex.Array  # (NUM_RED_AGENTS,) int32 — optional synced session-0 host override
 
     blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
     blue_pending_action: chex.Array  # (NUM_BLUE_AGENTS,) int32 — queued action index
@@ -196,7 +193,6 @@ def create_initial_state() -> CC4State:
         red_session_is_abstract=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_abstract_host_rank=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32),
         red_next_abstract_rank=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
-        red_session_pid=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
         red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),
         blue_suspicious_pids=jnp.full(
@@ -213,8 +209,6 @@ def create_initial_state() -> CC4State:
         red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),
         red_pending_source_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
-        red_pending_source_from_scan_memory=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
-        red_session_check_forced_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),

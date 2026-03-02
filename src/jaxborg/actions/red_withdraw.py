@@ -53,11 +53,6 @@ def apply_withdraw(
         state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(1_000_000)),
         state.red_abstract_host_rank,
     )
-    red_session_pid = jnp.where(
-        success,
-        state.red_session_pid.at[agent_id, target_host].set(-1),
-        state.red_session_pid,
-    )
     red_session_pids = jnp.where(
         success,
         state.red_session_pids.at[agent_id, target_host].set(-1),
@@ -110,7 +105,6 @@ def apply_withdraw(
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_session_is_abstract=red_session_is_abstract,

@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.rng import sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
@@ -146,11 +146,6 @@ def _apply_single_green(
         state.red_session_pids.at[red_agent_idx, host_idx].set(updated_pid_row),
         state.red_session_pids,
     )
-    red_session_pid = jnp.where(
-        phish_creates_session,
-        state.red_session_pid.at[red_agent_idx, host_idx].set(first_valid_pid(updated_pid_row)),
-        state.red_session_pid,
-    )
     red_privilege = jnp.where(
         phish_creates_session,
         state.red_privilege.at[red_agent_idx, host_idx].set(
@@ -229,7 +224,6 @@ def _apply_single_green(
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,
         red_privilege=red_privilege,

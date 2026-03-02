@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
+from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS
@@ -77,8 +77,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     new_sessions = new_session_count > 0
     new_multiple = new_session_count > 1
     new_many = new_session_count > 2
-    new_session_pid = jax.vmap(jax.vmap(first_valid_pid))(new_session_pids)
-    new_session_pid = jnp.where(new_sessions, new_session_pid, -1)
 
     remaining_max_priv = jnp.max(new_privilege[:, target_host])
     new_host_compromised = jnp.where(
@@ -135,7 +133,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_session_count=new_session_count,
         red_session_multiple=new_multiple,
         red_session_many=new_many,
-        red_session_pid=new_session_pid,
         red_session_pids=new_session_pids,
         red_suspicious_process_count=new_suspicious_count,
         red_privilege=new_privilege,

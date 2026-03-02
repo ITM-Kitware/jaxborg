@@ -8,8 +8,8 @@ host's subnet.
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
-from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources_with_fallback, sync_scan_memory_fields
+from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import MAX_TRACKED_SESSION_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
@@ -92,8 +92,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_sessions = red_session_count > 0
     red_session_multiple = red_session_count > 1
     red_session_many = red_session_count > 2
-    red_session_pid = jax.vmap(jax.vmap(first_valid_pid))(red_session_pids)
-    red_session_pid = jnp.where(red_sessions, red_session_pid, -1)
 
     # Any host with an active red session must be discoverable by that red agent.
     red_discovered = red_discovered | red_sessions
@@ -108,14 +106,14 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         const.host_active,
     )
     full_clear = (~has_any_sessions_now)[:, None]
-    scan_sources = scan_sources_with_fallback(state)
+    source_matrix = scan_sources(state)
     scan_synced = sync_scan_memory_fields(
         state.replace(
             red_sessions=red_sessions,
             red_session_is_abstract=red_session_is_abstract,
         ),
         const,
-        scan_sources=scan_sources,
+        source_matrix=source_matrix,
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
@@ -127,7 +125,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
-        red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
