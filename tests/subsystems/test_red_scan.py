@@ -478,6 +478,149 @@ class TestDifferentialWithCybORG:
         assert cy_target_scanned, "CybORG should keep scan memory tied to the other abstract session"
         assert jax_target_scanned == cy_target_scanned
 
+    def test_restore_source_host_keeps_target_scan_when_target_session_still_knows_ip_matches_cyborg(self):
+        """Regression: rescans should not overwrite scan ownership away from a live target session."""
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=8)
+        cyborg_env.reset()
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        controller = cyborg_env.environment_controller
+
+        red_agent_id = 3
+        red_agent_name = f"red_agent_{red_agent_id}"
+
+        choice = None
+        for subnet_id in range(NUM_SUBNETS):
+            if not bool(const.red_agent_subnets[red_agent_id, subnet_id]):
+                continue
+            subnet_hosts = [
+                h
+                for h in range(int(const.num_hosts))
+                if bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+                and int(const.host_subnet[h]) == subnet_id
+            ]
+            if len(subnet_hosts) < 2:
+                continue
+            restorable = [h for h in subnet_hosts if any(bool(const.blue_agent_hosts[b, h]) for b in range(5))]
+            if len(restorable) < 2:
+                continue
+            restorable = sorted(restorable)
+            target_host = restorable[0]
+            source_host = restorable[-1]
+            if source_host != target_host:
+                choice = (target_host, source_host)
+                break
+        assert choice is not None, "Need two restorable hosts in a red-reachable subnet"
+        target_host, source_host = choice
+
+        pre_ids = set(cy_state.sessions[red_agent_name].keys())
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[source_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        source_sid = next(sid for sid in cy_state.sessions[red_agent_name] if sid not in pre_ids)
+
+        pre_ids = set(cy_state.sessions[red_agent_name].keys())
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=mappings.idx_to_hostname[target_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        target_sid = next(sid for sid in cy_state.sessions[red_agent_name] if sid not in pre_ids)
+
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+        source_sess = cy_state.sessions[red_agent_name][source_sid]
+        target_sess = cy_state.sessions[red_agent_name][target_sid]
+        source_sess.addport(target_ip, 22)
+        target_ports = dict(getattr(target_sess, "ports", {}))
+        target_ports[target_ip] = 22
+        target_sess.ports = target_ports
+
+        iface = controller.agent_interfaces[red_agent_name]
+        iface.action_space.client_session[source_sid] = True
+        iface.action_space.server_session[source_sid] = True
+        iface.action_space.client_session[target_sid] = True
+        iface.action_space.server_session[target_sid] = True
+
+        scan_action = AggressiveServiceDiscovery(session=source_sid, agent=red_agent_name, ip_address=target_ip)
+        scan_action.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=scan_action)
+
+        blue_agent_id = next(b for b in range(5) if bool(const.blue_agent_hosts[b, source_host]))
+        restore_action = Restore(
+            session=0,
+            agent=f"blue_agent_{blue_agent_id}",
+            hostname=mappings.idx_to_hostname[source_host],
+        )
+        cyborg_env.step(agent=f"blue_agent_{blue_agent_id}", action=restore_action)
+
+        def _cy_scanned_hosts():
+            scanned = set()
+            for sess in cy_state.sessions[red_agent_name].values():
+                for ip in getattr(sess, "ports", {}).keys():
+                    hostname = cy_state.ip_addresses.get(ip)
+                    if hostname in mappings.hostname_to_idx:
+                        scanned.add(mappings.hostname_to_idx[hostname])
+            return scanned
+
+        assert target_host in _cy_scanned_hosts(), "CybORG should retain scan via surviving target session"
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, target_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, source_host]
+            .set(1)
+            .at[red_agent_id, target_host]
+            .set(1),
+            red_privilege=state.red_privilege.at[red_agent_id, source_host].set(1).at[red_agent_id, target_host].set(1),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, target_host]
+            .set(True),
+            red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(True),
+            red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(target_host),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, target_host]
+            .set(False),
+        )
+
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        state = _jit_apply_red(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
+        restore_idx = encode_blue_action("Restore", source_host, blue_agent_id)
+        state = _jit_apply_blue(state, const, blue_agent_id, restore_idx)
+
+        assert bool(state.red_scanned_hosts[red_agent_id, target_host]) == (target_host in _cy_scanned_hosts())
+
 
 class TestScanRequiresAbstractSession:
     """CybORG gates DiscoverNetworkServices on RedAbstractSession.
@@ -803,3 +946,159 @@ class TestDeferredScanSessionBinding:
         action_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
         new_state = process_red_with_duration(state, const, red_agent_id, action_idx, jax.random.PRNGKey(0))
         assert not bool(new_state.red_scanned_hosts[red_agent_id, target_host])
+
+    def test_scan_honors_prebound_source_during_execution_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+        cy_state = cyborg_env.environment_controller.state
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        choice = None
+        for red_agent_id in range(NUM_RED_AGENTS):
+            start_host = int(const.red_start_hosts[red_agent_id])
+            subnet_id = int(const.host_subnet[start_host])
+            if not bool(const.red_agent_subnets[red_agent_id, subnet_id]):
+                continue
+            subnet_hosts = [
+                h
+                for h in range(int(const.num_hosts))
+                if bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+                and int(const.host_subnet[h]) == subnet_id
+            ]
+            restorable_hosts = [h for h in subnet_hosts if any(bool(const.blue_agent_hosts[b, h]) for b in range(5))]
+            if len(restorable_hosts) < 2:
+                continue
+            target_candidates = [h for h in subnet_hosts if h not in {restorable_hosts[0], restorable_hosts[1]}]
+            if not target_candidates:
+                continue
+            choice = (red_agent_id, restorable_hosts[0], restorable_hosts[1], target_candidates[0])
+            break
+        if choice is None:
+            pytest.skip("Need a subnet with source/anchor/target hosts")
+        red_agent_id, source_host, anchor_host, target_host = choice
+        red_agent_name = f"red_agent_{red_agent_id}"
+
+        source_hostname = mappings.idx_to_hostname[source_host]
+        anchor_hostname = mappings.idx_to_hostname[anchor_host]
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        cy_state.sessions[red_agent_name][0] = RedAbstractSession(
+            ident=0,
+            hostname=source_hostname,
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=anchor_hostname,
+                username="user",
+                agent=red_agent_name,
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.sessions[red_agent_name][0].addport(target_ip, 22)
+
+        cy_scan = AggressiveServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip)
+        cy_scan.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=cy_scan)
+
+        blue_agent_id = next(b for b in range(5) if bool(const.blue_agent_hosts[b, anchor_host]))
+        cy_restore = Restore(session=0, agent=f"blue_agent_{blue_agent_id}", hostname=anchor_hostname)
+        cyborg_env.step(agent=f"blue_agent_{blue_agent_id}", action=cy_restore)
+
+        cy_scanned = False
+        for sess in cy_state.sessions.get(red_agent_name, {}).values():
+            if target_ip in getattr(sess, "ports", {}):
+                cy_scanned = True
+                break
+        assert cy_scanned
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, anchor_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, source_host]
+            .set(1)
+            .at[red_agent_id, anchor_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, anchor_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(source_host),
+        )
+
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        state = process_red_with_duration(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
+        restore_idx = encode_blue_action("Restore", anchor_host, blue_agent_id)
+        state = _jit_apply_blue(state, const, blue_agent_id, restore_idx)
+
+        assert bool(state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
+
+    def test_unset_anchor_deterministic_scan_source_not_forced_to_start_host(self, jax_const):
+        choice = None
+        for red_agent_id in range(NUM_RED_AGENTS):
+            allowed_hosts = [
+                h
+                for h in range(int(jax_const.num_hosts))
+                if bool(jax_const.host_active[h])
+                and not bool(jax_const.host_is_router[h])
+                and bool(jax_const.red_agent_subnets[red_agent_id, int(jax_const.host_subnet[h])])
+            ]
+            if len(allowed_hosts) < 3:
+                continue
+            allowed_hosts = sorted(allowed_hosts)
+            source_host = allowed_hosts[0]
+            start_host = allowed_hosts[1]
+            target_host = allowed_hosts[2]
+            choice = (red_agent_id, source_host, start_host, target_host)
+            break
+        assert choice is not None
+        red_agent_id, source_host, start_host, target_host = choice
+
+        const = jax_const.replace(red_start_hosts=jax_const.red_start_hosts.at[red_agent_id].set(start_host))
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, start_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, source_host]
+            .set(1)
+            .at[red_agent_id, start_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, start_host]
+            .set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(-1),
+        )
+
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        state = process_red_with_duration(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
+
+        assert bool(state.red_scanned_hosts[red_agent_id, target_host])
+        assert int(state.red_scanned_via[red_agent_id, target_host]) == source_host

@@ -31,12 +31,7 @@ def select_bound_source_host(
     anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
     anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
 
-    # When no explicit anchor has been set, session 0 maps to the red start host.
-    start_host = const.red_start_hosts[agent_id]
-    start_idx = jnp.clip(start_host, 0, state.red_sessions.shape[1] - 1)
-    start_valid = (start_host >= 0) & state.red_sessions[agent_id, start_idx] & const.host_active[start_idx]
-
-    return jnp.where(anchor_valid, anchor, jnp.where((anchor < 0) & start_valid, start_host, jnp.int32(-1)))
+    return jnp.where(anchor_valid, anchor, jnp.int32(-1))
 
 
 def bound_source_is_abstract(
@@ -127,8 +122,40 @@ def select_scan_execution_source_host(
         & state.red_session_is_abstract[agent_id, via_idx]
         & const.host_active[via_idx]
     )
+
+    # During duration processing, scans can be pre-bound to a specific source host.
+    # Respect that explicit binding (including "bound to none") instead of recomputing
+    # against potentially changed same-step state (e.g. after green updates).
+    pending_source = state.red_pending_source_host[agent_id]
+    pending_idx = jnp.clip(pending_source, 0, state.red_sessions.shape[1] - 1)
+    pending_valid = (
+        (pending_source >= 0)
+        & state.red_sessions[agent_id, pending_idx]
+        & state.red_session_is_abstract[agent_id, pending_idx]
+        & const.host_active[pending_idx]
+    )
+    has_pending_binding = pending_source != jnp.int32(-1)
+
     fallback = select_scan_source_host(state, const, agent_id)
-    return jnp.where(via_valid, via, fallback)
+    computed = jnp.where(via_valid, via, fallback)
+    return jnp.where(
+        has_pending_binding,
+        jnp.where(pending_valid, pending_source, jnp.int32(-1)),
+        computed,
+    )
+
+
+def scan_via_owner_alive(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+) -> chex.Array:
+    """Whether current scan-memory owner is still a live session host."""
+    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
+    via = state.red_scanned_via[agent_id, target_idx]
+    via_idx = jnp.clip(via, 0, state.red_sessions.shape[1] - 1)
+    return (via >= 0) & state.red_sessions[agent_id, via_idx] & const.host_active[via_idx]
 
 
 def apply_exploit_success(

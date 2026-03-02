@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet,
+    scan_via_owner_alive,
     select_scan_execution_source_host,
 )
 from jaxborg.actions.rng import sample_detection_random
@@ -33,8 +34,10 @@ def apply_stealth_scan(
         state.red_scanned_hosts[agent_id, target_host] | success
     )
 
+    current_owner_alive = scan_via_owner_alive(state, const, agent_id, target_host)
+    should_update_owner = success & (~state.red_scanned_hosts[agent_id, target_host] | ~current_owner_alive)
     red_scanned_via = jnp.where(
-        success,
+        should_update_owner,
         state.red_scanned_via.at[agent_id, target_host].set(source_host),
         state.red_scanned_via,
     )
