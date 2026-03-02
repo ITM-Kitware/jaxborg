@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS, NUM_RED_AGENTS
+from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -13,22 +13,20 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     suspicious_pid_row = state.blue_suspicious_pids[agent_id, target_host]
 
     session_count_before = effective_session_counts(state)
-    new_session_count = session_count_before
-    new_suspicious_count = state.red_suspicious_process_count
-    new_privilege = state.red_privilege
-    new_session_pids = state.red_session_pids
-    any_removed = jnp.array(False)
+    row_indices = jnp.arange(MAX_TRACKED_SUSPICIOUS_PIDS, dtype=jnp.int32)
+    row_max_slot = jnp.max(jnp.where(suspicious_pid_row >= 0, row_indices, -1)) + 1
+    pid_budget = jnp.clip(state.blue_suspicious_pid_budget[agent_id, target_host], 0, MAX_TRACKED_SUSPICIOUS_PIDS)
+    slot_limit = jnp.clip(jnp.maximum(row_max_slot, pid_budget), 0, MAX_TRACKED_SUSPICIOUS_PIDS)
 
-    for slot in range(MAX_TRACKED_SUSPICIOUS_PIDS):
+    def _remove_slot(slot, carry):
+        new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed = carry
         sus_pid = suspicious_pid_row[slot]
         has_pid = sus_pid >= 0
 
-        match_by_red = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
-        for r in range(NUM_RED_AGENTS):
-            is_user = new_privilege[r, target_host] == COMPROMISE_USER
-            has_sessions = new_session_count[r, target_host] > 0
-            has_live_pid = pid_row_contains(new_session_pids[r, target_host], sus_pid)
-            match_by_red = match_by_red.at[r].set(covers_host & has_pid & is_user & has_sessions & has_live_pid)
+        is_user = new_privilege[:, target_host] == COMPROMISE_USER
+        has_sessions = new_session_count[:, target_host] > 0
+        has_live_pid = jax.vmap(pid_row_contains, in_axes=(0, None))(new_session_pids[:, target_host, :], sus_pid)
+        match_by_red = covers_host & has_pid & is_user & has_sessions & has_live_pid
 
         any_match = jnp.any(match_by_red)
         matched_red = jnp.argmax(match_by_red)
@@ -63,6 +61,18 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
             new_session_pids.at[matched_red, target_host].set(updated_pid_row),
             new_session_pids,
         )
+        return new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed
+
+    init = (
+        session_count_before,
+        state.red_suspicious_process_count,
+        state.red_privilege,
+        state.red_session_pids,
+        jnp.array(False),
+    )
+    new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed = jax.lax.fori_loop(
+        0, slot_limit, _remove_slot, init
+    )
 
     new_sessions = new_session_count > 0
     new_multiple = new_session_count > 1

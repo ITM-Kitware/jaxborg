@@ -5,13 +5,15 @@ list focused on remaining work.
 
 ## Open Session-Identity Gaps
 
-1. Remaining scan-memory parity gaps still appear in long random-policy fuzz runs
-   (current example: `seed=5 step=198`, multi-field drift on `red_agent_3`:
-   `red_sessions`, `red_privilege`, `red_scanned_hosts`, `host_compromised`).
-   This indicates remaining per-session reassignment/restore semantics are still
-   collapsing incorrectly into host-level state.
-   - `src/jaxborg/reassignment.py`
-   - `src/jaxborg/actions/blue_restore.py`
+1. CybORG PID memory is unbounded, while JAX PID identity storage is bounded by
+   fixed capacities (`MAX_TRACKED_SESSION_PIDS` and `MAX_TRACKED_SUSPICIOUS_PIDS`,
+   currently 64 each). This affects:
+   - Red session PID identity memory (`red_session_pids`)
+   - Blue suspicious PID memory (`blue_suspicious_pids`)
+   Differential harness/test setup now fail fast on overflow instead of silently truncating,
+   but core JAX state is still bounded.
+   - `src/jaxborg/constants.py`
+   - `tests/differential/harness.py`
 
 ## Additional Open Differences
 

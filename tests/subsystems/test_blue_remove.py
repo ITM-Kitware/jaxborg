@@ -24,6 +24,7 @@ from jaxborg.constants import (
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SESSION_PIDS,
     MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
@@ -105,10 +106,7 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
     host_to_idx = {h: i for i, h in enumerate(sorted_hosts)}
 
     modeled_hosts = (
-        state.red_sessions
-        | (state.red_session_count > 0)
-        | state.red_session_multiple
-        | state.red_session_many
+        state.red_sessions | (state.red_session_count > 0) | state.red_session_multiple | state.red_session_many
     )
 
     cy_session_count = jnp.zeros_like(state.red_session_count)
@@ -125,6 +123,14 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
             pid = int(getattr(sess, "pid", -1))
             if pid >= 0:
                 row = cy_session_pids[r, hidx]
+                row_has_empty = bool(jnp.any(row < 0))
+                row_has_pid = bool(jnp.any(row == pid))
+                if not row_has_empty and not row_has_pid:
+                    raise RuntimeError(
+                        "Test setup overflow while syncing red session pids for "
+                        f"{agent_name} host={sess.hostname}: "
+                        f"MAX_TRACKED_SESSION_PIDS={MAX_TRACKED_SESSION_PIDS}"
+                    )
                 cy_session_pids = cy_session_pids.at[r, hidx].set(append_pid_to_row(row, pid))
                 max_pid = max(max_pid, pid + 1)
             level = 2 if getattr(sess, "username", "") in ("root", "SYSTEM") else 1
@@ -146,8 +152,14 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
                 if hostname not in host_to_idx:
                     continue
                 hidx = host_to_idx[hostname]
+                if len(pid_list) > MAX_TRACKED_SUSPICIOUS_PIDS:
+                    raise RuntimeError(
+                        "Test setup overflow while syncing blue suspicious pids for "
+                        f"{agent_name} host={hostname}: observed {len(pid_list)} "
+                        f"> MAX_TRACKED_SUSPICIOUS_PIDS={MAX_TRACKED_SUSPICIOUS_PIDS}"
+                    )
                 row = jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32)
-                for i, pid in enumerate(pid_list[:MAX_TRACKED_SUSPICIOUS_PIDS]):
+                for i, pid in enumerate(pid_list):
                     row = row.at[i].set(int(pid))
                 blue_suspicious_pids = blue_suspicious_pids.at[b, hidx].set(row)
 
@@ -1956,3 +1968,67 @@ class TestDifferentialWithCybORG:
         assert bool(new_state.red_sessions[3, target]) == cyborg_has_user_session
         assert int(new_state.red_privilege[3, target]) == expected_priv
         assert int(new_state.host_compromised[target]) == expected_priv
+
+    def test_remove_with_nine_live_suspicious_pids_clears_all_sessions_matches_cyborg(self, cyborg_and_jax):
+        """Regression for seed=5 step=198: Remove must process all live suspicious PIDs on the host."""
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_B")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        for _ in range(9):
+            cyborg_state.add_session(
+                RedAbstractSession(
+                    ident=None,
+                    hostname=target_hostname,
+                    username="user",
+                    agent="red_agent_3",
+                    parent=0,
+                    session_type="shell",
+                    pid=None,
+                )
+            )
+
+        cy_target_sessions = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]
+        assert len(cy_target_sessions) == 9
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        for sess in cy_target_sessions:
+            blue_parent.add_sus_pids(hostname=target_hostname, pid=sess.pid)
+        assert len(blue_parent.sus_pids[target_hostname]) == 9
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[3, target].set(True),
+            red_session_count=state.red_session_count.at[3, target].set(9),
+            red_session_multiple=state.red_session_multiple.at[3, target].set(True),
+            red_session_many=state.red_session_many.at[3, target].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
+            red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(9),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_has_malware=state.host_has_malware.at[target].set(True),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(True),
+            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(9),
+        )
+
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
+
+        cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]
+        assert len(cyborg_remaining) == 0
+        assert not bool(new_state.red_sessions[3, target])
+        assert int(new_state.red_session_count[3, target]) == 0
+        assert int(new_state.red_privilege[3, target]) == COMPROMISE_NONE
+        assert int(new_state.host_compromised[target]) == COMPROMISE_NONE

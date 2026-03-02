@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources_with_fallback, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import MAX_TRACKED_SUSPICIOUS_PIDS, NUM_RED_AGENTS
+from jaxborg.constants import MAX_TRACKED_SESSION_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -72,15 +72,21 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_abstract_host_rank = red_abstract_host_rank.at[dst].set(merged_ranks)
 
             dst_rows = red_session_pids[dst]
-            for slot in range(MAX_TRACKED_SUSPICIOUS_PIDS):
+            slot_indices = jnp.arange(MAX_TRACKED_SESSION_PIDS, dtype=jnp.int32)
+            max_slot_by_host = jnp.max(jnp.where(src_pid_rows >= 0, slot_indices[None, :], -1), axis=1) + 1
+            slot_limit = jnp.clip(jnp.max(jnp.where(dst_mask, max_slot_by_host, 0)), 0, MAX_TRACKED_SESSION_PIDS)
+
+            def _move_slot(slot, rows):
                 incoming_pid = src_pid_rows[:, slot]
-                dst_rows = jax.vmap(
+                return jax.vmap(
                     lambda row, pid, do_assign: jnp.where(
                         do_assign & (pid >= 0),
                         append_pid_to_row(row, pid),
                         row,
                     )
-                )(dst_rows, incoming_pid, dst_mask)
+                )(rows, incoming_pid, dst_mask)
+
+            dst_rows = jax.lax.fori_loop(0, slot_limit, _move_slot, dst_rows)
             red_session_pids = red_session_pids.at[dst].set(dst_rows)
 
     red_sessions = red_session_count > 0

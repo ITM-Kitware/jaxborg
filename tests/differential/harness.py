@@ -31,6 +31,7 @@ from jaxborg.agents.fsm_red import (
 )
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SESSION_PIDS,
     MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
@@ -191,6 +192,24 @@ class CC4DifferentialHarness:
         self.rng_key = None
         self.green_recorder = None
 
+    def _assert_pid_capacity(self, stage: str):
+        max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
+        max_suspicious_tracked = int(MAX_TRACKED_SUSPICIOUS_PIDS)
+        max_session_count = int(jnp.max(self.jax_state.red_session_count))
+        max_suspicious_budget = int(jnp.max(self.jax_state.blue_suspicious_pid_budget))
+        if max_session_count > max_session_tracked:
+            raise RuntimeError(
+                f"[{stage}] red_session_count overflow: observed {max_session_count} "
+                f"> MAX_TRACKED_SESSION_PIDS={max_session_tracked}. "
+                "CybORG session PID tracking is effectively unbounded; increase JAX PID capacity."
+            )
+        if max_suspicious_budget > max_suspicious_tracked:
+            raise RuntimeError(
+                f"[{stage}] blue_suspicious_pid_budget overflow: observed {max_suspicious_budget} "
+                f"> MAX_TRACKED_SUSPICIOUS_PIDS={max_suspicious_tracked}. "
+                "CybORG suspicious PID memory is unbounded; increase JAX PID capacity."
+            )
+
     def reset(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=self.blue_cls,
@@ -268,9 +287,7 @@ class CC4DifferentialHarness:
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
         start_abstract_rank = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32)
         start_next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
-        start_session_pids = jnp.full(
-            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
-        )
+        start_session_pids = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32)
         max_pid_seen = 4999
         start_blue_suspicious_pids = jnp.full(
             (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
@@ -303,6 +320,14 @@ class CC4DifferentialHarness:
                     if sess_pid >= 0:
                         max_pid_seen = max(max_pid_seen, sess_pid)
                         pid_row = start_session_pids[red_idx, hidx]
+                        row_has_empty = bool(jnp.any(pid_row < 0))
+                        row_has_pid = bool(jnp.any(pid_row == sess_pid))
+                        if not row_has_empty and not row_has_pid:
+                            raise RuntimeError(
+                                "Reset overflow while syncing red session pids for "
+                                f"red_agent_{red_idx} host={sess.hostname}: "
+                                f"MAX_TRACKED_SESSION_PIDS={MAX_TRACKED_SESSION_PIDS}"
+                            )
                         start_session_pids = start_session_pids.at[red_idx, hidx].set(
                             append_pid_to_row(pid_row, sess_pid)
                         )
@@ -341,10 +366,14 @@ class CC4DifferentialHarness:
                     if hostname not in self.mappings.hostname_to_idx:
                         continue
                     hidx = self.mappings.hostname_to_idx[hostname]
+                    if len(pid_list) > MAX_TRACKED_SUSPICIOUS_PIDS:
+                        raise RuntimeError(
+                            "Reset overflow while syncing blue suspicious pids for "
+                            f"blue_agent_{b} host={hostname}: observed {len(pid_list)} "
+                            f"> MAX_TRACKED_SUSPICIOUS_PIDS={MAX_TRACKED_SUSPICIOUS_PIDS}"
+                        )
                     slot = 0
                     for pid in pid_list:
-                        if slot >= MAX_TRACKED_SUSPICIOUS_PIDS:
-                            break
                         start_blue_suspicious_pids = start_blue_suspicious_pids.at[b, hidx, slot].set(int(pid))
                         slot += 1
 
@@ -371,6 +400,7 @@ class CC4DifferentialHarness:
             red_abstract_host_rank=start_abstract_rank,
             red_next_abstract_rank=start_next_abstract_rank,
         )
+        self._assert_pid_capacity("reset")
 
         self.rng_key = jax.random.PRNGKey(self.seed)
 
@@ -685,6 +715,7 @@ class CC4DifferentialHarness:
 
         # --- Time increment ---
         self.jax_state = self.jax_state.replace(time=self.jax_state.time + 1)
+        self._assert_pid_capacity("full_step")
 
         # --- Compare ---
         from tests.differential.state_comparator import compare_fast

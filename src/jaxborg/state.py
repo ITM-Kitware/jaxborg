@@ -6,6 +6,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     MAX_DETECTION_RANDOMS,
     MAX_STEPS,
+    MAX_TRACKED_SESSION_PIDS,
     MAX_TRACKED_SUSPICIOUS_PIDS,
     MESSAGE_LENGTH,
     MISSION_PHASES,
@@ -106,7 +107,7 @@ class CC4State:
     red_abstract_host_rank: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — min abstract-session order per host
     red_next_abstract_rank: chex.Array  # (NUM_RED_AGENTS,) int32 — next abstract-session order value
     red_session_pid: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — primary PID mirror for compatibility
-    red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
+    red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS) int32
     red_next_pid: chex.Array  # scalar int32 — next PID to allocate
     blue_suspicious_pids: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
 
@@ -196,7 +197,7 @@ def create_initial_state() -> CC4State:
         red_abstract_host_rank=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32),
         red_next_abstract_rank=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_session_pid=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
-        red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32),
+        red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),
         blue_suspicious_pids=jnp.full(
             (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
