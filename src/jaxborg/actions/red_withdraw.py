@@ -92,7 +92,6 @@ def apply_withdraw(
         const,
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
-    red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
@@ -111,7 +110,6 @@ def apply_withdraw(
         red_abstract_host_rank=red_abstract_host_rank,
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
-        red_scanned_via=red_scanned_via,
         red_scanned_source_hosts=red_scanned_source_hosts,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,

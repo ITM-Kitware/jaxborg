@@ -289,7 +289,6 @@ class CC4DifferentialHarness:
         start_priv = jnp.zeros_like(self.jax_state.red_privilege)
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
-        start_scanned_via = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32)
         start_scanned_source_hosts = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
@@ -348,7 +347,6 @@ class CC4DifferentialHarness:
                         scanned_host = cyborg_state.ip_addresses.get(ip)
                         if scanned_host in self.mappings.hostname_to_idx:
                             scanned_hidx = self.mappings.hostname_to_idx[scanned_host]
-                            start_scanned_via = start_scanned_via.at[red_idx, scanned_hidx].set(hidx)
                             start_scanned_source_hosts = start_scanned_source_hosts.at[red_idx, scanned_hidx, hidx].set(
                                 True
                             )
@@ -396,7 +394,6 @@ class CC4DifferentialHarness:
             blue_suspicious_pids=start_blue_suspicious_pids,
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
-            red_scanned_via=start_scanned_via,
             red_scanned_source_hosts=start_scanned_source_hosts,
             red_scan_anchor_host=start_scan_anchor,
             host_compromised=host_compromised,
@@ -603,7 +600,6 @@ class CC4DifferentialHarness:
                 return
             sessions = cy_state.sessions.get(agent_name, {})
             target_ip = getattr(action_obj, "ip_address", None)
-            fallback_sid = None
             anchor_sid = None
             agent_idx = int(agent_name.split("_")[-1])
             anchor_host = int(self.jax_state.red_scan_anchor_host[agent_idx])
@@ -611,8 +607,6 @@ class CC4DifferentialHarness:
             for sid in sorted(sessions):
                 if not isinstance(sessions[sid], _RAS):
                     continue
-                if fallback_sid is None:
-                    fallback_sid = sid
                 if target_ip is not None and target_ip in sessions[sid].ports:
                     action_obj.session = sid
                     return
@@ -620,8 +614,6 @@ class CC4DifferentialHarness:
                     anchor_sid = sid
             if anchor_sid is not None:
                 action_obj.session = anchor_sid
-            elif target_ip is not None and fallback_sid is not None:
-                action_obj.session = fallback_sid
 
         for agent_name, cy_action in cyborg_actions.items():
             if agent_name.startswith("red_agent_"):

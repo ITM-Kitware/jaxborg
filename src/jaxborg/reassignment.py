@@ -116,7 +116,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         source_matrix=source_matrix,
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
-    red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     host_suspicious_process = jnp.any(red_suspicious_process_count > 0, axis=0)
 
@@ -130,7 +129,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned_hosts,
-        red_scanned_via=red_scanned_via,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,

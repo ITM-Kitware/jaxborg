@@ -1863,7 +1863,7 @@ class TestDifferentialWithCybORG:
             .at[3, other]
             .set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[3].set(False).at[3, target].set(True),
-            red_scanned_via=state.red_scanned_via.at[3].set(-1).at[3, target].set(target),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[3].set(False).at[3, target, target].set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[3].set(other),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER).at[other].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),

@@ -46,7 +46,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_session_is_abstract = state.red_session_is_abstract
     red_abstract_host_rank = state.red_abstract_host_rank
     red_next_abstract_rank = state.red_next_abstract_rank
-    red_scanned_via = state.red_scanned_via
     red_scanned_source_hosts = state.red_scanned_source_hosts
     red_session_pids = state.red_session_pids
     red_next_pid = state.red_next_pid
@@ -112,12 +111,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_scan_anchor_host,
         )
         initially_scanned = const.red_initial_scanned_hosts[r]
-        new_via_row = jnp.where(initially_scanned, start_host, red_scanned_via[r])
-        red_scanned_via = jnp.where(
-            is_active,
-            red_scanned_via.at[r].set(new_via_row),
-            red_scanned_via,
-        )
         red_scanned_source_hosts = jnp.where(
             is_active,
             red_scanned_source_hosts.at[r, :, start_host].set(initially_scanned),
@@ -130,7 +123,6 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
-        red_scanned_via=red_scanned_via,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,

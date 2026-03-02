@@ -81,7 +81,6 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         const,
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
-    red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
 
     host_services = jnp.where(
@@ -134,7 +133,6 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
-        red_scanned_via=red_scanned_via,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scan_anchor_host=red_scan_anchor_host,
         host_services=host_services,

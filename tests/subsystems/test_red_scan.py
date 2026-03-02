@@ -14,7 +14,6 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import (
-    PENDING_SOURCE_NONE,
     PENDING_SOURCE_SESSION_BINDING,
     process_red_with_duration,
 )
@@ -456,7 +455,7 @@ class TestDifferentialWithCybORG:
             .set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(high_host),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, seed_host].set(True),
-            red_scanned_via=state.red_scanned_via.at[red_agent_id, seed_host].set(high_host),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, seed_host, high_host].set(True),
         )
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", subnet_id, red_agent_id)
@@ -610,7 +609,6 @@ class TestDifferentialWithCybORG:
             .at[red_agent_id, target_host]
             .set(True),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(True),
-            red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(target_host),
             red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host]
             .set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
@@ -946,7 +944,8 @@ class TestDeferredScanSessionBinding:
             .set(1),
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, alt_host].set(True),
             red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
-            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(PENDING_SOURCE_NONE),
+            # Keep explicit "no bound source" for this deferred-action regression.
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-2),
         )
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
@@ -1107,7 +1106,7 @@ class TestDeferredScanSessionBinding:
         state = process_red_with_duration(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
 
         assert bool(state.red_scanned_hosts[red_agent_id, target_host])
-        assert int(state.red_scanned_via[red_agent_id, target_host]) == source_host
+        assert bool(state.red_scanned_source_hosts[red_agent_id, target_host, source_host])
 
     def test_deferred_scan_uses_current_session_zero_host_when_prebound_source_stale_matches_cyborg(self):
         from jaxborg.topology import build_const_from_cyborg
@@ -1470,7 +1469,6 @@ class TestDeferredScanSessionBinding:
             .set(True),
             red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(False),
-            red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(-1),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(fallback_abstract_host),
             red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(1),
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
@@ -1601,4 +1599,4 @@ class TestDeferredScanSessionBinding:
         scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
         new_state = process_red_with_duration(state, jax_const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host])
-        assert int(new_state.red_scanned_via[red_agent_id, target_host]) == low_rank_host
+        assert bool(new_state.red_scanned_source_hosts[red_agent_id, target_host, low_rank_host])

@@ -66,17 +66,14 @@ def scan_sources(state: CC4State) -> chex.Array:
     CybORG tracks per-session source ownership for each scanned target through
     red-session `ports` memory. JAX mirrors that state in
     `red_scanned_source_hosts`; ownership should not be reconstructed from
-    derived fields (`red_scanned_hosts` / `red_scanned_via`).
+    derived fields.
     """
     return state.red_scanned_source_hosts
 
 
-def recompute_scan_views_from_sources(source_matrix: chex.Array) -> tuple[chex.Array, chex.Array]:
-    """Derive scanned-host and primary-owner views from source ownership."""
-    red_scanned_hosts = jnp.any(source_matrix, axis=2)
-    primary_owner = jnp.argmax(source_matrix, axis=2).astype(jnp.int32)
-    red_scanned_via = jnp.where(red_scanned_hosts, primary_owner, -1)
-    return red_scanned_hosts, red_scanned_via
+def recompute_scanned_hosts_from_sources(source_matrix: chex.Array) -> chex.Array:
+    """Derive scanned-host view from source ownership."""
+    return jnp.any(source_matrix, axis=2)
 
 
 def sync_scan_memory_fields(
@@ -96,11 +93,10 @@ def sync_scan_memory_fields(
         & state.red_sessions[:, None, :]
         & const.host_active[None, None, :]
     )
-    red_scanned_hosts, red_scanned_via = recompute_scan_views_from_sources(valid_sources)
+    red_scanned_hosts = recompute_scanned_hosts_from_sources(valid_sources)
     return state.replace(
         red_scanned_source_hosts=valid_sources,
         red_scanned_hosts=red_scanned_hosts,
-        red_scanned_via=red_scanned_via,
     )
 
 

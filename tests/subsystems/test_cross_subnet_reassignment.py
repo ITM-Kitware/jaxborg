@@ -368,7 +368,9 @@ def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_ses
         )
     jax_state = jax_state.replace(
         red_scanned_hosts=jax_state.red_scanned_hosts.at[source_agent, remote_scan_host].set(True),
-        red_scanned_via=jax_state.red_scanned_via.at[source_agent, remote_scan_host].set(target_idx),
+        red_scanned_source_hosts=jax_state.red_scanned_source_hosts.at[source_agent, remote_scan_host, target_idx].set(
+            True
+        ),
         red_scan_anchor_host=jax_state.red_scan_anchor_host.at[source_agent].set(target_idx),
     )
 

@@ -126,7 +126,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         const,
     )
     new_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
-    new_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)
     new_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
     return state.replace(
         red_sessions=new_sessions,
@@ -138,7 +137,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_privilege=new_privilege,
         red_scan_anchor_host=red_scan_anchor_host,
         red_scanned_hosts=new_scanned_hosts,
-        red_scanned_via=new_scanned_via,
         red_scanned_source_hosts=new_scanned_source_hosts,
         host_compromised=new_host_compromised,
         host_suspicious_process=new_suspicious_process,

@@ -20,7 +20,6 @@ from jaxborg.actions.red_common import (
 from jaxborg.state import CC4Const, CC4State
 
 PENDING_SOURCE_UNSET = jnp.int32(-1)
-PENDING_SOURCE_NONE = jnp.int32(-2)
 PENDING_SOURCE_SESSION_BINDING = jnp.int32(-3)
 
 
