@@ -7,6 +7,7 @@ from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
 from CybORG.Shared.Session import RedAbstractSession
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
+from jaxborg.actions.encoding import encode_red_action
 from jaxborg.constants import COMPROMISE_USER, NUM_RED_AGENTS, NUM_SUBNETS
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.state import create_initial_state
@@ -272,6 +273,34 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
     jax_src_scanned = {h for h in range(int(const.num_hosts)) if bool(jax_after.red_scanned_hosts[source_agent, h])}
     assert cy_src_scanned == {remote_scan_host}
     assert jax_src_scanned == cy_src_scanned
+
+
+def test_reassignment_does_not_rebind_busy_scan_when_bound_source_becomes_invalid():
+    env = _make_env(seed=0)
+    const = build_const_from_cyborg(env)
+
+    agent_id = 0
+    candidate_hosts = [
+        h for h in range(int(const.num_hosts)) if bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    ]
+    assert len(candidate_hosts) >= 3
+    source_host, alt_host, target_host = candidate_hosts[:3]
+
+    state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    scan_idx = encode_red_action("StealthServiceDiscovery", target_host, agent_id)
+    state = state.replace(
+        red_sessions=state.red_sessions.at[agent_id, alt_host].set(True),
+        red_session_count=state.red_session_count.at[agent_id, alt_host].set(1),
+        red_session_is_abstract=state.red_session_is_abstract.at[agent_id, alt_host].set(True),
+        red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+        red_pending_ticks=state.red_pending_ticks.at[agent_id].set(1),
+        red_pending_action=state.red_pending_action.at[agent_id].set(scan_idx),
+        red_pending_source_host=state.red_pending_source_host.at[agent_id].set(source_host),
+    )
+
+    out = reassign_cross_subnet_sessions(state, const)
+
+    assert int(out.red_pending_source_host[agent_id]) == source_host
 
 
 def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_session_moves_matches_cyborg():

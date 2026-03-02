@@ -131,18 +131,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             | (action_type == ACTION_TYPE_STEALTH_SCAN)
         )
         source_host = red_pending_source_host[r]
-        source_idx = jnp.clip(source_host, 0, GLOBAL_MAX_HOSTS - 1)
-        source_valid = (
-            (source_host >= 0)
-            & red_sessions[r, source_idx]
-            & red_session_is_abstract[r, source_idx]
-            & const.host_active[source_idx]
-        )
         rebound_source = select_scan_execution_source_host(source_state, const, r, target_host)
-        can_rebind = is_busy & is_scan_action & ~source_valid
-        red_pending_source_host = red_pending_source_host.at[r].set(
-            jnp.where(can_rebind, rebound_source, source_host)
-        )
+        can_rebind = is_busy & is_scan_action & (source_host == jnp.int32(-1))
+        red_pending_source_host = red_pending_source_host.at[r].set(jnp.where(can_rebind, rebound_source, source_host))
 
     return state.replace(
         red_sessions=red_sessions,

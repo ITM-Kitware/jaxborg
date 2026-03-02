@@ -8,7 +8,6 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import (
-    PENDING_SOURCE_NONE,
     process_blue_with_duration,
     process_red_with_duration,
 )
@@ -498,7 +497,7 @@ class CC4DifferentialHarness:
                     rebound_source = select_scan_execution_source_host(
                         self.jax_state, self.jax_const, r, busy_target_host
                     )
-                    rebound_source = jnp.where(rebound_source >= 0, rebound_source, PENDING_SOURCE_NONE)
+                    rebound_source = jnp.where(rebound_source >= 0, rebound_source, jnp.int32(-1))
                     prebound_source = jnp.where(busy_is_scan & (prebound_source < 0), rebound_source, prebound_source)
                 else:
                     action_type, _, target_host = decode_red_action(action, r, self.jax_const)
@@ -513,7 +512,7 @@ class CC4DifferentialHarness:
                         jnp.where(
                             bound_source >= 0,
                             bound_source,
-                            PENDING_SOURCE_NONE,
+                            jnp.int32(-1),
                         ),
                         jnp.int32(-1),
                     )
@@ -573,10 +572,6 @@ class CC4DifferentialHarness:
         for agent_name, cy_action in cyborg_actions.items():
             if agent_name.startswith("red_agent_"):
                 _patch_session_to_abstract(cy_action, agent_name)
-
-        for agent_name, aip in controller.actions_in_progress.items():
-            if agent_name.startswith("red_agent_") and aip and aip.get("action"):
-                _patch_session_to_abstract(aip["action"], agent_name)
 
         controller.step(cyborg_actions)
 
