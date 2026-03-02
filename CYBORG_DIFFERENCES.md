@@ -1,140 +1,51 @@
-# CybORG CC4 JAX Port: Known Differences & Simplifications
+# CybORG CC4 JAX Port: Open Differences
 
-Documented after a line-by-line code review of every JAX implementation file against
-the CybORG source at `.venv/lib/python3.11/site-packages/CybORG/`.
+This file tracks active parity gaps only. Resolved items have been removed to keep the
+list focused on remaining work.
 
-## Detection Rates
+## Open Heuristic Implementations (To Remove)
 
-### ~~AggressiveServiceDiscovery: always detected (CybORG: 75%)~~ RESOLVED
+1. `effective_session_counts()` infers counts from legacy boolean flags instead of using
+   explicit `red_session_count` as source of truth.
+   - `src/jaxborg/actions/session_counts.py`
 
-Now matches CybORG: 75% detection rate via `sample_detection_random()`. Uses precomputed
-RNG sequences in differential tests for exact reproducibility.
+2. `apply_blue_restore()` scan-memory remap uses threshold/candidate heuristics
+   (for example `via_count >= 4`) rather than explicit session-object semantics.
+   - `src/jaxborg/actions/blue_restore.py`
 
-### ~~StealthServiceDiscovery: never detected (CybORG: 25%)~~ RESOLVED
+3. Scan-memory owner/source selection is based on argmax/mode over host-index arrays
+   instead of concrete per-session identity/lifecycle matching.
+   - `src/jaxborg/actions/red_common.py`
 
-Now matches CybORG: 25% detection rate via `sample_detection_random()`. Sets
-`ACTIVITY_SCAN` when detected, matching CybORG's behavior.
+4. Cross-subnet reassignment merges transferred session attributes via aggregate
+   `max/sum` reductions rather than strict per-session reassignment semantics.
+   - `src/jaxborg/reassignment.py`
 
-### ~~DiscoverDeception: deterministic (CybORG: probabilistic)~~ RESOLVED
+5. Green phishing source-agent selection is simplified (first-valid) and does not yet
+   fully mirror CybORG `PhishingEmail` source selection behavior.
+   - `src/jaxborg/actions/green.py`
 
-Now matches CybORG: 50% true positive rate, 10% false positive rate. Two calls to
-`sample_detection_random()` for TP and FP rolls.
+## Additional Open Differences
 
-## ~~Blue Remove: Malware Clearing~~ RESOLVED
+### Observation Layout: Fixed vs Variable Body Size
 
-Now matches CybORG: Remove only kills user-level sessions. Malware files persist until
-Restore, so Analyse will still detect a compromised host after a successful Remove.
+CybORG `BlueFlatWrapper` uses a variable-length observation body based on how many
+subnets the blue agent controls, then appends messages and pads to 210.
 
-## ~~Green Agent: False Positive Observation Field~~ RESOLVED
+JAX keeps a fixed 3-subnet body for all blue agents, then appends messages. This keeps
+training input shape uniform but means raw vector indices differ from CybORG for
+agents that monitor fewer than 3 subnets.
 
-Now matches CybORG: GreenLocalWork false positive sets `host_activity_detected` (which
-maps to the `network_connections` observation field), not `host_has_malware`.
+- JAX: `src/jaxborg/observations.py`
+- CybORG: `BlueFlatWrapper.observation_change()`
 
-## ~~Service Reliability Degradation~~ RESOLVED
+### CC4Env Agent Interface: Blue-Only vs Exposed Red Actions
 
-Now matches CybORG: `host_service_reliability` tracks per-service reliability (0-100,
-default 100). `DegradeServices` decrements by 20 (clamped to 0). `GreenLocalWork` picks
-a random active service and checks `randint(0, 100) < reliability` before executing.
-`Restore` resets reliability to 100.
+CybORG CC4 is blue-controlled with red behavior produced by internal FSM agents.
 
-## ~~Privilege Escalation: No Sandbox Check~~ RESOLVED
+JAX `CC4Env` currently accepts both blue and red actions in the action dict (while
+`FsmRedCC4Env` exists for blue-only control). This is still a behavior/interface
+difference for users of `CC4Env`.
 
-Now matches CybORG: `apply_privesc` checks `red_session_sandboxed[agent_id, target_host]`.
-If the session was created by exploiting a sandboxed decoy process, escalation fails and
-the session is removed. None of the 4 CC4 decoy types currently use `SANDBOXING_EXPLOIT`,
-but the check is in place for future decoy types.
-
-## ~~FSM Red Agent: No U→F Subnet Guard~~ RESOLVED
-
-Now matches CybORG: `fsm_red_update_state` checks if the target host is in the agent's
-allowed subnets (via `red_agent_subnets` in CC4Const). If a host would transition to
-state U but is outside the agent's subnets, it transitions to F instead.
-
-## ~~Withdraw: Unconditional host_compromised Clear~~ RESOLVED
-
-Now matches CybORG: `apply_withdraw` computes the max remaining privilege across all red
-agents after clearing the withdrawing agent's session. `host_compromised` is set to that
-max (which is `COMPROMISE_NONE` only if no other agent has privilege). `host_has_malware`
-is only cleared if no other agent has a session on the host.
-
-## ~~Session Reassignment After Green Phishing~~ RESOLVED
-
-Now matches CybORG: `reassign_cross_subnet_sessions()` in `reassignment.py` transfers red
-sessions to the agent that owns the host's subnet. CybORG's
-`different_subnet_agent_reassignment()` does this after every step — when green phishing
-creates a session on a host outside the originating red agent's allowed subnets, the session
-is transferred to the correct subnet owner. The harness calls this after green actions.
-
-## Observation Layout: Fixed vs Variable Body Size
-
-CybORG's `BlueFlatWrapper` builds observations with a variable-length body depending on how
-many subnets the agent oversees. Agents 0-3 observe 1 subnet (body=60), agent 4 observes 3
-subnets (body=178). Messages are appended right after the body, then the observation is
-padded to 210 elements.
-
-The JAX implementation always includes 3 subnet blocks (zero-filled for unassigned subnets),
-giving a fixed body of 178 for all agents. Messages are always the last 32 elements.
-
-For agents 0-3, this means the message section is at different indices:
-- CybORG: `obs[60:92]` with padding at `obs[92:210]`
-- JAX: `obs[178:210]` with zero blocks at `obs[60:178]`
-
-The information content is identical — same subnet data, same messages — but at different
-positions. This is fine for training (consistent structure is better), but means raw
-observation vectors are not directly comparable between CybORG and JAX for agents 0-3.
-
-- JAX: `observations.py` — always 3 blocks + messages
-- CybORG: `BlueFlatWrapper.observation_change()` — variable blocks + messages + padding
-
-## CC4Env: Red Agents Exposed as Controllable (CybORG: Scripted FSM)
-
-CybORG CC4 is a **blue-only training** environment. Red agents always run the
-`FiniteStateRedAgent` FSM internally — they are not controllable by an RL policy. The FSM
-reads directly from state (`fsm_host_states`, `red_discovered_hosts`, `host_active`),
-picks a random eligible host, samples an action from a hardcoded probability matrix, and
-does not use observations at all.
-
-The JAX `CC4Env` currently exposes red agents as controllable agents in the action dict
-(6 red agents alongside 5 blue agents, 11 total). This was a design choice to support
-potential future red-blue self-play, but diverges from CC4's intended use where only blue
-agents are trained.
-
-For standard CC4 training, red actions should be generated internally by `fsm_red_get_action()`
-during `step_env()`, and only the 5 blue agents should appear in the action/observation/reward
-dicts.
-
-To make red agents genuinely trainable for self-play, additional work is needed:
-- **Red observations**: `get_red_obs()` currently returns zeros — needs proper encoding of
-  discovered hosts, session states, privilege levels, and FSM progress
-- **Red action masking**: `get_avail_actions()` returns all-ones for red — needs masks to
-  prevent invalid actions (e.g., scanning undiscovered hosts, exploiting without sessions)
-- **Red obs space**: currently set to `BLUE_OBS_SIZE` as a placeholder
-
-- JAX: `env.py` — red agents in `self.agents`, receive actions from caller
-- CybORG: `EnterpriseScenarioGenerator` — red always `FiniteStateRedAgent`, not trainable
-
-## Action Duration System
-
-CybORG actions have a `duration` field (number of steps to execute). When an action with
-duration > 1 is submitted, CybORG queues it — the agent sleeps for `duration - 1` steps,
-then the action executes. During the wait, new actions for that agent are ignored.
-
-| Action | Duration |
-|--------|----------|
-| Sleep, DiscoverRemoteSystems | 1 |
-| PrivilegeEscalate, Impact, DegradeServices, Analyse, DiscoverDeception, DeployDecoy | 2 |
-| DiscoverNetworkServices, Remove | 3 |
-| ExploitRemoteService | 4 |
-| Restore | 5 |
-
-JAX `CC4Env.step_env()` executes all actions immediately (no duration tracking). The
-**differential test harness** handles duration by reading CybORG's `actions_in_progress`
-after each step and only applying JAX actions when CybORG actually executes them. This
-keeps state comparison in sync without requiring JAX-side duration logic.
-
-For standalone JAX training (without CybORG), duration is irrelevant since both sides of
-the RL loop (env + policy) see the same immediate-execution semantics.
-
-- CybORG: `SimulationController.step()` — `remaining_ticks` / `actions_in_progress`
-- JAX: `env.py` `step_env()` — immediate execution
-- Harness: `tests/differential/harness.py` `full_step()` — syncs via `actions_in_progress`
+- JAX: `src/jaxborg/env.py`
+- CybORG: enterprise simulation controller + FSM red agents

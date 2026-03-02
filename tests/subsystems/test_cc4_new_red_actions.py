@@ -326,10 +326,12 @@ class TestApplyWithdraw:
         assert target is not None
 
         red_sessions = state.red_sessions.at[0, target].set(True)
+        red_session_count = state.red_session_count.at[0, target].set(1)
         red_privilege = state.red_privilege.at[0, target].set(COMPROMISE_PRIVILEGED)
         host_compromised = state.host_compromised.at[target].set(COMPROMISE_PRIVILEGED)
         state = state.replace(
             red_sessions=red_sessions,
+            red_session_count=red_session_count,
             red_privilege=red_privilege,
             host_compromised=host_compromised,
         )
@@ -359,7 +361,8 @@ class TestApplyWithdraw:
 
         red_sessions = state.red_sessions.at[0, target].set(True)
         red_sessions = red_sessions.at[1, target].set(True)
-        state = state.replace(red_sessions=red_sessions)
+        red_session_count = state.red_session_count.at[0, target].set(1).at[1, target].set(1)
+        state = state.replace(red_sessions=red_sessions, red_session_count=red_session_count)
 
         action_idx = encode_red_action("Withdraw", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -373,8 +376,13 @@ class TestApplyWithdraw:
         assert target is not None
 
         red_sessions = state.red_sessions.at[0, target].set(True)
+        red_session_count = state.red_session_count.at[0, target].set(1)
         red_privilege = state.red_privilege.at[0, target].set(COMPROMISE_USER)
-        state = state.replace(red_sessions=red_sessions, red_privilege=red_privilege)
+        state = state.replace(
+            red_sessions=red_sessions,
+            red_session_count=red_session_count,
+            red_privilege=red_privilege,
+        )
 
         action_idx = encode_red_action("Withdraw", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))

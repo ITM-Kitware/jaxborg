@@ -107,11 +107,13 @@ def test_cross_subnet_reassignment_drops_session_scan_memory_matches_cyborg():
     red_sessions = jax_state.red_sessions.at[source_agent, target_idx].set(True)
     red_privilege = jax_state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER)
     red_discovered = jax_state.red_discovered_hosts.at[source_agent, target_idx].set(True)
+    red_session_count = jax_state.red_session_count.at[source_agent, target_idx].set(1)
     red_scanned = jax_state.red_scanned_hosts
     for h in seeded_scan_hosts:
         red_scanned = red_scanned.at[source_agent, h].set(True)
     jax_state = jax_state.replace(
         red_sessions=red_sessions,
+        red_session_count=red_session_count,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
@@ -180,6 +182,10 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
         .set(True)
         .at[source_agent, target_idx]
         .set(True),
+        red_session_count=jax_state.red_session_count.at[source_agent, keep_host_idx]
+        .set(1)
+        .at[source_agent, target_idx]
+        .set(1),
         red_privilege=jax_state.red_privilege.at[source_agent, keep_host_idx]
         .set(COMPROMISE_USER)
         .at[source_agent, target_idx]
@@ -239,6 +245,10 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
         .set(True)
         .at[source_agent, target_idx]
         .set(True),
+        red_session_count=jax_state.red_session_count.at[source_agent, keep_host_idx]
+        .set(1)
+        .at[source_agent, target_idx]
+        .set(1),
         red_privilege=jax_state.red_privilege.at[source_agent, keep_host_idx]
         .set(COMPROMISE_USER)
         .at[source_agent, target_idx]
@@ -318,6 +328,7 @@ def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_ses
     for h in all_source_hosts:
         jax_state = jax_state.replace(
             red_sessions=jax_state.red_sessions.at[source_agent, h].set(True),
+            red_session_count=jax_state.red_session_count.at[source_agent, h].set(1),
             red_privilege=jax_state.red_privilege.at[source_agent, h].set(COMPROMISE_USER),
             red_discovered_hosts=jax_state.red_discovered_hosts.at[source_agent, h].set(True),
             host_compromised=jax_state.host_compromised.at[h].set(COMPROMISE_USER),
@@ -395,6 +406,12 @@ def test_cross_subnet_reassignment_preserves_scan_anchor_host_matches_cyborg():
         .set(True)
         .at[source_agent, transfer_idx]
         .set(True),
+        red_session_count=jax_state.red_session_count.at[source_agent, cy_anchor_idx]
+        .set(1)
+        .at[source_agent, keep_idx]
+        .set(1)
+        .at[source_agent, transfer_idx]
+        .set(1),
         red_privilege=jax_state.red_privilege.at[source_agent, cy_anchor_idx]
         .set(COMPROMISE_USER)
         .at[source_agent, keep_idx]

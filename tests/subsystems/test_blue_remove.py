@@ -57,7 +57,13 @@ def _make_jax_state(const):
     state = state.replace(host_services=jnp.array(const.initial_services))
     start_host = int(const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
-    return state.replace(red_sessions=red_sessions)
+    red_session_count = state.red_session_count.at[0, start_host].set(1)
+    red_privilege = state.red_privilege.at[0, start_host].set(COMPROMISE_USER)
+    return state.replace(
+        red_sessions=red_sessions,
+        red_session_count=red_session_count,
+        red_privilege=red_privilege,
+    )
 
 
 def _find_host_in_subnet(const, subnet_name, exclude_router=True):
@@ -179,6 +185,7 @@ class TestApplyBlueRemove:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(1),
             red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0, target].set(1),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
@@ -210,6 +217,7 @@ class TestApplyBlueRemove:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(1),
             red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_PRIVILEGED),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_PRIVILEGED),
             host_has_malware=state.host_has_malware.at[target].set(True),
@@ -253,6 +261,7 @@ class TestApplyBlueRemove:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True).at[1, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(1).at[1, target].set(1),
             red_privilege=state.red_privilege.at[0, target]
             .set(COMPROMISE_USER)
             .at[1, target]
@@ -288,6 +297,7 @@ class TestApplyBlueRemove:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(1),
             red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0, target].set(1),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
@@ -320,6 +330,7 @@ class TestRemoveViaDispatch:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(1),
             red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0, target].set(1),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
@@ -893,29 +904,38 @@ class TestDifferentialWithCybORG:
 
         blue_idx = _find_blue_for_host(const, target)
         assert blue_idx is not None
+        red_agent_idx = next(r for r in range(6) if int(const.red_start_hosts[r]) != target)
+        red_agent_name = f"red_agent_{red_agent_idx}"
 
         red_session = RedAbstractSession(
             ident=None,
             hostname=target_hostname,
             username="user",
-            agent="red_agent_0",
+            agent=red_agent_name,
             parent=0,
             session_type="shell",
             pid=None,
         )
         cyborg_state.add_session(red_session)
 
-        cy_red_sess = next(s for s in cyborg_state.sessions["red_agent_0"].values() if s.hostname == target_hostname)
+        cy_red_sess = next(s for s in cyborg_state.sessions[red_agent_name].values() if s.hostname == target_hostname)
         target_ip = next(ip for ip, host in cyborg_state.ip_addresses.items() if host == target_hostname)
         cy_red_sess.addport(target_ip, 22)
         blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
         blue_parent.add_sus_pids(hostname=target_hostname, pid=cy_red_sess.pid)
 
         state = state.replace(
-            red_sessions=state.red_sessions.at[0].set(False).at[0, target].set(True),
-            red_privilege=state.red_privilege.at[0].set(COMPROMISE_NONE).at[0, target].set(COMPROMISE_USER),
-            red_scanned_hosts=state.red_scanned_hosts.at[0].set(False).at[0, target].set(True),
-            red_suspicious_process_count=state.red_suspicious_process_count.at[0].set(0).at[0, target].set(1),
+            red_sessions=state.red_sessions.at[red_agent_idx].set(False).at[red_agent_idx, target].set(True),
+            red_session_count=state.red_session_count.at[red_agent_idx].set(0).at[red_agent_idx, target].set(1),
+            red_privilege=state.red_privilege.at[red_agent_idx]
+            .set(COMPROMISE_NONE)
+            .at[red_agent_idx, target]
+            .set(COMPROMISE_USER),
+            red_scanned_hosts=state.red_scanned_hosts.at[red_agent_idx].set(False).at[red_agent_idx, target].set(True),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[red_agent_idx]
+            .set(0)
+            .at[red_agent_idx, target]
+            .set(1),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
@@ -933,14 +953,16 @@ class TestDifferentialWithCybORG:
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned_hosts = set()
-        for sess in cyborg_state.sessions["red_agent_0"].values():
+        for sess in cyborg_state.sessions[red_agent_name].values():
             for ip in getattr(sess, "ports", {}).keys():
                 host = cyborg_state.ip_addresses.get(ip)
                 if host is not None:
                     cy_scanned_hosts.add(sorted_hosts.index(host))
 
         assert cy_scanned_hosts == set()
-        jax_scanned_hosts = {h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[0, h])}
+        jax_scanned_hosts = {
+            h for h in range(int(const.num_hosts)) if bool(new_state.red_scanned_hosts[red_agent_idx, h])
+        }
         assert jax_scanned_hosts == cy_scanned_hosts
 
     def test_remove_with_multiple_user_sessions_removes_one_not_all_matches_cyborg(self, cyborg_and_jax):
