@@ -65,6 +65,9 @@ def scan_sources_with_fallback(state: CC4State) -> chex.Array:
 
     Legacy tests and some initialization paths still seed `red_scanned_hosts` and
     `red_scanned_via` without populating `red_scanned_source_hosts`.
+    For unresolved scanned targets, fallback source ownership follows:
+    1) `red_scan_anchor_host` (session-0 modeled host) when valid
+    2) first available live session host
     """
     via = state.red_scanned_via
     host_dim = state.red_scanned_source_hosts.shape[2]
@@ -72,7 +75,32 @@ def scan_sources_with_fallback(state: CC4State) -> chex.Array:
     via_one_hot = jax.nn.one_hot(via_idx, host_dim, dtype=jnp.bool_)
     via_valid = state.red_scanned_hosts & (via >= 0)
     via_sources = via_one_hot & via_valid[:, :, None]
-    return state.red_scanned_source_hosts | via_sources
+    sources = state.red_scanned_source_hosts | via_sources
+
+    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
+
+    anchor = state.red_scan_anchor_host
+    anchor_idx = jnp.clip(anchor, 0, host_dim - 1)
+    anchor_valid = (anchor >= 0) & state.red_sessions[jnp.arange(state.red_sessions.shape[0]), anchor_idx]
+    anchor_one_hot = jax.nn.one_hot(anchor_idx, host_dim, dtype=jnp.bool_)
+    anchor_sources = unresolved[:, :, None] & anchor_one_hot[:, None, :] & anchor_valid[:, None, None]
+    sources = sources | anchor_sources
+
+    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
+    self_host_sources = (
+        unresolved[:, :, None]
+        & state.red_sessions[:, :, None]
+        & jnp.eye(host_dim, dtype=jnp.bool_)[None, :, :]
+    )
+    sources = sources | self_host_sources
+
+    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
+    live_sessions = state.red_sessions
+    first_idx = jnp.argmax(live_sessions, axis=1)
+    first_valid = jnp.any(live_sessions, axis=1)
+    first_one_hot = jax.nn.one_hot(first_idx, host_dim, dtype=jnp.bool_)
+    first_sources = unresolved[:, :, None] & first_one_hot[:, None, :] & first_valid[:, None, None]
+    return sources | first_sources
 
 
 def recompute_scan_views_from_sources(scan_sources: chex.Array) -> tuple[chex.Array, chex.Array]:
@@ -88,12 +116,16 @@ def sync_scan_memory_fields(
     const: CC4Const,
     scan_sources: chex.Array | None = None,
 ) -> CC4State:
-    """Project scan-memory ownership onto active abstract source sessions."""
+    """Project scan-memory ownership onto active source sessions.
+
+    CybORG derives scanned-host memory from session `ports` maps. That logic is
+    not gated on JAX-specific abstract-session bookkeeping, so scan-memory
+    validity should depend on live source sessions and active hosts only.
+    """
     sources = scan_sources if scan_sources is not None else scan_sources_with_fallback(state)
     valid_sources = (
         sources
         & state.red_sessions[:, None, :]
-        & state.red_session_is_abstract[:, None, :]
         & const.host_active[None, None, :]
     )
     red_scanned_hosts, red_scanned_via = recompute_scan_views_from_sources(valid_sources)

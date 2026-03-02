@@ -26,17 +26,32 @@ def jax_state(jax_const):
     return state.replace(host_services=jax_const.initial_services)
 
 
+def _jax_msg_start(const, agent_id):
+    num_subnets = int(np.sum(np.array(const.blue_obs_subnets[agent_id]) >= 0))
+    return 1 + num_subnets * SUBNET_BLOCK_SIZE
+
+
+def _jax_msg_section(obs, const, agent_id):
+    start = _jax_msg_start(const, agent_id)
+    return np.array(obs[start : start + MESSAGE_SECTION_SIZE])
+
+
 class TestMessageSectionPosition:
-    def test_messages_are_last_32_elements(self, jax_const, jax_state):
+    def test_message_section_has_expected_size(self, jax_const, jax_state):
         obs = get_blue_obs(jax_state, jax_const, 0)
         assert obs.shape == (OBS_SIZE,)
-        msg_section = obs[-MESSAGE_SECTION_SIZE:]
+        msg_section = _jax_msg_section(obs, jax_const, 0)
         assert msg_section.shape == (MESSAGE_SECTION_SIZE,)
+
+    def test_message_section_start_matches_subnet_count(self, jax_const, jax_state):
+        _ = get_blue_obs(jax_state, jax_const, 0)
+        assert _jax_msg_start(jax_const, 0) == 1 + SUBNET_BLOCK_SIZE
+        assert _jax_msg_start(jax_const, 4) == 1 + 3 * SUBNET_BLOCK_SIZE
 
     def test_zero_messages_give_zero_section(self, jax_const, jax_state):
         for agent_id in range(NUM_BLUE_AGENTS):
             obs = get_blue_obs(jax_state, jax_const, agent_id)
-            msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+            msg_section = _jax_msg_section(obs, jax_const, agent_id)
             np.testing.assert_array_equal(
                 msg_section,
                 np.zeros(MESSAGE_SECTION_SIZE),
@@ -54,7 +69,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 0)
         assert np.any(msg_section != 0), "message from agent 1 should appear in agent 0 obs"
 
     def test_self_messages_excluded(self, jax_const, jax_state):
@@ -63,7 +78,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 0)
         np.testing.assert_array_equal(
             msg_section,
             np.zeros(MESSAGE_SECTION_SIZE),
@@ -75,7 +90,7 @@ class TestMessageContent:
             msgs = jax_state.messages.at[agent_id, agent_id, :].set(jnp.ones(MESSAGE_LENGTH))
             state = jax_state.replace(messages=msgs)
             obs = get_blue_obs(state, jax_const, agent_id)
-            msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+            msg_section = _jax_msg_section(obs, jax_const, agent_id)
             np.testing.assert_array_equal(
                 msg_section,
                 np.zeros(MESSAGE_SECTION_SIZE),
@@ -92,7 +107,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 0)
         nonzero_count = np.count_nonzero(msg_section)
         assert nonzero_count == NUM_MESSAGES * MESSAGE_LENGTH, (
             f"expected {NUM_MESSAGES * MESSAGE_LENGTH} nonzero, got {nonzero_count}"
@@ -107,7 +122,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 2)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 2)
 
         for slot_idx in range(NUM_MESSAGES):
             slot = msg_section[slot_idx * MESSAGE_LENGTH : (slot_idx + 1) * MESSAGE_LENGTH]
@@ -119,7 +134,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 1)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 1)
         slot2 = msg_section[2 * MESSAGE_LENGTH : 3 * MESSAGE_LENGTH]
         np.testing.assert_array_almost_equal(slot2, np.array(msg_val))
 
@@ -131,7 +146,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 0)
 
         expected_senders = [1, 2, 3, 4]
         for slot_idx, sender in enumerate(expected_senders):
@@ -151,7 +166,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs = get_blue_obs(state, jax_const, 4)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 4)
 
         expected_senders = [0, 1, 2, 3]
         for slot_idx, sender in enumerate(expected_senders):
@@ -169,7 +184,7 @@ class TestMessageContent:
         state = jax_state.replace(messages=msgs)
 
         obs_agent2 = np.array(get_blue_obs(state, jax_const, 2))
-        msg_section_agent2 = obs_agent2[-MESSAGE_SECTION_SIZE:]
+        msg_section_agent2 = _jax_msg_section(obs_agent2, jax_const, 2)
         np.testing.assert_array_equal(
             msg_section_agent2,
             np.zeros(MESSAGE_SECTION_SIZE),
@@ -185,7 +200,7 @@ class TestMessageJIT:
 
         jitted = jax.jit(get_blue_obs, static_argnums=(2,))
         obs = jitted(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        msg_section = _jax_msg_section(obs, jax_const, 0)
         assert np.any(msg_section != 0)
 
     def test_jit_all_agents_with_messages(self, jax_const, jax_state):
@@ -237,9 +252,10 @@ class TestDifferentialMessages:
 
         for agent_id in range(NUM_BLUE_AGENTS):
             agent_name = f"blue_agent_{agent_id}"
-            cyborg_msgs = observations[agent_name][-MESSAGE_SECTION_SIZE:]
+            msg_start = self._cyborg_msg_start(wrapped_env, agent_name)
+            cyborg_msgs = observations[agent_name][msg_start : msg_start + MESSAGE_SECTION_SIZE]
             jax_obs = np.array(get_blue_obs(state, const, agent_id))
-            jax_msgs = jax_obs[-MESSAGE_SECTION_SIZE:]
+            jax_msgs = _jax_msg_section(jax_obs, const, agent_id)
 
             np.testing.assert_array_equal(
                 cyborg_msgs,
@@ -281,7 +297,7 @@ class TestDifferentialMessages:
             assert np.any(cyborg_msg_section != 0), f"{agent_name}: CybORG delivered no messages"
 
             jax_obs = np.array(get_blue_obs(state_with_msgs, const, agent_id))
-            jax_msg_section = jax_obs[-MESSAGE_SECTION_SIZE:]
+            jax_msg_section = _jax_msg_section(jax_obs, const, agent_id)
 
             np.testing.assert_array_equal(
                 cyborg_msg_section,
@@ -316,7 +332,7 @@ class TestDifferentialMessages:
             msg_start = self._cyborg_msg_start(wrapped_env, agent_name)
             cyborg_msg_section = cyborg_obs[agent_name][msg_start : msg_start + MESSAGE_SECTION_SIZE]
             jax_obs = np.array(get_blue_obs(state_with_msgs, const, agent_id))
-            jax_msg_section = jax_obs[-MESSAGE_SECTION_SIZE:]
+            jax_msg_section = _jax_msg_section(jax_obs, const, agent_id)
 
             np.testing.assert_array_equal(
                 cyborg_msg_section,
@@ -333,13 +349,20 @@ class TestDifferentialMessages:
 
         for agent_id in range(NUM_BLUE_AGENTS):
             agent_name = f"blue_agent_{agent_id}"
-            cyborg_body = observations[agent_name][:-MESSAGE_SECTION_SIZE]
+            msg_start = self._cyborg_msg_start(wrapped_env, agent_name)
+            cyborg_msg_end = msg_start + MESSAGE_SECTION_SIZE
             jax_obs = np.array(get_blue_obs(state, const, agent_id))
-            jax_body = jax_obs[:-MESSAGE_SECTION_SIZE]
+            jax_msg_start = _jax_msg_start(const, agent_id)
+            jax_msg_end = jax_msg_start + MESSAGE_SECTION_SIZE
 
             np.testing.assert_array_equal(
-                cyborg_body,
-                jax_body,
+                observations[agent_name][:msg_start],
+                jax_obs[:jax_msg_start],
+                err_msg=f"{agent_name}: pre-message obs mismatch after step",
+            )
+            np.testing.assert_array_equal(
+                observations[agent_name][cyborg_msg_end:],
+                jax_obs[jax_msg_end:],
                 err_msg=f"{agent_name}: non-message obs mismatch after step",
             )
 
@@ -366,6 +389,7 @@ class TestMessageDifferential:
             agent_name = f"blue_agent_{agent_id}"
             cyborg_obs = observations[agent_name]
             jax_obs = np.array(get_blue_obs(state, const, agent_id))
-            cyborg_msgs = cyborg_obs[-MESSAGE_SECTION_SIZE:]
-            jax_msgs = jax_obs[-MESSAGE_SECTION_SIZE:]
+            cyborg_msg_start = 1 + len(wrapped.subnets(agent_name)) * SUBNET_BLOCK_SIZE
+            cyborg_msgs = cyborg_obs[cyborg_msg_start : cyborg_msg_start + MESSAGE_SECTION_SIZE]
+            jax_msgs = _jax_msg_section(jax_obs, const, agent_id)
             np.testing.assert_array_equal(cyborg_msgs, jax_msgs, err_msg=f"{agent_name}: message section mismatch")

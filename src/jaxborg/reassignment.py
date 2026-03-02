@@ -109,19 +109,13 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     )
     full_clear = (~has_any_sessions_now)[:, None]
     scan_sources = scan_sources_with_fallback(state)
-    source_knowledge_any_agent = jnp.any(scan_sources, axis=0)
-    reassigned_scan_sources = jnp.zeros_like(scan_sources)
-    for dst in range(NUM_RED_AGENTS):
-        dst_source_mask = red_sessions[dst]
-        dst_sources = jnp.where(dst_source_mask[None, :], source_knowledge_any_agent, False)
-        reassigned_scan_sources = reassigned_scan_sources.at[dst].set(dst_sources)
     scan_synced = sync_scan_memory_fields(
         state.replace(
             red_sessions=red_sessions,
             red_session_is_abstract=red_session_is_abstract,
         ),
         const,
-        scan_sources=reassigned_scan_sources,
+        scan_sources=scan_sources,
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_via = jnp.where(full_clear, -1, scan_synced.red_scanned_via)

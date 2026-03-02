@@ -1,4 +1,5 @@
 import chex
+import jax
 import jax.numpy as jnp
 import numpy as np
 
@@ -57,7 +58,7 @@ def _subnet_block(
 
 
 def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
-    mission_phase = state.mission_phase.astype(jnp.float32).reshape(1)
+    mission_phase = state.mission_phase.astype(jnp.float32)
 
     blocks = []
     for slot in range(3):
@@ -68,6 +69,11 @@ def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
             jnp.zeros(SUBNET_BLOCK_SIZE, dtype=jnp.float32),
         )
         blocks.append(block)
+    all_blocks = jnp.concatenate(blocks)
+    num_subnets = jnp.sum(const.blue_obs_subnets[agent_id] >= 0).astype(jnp.int32)
+    subnet_len = num_subnets * SUBNET_BLOCK_SIZE
+    subnet_mask = jnp.arange(3 * SUBNET_BLOCK_SIZE, dtype=jnp.int32) < subnet_len
+    subnet_section = jnp.where(subnet_mask, all_blocks, 0.0)
 
     other_agents = jnp.array([i for i in range(NUM_BLUE_AGENTS) if i != agent_id])
     msg_parts = []
@@ -76,7 +82,12 @@ def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
         msg_parts.append(state.messages[sender, agent_id, :])
     message_section = jnp.concatenate(msg_parts)
 
-    return jnp.concatenate([mission_phase] + blocks + [message_section])
+    obs = jnp.zeros(BLUE_OBS_SIZE, dtype=jnp.float32)
+    obs = obs.at[0].set(mission_phase)
+    obs = obs.at[1 : 1 + 3 * SUBNET_BLOCK_SIZE].set(subnet_section)
+    message_start = jnp.int32(1) + subnet_len
+    obs = jax.lax.dynamic_update_slice(obs, message_section, (message_start,))
+    return obs
 
 
 def get_red_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:

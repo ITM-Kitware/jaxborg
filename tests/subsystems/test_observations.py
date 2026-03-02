@@ -37,6 +37,11 @@ def _get_subnet_block(obs, slot):
     return np.array(obs[start : start + SUBNET_BLOCK_SIZE])
 
 
+def _message_start(const, agent_id):
+    num_subnets = int(np.sum(np.array(const.blue_obs_subnets[agent_id]) >= 0))
+    return 1 + num_subnets * SUBNET_BLOCK_SIZE
+
+
 class TestBlueObsShape:
     def test_obs_shape_all_agents(self, jax_const, jax_state):
         for agent_id in range(NUM_BLUE_AGENTS):
@@ -63,22 +68,25 @@ class TestBlueObsStructure:
         obs = get_blue_obs(state_p2, jax_const, 0)
         assert int(obs[0]) == 2
 
-    def test_messages_are_last_32_elements(self, jax_const, jax_state):
+    def test_messages_are_at_cyborg_position(self, jax_const, jax_state):
         obs = get_blue_obs(jax_state, jax_const, 0)
-        msg_section = obs[-MESSAGE_SECTION_SIZE:]
+        start = _message_start(jax_const, 0)
+        msg_section = obs[start : start + MESSAGE_SECTION_SIZE]
         np.testing.assert_array_equal(np.array(msg_section), np.zeros(MESSAGE_SECTION_SIZE))
 
     def test_messages_reflect_state(self, jax_const, jax_state):
         msgs = jax_state.messages.at[1, 0, :].set(jnp.ones(MESSAGE_LENGTH))
         state = jax_state.replace(messages=msgs)
         obs = get_blue_obs(state, jax_const, 0)
-        msg_section = np.array(obs[-MESSAGE_SECTION_SIZE:])
+        start = _message_start(jax_const, 0)
+        msg_section = np.array(obs[start : start + MESSAGE_SECTION_SIZE])
         assert np.any(msg_section != 0), "message should appear in observation"
 
-    def test_inactive_hosts_zero_in_obs(self, jax_const, jax_state):
+    def test_padding_tail_zero_for_single_subnet_agents(self, jax_const, jax_state):
         obs = get_blue_obs(jax_state, jax_const, 0)
-        body = np.array(obs[1 : OBS_SIZE - MESSAGE_SECTION_SIZE])
-        assert body.shape == (NUM_HQ_SUBNETS * SUBNET_BLOCK_SIZE,)
+        start = _message_start(jax_const, 0)
+        tail = np.array(obs[start + MESSAGE_SECTION_SIZE :])
+        np.testing.assert_array_equal(tail, np.zeros_like(tail))
 
 
 class TestSubnetOneHot:

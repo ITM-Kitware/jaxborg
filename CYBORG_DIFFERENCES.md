@@ -17,18 +17,6 @@ list focused on remaining work.
 
 ## Additional Open Differences
 
-### Observation Layout: Fixed vs Variable Body Size
-
-CybORG `BlueFlatWrapper` uses a variable-length observation body based on how many
-subnets the blue agent controls, then appends messages and pads to 210.
-
-JAX keeps a fixed 3-subnet body for all blue agents, then appends messages. This keeps
-training input shape uniform but means raw vector indices differ from CybORG for
-agents that monitor fewer than 3 subnets.
-
-- JAX: `src/jaxborg/observations.py`
-- CybORG: `BlueFlatWrapper.observation_change()`
-
 ### CC4Env Agent Interface: Blue-Only vs Exposed Red Actions
 
 CybORG CC4 is blue-controlled with red behavior produced by internal FSM agents.
