@@ -5,23 +5,15 @@ list focused on remaining work.
 
 ## Open Heuristic Implementations (To Remove)
 
-1. `effective_session_counts()` infers counts from legacy boolean flags instead of using
-   explicit `red_session_count` as source of truth.
-   - `src/jaxborg/actions/session_counts.py`
-
-2. `apply_blue_restore()` scan-memory remap uses threshold/candidate heuristics
-   (for example `via_count >= 4`) rather than explicit session-object semantics.
-   - `src/jaxborg/actions/blue_restore.py`
-
-3. Scan-memory owner/source selection is based on argmax/mode over host-index arrays
+1. Scan-memory owner/source selection is based on argmax/mode over host-index arrays
    instead of concrete per-session identity/lifecycle matching.
    - `src/jaxborg/actions/red_common.py`
 
-4. Cross-subnet reassignment merges transferred session attributes via aggregate
+2. Cross-subnet reassignment merges transferred session attributes via aggregate
    `max/sum` reductions rather than strict per-session reassignment semantics.
    - `src/jaxborg/reassignment.py`
 
-5. Green phishing source-agent selection is simplified (first-valid) and does not yet
+3. Green phishing source-agent selection is simplified (first-valid) and does not yet
    fully mirror CybORG `PhishingEmail` source selection behavior.
    - `src/jaxborg/actions/green.py`
 

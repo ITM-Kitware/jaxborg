@@ -86,26 +86,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.red_scan_anchor_host,
     )
     red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)
-    target_subnet = const.host_subnet[target_host]
-    same_subnet_as_target = const.host_subnet == target_subnet
-    host_indices = jnp.arange(state.host_compromised.shape[0], dtype=jnp.int32)
-    via_count = jnp.sum(via_clear.astype(jnp.int32), axis=1)
-    remap_candidate = (
-        via_clear
-        & has_any_sessions_now[:, None]
-        & (state.host_compromised[None, :] == COMPROMISE_NONE)
-        & same_subnet_as_target[None, :]
-        & (state.red_scan_anchor_host[:, None] != jnp.int32(target_host))
-        & (host_indices[None, :] != jnp.int32(target_host))
-    )
-    candidate_count = jnp.sum(remap_candidate.astype(jnp.int32), axis=1)
-    via_remap = remap_candidate & (via_count >= 4)[:, None] & (candidate_count == 1)[:, None]
-    via_drop = via_clear & ~via_remap
-    red_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_drop)
+    red_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
     red_scanned_via = jnp.where(
-        full_clear | via_drop,
+        full_clear | via_clear,
         -1,
-        jnp.where(via_remap, fallback_anchor[:, None], state.red_scanned_via),
+        state.red_scanned_via,
     )
 
     host_services = jnp.where(
