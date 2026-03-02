@@ -61,46 +61,14 @@ def can_reach_subnet(
 
 
 def scan_sources_with_fallback(state: CC4State) -> chex.Array:
-    """Return scan-memory ownership matrix including legacy via fallback.
+    """Return scan-memory ownership matrix.
 
-    Legacy tests and some initialization paths still seed `red_scanned_hosts` and
-    `red_scanned_via` without populating `red_scanned_source_hosts`.
-    For unresolved scanned targets, fallback source ownership follows:
-    1) `red_scan_anchor_host` (session-0 modeled host) when valid
-    2) first available live session host
+    CybORG tracks per-session source ownership for each scanned target through
+    red-session `ports` memory. JAX mirrors that state in
+    `red_scanned_source_hosts`; ownership should not be reconstructed from
+    derived fields (`red_scanned_hosts` / `red_scanned_via`).
     """
-    via = state.red_scanned_via
-    host_dim = state.red_scanned_source_hosts.shape[2]
-    via_idx = jnp.clip(via, 0, host_dim - 1)
-    via_one_hot = jax.nn.one_hot(via_idx, host_dim, dtype=jnp.bool_)
-    via_valid = state.red_scanned_hosts & (via >= 0)
-    via_sources = via_one_hot & via_valid[:, :, None]
-    sources = state.red_scanned_source_hosts | via_sources
-
-    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
-
-    anchor = state.red_scan_anchor_host
-    anchor_idx = jnp.clip(anchor, 0, host_dim - 1)
-    anchor_valid = (anchor >= 0) & state.red_sessions[jnp.arange(state.red_sessions.shape[0]), anchor_idx]
-    anchor_one_hot = jax.nn.one_hot(anchor_idx, host_dim, dtype=jnp.bool_)
-    anchor_sources = unresolved[:, :, None] & anchor_one_hot[:, None, :] & anchor_valid[:, None, None]
-    sources = sources | anchor_sources
-
-    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
-    self_host_sources = (
-        unresolved[:, :, None]
-        & state.red_sessions[:, :, None]
-        & jnp.eye(host_dim, dtype=jnp.bool_)[None, :, :]
-    )
-    sources = sources | self_host_sources
-
-    unresolved = state.red_scanned_hosts & ~jnp.any(sources, axis=2)
-    live_sessions = state.red_sessions
-    first_idx = jnp.argmax(live_sessions, axis=1)
-    first_valid = jnp.any(live_sessions, axis=1)
-    first_one_hot = jax.nn.one_hot(first_idx, host_dim, dtype=jnp.bool_)
-    first_sources = unresolved[:, :, None] & first_one_hot[:, None, :] & first_valid[:, None, None]
-    return sources | first_sources
+    return state.red_scanned_source_hosts
 
 
 def recompute_scan_views_from_sources(scan_sources: chex.Array) -> tuple[chex.Array, chex.Array]:
@@ -283,26 +251,6 @@ def select_scan_execution_source_host(
         has_pending_binding,
         jnp.where(pending_valid, pending_source, jnp.int32(-1)),
         computed,
-    )
-
-
-def scan_via_owner_alive(
-    state: CC4State,
-    const: CC4Const,
-    agent_id: int,
-    target_host: chex.Array,
-) -> chex.Array:
-    """Whether current scan-memory owner is still a live session host."""
-    target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
-    via = state.red_scanned_via[agent_id, target_idx]
-    via_idx = jnp.clip(via, 0, state.red_sessions.shape[1] - 1)
-    sources = scan_sources_with_fallback(state)
-    return (
-        (via >= 0)
-        & sources[agent_id, target_idx, via_idx]
-        & state.red_sessions[agent_id, via_idx]
-        & state.red_session_is_abstract[agent_id, via_idx]
-        & const.host_active[via_idx]
     )
 
 

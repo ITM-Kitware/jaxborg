@@ -4,7 +4,6 @@ import jax.numpy as jnp
 from jaxborg.actions.red_common import (
     can_reach_subnet,
     scan_sources_with_fallback,
-    scan_via_owner_alive,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
 )
@@ -35,14 +34,6 @@ def apply_scan(
         scan_sources,
     )
 
-    current_owner_alive = scan_via_owner_alive(state, const, agent_id, target_host)
-    should_update_owner = success & (~state.red_scanned_hosts[agent_id, target_host] | ~current_owner_alive)
-    red_scanned_via = jnp.where(
-        should_update_owner,
-        state.red_scanned_via.at[agent_id, target_host].set(source_host),
-        state.red_scanned_via,
-    )
-
     activity = jnp.where(
         success,
         state.red_activity_this_step.at[target_host].set(ACTIVITY_SCAN),
@@ -55,7 +46,6 @@ def apply_scan(
     )
 
     next_state = state.replace(
-        red_scanned_via=red_scanned_via,
         red_scan_anchor_host=red_scan_anchor_host,
         red_activity_this_step=activity,
     )

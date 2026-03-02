@@ -607,6 +607,7 @@ class TestDifferentialWithCybORG:
             .set(True),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(True),
             red_scanned_via=state.red_scanned_via.at[red_agent_id, target_host].set(target_host),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host].set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
             .set(True)
