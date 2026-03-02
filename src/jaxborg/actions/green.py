@@ -5,6 +5,7 @@ from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.rng import sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
+    ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
@@ -34,10 +35,12 @@ def _find_phishing_red_agent(
     routable_pairs = session_pairs & ~state.blocked_zones[source_subnets, target_subnet]
     same_subnet_pairs = routable_pairs & (source_subnets == target_subnet)
 
-    same_subnet_flat = jnp.transpose(same_subnet_pairs, (1, 0)).reshape(-1)
-    has_same_subnet = jnp.any(same_subnet_flat)
-    first_same_idx = jnp.argmax(same_subnet_flat)
-    same_subnet_agent = (first_same_idx % NUM_RED_AGENTS).astype(jnp.int32)
+    same_subnet_by_host = jnp.any(same_subnet_pairs, axis=0)
+    first_same_agent_by_host = jnp.argmax(same_subnet_pairs, axis=0).astype(jnp.int32)
+    host_indices = jnp.arange(same_subnet_by_host.shape[0], dtype=jnp.int32)
+    last_same_host = jnp.max(jnp.where(same_subnet_by_host, host_indices, jnp.int32(-1)))
+    has_same_subnet = last_same_host >= 0
+    same_subnet_agent = first_same_agent_by_host[jnp.clip(last_same_host, 0, same_subnet_by_host.shape[0] - 1)]
 
     routable_flat = jnp.transpose(routable_pairs, (1, 0)).reshape(-1)
     num_routable = jnp.sum(routable_flat.astype(jnp.int32))
@@ -109,16 +112,6 @@ def _apply_single_green(
         session_counts.at[red_agent_idx, host_idx].set(new_count_for_agent),
         session_counts,
     )
-    red_session_multiple = jnp.where(
-        phish_creates_session,
-        state.red_session_multiple.at[red_agent_idx, host_idx].set(new_count_for_agent > 1),
-        state.red_session_multiple,
-    )
-    red_session_many = jnp.where(
-        phish_creates_session,
-        state.red_session_many.at[red_agent_idx, host_idx].set(new_count_for_agent > 2),
-        state.red_session_many,
-    )
     red_session_is_abstract = jnp.where(
         phish_creates_session,
         state.red_session_is_abstract.at[red_agent_idx, host_idx].set(True),
@@ -126,7 +119,11 @@ def _apply_single_green(
     )
     abstract_rank_before = state.red_abstract_host_rank[red_agent_idx, host_idx]
     next_abstract_rank = state.red_next_abstract_rank[red_agent_idx]
-    assigned_rank = jnp.where(abstract_rank_before < jnp.int32(1_000_000), abstract_rank_before, next_abstract_rank)
+    assigned_rank = jnp.where(
+        abstract_rank_before < jnp.int32(ABSTRACT_RANK_NONE),
+        abstract_rank_before,
+        next_abstract_rank,
+    )
     red_abstract_host_rank = jnp.where(
         phish_creates_session,
         state.red_abstract_host_rank.at[red_agent_idx, host_idx].set(assigned_rank),
@@ -219,8 +216,6 @@ def _apply_single_green(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,

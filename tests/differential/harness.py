@@ -8,7 +8,6 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.duration import (
-    PENDING_SOURCE_SESSION_BINDING,
     process_blue_with_duration,
     process_red_with_duration,
 )
@@ -23,6 +22,11 @@ from jaxborg.actions.encoding import (
     decode_red_action,
 )
 from jaxborg.actions.green import apply_green_agents
+from jaxborg.actions.pending_source import (
+    PENDING_SOURCE_KIND_HOST,
+    PENDING_SOURCE_KIND_NONE,
+    PENDING_SOURCE_KIND_SESSION_BINDING,
+)
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import select_bound_source_host, select_scan_execution_source_host
 from jaxborg.agents.fsm_red import (
@@ -31,6 +35,7 @@ from jaxborg.agents.fsm_red import (
     fsm_red_post_step_update,
 )
 from jaxborg.constants import (
+    ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
     MAX_TRACKED_SESSION_PIDS,
     MAX_TRACKED_SUSPICIOUS_PIDS,
@@ -292,7 +297,11 @@ class CC4DifferentialHarness:
         start_scanned_source_hosts = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
-        start_abstract_rank = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32)
+        start_abstract_rank = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
+            jnp.int32(ABSTRACT_RANK_NONE),
+            dtype=jnp.int32,
+        )
         start_next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
         start_session_pids = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32)
         max_pid_seen = 4999
@@ -386,8 +395,6 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_session_count=start_session_count,
-            red_session_multiple=start_session_count > 1,
-            red_session_many=start_session_count > 2,
             red_privilege=start_priv,
             red_session_pids=start_session_pids,
             red_next_pid=jnp.array(max_pid_seen + 1, dtype=jnp.int32),
@@ -538,7 +545,8 @@ class CC4DifferentialHarness:
                 target_hosts.append(eff_host)
                 fsm_actions.append(eff_fsm_act)
                 eligible_flags.append(eff_eligible)
-                prebound_source = self.jax_state.red_pending_source_host[r]
+                prebound_source_kind = self.jax_state.red_pending_source_kind[r]
+                prebound_source_host = self.jax_state.red_pending_source_host[r]
                 if not is_busy:
                     action_type, _, target_host = decode_red_action(action, r, self.jax_const)
                     is_scan_action = (
@@ -549,29 +557,35 @@ class CC4DifferentialHarness:
                     bound_source = select_scan_execution_source_host(self.jax_state, self.jax_const, r, target_host)
                     target_idx = jnp.clip(target_host, 0, self.jax_state.red_scanned_hosts.shape[1] - 1)
                     source_idx = jnp.clip(bound_source, 0, self.jax_state.red_sessions.shape[1] - 1)
-                    source_from_scan_memory = (
-                        (bound_source >= 0) & self.jax_state.red_scanned_source_hosts[r, target_idx, source_idx]
-                    )
+                    source_from_scan_memory = (bound_source >= 0) & self.jax_state.red_scanned_source_hosts[
+                        r, target_idx, source_idx
+                    ]
                     bound_anchor_source = select_bound_source_host(self.jax_state, self.jax_const, r)
                     source_from_bound_session = (bound_source >= 0) & (bound_source == bound_anchor_source)
-                    prebound_source = jnp.where(
+                    prebound_source_kind = jnp.where(
                         is_scan_action,
                         jnp.where(
                             bound_source >= 0,
                             jnp.where(
                                 source_from_scan_memory | ~source_from_bound_session,
-                                bound_source,
-                                PENDING_SOURCE_SESSION_BINDING,
+                                PENDING_SOURCE_KIND_HOST,
+                                PENDING_SOURCE_KIND_SESSION_BINDING,
                             ),
-                            jnp.int32(-1),
+                            PENDING_SOURCE_KIND_NONE,
                         ),
+                        PENDING_SOURCE_KIND_NONE,
+                    )
+                    prebound_source_host = jnp.where(
+                        prebound_source_kind == PENDING_SOURCE_KIND_HOST,
+                        bound_source,
                         jnp.int32(-1),
                     )
 
                 self.jax_state = self.jax_state.replace(
                     red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
                     red_pending_target_host=self.jax_state.red_pending_target_host.at[r].set(eff_host),
-                    red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source),
+                    red_pending_source_kind=self.jax_state.red_pending_source_kind.at[r].set(prebound_source_kind),
+                    red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source_host),
                 )
             else:
                 red_actions[r] = RED_SLEEP
@@ -593,37 +607,15 @@ class CC4DifferentialHarness:
         for hostname in cy_state.hosts:
             pre_services[hostname] = set(cy_state.hosts[hostname].services.keys())
 
-        from CybORG.Shared.Session import RedAbstractSession as _RAS
-
-        def _patch_session_to_abstract(action_obj, agent_name):
-            if not hasattr(action_obj, "session"):
-                return
-            sessions = cy_state.sessions.get(agent_name, {})
-            target_ip = getattr(action_obj, "ip_address", None)
-            anchor_sid = None
-            agent_idx = int(agent_name.split("_")[-1])
-            anchor_host = int(self.jax_state.red_scan_anchor_host[agent_idx])
-            anchor_hostname = self.mappings.idx_to_hostname.get(anchor_host) if anchor_host >= 0 else None
-            for sid in sorted(sessions):
-                if not isinstance(sessions[sid], _RAS):
-                    continue
-                if target_ip is not None and target_ip in sessions[sid].ports:
-                    action_obj.session = sid
-                    return
-                if anchor_hostname is not None and sessions[sid].hostname == anchor_hostname:
-                    anchor_sid = sid
-            if anchor_sid is not None:
-                action_obj.session = anchor_sid
-
-        for agent_name, cy_action in cyborg_actions.items():
-            if agent_name.startswith("red_agent_"):
-                _patch_session_to_abstract(cy_action, agent_name)
-
         controller.step(cyborg_actions)
 
         # Sync CybORG end-turn RedSessionCheck primary-session host choices.
         forced_primary_hosts = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
-        abstract_host_rank = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32)
+        abstract_host_rank = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
+            jnp.int32(ABSTRACT_RANK_NONE),
+            dtype=jnp.int32,
+        )
         next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
         for r in range(NUM_RED_AGENTS):
             sessions = cy_state.sessions.get(f"red_agent_{r}", {})

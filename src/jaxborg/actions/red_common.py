@@ -2,9 +2,15 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from jaxborg.actions.pending_source import (
+    PENDING_SOURCE_KIND_BOUND_NONE,
+    PENDING_SOURCE_KIND_HOST,
+    PENDING_SOURCE_KIND_NONE,
+    PENDING_SOURCE_KIND_SESSION_BINDING,
+)
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_SUBNETS
+from jaxborg.constants import ABSTRACT_RANK_NONE, ACTIVITY_EXPLOIT, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_SUBNETS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -88,11 +94,7 @@ def sync_scan_memory_fields(
     validity should depend on live source sessions and active hosts only.
     """
     sources = source_matrix if source_matrix is not None else scan_sources(state)
-    valid_sources = (
-        sources
-        & state.red_sessions[:, None, :]
-        & const.host_active[None, None, :]
-    )
+    valid_sources = sources & state.red_sessions[:, None, :] & const.host_active[None, None, :]
     red_scanned_hosts = recompute_scanned_hosts_from_sources(valid_sources)
     return state.replace(
         red_scanned_source_hosts=valid_sources,
@@ -135,8 +137,8 @@ def select_scan_source_host(
 
     abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
     abstract_ranks = state.red_abstract_host_rank[agent_id]
-    rank_scores = jnp.where(abstract_hosts, abstract_ranks, jnp.int32(1_000_000))
-    has_rank_fallback = jnp.any(abstract_hosts & (abstract_ranks < jnp.int32(1_000_000)))
+    rank_scores = jnp.where(abstract_hosts, abstract_ranks, jnp.int32(ABSTRACT_RANK_NONE))
+    has_rank_fallback = jnp.any(abstract_hosts & (abstract_ranks < jnp.int32(ABSTRACT_RANK_NONE)))
     fallback_by_rank = jnp.argmin(rank_scores).astype(jnp.int32)
     has_any_fallback = jnp.any(abstract_hosts)
     fallback_any = jnp.where(has_any_fallback, jnp.argmax(abstract_hosts), -1)
@@ -231,21 +233,43 @@ def select_scan_execution_source_host(
     # During duration processing, scans can be pre-bound to a specific source host.
     # Respect that explicit binding (including "bound to none") instead of recomputing
     # against potentially changed same-step state (e.g. after green updates).
-    pending_source = state.red_pending_source_host[agent_id]
-    pending_idx = jnp.clip(pending_source, 0, state.red_sessions.shape[1] - 1)
-    pending_valid = (
-        (pending_source >= 0)
+    pending_source_kind = state.red_pending_source_kind[agent_id]
+    pending_source_host = state.red_pending_source_host[agent_id]
+    pending_idx = jnp.clip(pending_source_host, 0, state.red_sessions.shape[1] - 1)
+    pending_host_valid = (
+        (pending_source_host >= 0)
         & state.red_sessions[agent_id, pending_idx]
         & state.red_session_is_abstract[agent_id, pending_idx]
         & const.host_active[pending_idx]
     )
-    has_pending_binding = pending_source != jnp.int32(-1)
+    bound_source_host = select_bound_source_host(state, const, agent_id)
+    bound_idx = jnp.clip(bound_source_host, 0, state.red_sessions.shape[1] - 1)
+    pending_bound_valid = (
+        (bound_source_host >= 0)
+        & state.red_session_is_abstract[agent_id, bound_idx]
+        & state.red_sessions[agent_id, bound_idx]
+        & const.host_active[bound_idx]
+    )
+    pending_source = jnp.select(
+        [
+            pending_source_kind == PENDING_SOURCE_KIND_HOST,
+            pending_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING,
+            pending_source_kind == PENDING_SOURCE_KIND_BOUND_NONE,
+        ],
+        [
+            jnp.where(pending_host_valid, pending_source_host, jnp.int32(-1)),
+            jnp.where(pending_bound_valid, bound_source_host, jnp.int32(-1)),
+            jnp.int32(-1),
+        ],
+        default=jnp.int32(-1),
+    )
+    has_pending_binding = pending_source_kind != PENDING_SOURCE_KIND_NONE
 
     fallback = select_scan_source_host(state, const, agent_id)
     computed = jnp.where(has_owner, owner_host, fallback)
     return jnp.where(
         has_pending_binding,
-        jnp.where(pending_valid, pending_source, jnp.int32(-1)),
+        pending_source,
         computed,
     )
 
@@ -269,16 +293,6 @@ def apply_exploit_success(
         success,
         state.red_sessions.at[agent_id, target_host].set(new_count > 0),
         state.red_sessions,
-    )
-    red_session_multiple = jnp.where(
-        success,
-        state.red_session_multiple.at[agent_id, target_host].set(new_count > 1),
-        state.red_session_multiple,
-    )
-    red_session_many = jnp.where(
-        success,
-        state.red_session_many.at[agent_id, target_host].set(new_count > 2),
-        state.red_session_many,
     )
     prior_suspicious = state.red_suspicious_process_count[agent_id, target_host]
     new_suspicious = jnp.where(
@@ -352,8 +366,6 @@ def apply_exploit_success(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
         red_session_pids=red_session_pids,

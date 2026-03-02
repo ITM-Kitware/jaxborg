@@ -3,6 +3,7 @@ import jax.numpy as jnp
 from flax import struct
 
 from jaxborg.constants import (
+    ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
     MAX_DETECTION_RANDOMS,
     MAX_STEPS,
@@ -74,8 +75,6 @@ class CC4State:
 
     red_sessions: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_session_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — exact session multiplicity
-    red_session_multiple: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — tracks 2+ sessions on host
-    red_session_many: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — tracks 3+ sessions on host
     red_suspicious_process_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — known suspicious user pids
     red_privilege: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — 0/1/2
     red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
@@ -115,6 +114,7 @@ class CC4State:
     red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
     red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
     red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
+    red_pending_source_kind: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 none, 1 host, 2 session binding, 3 bound none
     red_pending_source_host: chex.Array  # (NUM_RED_AGENTS,) int32 — queued scan source (anchor) host
 
     blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
@@ -171,8 +171,6 @@ def create_initial_state() -> CC4State:
         ot_service_stopped=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_sessions=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
-        red_session_multiple=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
-        red_session_many=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_suspicious_process_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_privilege=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
@@ -189,7 +187,11 @@ def create_initial_state() -> CC4State:
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_is_abstract=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
-        red_abstract_host_rank=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), jnp.int32(1_000_000), dtype=jnp.int32),
+        red_abstract_host_rank=jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
+            jnp.int32(ABSTRACT_RANK_NONE),
+            dtype=jnp.int32,
+        ),
         red_next_abstract_rank=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),
@@ -206,6 +208,7 @@ def create_initial_state() -> CC4State:
         red_pending_ticks=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),
+        red_pending_source_kind=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_source_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),

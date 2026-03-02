@@ -1147,7 +1147,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[3, anchor].set(True).at[3, target].set(True),
             red_session_count=state.red_session_count.at[3, anchor].set(2).at[3, target].set(1),
-            red_session_multiple=state.red_session_multiple.at[3, anchor].set(True).at[3, target].set(False),
             red_privilege=state.red_privilege.at[3, anchor].set(COMPROMISE_USER).at[3, target].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[anchor].set(COMPROMISE_USER).at[target].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[3, anchor].set(True).at[3, remote].set(True),

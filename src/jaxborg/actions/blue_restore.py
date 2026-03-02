@@ -2,7 +2,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import COMPROMISE_NONE
+from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -32,16 +32,6 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.red_privilege.at[:, target_host].set(COMPROMISE_NONE),
         state.red_privilege,
     )
-    red_session_multiple = jnp.where(
-        covers_host,
-        state.red_session_multiple.at[:, target_host].set(False),
-        state.red_session_multiple,
-    )
-    red_session_many = jnp.where(
-        covers_host,
-        state.red_session_many.at[:, target_host].set(False),
-        state.red_session_many,
-    )
     red_suspicious_process_count = jnp.where(
         covers_host,
         state.red_suspicious_process_count.at[:, target_host].set(0),
@@ -54,7 +44,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     )
     red_abstract_host_rank = jnp.where(
         covers_host,
-        state.red_abstract_host_rank.at[:, target_host].set(jnp.int32(1_000_000)),
+        state.red_abstract_host_rank.at[:, target_host].set(jnp.int32(ABSTRACT_RANK_NONE)),
         state.red_abstract_host_rank,
     )
     red_session_pids = jnp.where(
@@ -127,8 +117,6 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_compromised=host_compromised,
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,

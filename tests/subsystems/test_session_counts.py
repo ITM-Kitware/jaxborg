@@ -9,8 +9,6 @@ class TestEffectiveSessionCounts:
         state = create_initial_state()
         state = state.replace(
             red_sessions=state.red_sessions.at[0, 10].set(True),
-            red_session_multiple=state.red_session_multiple.at[0, 10].set(True),
-            red_session_many=state.red_session_many.at[0, 10].set(True),
             red_session_count=state.red_session_count.at[0, 10].set(0),
         )
 
@@ -21,8 +19,6 @@ class TestEffectiveSessionCounts:
         state = create_initial_state()
         state = state.replace(
             red_sessions=state.red_sessions.at[2, 5].set(False),
-            red_session_multiple=state.red_session_multiple.at[2, 5].set(False),
-            red_session_many=state.red_session_many.at[2, 5].set(False),
             red_session_count=state.red_session_count.at[2, 5].set(3),
         )
 

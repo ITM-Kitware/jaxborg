@@ -105,9 +105,7 @@ def _setup_exploit(state, const, target_h):
 def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
     host_to_idx = {h: i for i, h in enumerate(sorted_hosts)}
 
-    modeled_hosts = (
-        state.red_sessions | (state.red_session_count > 0) | state.red_session_multiple | state.red_session_many
-    )
+    modeled_hosts = state.red_sessions | (state.red_session_count > 0)
 
     cy_session_count = jnp.zeros_like(state.red_session_count)
     cy_session_pids = jnp.full_like(state.red_session_pids, -1)
@@ -138,8 +136,6 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
 
     red_session_count = jnp.where(modeled_hosts, cy_session_count, state.red_session_count)
     red_sessions = jnp.where(modeled_hosts, red_session_count > 0, state.red_sessions)
-    red_session_multiple = jnp.where(modeled_hosts, red_session_count > 1, state.red_session_multiple)
-    red_session_many = jnp.where(modeled_hosts, red_session_count > 2, state.red_session_many)
     red_privilege = jnp.where(modeled_hosts, cy_privilege, state.red_privilege)
     red_session_pids = jnp.where(modeled_hosts[:, :, None], cy_session_pids, state.red_session_pids)
 
@@ -166,8 +162,6 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_privilege=red_privilege,
         red_session_pids=red_session_pids,
         red_next_pid=jnp.int32(max_pid),
@@ -1008,7 +1002,6 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0].set(False).at[0, target].set(True),
-            red_session_multiple=state.red_session_multiple.at[0, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0].set(0).at[0, target].set(1),
             red_privilege=state.red_privilege.at[0].set(COMPROMISE_NONE).at[0, target].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
@@ -1067,8 +1060,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[5, target].set(True),
             red_session_count=state.red_session_count.at[5, target].set(3),
-            red_session_multiple=state.red_session_multiple.at[5, target].set(True),
-            red_session_many=state.red_session_many.at[5, target].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[5, target].set(True),
             red_privilege=state.red_privilege.at[5, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[5, target].set(2),
@@ -1132,7 +1123,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[3, target].set(True),
             red_session_count=state.red_session_count.at[3, target].set(2),
-            red_session_multiple=state.red_session_multiple.at[3, target].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
             red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(1),
@@ -1258,8 +1248,6 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0].set(False).at[0, target].set(True),
-            red_session_multiple=state.red_session_multiple.at[0, target].set(True),
-            red_session_many=state.red_session_many.at[0, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0].set(0).at[0, target].set(2),
             red_privilege=state.red_privilege.at[0].set(COMPROMISE_NONE).at[0, target].set(COMPROMISE_USER),
             red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(target),
@@ -1284,7 +1272,7 @@ class TestDifferentialWithCybORG:
         assert cyborg_has_user_session
         assert bool(new_state.red_sessions[0, target]) == cyborg_has_user_session
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_USER
-        assert not bool(new_state.red_session_multiple[0, target])
+        assert int(new_state.red_session_count[0, target]) == 1
 
     def test_remove_with_many_sessions_on_non_anchor_host_clears_target_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -1333,8 +1321,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[0].set(False).at[0, anchor].set(True).at[0, target].set(True),
             red_session_count=state.red_session_count.at[0].set(0).at[0, anchor].set(1).at[0, target].set(3),
-            red_session_multiple=state.red_session_multiple.at[0, target].set(True),
-            red_session_many=state.red_session_many.at[0, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0].set(0).at[0, target].set(3),
             red_privilege=state.red_privilege.at[0]
             .set(COMPROMISE_NONE)
@@ -1415,8 +1401,6 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0].set(False).at[0, anchor].set(True).at[0, target].set(True),
-            red_session_multiple=state.red_session_multiple.at[0, target].set(True),
-            red_session_many=state.red_session_many.at[0, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[0].set(0).at[0, target].set(2),
             red_privilege=state.red_privilege.at[0]
             .set(COMPROMISE_NONE)
@@ -1504,8 +1488,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[1].set(False).at[1, anchor].set(True).at[1, target].set(True),
             red_session_count=state.red_session_count.at[1].set(0).at[1, anchor].set(1).at[1, target].set(2),
-            red_session_multiple=state.red_session_multiple.at[1].set(False).at[1, target].set(True),
-            red_session_many=state.red_session_many.at[1].set(False).at[1, target].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[1].set(0).at[1, target].set(1),
             red_privilege=state.red_privilege.at[1]
             .set(COMPROMISE_NONE)
@@ -1590,8 +1572,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[5].set(False).at[5, anchor].set(True).at[5, target].set(True),
             red_session_count=state.red_session_count.at[5].set(0).at[5, anchor].set(1).at[5, target].set(2),
-            red_session_multiple=state.red_session_multiple.at[5].set(False).at[5, target].set(True),
-            red_session_many=state.red_session_many.at[5].set(False).at[5, target].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[5].set(0).at[5, target].set(2),
             red_privilege=state.red_privilege.at[5]
             .set(COMPROMISE_NONE)
@@ -1677,8 +1657,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[5].set(False).at[5, anchor].set(True).at[5, target].set(True),
             red_session_count=state.red_session_count.at[5].set(0).at[5, anchor].set(1).at[5, target].set(4),
-            red_session_multiple=state.red_session_multiple.at[5].set(False).at[5, target].set(True),
-            red_session_many=state.red_session_many.at[5].set(False).at[5, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[5].set(0).at[5, target].set(3),
             red_privilege=state.red_privilege.at[5]
             .set(COMPROMISE_NONE)
@@ -1766,8 +1744,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[2].set(False).at[2, anchor].set(True).at[2, target].set(True),
             red_session_count=state.red_session_count.at[2].set(0).at[2, anchor].set(1).at[2, target].set(3),
-            red_session_multiple=state.red_session_multiple.at[2].set(False).at[2, target].set(True),
-            red_session_many=state.red_session_many.at[2].set(False).at[2, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[2].set(0).at[2, target].set(2),
             red_privilege=state.red_privilege.at[2]
             .set(COMPROMISE_NONE)
@@ -1853,8 +1829,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[3].set(False).at[3, target].set(True).at[3, other].set(True),
             red_session_count=state.red_session_count.at[3].set(0).at[3, target].set(1).at[3, other].set(1),
-            red_session_multiple=state.red_session_multiple.at[3].set(False),
-            red_session_many=state.red_session_many.at[3].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3].set(0).at[3, other].set(1),
             red_privilege=state.red_privilege.at[3]
             .set(COMPROMISE_NONE)
@@ -1929,8 +1903,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[3, target].set(True),
             red_session_count=state.red_session_count.at[3, target].set(5),
-            red_session_multiple=state.red_session_multiple.at[3, target].set(True),
-            red_session_many=state.red_session_many.at[3, target].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
             red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
             # Reproduces mismatch where JAX suspicious count underestimates true blue PID budget.
@@ -1996,8 +1968,6 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[3, target].set(True),
             red_session_count=state.red_session_count.at[3, target].set(9),
-            red_session_multiple=state.red_session_multiple.at[3, target].set(True),
-            red_session_many=state.red_session_many.at[3, target].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
             red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(9),

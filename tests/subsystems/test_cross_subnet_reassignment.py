@@ -196,8 +196,9 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
         .at[source_agent, target_idx]
         .set(True),
         red_scanned_hosts=jax_state.red_scanned_hosts.at[source_agent, keep_host_idx].set(True),
-        red_scanned_source_hosts=jax_state.red_scanned_source_hosts.at[source_agent, keep_host_idx, keep_host_idx]
-        .set(True),
+        red_scanned_source_hosts=jax_state.red_scanned_source_hosts.at[source_agent, keep_host_idx, keep_host_idx].set(
+            True
+        ),
         host_compromised=jax_state.host_compromised.at[keep_host_idx]
         .set(COMPROMISE_USER)
         .at[target_idx]
@@ -261,8 +262,9 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
         .at[source_agent, target_idx]
         .set(True),
         red_scanned_hosts=jax_state.red_scanned_hosts.at[source_agent, remote_scan_host].set(True),
-        red_scanned_source_hosts=jax_state.red_scanned_source_hosts.at[source_agent, remote_scan_host, keep_host_idx]
-        .set(True),
+        red_scanned_source_hosts=jax_state.red_scanned_source_hosts.at[
+            source_agent, remote_scan_host, keep_host_idx
+        ].set(True),
         red_scan_anchor_host=jax_state.red_scan_anchor_host.at[source_agent].set(keep_host_idx),
         host_compromised=jax_state.host_compromised.at[keep_host_idx]
         .set(COMPROMISE_USER)

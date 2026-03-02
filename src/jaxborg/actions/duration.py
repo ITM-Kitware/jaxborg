@@ -11,6 +11,11 @@ from jaxborg.actions.encoding import (
     decode_blue_action,
     decode_red_action,
 )
+from jaxborg.actions.pending_source import (
+    PENDING_SOURCE_KIND_HOST,
+    PENDING_SOURCE_KIND_NONE,
+    PENDING_SOURCE_KIND_SESSION_BINDING,
+)
 from jaxborg.actions.red_common import (
     apply_red_session_check,
     scan_sources,
@@ -18,9 +23,6 @@ from jaxborg.actions.red_common import (
     select_scan_execution_source_host,
 )
 from jaxborg.state import CC4Const, CC4State
-
-PENDING_SOURCE_UNSET = jnp.int32(-1)
-PENDING_SOURCE_SESSION_BINDING = jnp.int32(-3)
 
 
 def process_red_with_duration(
@@ -48,16 +50,17 @@ def process_red_with_duration(
         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
         | (action_type == ACTION_TYPE_STEALTH_SCAN)
     )
-    pending_source = state.red_pending_source_host[agent_id]
-    source_is_bound = pending_source != PENDING_SOURCE_UNSET
+    pending_source_kind = state.red_pending_source_kind[agent_id]
+    pending_source_host = state.red_pending_source_host[agent_id]
+    source_is_bound = pending_source_kind != PENDING_SOURCE_KIND_NONE
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
             source_is_bound,
-            pending_source,
+            pending_source_host,
             select_scan_execution_source_host(state, const, agent_id, target_host),
         ),
-        PENDING_SOURCE_UNSET,
+        jnp.int32(-1),
     )
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
     queued_source_idx = jnp.clip(queued_source_host, 0, state.red_sessions.shape[1] - 1)
@@ -66,29 +69,37 @@ def process_red_with_duration(
         is_scan_action & (queued_source_host >= 0) & source_matrix[agent_id, target_idx, queued_source_idx]
     )
     bound_source_host = select_bound_source_host(state, const, agent_id)
-    source_from_bound_session = (
-        is_scan_action & (queued_source_host >= 0) & (queued_source_host == bound_source_host)
-    )
-    queued_source_binding = jnp.where(
+    source_from_bound_session = is_scan_action & (queued_source_host >= 0) & (queued_source_host == bound_source_host)
+    queued_source_kind = jnp.where(
         source_is_bound,
-        pending_source,
+        pending_source_kind,
         jnp.where(
             is_scan_action & (queued_source_host >= 0) & ~source_from_scan_memory & source_from_bound_session,
-            PENDING_SOURCE_SESSION_BINDING,
-            queued_source_host,
+            PENDING_SOURCE_KIND_SESSION_BINDING,
+            jnp.where(
+                is_scan_action & (queued_source_host >= 0),
+                PENDING_SOURCE_KIND_HOST,
+                PENDING_SOURCE_KIND_NONE,
+            ),
         ),
     )
-    effective_source_binding = jnp.where(is_busy, pending_source, queued_source_binding)
+    queued_source_binding_host = jnp.where(
+        source_is_bound & (pending_source_kind == PENDING_SOURCE_KIND_HOST),
+        pending_source_host,
+        jnp.where(queued_source_kind == PENDING_SOURCE_KIND_HOST, queued_source_host, jnp.int32(-1)),
+    )
+    effective_source_kind = jnp.where(is_busy, pending_source_kind, queued_source_kind)
+    effective_source_binding_host = jnp.where(is_busy, pending_source_host, queued_source_binding_host)
     anchor_source_host = select_bound_source_host(state, const, agent_id)
     effective_source_host = jnp.where(
         is_scan_action
         & (
-            (effective_source_binding == PENDING_SOURCE_UNSET)
-            | (effective_source_binding == PENDING_SOURCE_SESSION_BINDING)
+            (effective_source_kind == PENDING_SOURCE_KIND_NONE)
+            | (effective_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING)
         )
         & (anchor_source_host >= 0),
         anchor_source_host,
-        effective_source_binding,
+        effective_source_binding_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
     source_valid = (
@@ -102,8 +113,14 @@ def process_red_with_duration(
     should_execute = new_ticks <= 0
     requires_bound_source = is_scan_action
     can_execute = should_execute & ((~requires_bound_source) | source_valid)
+    execution_pending_kind = jnp.where(
+        is_scan_action & (effective_source_host >= 0),
+        PENDING_SOURCE_KIND_HOST,
+        PENDING_SOURCE_KIND_NONE,
+    )
     state_with_source = state.replace(
-        red_pending_source_host=state.red_pending_source_host.at[agent_id].set(effective_source_host)
+        red_pending_source_kind=state.red_pending_source_kind.at[agent_id].set(execution_pending_kind),
+        red_pending_source_host=state.red_pending_source_host.at[agent_id].set(effective_source_host),
     )
 
     new_state = jax.lax.cond(
@@ -114,11 +131,17 @@ def process_red_with_duration(
     )
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
-    final_source_host = jnp.where(should_execute, PENDING_SOURCE_UNSET, effective_source_binding)
+    final_source_kind = jnp.where(should_execute, PENDING_SOURCE_KIND_NONE, effective_source_kind)
+    final_source_host = jnp.where(
+        should_execute | (final_source_kind != PENDING_SOURCE_KIND_HOST),
+        jnp.int32(-1),
+        effective_source_binding_host,
+    )
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),
         red_pending_action=new_state.red_pending_action.at[agent_id].set(effective_action),
         red_pending_key=new_state.red_pending_key.at[agent_id].set(effective_key),
+        red_pending_source_kind=new_state.red_pending_source_kind.at[agent_id].set(final_source_kind),
         red_pending_source_host=new_state.red_pending_source_host.at[agent_id].set(final_source_host),
     )
 

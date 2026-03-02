@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import MAX_TRACKED_SESSION_PIDS, NUM_RED_AGENTS
+from jaxborg.constants import ABSTRACT_RANK_NONE, MAX_TRACKED_SESSION_PIDS, NUM_RED_AGENTS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -48,7 +48,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_privilege = red_privilege.at[src].set(jnp.where(src_mask, 0, src_privilege))
         red_session_is_abstract = red_session_is_abstract.at[src].set(jnp.where(src_mask, False, src_abstract))
         red_abstract_host_rank = red_abstract_host_rank.at[src].set(
-            jnp.where(src_mask, jnp.int32(1_000_000), src_abstract_rank)
+            jnp.where(src_mask, jnp.int32(ABSTRACT_RANK_NONE), src_abstract_rank)
         )
         red_session_pids = red_session_pids.at[src].set(jnp.where(src_mask[:, None], -1, src_pid_rows))
 
@@ -67,7 +67,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_session_is_abstract = red_session_is_abstract.at[dst].set(
                 jnp.where(dst_mask, True, red_session_is_abstract[dst])
             )
-            moved_ranks = jnp.where(dst_mask, src_abstract_rank, jnp.int32(1_000_000))
+            moved_ranks = jnp.where(dst_mask, src_abstract_rank, jnp.int32(ABSTRACT_RANK_NONE))
             merged_ranks = jnp.minimum(red_abstract_host_rank[dst], moved_ranks)
             red_abstract_host_rank = red_abstract_host_rank.at[dst].set(merged_ranks)
 
@@ -90,9 +90,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_session_pids = red_session_pids.at[dst].set(dst_rows)
 
     red_sessions = red_session_count > 0
-    red_session_multiple = red_session_count > 1
-    red_session_many = red_session_count > 2
-
     # Any host with an active red session must be discoverable by that red agent.
     red_discovered = red_discovered | red_sessions
 
@@ -122,8 +119,6 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,

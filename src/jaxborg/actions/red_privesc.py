@@ -3,7 +3,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
+from jaxborg.constants import ABSTRACT_RANK_NONE, ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -32,16 +32,6 @@ def apply_privesc(
         session_counts.at[agent_id, target_host].set(0),
         session_counts,
     )
-    red_session_multiple = jnp.where(
-        is_active & has_session & is_sandboxed,
-        state.red_session_multiple.at[agent_id, target_host].set(False),
-        state.red_session_multiple,
-    )
-    red_session_many = jnp.where(
-        is_active & has_session & is_sandboxed,
-        state.red_session_many.at[agent_id, target_host].set(False),
-        state.red_session_many,
-    )
     red_suspicious_process_count = jnp.where(
         is_active & has_session & is_sandboxed,
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
@@ -54,7 +44,7 @@ def apply_privesc(
     )
     red_abstract_host_rank = jnp.where(
         is_active & has_session & is_sandboxed,
-        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(1_000_000)),
+        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(ABSTRACT_RANK_NONE)),
         state.red_abstract_host_rank,
     )
     red_session_pids = jnp.where(
@@ -113,8 +103,6 @@ def apply_privesc(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_session_is_abstract=red_session_is_abstract,

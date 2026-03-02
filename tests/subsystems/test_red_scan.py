@@ -13,16 +13,19 @@ from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.duration import (
-    PENDING_SOURCE_SESSION_BINDING,
-    process_red_with_duration,
-)
+from jaxborg.actions.duration import process_red_with_duration
 from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
     RED_SCAN_START,
     decode_red_action,
     encode_blue_action,
     encode_red_action,
+)
+from jaxborg.actions.pending_source import (
+    PENDING_SOURCE_KIND_BOUND_NONE,
+    PENDING_SOURCE_KIND_HOST,
+    PENDING_SOURCE_KIND_NONE,
+    PENDING_SOURCE_KIND_SESSION_BINDING,
 )
 from jaxborg.actions.red_common import can_reach_subnet, select_new_primary_session_host
 from jaxborg.constants import (
@@ -609,8 +612,9 @@ class TestDifferentialWithCybORG:
             .at[red_agent_id, target_host]
             .set(True),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, target_host].set(True),
-            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host]
-            .set(True),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[red_agent_id, target_host, target_host].set(
+                True
+            ),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
             .set(True)
@@ -860,6 +864,7 @@ class TestDeferredScanSessionBinding:
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
             red_pending_key=state.red_pending_key.at[red_agent_id].set(jnp.array([1, 2], dtype=jnp.uint32)),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_HOST),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(anchor_host),
         )
 
@@ -945,7 +950,8 @@ class TestDeferredScanSessionBinding:
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, alt_host].set(True),
             red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
             # Keep explicit "no bound source" for this deferred-action regression.
-            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-2),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_BOUND_NONE),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
         )
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
@@ -1052,6 +1058,7 @@ class TestDeferredScanSessionBinding:
             .set(True),
             red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_HOST),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(source_host),
         )
 
@@ -1180,9 +1187,10 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
-            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(
-                PENDING_SOURCE_SESSION_BINDING
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(
+                PENDING_SOURCE_KIND_SESSION_BINDING
             ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
         )
 
         new_state = process_red_with_duration(
@@ -1282,6 +1290,7 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_NONE),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
         )
 
@@ -1357,6 +1366,7 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_NONE),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(-1),
         )
 
@@ -1474,6 +1484,7 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_HOST),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_scan_owner),
         )
 
@@ -1526,6 +1537,7 @@ class TestDeferredScanSessionBinding:
             red_pending_action=state.red_pending_action.at[red_agent_id].set(
                 encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
             ),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(PENDING_SOURCE_KIND_HOST),
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_source_host),
         )
 

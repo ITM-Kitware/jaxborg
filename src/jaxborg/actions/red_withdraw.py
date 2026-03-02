@@ -3,7 +3,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import COMPROMISE_NONE
+from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -28,16 +28,6 @@ def apply_withdraw(
         session_counts.at[agent_id, target_host].set(0),
         session_counts,
     )
-    red_session_multiple = jnp.where(
-        success,
-        state.red_session_multiple.at[agent_id, target_host].set(False),
-        state.red_session_multiple,
-    )
-    red_session_many = jnp.where(
-        success,
-        state.red_session_many.at[agent_id, target_host].set(False),
-        state.red_session_many,
-    )
     red_suspicious_process_count = jnp.where(
         success,
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
@@ -50,7 +40,7 @@ def apply_withdraw(
     )
     red_abstract_host_rank = jnp.where(
         success,
-        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(1_000_000)),
+        state.red_abstract_host_rank.at[agent_id, target_host].set(jnp.int32(ABSTRACT_RANK_NONE)),
         state.red_abstract_host_rank,
     )
     red_session_pids = jnp.where(
@@ -102,8 +92,6 @@ def apply_withdraw(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
-        red_session_multiple=red_session_multiple,
-        red_session_many=red_session_many,
         red_session_pids=red_session_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_session_is_abstract=red_session_is_abstract,

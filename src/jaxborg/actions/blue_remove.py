@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS
+from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -75,9 +75,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     )
 
     new_sessions = new_session_count > 0
-    new_multiple = new_session_count > 1
-    new_many = new_session_count > 2
-
     remaining_max_priv = jnp.max(new_privilege[:, target_host])
     new_host_compromised = jnp.where(
         covers_host & any_removed,
@@ -104,7 +101,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.red_session_is_abstract,
     )
     rank_update = state.red_abstract_host_rank.at[:, target_host].set(
-        jnp.where(sessions_cleared_on_host, jnp.int32(1_000_000), state.red_abstract_host_rank[:, target_host])
+        jnp.where(sessions_cleared_on_host, jnp.int32(ABSTRACT_RANK_NONE), state.red_abstract_host_rank[:, target_host])
     )
     red_abstract_host_rank = jnp.where(
         covers_host,
@@ -130,8 +127,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     return state.replace(
         red_sessions=new_sessions,
         red_session_count=new_session_count,
-        red_session_multiple=new_multiple,
-        red_session_many=new_many,
         red_session_pids=new_session_pids,
         red_suspicious_process_count=new_suspicious_count,
         red_privilege=new_privilege,
