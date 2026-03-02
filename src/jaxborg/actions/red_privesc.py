@@ -1,7 +1,7 @@
 import chex
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import has_abstract_session
+from jaxborg.actions.red_common import bound_source_is_abstract
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
 from jaxborg.state import CC4Const, CC4State
@@ -18,7 +18,7 @@ def apply_privesc(
     has_session = session_counts[agent_id, target_host] > 0
     not_already_privileged = state.red_privilege[agent_id, target_host] < COMPROMISE_PRIVILEGED
     is_sandboxed = state.red_session_sandboxed[agent_id, target_host]
-    is_abstract = has_abstract_session(state, agent_id)
+    is_abstract = bound_source_is_abstract(state, const, agent_id)
     success = is_active & has_session & not_already_privileged & ~is_sandboxed & is_abstract
 
     # Sandboxed sessions are removed on escalation attempt (CybORG PrivilegeEscalate behavior)

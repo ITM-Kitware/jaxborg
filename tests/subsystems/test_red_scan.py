@@ -13,7 +13,7 @@ from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.duration import process_red_with_duration
+from jaxborg.actions.duration import PENDING_SOURCE_NONE, process_red_with_duration
 from jaxborg.actions.encoding import (
     ACTION_TYPE_SCAN,
     RED_SCAN_START,
@@ -450,7 +450,7 @@ class TestDifferentialWithCybORG:
             .set(True)
             .at[red_agent_id, low_host]
             .set(True),
-            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(anchor_host),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(high_host),
             red_scanned_hosts=state.red_scanned_hosts.at[red_agent_id, seed_host].set(True),
             red_scanned_via=state.red_scanned_via.at[red_agent_id, seed_host].set(high_host),
         )
@@ -694,7 +694,10 @@ class TestDeferredScanSessionBinding:
 
         state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
         state = state.replace(
-            red_sessions=state.red_sessions.at[red_agent_id, anchor_host].set(True).at[red_agent_id, alt_host].set(True),
+            red_sessions=state.red_sessions.at[red_agent_id, anchor_host]
+            .set(True)
+            .at[red_agent_id, alt_host]
+            .set(True),
             red_session_count=state.red_session_count.at[red_agent_id, anchor_host]
             .set(1)
             .at[red_agent_id, alt_host]
@@ -726,3 +729,77 @@ class TestDeferredScanSessionBinding:
 
         assert not cy_scanned, "CybORG should fail deferred scan when queued session id is removed"
         assert jax_scanned == cy_scanned, "JAX must match CybORG for deferred scan session binding"
+
+    def test_scan_does_not_rebind_when_bound_source_is_missing_matches_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+        cy_state = cyborg_env.environment_controller.state
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        start_host = int(const.red_start_hosts[red_agent_id])
+        same_subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == int(const.host_subnet[start_host])
+            and h != start_host
+        ]
+        assert len(same_subnet_hosts) >= 2
+        alt_host = same_subnet_hosts[0]
+        target_host = same_subnet_hosts[1]
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        start_hostname = mappings.idx_to_hostname[start_host]
+        cy_state.sessions[red_agent_name][0] = Session(
+            ident=0,
+            hostname=start_hostname,
+            username="user",
+            agent=red_agent_name,
+            parent=None,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[alt_host],
+                username="user",
+                agent=red_agent_name,
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_action = AggressiveServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip)
+        cy_obs = cy_action.execute(cy_state)
+        assert str(cy_obs.success).upper() != "TRUE"
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, start_host].set(True).at[red_agent_id, alt_host].set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, start_host]
+            .set(1)
+            .at[red_agent_id, alt_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, alt_host].set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(PENDING_SOURCE_NONE),
+        )
+
+        action_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        new_state = process_red_with_duration(state, const, red_agent_id, action_idx, jax.random.PRNGKey(0))
+        assert not bool(new_state.red_scanned_hosts[red_agent_id, target_host])

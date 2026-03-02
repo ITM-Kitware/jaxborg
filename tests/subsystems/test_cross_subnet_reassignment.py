@@ -440,3 +440,66 @@ def test_cross_subnet_reassignment_preserves_scan_anchor_host_matches_cyborg():
     cy_anchor_after_idx = mappings.hostname_to_idx[cy_anchor_after]
     assert cy_anchor_after_idx == cy_anchor_idx
     assert int(jax_after.red_scan_anchor_host[source_agent]) == cy_anchor_after_idx
+
+
+def test_cross_subnet_reassignment_sums_transferred_suspicious_counts_per_session_matches_cyborg():
+    env = _make_env(seed=0)
+    controller = env.environment_controller
+    cy_state = controller.state
+    const = build_const_from_cyborg(env)
+    mappings = build_mappings_from_cyborg(env)
+
+    source_agent = 0
+    target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+    assert target_idx is not None
+    assert dest_agent is not None
+
+    target_subnet = int(const.host_subnet[target_idx])
+    extra_source = next(
+        r
+        for r in range(NUM_RED_AGENTS)
+        if r not in {source_agent, dest_agent} and not bool(const.red_agent_subnets[r, target_subnet])
+    )
+    target_hostname = mappings.idx_to_hostname[target_idx]
+
+    injected = [(source_agent, 7100), (extra_source, 7101)]
+    for src, pid in injected:
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=f"red_agent_{src}",
+                parent=0,
+                session_type="shell",
+                pid=pid,
+            )
+        )
+
+    controller.different_subnet_agent_reassignment()
+    cy_dest_pid_sessions = [
+        sess
+        for sess in cy_state.sessions[f"red_agent_{dest_agent}"].values()
+        if sess.hostname == target_hostname and getattr(sess, "pid", None) in {7100, 7101}
+    ]
+    assert len(cy_dest_pid_sessions) == len(injected)
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    for src, pid in injected:
+        pid_row = jax_state.red_session_pids[src, target_idx]
+        pid_row = pid_row.at[0].set(pid)
+        jax_state = jax_state.replace(
+            red_sessions=jax_state.red_sessions.at[src, target_idx].set(True),
+            red_session_count=jax_state.red_session_count.at[src, target_idx].set(1),
+            red_privilege=jax_state.red_privilege.at[src, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=jax_state.red_discovered_hosts.at[src, target_idx].set(True),
+            red_suspicious_process_count=jax_state.red_suspicious_process_count.at[src, target_idx].set(1),
+            red_session_pids=jax_state.red_session_pids.at[src, target_idx].set(pid_row),
+            red_session_pid=jax_state.red_session_pid.at[src, target_idx].set(pid),
+            host_compromised=jax_state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+        )
+
+    jax_after = reassign_cross_subnet_sessions(jax_state, const)
+    expected = len(cy_dest_pid_sessions)
+    assert int(jax_after.red_session_count[dest_agent, target_idx]) == expected
+    assert int(jax_after.red_suspicious_process_count[dest_agent, target_idx]) == expected

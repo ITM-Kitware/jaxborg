@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
+from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Actions import DiscoverRemoteSystems, PrivilegeEscalate
 from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
     AggressiveServiceDiscovery,
@@ -432,3 +433,250 @@ class TestDifferentialWithCybORG:
         for linked_h in unseen_linked:
             assert linked_h in known_after
             assert linked_h in jax_known_after
+
+    def test_privesc_requires_bound_source_session_to_be_abstract_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        source_host = int(const.red_start_hosts[0])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h != source_host
+        )
+        abstract_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h not in {source_host, target_host}
+        )
+
+        target_hostname = sorted_hosts[target_host]
+        abstract_hostname = sorted_hosts[abstract_host]
+
+        # Keep source session id=0 as plain Session (non-abstract), but add an abstract
+        # session elsewhere to ensure "has any abstract session" is true.
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=abstract_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
+        cy_action.duration = 1
+        cy_result = cyborg_env.step(agent="red_agent_0", action=cy_action)
+        cy_success = cy_result.observation.get("success") == True  # noqa: E712
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, source_host]
+            .set(True)
+            .at[0, target_host]
+            .set(True)
+            .at[0, abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[0, source_host]
+            .set(1)
+            .at[0, target_host]
+            .set(1)
+            .at[0, abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host]
+            .set(False)
+            .at[0, target_host]
+            .set(False)
+            .at[0, abstract_host]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
+            red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        jax_action = encode_red_action("PrivilegeEscalate", target_host, 0)
+        new_state = _jit_apply_red(state, const, 0, jax_action, jax.random.PRNGKey(0))
+        jax_success = int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert not cy_success
+        assert jax_success == cy_success
+
+    def test_privesc_fails_when_bound_source_session_missing_even_if_other_abstract_exists_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        source_host = int(const.red_start_hosts[0])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h != source_host
+        )
+        abstract_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h not in {source_host, target_host}
+        )
+        target_hostname = sorted_hosts[target_host]
+        abstract_hostname = sorted_hosts[abstract_host]
+
+        # Remove source session 0 entirely, but keep another abstract session.
+        del cy_state.sessions["red_agent_0"][0]
+        source_hostname = sorted_hosts[source_host]
+        if 0 in cy_state.hosts[source_hostname].sessions["red_agent_0"]:
+            cy_state.hosts[source_hostname].sessions["red_agent_0"].remove(0)
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=abstract_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=None,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
+        cy_action.duration = 1
+        cy_result = cyborg_env.step(agent="red_agent_0", action=cy_action)
+        cy_success = cy_result.observation.get("success") == True  # noqa: E712
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, source_host]
+            .set(False)
+            .at[0, target_host]
+            .set(True)
+            .at[0, abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[0, source_host]
+            .set(0)
+            .at[0, target_host]
+            .set(1)
+            .at[0, abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, target_host]
+            .set(False)
+            .at[0, abstract_host]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(-1),
+            red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        jax_action = encode_red_action("PrivilegeEscalate", target_host, 0)
+        new_state = _jit_apply_red(state, const, 0, jax_action, jax.random.PRNGKey(0))
+        jax_success = int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert not cy_success
+        assert jax_success == cy_success
+
+    def test_scan_recovers_bound_source_when_anchor_unset_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        agent_id = 0
+        start_host = int(const.red_start_hosts[agent_id])
+        subnet_id = int(const.host_subnet[start_host])
+        subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == subnet_id
+        ]
+        if len(subnet_hosts) < 3:
+            pytest.skip("Need three hosts in source subnet")
+        source_host = next(h for h in subnet_hosts if h != start_host)
+        target_host = next(
+            h
+            for h in subnet_hosts
+            if h not in {start_host, source_host} and cy_state.hosts[sorted_hosts[h]].os_type.name == "LINUX"
+        )
+        target_hostname = sorted_hosts[target_host]
+
+        red_name = "red_agent_0"
+        sess0 = cy_state.sessions[red_name][0]
+        old_hostname = sess0.hostname
+        if 0 in cy_state.hosts[old_hostname].sessions[red_name]:
+            cy_state.hosts[old_hostname].sessions[red_name].remove(0)
+        sess0.hostname = sorted_hosts[source_host]
+        cy_state.hosts[sorted_hosts[source_host]].sessions[red_name].append(0)
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=red_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        target_ip = cy_state.hostname_ip_map[target_hostname]
+        scan_action = AggressiveServiceDiscovery(session=0, agent=red_name, ip_address=target_ip)
+        scan_obs = scan_action.execute(cy_state)
+        assert str(scan_obs.success).upper() == "TRUE"
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent=red_name)
+        cy_obs = cy_action.execute(cy_state)
+        cy_success = str(cy_obs.success).upper() == "TRUE"
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, start_host]
+            .set(False)
+            .at[agent_id, source_host]
+            .set(True)
+            .at[agent_id, target_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[agent_id, start_host]
+            .set(0)
+            .at[agent_id, source_host]
+            .set(1)
+            .at[agent_id, target_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host]
+            .set(False)
+            .at[agent_id, source_host]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(-1),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+            red_privilege=state.red_privilege.at[agent_id, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, agent_id)
+        state_after_scan = _jit_apply_red(state, const, agent_id, scan_idx, jax.random.PRNGKey(0))
+        assert int(state_after_scan.red_scan_anchor_host[agent_id]) == source_host
+
+        privesc_idx = encode_red_action("PrivilegeEscalate", target_host, agent_id)
+        new_state = _jit_apply_red(state_after_scan, const, agent_id, privesc_idx, jax.random.PRNGKey(1))
+        jax_success = int(new_state.red_privilege[agent_id, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert cy_success
+        assert jax_success == cy_success

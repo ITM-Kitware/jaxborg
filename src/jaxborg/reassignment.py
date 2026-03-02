@@ -32,52 +32,54 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     allowed = const.red_agent_subnets[:, const.host_subnet]  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS)
     needs_reassign = (session_counts > 0) & ~allowed & const.host_active[None, :]
 
-    transferred_priv = jnp.where(needs_reassign, state.red_privilege, 0)
-    max_transferred_priv = jnp.max(transferred_priv, axis=0)
-    transferred_count = jnp.where(needs_reassign, session_counts, 0)
-    transferred_count_sum = jnp.sum(transferred_count, axis=0)
-    transferred_suspicious = jnp.where(needs_reassign, state.red_suspicious_process_count, 0)
-    max_transferred_suspicious = jnp.max(transferred_suspicious, axis=0)
-    transferred_pid_rows = jnp.where(needs_reassign[:, :, None], state.red_session_pids, -1)
-    any_transferred = jnp.any(needs_reassign, axis=0)
-
-    red_session_count = jnp.where(needs_reassign, 0, session_counts)
-    red_suspicious_process_count = jnp.where(needs_reassign, 0, state.red_suspicious_process_count)
-    red_privilege = jnp.where(needs_reassign, 0, state.red_privilege)
-    red_session_is_abstract = jnp.where(needs_reassign, False, state.red_session_is_abstract)
-    red_session_pids = jnp.where(needs_reassign[:, :, None], -1, state.red_session_pids)
+    red_session_count = session_counts
+    red_suspicious_process_count = state.red_suspicious_process_count
+    red_privilege = state.red_privilege
+    red_session_is_abstract = state.red_session_is_abstract
+    red_session_pids = state.red_session_pids
     red_discovered = state.red_discovered_hosts
-    for r in range(NUM_RED_AGENTS):
-        is_dest = (host_owner == r) & any_transferred  # (GLOBAL_MAX_HOSTS,)
-        red_session_count = red_session_count.at[r].set(
-            jnp.where(is_dest, red_session_count[r] + transferred_count_sum, red_session_count[r])
-        )
-        red_suspicious_process_count = red_suspicious_process_count.at[r].set(
-            jnp.where(
-                is_dest,
-                jnp.maximum(red_suspicious_process_count[r], max_transferred_suspicious),
-                red_suspicious_process_count[r],
+
+    for src in range(NUM_RED_AGENTS):
+        src_mask = needs_reassign[src]
+        src_counts = red_session_count[src]
+        src_suspicious = red_suspicious_process_count[src]
+        src_privilege = red_privilege[src]
+        src_pid_rows = red_session_pids[src]
+        src_abstract = red_session_is_abstract[src]
+
+        red_session_count = red_session_count.at[src].set(jnp.where(src_mask, 0, src_counts))
+        red_suspicious_process_count = red_suspicious_process_count.at[src].set(jnp.where(src_mask, 0, src_suspicious))
+        red_privilege = red_privilege.at[src].set(jnp.where(src_mask, 0, src_privilege))
+        red_session_is_abstract = red_session_is_abstract.at[src].set(jnp.where(src_mask, False, src_abstract))
+        red_session_pids = red_session_pids.at[src].set(jnp.where(src_mask[:, None], -1, src_pid_rows))
+
+        for dst in range(NUM_RED_AGENTS):
+            dst_mask = src_mask & (host_owner == dst)
+            moved_counts = jnp.where(dst_mask, src_counts, 0)
+            moved_suspicious = jnp.where(dst_mask, src_suspicious, 0)
+            moved_privilege = jnp.where(dst_mask, src_privilege, 0)
+
+            red_session_count = red_session_count.at[dst].set(red_session_count[dst] + moved_counts)
+            red_suspicious_process_count = red_suspicious_process_count.at[dst].set(
+                red_suspicious_process_count[dst] + moved_suspicious
             )
-        )
-        red_privilege = red_privilege.at[r].set(
-            jnp.where(is_dest, jnp.maximum(red_privilege[r], max_transferred_priv), red_privilege[r])
-        )
-        red_discovered = red_discovered.at[r].set(jnp.where(is_dest, True, red_discovered[r]))
-        red_session_is_abstract = red_session_is_abstract.at[r].set(
-            jnp.where(is_dest, True, red_session_is_abstract[r])
-        )
-        pid_rows_for_r = red_session_pids[r]
-        for src in range(NUM_RED_AGENTS):
+            red_privilege = red_privilege.at[dst].set(jnp.maximum(red_privilege[dst], moved_privilege))
+            red_discovered = red_discovered.at[dst].set(jnp.where(dst_mask, True, red_discovered[dst]))
+            red_session_is_abstract = red_session_is_abstract.at[dst].set(
+                jnp.where(dst_mask, True, red_session_is_abstract[dst])
+            )
+
+            dst_rows = red_session_pids[dst]
             for slot in range(MAX_TRACKED_SUSPICIOUS_PIDS):
-                incoming_pid = transferred_pid_rows[src, :, slot]
-                pid_rows_for_r = jax.vmap(
+                incoming_pid = src_pid_rows[:, slot]
+                dst_rows = jax.vmap(
                     lambda row, pid, do_assign: jnp.where(
                         do_assign & (pid >= 0),
                         append_pid_to_row(row, pid),
                         row,
                     )
-                )(pid_rows_for_r, incoming_pid, is_dest)
-        red_session_pids = red_session_pids.at[r].set(pid_rows_for_r)
+                )(dst_rows, incoming_pid, dst_mask)
+            red_session_pids = red_session_pids.at[dst].set(dst_rows)
 
     red_sessions = red_session_count > 0
     red_session_multiple = red_session_count > 1
@@ -88,28 +90,17 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # Any host with an active red session must be discoverable by that red agent.
     red_discovered = red_discovered | red_sessions
 
-    host_compromised = jnp.where(
-        any_transferred,
-        jnp.maximum(state.host_compromised, max_transferred_priv),
-        state.host_compromised,
-    )
+    host_compromised = state.host_compromised
 
-    # CybORG keeps session id 0 stable unless that specific host session is gone.
+    # Keep anchor bound only while that specific source host session survives.
     anchor = state.red_scan_anchor_host
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
-    session_hosts = red_sessions & const.host_active[None, :]
-    abstract_hosts = red_session_is_abstract & session_hosts
-    has_abstract = jnp.any(abstract_hosts, axis=1)
-    first_abstract = jnp.argmax(abstract_hosts, axis=1)
-    first_session = jnp.argmax(session_hosts, axis=1)
-    fallback_anchor = jnp.where(has_abstract, first_abstract, first_session)
-    fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
     anchor_idx = jnp.clip(anchor, 0, red_sessions.shape[1] - 1)
     anchor_had_session = (anchor >= 0) & (session_counts[jnp.arange(NUM_RED_AGENTS), anchor_idx] > 0)
     anchor_has_session = anchor_had_session & red_sessions[jnp.arange(NUM_RED_AGENTS), anchor_idx]
     red_scan_anchor_host = jnp.where(
         has_any_sessions_now,
-        jnp.where(anchor_has_session, anchor, fallback_anchor),
+        jnp.where(anchor_has_session, anchor, -1),
         -1,
     )
 
@@ -148,8 +139,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             & const.host_active[source_idx]
         )
         rebound_source = select_scan_execution_source_host(source_state, const, r, target_host)
+        can_rebind = is_busy & is_scan_action & ~source_valid
         red_pending_source_host = red_pending_source_host.at[r].set(
-            jnp.where(is_busy & is_scan_action & ~source_valid, rebound_source, source_host)
+            jnp.where(can_rebind, rebound_source, source_host)
         )
 
     return state.replace(

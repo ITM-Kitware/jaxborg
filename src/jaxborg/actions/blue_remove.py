@@ -84,18 +84,11 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     full_clear = cleared_all_sessions[:, None]
     new_scanned_hosts = state.red_scanned_hosts & ~(full_clear | via_clear)
     new_scanned_via = jnp.where(full_clear | via_clear, -1, state.red_scanned_via)
-    session_hosts = new_sessions & const.host_active[None, :]
-    abstract_hosts = state.red_session_is_abstract & session_hosts
-    has_abstract = jnp.any(abstract_hosts, axis=1)
-    first_abstract = jnp.argmax(abstract_hosts, axis=1)
-    first_session = jnp.argmax(session_hosts, axis=1)
-    fallback_anchor = jnp.where(has_abstract, first_abstract, first_session)
-    fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
     anchor_host_cleared = sessions_lost_on_target & (state.red_scan_anchor_host == jnp.int32(target_host))
     removed_anchor = cleared_all_sessions | anchor_host_cleared
     red_scan_anchor_host = jnp.where(
         removed_anchor,
-        fallback_anchor,
+        -1,
         state.red_scan_anchor_host,
     )
     red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)

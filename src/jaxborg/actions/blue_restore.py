@@ -73,16 +73,9 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     via_target = state.red_scanned_via == jnp.int32(target_host)
     via_clear = sessions_lost_on_target[:, None] & via_target
     full_clear = cleared_all_sessions[:, None]
-    session_hosts = (red_session_count > 0) & const.host_active[None, :]
-    abstract_hosts = red_session_is_abstract & session_hosts
-    has_abstract = jnp.any(abstract_hosts, axis=1)
-    first_abstract = jnp.argmax(abstract_hosts, axis=1)
-    first_session = jnp.argmax(session_hosts, axis=1)
-    fallback_anchor = jnp.where(has_abstract, first_abstract, first_session)
-    fallback_anchor = jnp.where(has_any_sessions_now, fallback_anchor, -1)
     red_scan_anchor_host = jnp.where(
         cleared_all_sessions | removed_anchor_session,
-        fallback_anchor,
+        -1,
         state.red_scan_anchor_host,
     )
     red_scan_anchor_host = jnp.where(has_any_sessions_now, red_scan_anchor_host, -1)

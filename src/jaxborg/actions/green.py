@@ -26,23 +26,29 @@ def _find_phishing_red_agent(
     state: CC4State,
     const: CC4Const,
     host_idx: jnp.int32,
+    key: jax.Array,
 ) -> jnp.int32:
-    host_subnet = const.host_subnet[host_idx]
-    has_session_on_subnet = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
+    target_subnet = const.host_subnet[host_idx]
+    session_pairs = state.red_sessions & const.host_active[None, :]
+    source_subnets = jnp.broadcast_to(const.host_subnet[None, :], session_pairs.shape)
+    routable_pairs = session_pairs & ~state.blocked_zones[source_subnets, target_subnet]
+    same_subnet_pairs = routable_pairs & (source_subnets == target_subnet)
 
-    for r in range(NUM_RED_AGENTS):
-        agent_sessions = state.red_sessions[r] & const.host_active
-        agent_subnets = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_)
-        for s in range(NUM_SUBNETS):
-            agent_subnets = agent_subnets.at[s].set(jnp.any(agent_sessions & (const.host_subnet == s)))
-        not_blocked = ~state.blocked_zones[host_subnet]
-        can_route = jnp.any(agent_subnets & not_blocked)
-        has_session_on_subnet = has_session_on_subnet.at[r].set(jnp.any(agent_sessions) & can_route)
+    same_subnet_flat = jnp.transpose(same_subnet_pairs, (1, 0)).reshape(-1)
+    has_same_subnet = jnp.any(same_subnet_flat)
+    first_same_idx = jnp.argmax(same_subnet_flat)
+    same_subnet_agent = (first_same_idx % NUM_RED_AGENTS).astype(jnp.int32)
 
-    candidates = has_session_on_subnet
-    first_valid = jnp.argmax(candidates)
-    any_valid = jnp.any(candidates)
-    return jnp.where(any_valid, first_valid, jnp.int32(-1))
+    routable_flat = jnp.transpose(routable_pairs, (1, 0)).reshape(-1)
+    num_routable = jnp.sum(routable_flat.astype(jnp.int32))
+    candidate_indices = jnp.where(routable_flat, jnp.arange(routable_flat.shape[0]), routable_flat.shape[0])
+    sorted_candidates = jnp.sort(candidate_indices)
+    fallback_pick = jax.random.randint(key, (), 0, jnp.maximum(num_routable, 1))
+    fallback_flat_idx = sorted_candidates[fallback_pick]
+    fallback_agent = (fallback_flat_idx % NUM_RED_AGENTS).astype(jnp.int32)
+    fallback_agent = jnp.where(num_routable > 0, fallback_agent, jnp.int32(-1))
+
+    return jnp.where(has_same_subnet, same_subnet_agent, fallback_agent)
 
 
 def _apply_single_green(
@@ -51,7 +57,7 @@ def _apply_single_green(
     host_idx: jnp.int32,
     key: jax.Array,
 ) -> CC4State:
-    k1, k2, k3, k4, k5, k_svc, k_rel = jax.random.split(key, 7)
+    k1, k2, k3, k4, k5, k_svc, k_rel, k_phish_src = jax.random.split(key, 8)
     t = state.time
 
     action = sample_green_random(state, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
@@ -85,7 +91,7 @@ def _apply_single_green(
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
-    red_agent = _find_phishing_red_agent(state, const, host_idx)
+    red_agent = _find_phishing_red_agent(state, const, host_idx, k_phish_src)
     any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
     phish_creates_session = do_phish & (red_agent >= 0) & ~any_red_on_host
     red_agent_idx = jnp.maximum(red_agent, 0)
@@ -112,6 +118,11 @@ def _apply_single_green(
         phish_creates_session,
         state.red_session_many.at[red_agent_idx, host_idx].set(new_count_for_agent > 2),
         state.red_session_many,
+    )
+    red_session_is_abstract = jnp.where(
+        phish_creates_session,
+        state.red_session_is_abstract.at[red_agent_idx, host_idx].set(True),
+        state.red_session_is_abstract,
     )
     new_pid = state.red_next_pid
     red_next_pid = state.red_next_pid + phish_creates_session.astype(jnp.int32)
@@ -202,6 +213,7 @@ def _apply_single_green(
         red_session_count=red_session_count,
         red_session_multiple=red_session_multiple,
         red_session_many=red_session_many,
+        red_session_is_abstract=red_session_is_abstract,
         red_session_pid=red_session_pid,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,

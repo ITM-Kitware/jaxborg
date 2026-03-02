@@ -3,19 +3,14 @@
 This file tracks active parity gaps only. Resolved items have been removed to keep the
 list focused on remaining work.
 
-## Open Heuristic Implementations (To Remove)
+## Open Session-Identity Gaps
 
-1. Scan-memory owner/source selection is based on argmax/mode over host-index arrays
-   instead of concrete per-session identity/lifecycle matching.
-   - `src/jaxborg/actions/red_common.py`
-
-2. Cross-subnet reassignment merges transferred session attributes via aggregate
-   `max/sum` reductions rather than strict per-session reassignment semantics.
-   - `src/jaxborg/reassignment.py`
-
-3. Green phishing source-agent selection is simplified (first-valid) and does not yet
-   fully mirror CybORG `PhishingEmail` source selection behavior.
-   - `src/jaxborg/actions/green.py`
+1. Remaining scan-memory parity gaps still appear in long random-policy fuzz runs
+   (example: `seed=0 step=211`, `red_scanned_hosts` mismatch for `red_agent_3`).
+   This indicates there are still edge cases in session-id lifecycle binding for
+   deferred/red FSM scan flows.
+   - `src/jaxborg/actions/duration.py`
+   - `tests/differential/harness.py`
 
 ## Additional Open Differences
 

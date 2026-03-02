@@ -4,21 +4,27 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
+from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Simulator.Actions.ConcreteActions.PhishingEmail import PhishingEmail
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.green import (
     FP_DETECTION_RATE,
+    GREEN_LOCAL_WORK,
     PHISHING_ERROR_RATE,
     apply_green_agents,
 )
 from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_STEPS,
+    NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
+from jaxborg.topology import build_const_from_cyborg, build_topology
+from jaxborg.translate import build_mappings_from_cyborg
 
 
 @pytest.fixture
@@ -227,3 +233,191 @@ class TestGreenStatisticalDifferential:
 
         observed_rate = fp_total / (n_green * n_trials) if n_green > 0 else 0
         assert observed_rate < 0.05, f"FP rate {observed_rate} seems too high"
+
+
+def test_phishing_prefers_same_subnet_source_agent_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    for r in range(NUM_RED_AGENTS):
+        red_name = f"red_agent_{r}"
+        cy_state.sessions[red_name] = {}
+        cy_state.sessions_count[red_name] = 0
+    for host in cy_state.hosts.values():
+        for r in range(NUM_RED_AGENTS):
+            host.sessions[f"red_agent_{r}"] = []
+
+    target_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.green_agent_active[h]) and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    target_subnet = int(const.host_subnet[target_host])
+    same_subnet_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if h != target_host
+        and bool(const.host_active[h])
+        and not bool(const.host_is_router[h])
+        and int(const.host_subnet[h]) == target_subnet
+    )
+    diff_subnet_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if h not in {target_host, same_subnet_host}
+        and bool(const.host_active[h])
+        and not bool(const.host_is_router[h])
+        and int(const.host_subnet[h]) != target_subnet
+    )
+
+    low_agent = 0
+    high_agent = NUM_RED_AGENTS - 1
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=mappings.idx_to_hostname[diff_subnet_host],
+            username="user",
+            agent=f"red_agent_{low_agent}",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=mappings.idx_to_hostname[same_subnet_host],
+            username="user",
+            agent=f"red_agent_{high_agent}",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+
+    green_name = f"green_agent_{int(const.green_agent_host[target_host])}"
+    target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+    cy_action = PhishingEmail(session=0, agent=green_name, ip_address=target_ip)
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "TRUE"
+
+    cy_owner = next(
+        r
+        for r in range(NUM_RED_AGENTS)
+        if any(
+            sess.hostname == mappings.idx_to_hostname[target_host]
+            for sess in cy_state.sessions[f"red_agent_{r}"].values()
+        )
+    )
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    for r, h in ((low_agent, diff_subnet_host), (high_agent, same_subnet_host)):
+        jax_state = jax_state.replace(
+            red_sessions=jax_state.red_sessions.at[r, h].set(True),
+            red_session_count=jax_state.red_session_count.at[r, h].set(1),
+            red_session_is_abstract=jax_state.red_session_is_abstract.at[r, h].set(True),
+        )
+
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, target_host, 0] = (GREEN_LOCAL_WORK + 0.5) / 3.0
+    green_randoms[0, target_host, 1] = 0.5
+    green_randoms[0, target_host, 2] = 0.0
+    green_randoms[0, target_host, 3] = 0.5
+    green_randoms[0, target_host, 4] = 0.0
+    jax_state = jax_state.replace(
+        green_randoms=jnp.array(green_randoms),
+        use_green_randoms=jnp.array(True),
+    )
+    jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+
+    jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after.red_sessions[r, target_host]))
+
+    assert cy_owner == high_agent
+    assert jax_owner == cy_owner
+
+
+def test_phishing_creates_abstract_session_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    for r in range(NUM_RED_AGENTS):
+        red_name = f"red_agent_{r}"
+        cy_state.sessions[red_name] = {}
+        cy_state.sessions_count[red_name] = 0
+    for host in cy_state.hosts.values():
+        for r in range(NUM_RED_AGENTS):
+            host.sessions[f"red_agent_{r}"] = []
+
+    target_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.green_agent_active[h]) and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    source_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if h != target_host and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    source_agent = 0
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=mappings.idx_to_hostname[source_host],
+            username="user",
+            agent=f"red_agent_{source_agent}",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+
+    green_name = f"green_agent_{int(const.green_agent_host[target_host])}"
+    target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+    cy_action = PhishingEmail(session=0, agent=green_name, ip_address=target_ip)
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "TRUE"
+
+    cy_created = [
+        sess
+        for r in range(NUM_RED_AGENTS)
+        for sess in cy_state.sessions[f"red_agent_{r}"].values()
+        if sess.hostname == mappings.idx_to_hostname[target_host]
+    ]
+    assert cy_created
+    assert all(isinstance(sess, RedAbstractSession) for sess in cy_created)
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[source_agent, source_host].set(True),
+        red_session_count=jax_state.red_session_count.at[source_agent, source_host].set(1),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[source_agent, source_host].set(True),
+    )
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, target_host, 0] = (GREEN_LOCAL_WORK + 0.5) / 3.0
+    green_randoms[0, target_host, 1] = 0.5
+    green_randoms[0, target_host, 2] = 0.0
+    green_randoms[0, target_host, 3] = 0.5
+    green_randoms[0, target_host, 4] = 0.0
+    jax_state = jax_state.replace(green_randoms=jnp.array(green_randoms), use_green_randoms=jnp.array(True))
+    jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+
+    jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after.red_sessions[r, target_host]))
+    assert bool(jax_after.red_session_is_abstract[jax_owner, target_host])

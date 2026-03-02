@@ -16,6 +16,39 @@ def has_abstract_session(state: CC4State, agent_id: int) -> chex.Array:
     return jnp.any(state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id])
 
 
+def select_bound_source_host(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+) -> chex.Array:
+    """Return the host of the bound source session for red actions.
+
+    CybORG red abstract actions execute against a concrete bound session id
+    (session 0 for FSM-driven CC4 actions). In JAX we track that binding via
+    `red_scan_anchor_host`.
+    """
+    anchor = state.red_scan_anchor_host[agent_id]
+    anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
+    anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
+
+    # When no explicit anchor has been set, session 0 maps to the red start host.
+    start_host = const.red_start_hosts[agent_id]
+    start_idx = jnp.clip(start_host, 0, state.red_sessions.shape[1] - 1)
+    start_valid = (start_host >= 0) & state.red_sessions[agent_id, start_idx] & const.host_active[start_idx]
+
+    return jnp.where(anchor_valid, anchor, jnp.where((anchor < 0) & start_valid, start_host, jnp.int32(-1)))
+
+
+def bound_source_is_abstract(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+) -> chex.Array:
+    source_host = select_bound_source_host(state, const, agent_id)
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
+    return (source_host >= 0) & state.red_session_is_abstract[agent_id, source_idx]
+
+
 def can_reach_subnet(
     state: CC4State,
     const: CC4Const,
@@ -39,11 +72,16 @@ def exploit_common_preconditions(
     target_host: chex.Array,
 ) -> chex.Array:
     is_active = const.host_active[target_host]
-    is_scanned = state.red_scanned_hosts[agent_id, target_host]
+    source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
+    owns_target_scan = (
+        (source_host >= 0)
+        & state.red_scanned_hosts[agent_id, target_host]
+        & (state.red_scanned_via[agent_id, target_host] == source_host)
+    )
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
-    is_abstract = has_abstract_session(state, agent_id)
-    return is_active & is_scanned & can_reach & is_abstract
+    is_abstract = source_host >= 0
+    return is_active & owns_target_scan & can_reach & is_abstract
 
 
 def select_scan_source_host(
@@ -51,44 +89,21 @@ def select_scan_source_host(
     const: CC4Const,
     agent_id: int,
 ) -> chex.Array:
-    """Choose the host that owns new scan memory for this red agent.
+    """Choose source host for abstract red actions.
 
-    CybORG ties scan memory to a concrete abstract session. When the anchor host
-    is non-abstract, prefer the existing abstract scan owner (mode of valid
-    `red_scanned_via`) before falling back to any abstract session host.
+    Priority:
+    1) Bound source session host (anchor) when it exists and is abstract.
+    2) If anchor is absent/unset, first available abstract session host.
     """
-    anchor = state.red_scan_anchor_host[agent_id]
-    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
-    anchor_is_abstract = (
-        (anchor >= 0)
-        & state.red_session_is_abstract[agent_id, anchor_idx]
-        & state.red_sessions[agent_id, anchor_idx]
-        & const.host_active[anchor_idx]
-    )
+    source_host = select_bound_source_host(state, const, agent_id)
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
+    source_is_abstract = (source_host >= 0) & state.red_session_is_abstract[agent_id, source_idx]
 
     abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
-    fallback = jnp.argmax(abstract_hosts)
+    has_fallback = jnp.any(abstract_hosts)
+    fallback = jnp.where(has_fallback, jnp.argmax(abstract_hosts), -1)
 
-    via_row = state.red_scanned_via[agent_id]
-    scanned_row = state.red_scanned_hosts[agent_id]
-    valid_via = scanned_row & (via_row >= 0)
-    clipped_via = jnp.clip(via_row, 0, state.red_session_is_abstract.shape[1] - 1)
-    valid_via = (
-        valid_via
-        & state.red_session_is_abstract[agent_id, clipped_via]
-        & state.red_sessions[agent_id, clipped_via]
-        & const.host_active[clipped_via]
-    )
-
-    via_counts = jnp.sum(
-        jax.nn.one_hot(clipped_via, state.red_session_is_abstract.shape[1], dtype=jnp.int32)
-        * valid_via[:, None].astype(jnp.int32),
-        axis=0,
-    )
-    has_existing_owner = jnp.any(via_counts > 0)
-    preferred_owner = jnp.argmax(via_counts)
-
-    return jnp.where(anchor_is_abstract, anchor, jnp.where(has_existing_owner, preferred_owner, fallback))
+    return jnp.where(source_host >= 0, jnp.where(source_is_abstract, source_host, fallback), fallback)
 
 
 def select_scan_execution_source_host(
@@ -97,38 +112,23 @@ def select_scan_execution_source_host(
     agent_id: int,
     target_host: chex.Array,
 ) -> chex.Array:
-    """Choose the abstract source host used to execute a queued scan action.
+    """Choose source host for target-specific scan/exploit actions.
 
-    CybORG source session selection for scan-like actions prefers a target-specific
-    known source first (session already owning scan memory for that target), then
-    falls back to anchor session, then any abstract session.
+    Prefer the existing owner of the target's scan memory when that owner is a
+    live abstract session; otherwise fall back to generic scan source selection.
     """
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
-    target_scanned = state.red_scanned_hosts[agent_id, target_idx]
     via = state.red_scanned_via[agent_id, target_idx]
-    via_idx = jnp.clip(via, 0, state.red_session_is_abstract.shape[1] - 1)
+    via_idx = jnp.clip(via, 0, state.red_sessions.shape[1] - 1)
     via_valid = (
         (via >= 0)
+        & state.red_scanned_hosts[agent_id, target_idx]
         & state.red_sessions[agent_id, via_idx]
         & state.red_session_is_abstract[agent_id, via_idx]
         & const.host_active[via_idx]
     )
-
-    anchor = state.red_scan_anchor_host[agent_id]
-    anchor_idx = jnp.clip(anchor, 0, state.red_session_is_abstract.shape[1] - 1)
-    anchor_valid = (
-        (anchor >= 0)
-        & state.red_sessions[agent_id, anchor_idx]
-        & state.red_session_is_abstract[agent_id, anchor_idx]
-        & const.host_active[anchor_idx]
-    )
-
-    abstract_hosts = state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id] & const.host_active
-    has_fallback = jnp.any(abstract_hosts)
-    fallback = jnp.argmax(abstract_hosts)
-    fallback = jnp.where(has_fallback, fallback, -1)
-
-    return jnp.where(anchor_valid, anchor, jnp.where(target_scanned & via_valid, via, fallback))
+    fallback = select_scan_source_host(state, const, agent_id)
+    return jnp.where(via_valid, via, fallback)
 
 
 def apply_exploit_success(

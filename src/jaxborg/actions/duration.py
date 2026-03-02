@@ -14,6 +14,9 @@ from jaxborg.actions.encoding import (
 from jaxborg.actions.red_common import select_scan_execution_source_host
 from jaxborg.state import CC4Const, CC4State
 
+PENDING_SOURCE_UNSET = jnp.int32(-1)
+PENDING_SOURCE_NONE = jnp.int32(-2)
+
 
 def process_red_with_duration(
     state: CC4State,
@@ -39,19 +42,21 @@ def process_red_with_duration(
         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
         | (action_type == ACTION_TYPE_STEALTH_SCAN)
     )
+    pending_source = state.red_pending_source_host[agent_id]
+    source_is_bound = pending_source != PENDING_SOURCE_UNSET
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
-            state.red_pending_source_host[agent_id] >= 0,
-            state.red_pending_source_host[agent_id],
+            source_is_bound,
+            pending_source,
             select_scan_execution_source_host(state, const, agent_id, target_host),
         ),
-        jnp.int32(-1),
+        PENDING_SOURCE_UNSET,
     )
-    effective_source_host = jnp.where(is_busy, state.red_pending_source_host[agent_id], queued_source_host)
+    effective_source_host = jnp.where(is_busy, pending_source, queued_source_host)
     rebound_source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
     effective_source_host = jnp.where(
-        is_busy & is_scan_action & (effective_source_host < 0),
+        is_busy & is_scan_action & (effective_source_host == PENDING_SOURCE_UNSET),
         rebound_source_host,
         effective_source_host,
     )
@@ -76,7 +81,7 @@ def process_red_with_duration(
     )
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
-    final_source_host = jnp.where(should_execute, jnp.int32(-1), effective_source_host)
+    final_source_host = jnp.where(should_execute, PENDING_SOURCE_UNSET, effective_source_host)
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),
         red_pending_action=new_state.red_pending_action.at[agent_id].set(effective_action),

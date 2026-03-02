@@ -7,7 +7,11 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
+from jaxborg.actions.duration import (
+    PENDING_SOURCE_NONE,
+    process_blue_with_duration,
+    process_red_with_duration,
+)
 from jaxborg.actions.encoding import (
     ACTION_TYPE_AGGRESSIVE_SCAN,
     ACTION_TYPE_SCAN,
@@ -483,16 +487,34 @@ class CC4DifferentialHarness:
                 fsm_actions.append(eff_fsm_act)
                 eligible_flags.append(eff_eligible)
                 prebound_source = self.jax_state.red_pending_source_host[r]
-                if not is_busy:
+                if is_busy:
+                    pending_action = self.jax_state.red_pending_action[r]
+                    busy_type, _, busy_target_host = decode_red_action(pending_action, r, self.jax_const)
+                    busy_is_scan = (
+                        (busy_type == ACTION_TYPE_SCAN)
+                        | (busy_type == ACTION_TYPE_AGGRESSIVE_SCAN)
+                        | (busy_type == ACTION_TYPE_STEALTH_SCAN)
+                    )
+                    rebound_source = select_scan_execution_source_host(
+                        self.jax_state, self.jax_const, r, busy_target_host
+                    )
+                    rebound_source = jnp.where(rebound_source >= 0, rebound_source, PENDING_SOURCE_NONE)
+                    prebound_source = jnp.where(busy_is_scan & (prebound_source < 0), rebound_source, prebound_source)
+                else:
                     action_type, _, target_host = decode_red_action(action, r, self.jax_const)
                     is_scan_action = (
                         (action_type == ACTION_TYPE_SCAN)
                         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
                         | (action_type == ACTION_TYPE_STEALTH_SCAN)
                     )
+                    bound_source = select_scan_execution_source_host(self.jax_state, self.jax_const, r, target_host)
                     prebound_source = jnp.where(
                         is_scan_action,
-                        select_scan_execution_source_host(self.jax_state, self.jax_const, r, target_host),
+                        jnp.where(
+                            bound_source >= 0,
+                            bound_source,
+                            PENDING_SOURCE_NONE,
+                        ),
                         jnp.int32(-1),
                     )
 
@@ -545,7 +567,7 @@ class CC4DifferentialHarness:
                     anchor_sid = sid
             if anchor_sid is not None:
                 action_obj.session = anchor_sid
-            elif fallback_sid is not None:
+            elif target_ip is not None and fallback_sid is not None:
                 action_obj.session = fallback_sid
 
         for agent_name, cy_action in cyborg_actions.items():
