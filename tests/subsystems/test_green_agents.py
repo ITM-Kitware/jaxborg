@@ -5,16 +5,21 @@ import pytest
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
 from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Simulator.Actions import Remove
 from CybORG.Simulator.Actions.ConcreteActions.PhishingEmail import PhishingEmail
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
+from jaxborg.actions import apply_blue_action
+from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.green import (
     FP_DETECTION_RATE,
     GREEN_LOCAL_WORK,
     PHISHING_ERROR_RATE,
     apply_green_agents,
 )
+from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.constants import (
+    COMPROMISE_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     MAX_STEPS,
@@ -421,3 +426,138 @@ def test_phishing_creates_abstract_session_matches_cyborg():
 
     jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after.red_sessions[r, target_host]))
     assert bool(jax_after.red_session_is_abstract[jax_owner, target_host])
+
+
+def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    for r in range(NUM_RED_AGENTS):
+        red_name = f"red_agent_{r}"
+        cy_state.sessions[red_name] = {}
+        cy_state.sessions_count[red_name] = 0
+    for host in cy_state.hosts.values():
+        for r in range(NUM_RED_AGENTS):
+            host.sessions[f"red_agent_{r}"] = []
+
+    target_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.green_agent_active[h]) and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    source_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if h != target_host and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    target_hostname = mappings.idx_to_hostname[target_host]
+    source_hostname = mappings.idx_to_hostname[source_host]
+
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=source_hostname,
+            username="user",
+            agent="red_agent_0",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+
+    green_name = f"green_agent_{int(const.green_agent_host[target_host])}"
+    target_ip = mappings.hostname_to_ip[target_hostname]
+    cy_action = PhishingEmail(session=0, agent=green_name, ip_address=target_ip)
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "TRUE"
+
+    # Add a second user session on the same host (models a follow-on compromise).
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=target_hostname,
+            username="user",
+            agent="red_agent_0",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+    cy_target_sessions = [s for s in cy_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
+    assert len(cy_target_sessions) == 2
+
+    blue_idx = next(b for b in range(const.blue_agent_hosts.shape[0]) if bool(const.blue_agent_hosts[b, target_host]))
+    cy_blue_parent = cy_state.sessions[f"blue_agent_{blue_idx}"][0]
+    for sess in cy_target_sessions:
+        cy_blue_parent.add_sus_pids(hostname=target_hostname, pid=sess.pid)
+    cy_sus_pids = cy_blue_parent.sus_pids.get(target_hostname, [])
+    assert set(cy_sus_pids) == {sess.pid for sess in cy_target_sessions}
+
+    cy_remove = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+    cy_remove.duration = 1
+    cy_remove_obs = cy_remove.execute(cy_state)
+    assert cy_remove_obs.success
+    cy_remaining = [s for s in cy_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
+    assert len(cy_remaining) == 0
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[0, source_host].set(True),
+        red_session_count=jax_state.red_session_count.at[0, source_host].set(1),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[0, source_host].set(True),
+        red_privilege=jax_state.red_privilege.at[0, source_host].set(COMPROMISE_USER),
+        host_compromised=jax_state.host_compromised.at[source_host].set(COMPROMISE_USER),
+    )
+
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, target_host, 0] = (GREEN_LOCAL_WORK + 0.5) / 3.0
+    green_randoms[0, target_host, 1] = 0.5
+    green_randoms[0, target_host, 2] = 0.0
+    green_randoms[0, target_host, 3] = 0.5
+    green_randoms[0, target_host, 4] = 0.0
+    jax_state = jax_state.replace(
+        green_randoms=jnp.array(green_randoms),
+        use_green_randoms=jnp.array(True),
+    )
+    jax_after_green = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+
+    jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after_green.red_sessions[r, target_host]))
+    phish_pid_row = np.array(jax_after_green.red_session_pids[jax_owner, target_host])
+    phish_pid = int(phish_pid_row[phish_pid_row >= 0][0])
+
+    follow_on_pid = int(jax_after_green.red_next_pid)
+    updated_session_pid_row = append_pid_to_row(jax_after_green.red_session_pids[jax_owner, target_host], follow_on_pid)
+    updated_sus_pid_row = append_pid_to_row(jax_after_green.blue_suspicious_pids[blue_idx, target_host], follow_on_pid)
+    jax_before_remove = jax_after_green.replace(
+        red_sessions=jax_after_green.red_sessions.at[jax_owner, target_host].set(True),
+        red_session_count=jax_after_green.red_session_count.at[jax_owner, target_host].set(
+            jax_after_green.red_session_count[jax_owner, target_host] + 1
+        ),
+        red_session_pids=jax_after_green.red_session_pids.at[jax_owner, target_host].set(updated_session_pid_row),
+        red_next_pid=jax_after_green.red_next_pid + 1,
+        red_privilege=jax_after_green.red_privilege.at[jax_owner, target_host].set(COMPROMISE_USER),
+        host_compromised=jax_after_green.host_compromised.at[target_host].set(COMPROMISE_USER),
+        blue_suspicious_pids=jax_after_green.blue_suspicious_pids.at[blue_idx, target_host].set(updated_sus_pid_row),
+        blue_suspicious_pid_budget=jax_after_green.blue_suspicious_pid_budget.at[blue_idx, target_host].add(1),
+    )
+
+    jax_sus_pids = np.array(jax_before_remove.blue_suspicious_pids[blue_idx, target_host])
+    jax_sus_pids = jax_sus_pids[jax_sus_pids >= 0].tolist()
+    assert phish_pid in jax_sus_pids
+
+    remove_idx = encode_blue_action("Remove", target_host, blue_idx)
+    jax_after_remove = apply_blue_action(jax_before_remove, const, blue_idx, remove_idx)
+
+    assert int(jax_after_remove.red_session_count[jax_owner, target_host]) == len(cy_remaining)
+    assert bool(jax_after_remove.red_sessions[jax_owner, target_host]) == (len(cy_remaining) > 0)
+    assert int(jax_after_remove.red_privilege[jax_owner, target_host]) == COMPROMISE_NONE
+    assert int(jax_after_remove.host_compromised[target_host]) == COMPROMISE_NONE

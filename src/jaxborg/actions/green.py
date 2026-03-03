@@ -8,6 +8,7 @@ from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -143,6 +144,19 @@ def _apply_single_green(
         state.red_session_pids.at[red_agent_idx, host_idx].set(updated_pid_row),
         state.red_session_pids,
     )
+    blue_budget_inc = const.blue_agent_hosts[:, host_idx].astype(jnp.int32)
+    blue_suspicious_pid_budget = jnp.where(
+        phish_creates_session,
+        state.blue_suspicious_pid_budget.at[:, host_idx].add(blue_budget_inc),
+        state.blue_suspicious_pid_budget,
+    )
+    blue_suspicious_pids = state.blue_suspicious_pids
+    for b in range(NUM_BLUE_AGENTS):
+        pid_row = blue_suspicious_pids[b, host_idx]
+        updated_row = append_pid_to_row(pid_row, new_pid)
+        blue_suspicious_pids = blue_suspicious_pids.at[b, host_idx].set(
+            jnp.where(phish_creates_session & const.blue_agent_hosts[b, host_idx], updated_row, pid_row)
+        )
     red_privilege = jnp.where(
         phish_creates_session,
         state.red_privilege.at[red_agent_idx, host_idx].set(
@@ -227,6 +241,8 @@ def _apply_single_green(
         host_activity_detected=host_activity_detected,
         green_lwf_this_step=green_lwf_this_step,
         green_asf_this_step=green_asf_this_step,
+        blue_suspicious_pid_budget=blue_suspicious_pid_budget,
+        blue_suspicious_pids=blue_suspicious_pids,
     )
 
 
