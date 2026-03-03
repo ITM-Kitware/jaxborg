@@ -540,6 +540,10 @@ class CC4DifferentialHarness:
 
         state_before = self.jax_state
 
+        # --- Duration parity check: JAX and CybORG must agree on busy state ---
+        controller = self.cyborg_env.environment_controller
+        self._assert_duration_parity(controller)
+
         # --- FSM red action selection (matches FsmRedCC4Env.step_env) ---
         red_actions = {}
         target_hosts = []
@@ -598,7 +602,6 @@ class CC4DifferentialHarness:
                 eligible_flags.append(jnp.bool_(False))
 
         # --- CybORG side ---
-        controller = self.cyborg_env.environment_controller
         cyborg_actions = {}
         for r, action_idx in red_actions.items():
             cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(action_idx, r, self.mappings)
@@ -731,6 +734,36 @@ class CC4DifferentialHarness:
         )
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def _assert_duration_parity(self, controller):
+        """Assert JAX and CybORG agree on which agents are busy (action in progress).
+
+        A mismatch means JAX and CybORG use different durations for the same action type,
+        causing the two systems to silently execute different action sequences.
+        """
+        step = int(self.jax_state.time)
+        for r in range(NUM_RED_AGENTS):
+            jax_busy = bool(self.jax_state.red_pending_ticks[r] > 0)
+            cy_entry = controller.actions_in_progress.get(f"red_agent_{r}")
+            cy_busy = cy_entry is not None
+            if jax_busy != cy_busy:
+                cy_detail = f"remaining_ticks={cy_entry['remaining_ticks']}" if cy_busy else "idle"
+                raise AssertionError(
+                    f"Duration mismatch for red_agent_{r} at step {step}: "
+                    f"JAX red_pending_ticks={int(self.jax_state.red_pending_ticks[r])}, "
+                    f"CybORG {cy_detail}"
+                )
+        for b in range(NUM_BLUE_AGENTS):
+            jax_busy = bool(self.jax_state.blue_pending_ticks[b] > 0)
+            cy_entry = controller.actions_in_progress.get(f"blue_agent_{b}")
+            cy_busy = cy_entry is not None
+            if jax_busy != cy_busy:
+                cy_detail = f"remaining_ticks={cy_entry['remaining_ticks']}" if cy_busy else "idle"
+                raise AssertionError(
+                    f"Duration mismatch for blue_agent_{b} at step {step}: "
+                    f"JAX blue_pending_ticks={int(self.jax_state.blue_pending_ticks[b])}, "
+                    f"CybORG {cy_detail}"
+                )
 
     def _resolve_red_action(self, controller, agent_idx, proposed_action):
         """Return JAX action matching what CybORG actually processed for this red agent.
