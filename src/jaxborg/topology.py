@@ -366,14 +366,99 @@ def _compute_allowed_subnet_pairs(allowed_per_mphase) -> np.ndarray:
     return pairs
 
 
+def _pick_addon_services(rng: np.random.Generator) -> set[str]:
+    addon_options = ["APACHE2", "MYSQLD", "SMTP"]
+    num_addons = rng.integers(0, len(addon_options), endpoint=True)
+    chosen = rng.choice(addon_options, size=num_addons, replace=False)
+    return set(chosen)
+
+
+def _generate_host_specs(rng: np.random.Generator) -> list[dict]:
+    """Generate host specs sorted alphabetically by name."""
+    specs = []
+    for sname in SUBNET_NAMES:
+        sid = SUBNET_IDS[sname]
+        if sname == "INTERNET":
+            specs.append(
+                {
+                    "name": "root_internet_host_0",
+                    "sid": sid,
+                    "is_internet": True,
+                    "is_router": False,
+                    "is_server": False,
+                    "is_user": False,
+                    "services": set(),
+                }
+            )
+            continue
+
+        cyborg_suffix = CYBORG_SUBNET_SUFFIX[sname]
+        specs.append(
+            {
+                "name": f"{cyborg_suffix}_router",
+                "sid": sid,
+                "is_router": True,
+                "is_internet": False,
+                "is_server": False,
+                "is_user": False,
+                "services": set(),
+            }
+        )
+
+        num_users = rng.integers(3, 10, endpoint=True)
+        for u in range(num_users):
+            svcs = {"SSHD"}
+            if "operational" in cyborg_suffix:
+                svcs.add("OTSERVICE")
+            svcs |= _pick_addon_services(rng)
+            specs.append(
+                {
+                    "name": f"{cyborg_suffix}_user_host_{u}",
+                    "sid": sid,
+                    "is_router": False,
+                    "is_internet": False,
+                    "is_server": False,
+                    "is_user": True,
+                    "services": svcs,
+                }
+            )
+
+        num_servers = rng.integers(1, 6, endpoint=True)
+        for sv in range(num_servers):
+            svcs = {"SSHD"}
+            if "operational" in cyborg_suffix:
+                svcs.add("OTSERVICE")
+            svcs |= _pick_addon_services(rng)
+            specs.append(
+                {
+                    "name": f"{cyborg_suffix}_server_host_{sv}",
+                    "sid": sid,
+                    "is_router": False,
+                    "is_internet": False,
+                    "is_server": True,
+                    "is_user": False,
+                    "services": svcs,
+                }
+            )
+
+    specs.sort(key=lambda h: h["name"])
+    return specs
+
+
 def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     """Build CC4 topology purely in JAX/numpy (no CybORG dependency).
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
     1 router + random user hosts (3-10) + random server hosts (1-6).
     Internet subnet gets 1 host (root_internet_host_0).
+
+    Hosts are sorted alphabetically by name before index assignment,
+    matching the convention used by build_const_from_cyborg().
     """
     rng = np.random.default_rng(int(key[0]) if hasattr(key, "__getitem__") else int(key))
+
+    host_specs = _generate_host_specs(rng)
+    num_hosts = len(host_specs)
 
     host_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_subnet_arr = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
@@ -386,71 +471,31 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     host_initial_max_pid = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
     initial_services = np.zeros((GLOBAL_MAX_HOSTS, len(SERVICE_NAMES)), dtype=bool)
     subnet_router_idx = np.full(NUM_SUBNETS, -1, dtype=np.int32)
-    subnet_host_counts = np.zeros(NUM_SUBNETS, dtype=np.int32)
-
-    host_idx = 0
     host_names = []
 
-    for sname in SUBNET_NAMES:
-        sid = SUBNET_IDS[sname]
+    for idx, spec in enumerate(host_specs):
+        host_active[idx] = True
+        host_subnet_arr[idx] = spec["sid"]
+        host_names.append(spec["name"])
 
-        if sname == "INTERNET":
-            host_active[host_idx] = True
-            host_subnet_arr[host_idx] = sid
-            subnet_router_idx[sid] = host_idx
-            subnet_host_counts[sid] = 1
-            host_names.append("root_internet_host_0")
-            host_idx += 1
-            continue
+        if spec["is_internet"]:
+            subnet_router_idx[spec["sid"]] = idx
+        elif spec["is_router"]:
+            host_is_router[idx] = True
+            subnet_router_idx[spec["sid"]] = idx
+        elif spec["is_server"]:
+            host_is_server[idx] = True
+            host_respond_to_ping[idx] = True
+            host_has_bruteforceable_user[idx] = True
+            host_initial_max_pid[idx] = 5000
+        elif spec["is_user"]:
+            host_is_user[idx] = True
+            host_respond_to_ping[idx] = True
+            host_has_bruteforceable_user[idx] = True
+            host_initial_max_pid[idx] = 5000
 
-        cyborg_suffix = CYBORG_SUBNET_SUFFIX[sname]
-        router_name = f"{cyborg_suffix}_router"
-        host_active[host_idx] = True
-        host_subnet_arr[host_idx] = sid
-        host_is_router[host_idx] = True
-        subnet_router_idx[sid] = host_idx
-        host_names.append(router_name)
-        host_idx += 1
-
-        num_users = rng.integers(3, 10, endpoint=True)
-        for u in range(num_users):
-            uname = f"{cyborg_suffix}_user_host_{u}"
-            host_active[host_idx] = True
-            host_subnet_arr[host_idx] = sid
-            host_is_user[host_idx] = True
-            host_respond_to_ping[host_idx] = True
-            host_has_bruteforceable_user[host_idx] = True
-            host_initial_max_pid[host_idx] = 5000
-
-            initial_services[host_idx, SERVICE_IDS["SSHD"]] = True
-            if "operational" in cyborg_suffix:
-                initial_services[host_idx, SERVICE_IDS["OTSERVICE"]] = True
-            _assign_random_addon_services(rng, initial_services, host_idx)
-
-            host_names.append(uname)
-            host_idx += 1
-
-        num_servers = rng.integers(1, 6, endpoint=True)
-        for sv in range(num_servers):
-            svname = f"{cyborg_suffix}_server_host_{sv}"
-            host_active[host_idx] = True
-            host_subnet_arr[host_idx] = sid
-            host_is_server[host_idx] = True
-            host_respond_to_ping[host_idx] = True
-            host_has_bruteforceable_user[host_idx] = True
-            host_initial_max_pid[host_idx] = 5000
-
-            initial_services[host_idx, SERVICE_IDS["SSHD"]] = True
-            if "operational" in cyborg_suffix:
-                initial_services[host_idx, SERVICE_IDS["OTSERVICE"]] = True
-            _assign_random_addon_services(rng, initial_services, host_idx)
-
-            host_names.append(svname)
-            host_idx += 1
-
-        subnet_host_counts[sid] = 1 + num_users + num_servers
-
-    num_hosts = host_idx
+        for svc in spec["services"]:
+            initial_services[idx, SERVICE_IDS[svc]] = True
 
     data_links = _build_data_links(host_subnet_arr, host_is_router, num_hosts, subnet_router_idx)
 
@@ -560,18 +605,6 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         max_steps=num_steps,
         num_hosts=num_hosts,
     )
-
-
-def _assign_random_addon_services(
-    rng: np.random.Generator,
-    services: np.ndarray,
-    host_idx: int,
-) -> None:
-    addon_options = ["APACHE2", "MYSQLD", "SMTP"]
-    num_addons = rng.integers(0, len(addon_options), endpoint=True)
-    chosen = rng.choice(addon_options, size=num_addons, replace=False)
-    for svc in chosen:
-        services[host_idx, SERVICE_IDS[svc]] = True
 
 
 def _compute_mission_phases(steps: int) -> tuple:
