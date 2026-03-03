@@ -596,6 +596,71 @@ class TestDifferentialWithCybORG:
         assert not cy_success
         assert jax_success == cy_success
 
+    def test_privesc_fails_when_session0_nonabstract_but_same_host_has_abstract_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        source_host = int(const.red_start_hosts[0])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and h != source_host
+        )
+        source_hostname = sorted_hosts[source_host]
+        target_hostname = sorted_hosts[target_host]
+
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        # Keep session id=0 as non-abstract, but add an abstract session on the
+        # same source host. CybORG still fails PrivilegeEscalate(session=0).
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=source_hostname,
+                username="user",
+                agent="red_agent_0",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
+        cy_action.duration = 1
+        cy_result = cyborg_env.step(agent="red_agent_0", action=cy_action)
+        cy_success = str(cy_result.observation.get("success")).upper() == "TRUE"
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, source_host].set(True).at[0, target_host].set(True),
+            red_session_count=state.red_session_count.at[0, source_host].set(2).at[0, target_host].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host]
+            .set(True)
+            .at[0, target_host]
+            .set(False),
+            red_abstract_host_rank=state.red_abstract_host_rank.at[0, source_host].set(1),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
+            red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        jax_action = encode_red_action("PrivilegeEscalate", target_host, 0)
+        new_state = _jit_apply_red(state, const, 0, jax_action, jax.random.PRNGKey(0))
+        jax_success = int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert not cy_success
+        assert jax_success == cy_success
+        assert int(new_state.red_privilege[0, target_host]) == COMPROMISE_USER
+        assert int(new_state.host_compromised[target_host]) == COMPROMISE_USER
+
     def test_scan_recovers_bound_source_when_anchor_unset_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
         cy_state = cyborg_env.environment_controller.state

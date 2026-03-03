@@ -47,7 +47,14 @@ def bound_source_is_abstract(
 ) -> chex.Array:
     source_host = select_bound_source_host(state, const, agent_id)
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
-    return (source_host >= 0) & state.red_session_is_abstract[agent_id, source_idx]
+    source_has_abstract = state.red_session_is_abstract[agent_id, source_idx]
+    source_abstract_rank = state.red_abstract_host_rank[agent_id, source_idx]
+    # CybORG PrivilegeEscalate(session=0) requires the bound primary session to
+    # be abstract. Host-level "has any abstract session" is insufficient.
+    source_primary_is_abstract = source_has_abstract & (
+        (source_abstract_rank == jnp.int32(0)) | (source_abstract_rank == jnp.int32(ABSTRACT_RANK_NONE))
+    )
+    return (source_host >= 0) & source_primary_is_abstract
 
 
 def can_reach_subnet(
