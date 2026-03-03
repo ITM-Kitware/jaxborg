@@ -21,6 +21,26 @@ list focused on remaining work.
 are no-ops (return state unchanged). CybORG's `FiniteStateRedAgent` never selects these
 exploit types, so this has no effect on FSM-driven training via `FsmRedCC4Env`.
 
+## CybORG Bugs Affecting Reward Semantics
+
+### GreenAccessService.available_dest_service never called (line 176)
+
+`if not self.available_dest_service:` checks the method object (always truthy), not its
+return value. Should be `self.available_dest_service(state)`. The service availability
+check is dead code — GreenAccessService only fails on blocked traffic, never on
+unavailable destination services. JAXborg matches this behavior by only triggering ASF
+on blocked traffic.
+
+- CybORG: `Simulator/Actions/GreenActions/GreenAccessService.py:176`
+
+### GreenAccessService.random_reachable_ip unreachable None branch (line 112)
+
+`if len(reachable_hosts) < 0:` is never true (len is never negative), so `None` is
+never returned. If reachable_hosts is empty, `np_random.choice([])` crashes instead.
+In practice there are always reachable servers, so this doesn't fire.
+
+- CybORG: `Simulator/Actions/GreenActions/GreenAccessService.py:112`
+
 ## Additional Open Differences
 
 ### CC4Env Agent Interface: Blue-Only vs Exposed Red Actions
