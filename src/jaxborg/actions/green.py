@@ -79,7 +79,7 @@ def _apply_single_green(
     work_succeeds = has_service & (rel_roll < svc_reliability)
 
     # -- GreenLocalWork --
-    local_work_failed = (action == GREEN_LOCAL_WORK) & has_service & ~work_succeeds
+    local_work_failed = (action == GREEN_LOCAL_WORK) & ~work_succeeds
     green_lwf_this_step = jnp.where(
         local_work_failed,
         state.green_lwf_this_step.at[host_idx].set(True),
