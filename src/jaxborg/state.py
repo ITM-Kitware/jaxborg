@@ -35,6 +35,7 @@ class CC4Const:
     host_has_bruteforceable_user: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     host_has_rfi: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     host_respond_to_ping: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_initial_max_pid: chex.Array  # (GLOBAL_MAX_HOSTS,) int32 — max host process pid at reset
 
     blue_agent_subnets: chex.Array  # (NUM_BLUE_AGENTS, NUM_SUBNETS) bool
     blue_agent_hosts: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) bool
@@ -84,7 +85,6 @@ class CC4State:
 
     red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
     host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
-    blue_suspicious_pid_budget: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) int — known suspicious pids
     host_suspicious_process: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     host_has_malware: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
@@ -105,10 +105,15 @@ class CC4State:
     red_abstract_host_rank: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — min abstract-session order per host
     red_next_abstract_rank: chex.Array  # (NUM_RED_AGENTS,) int32 — next abstract-session order value
     red_session_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS) int32
+    red_session_abstract_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS) int32
+    red_session_privileged_pids: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS) int32
     red_next_pid: chex.Array  # scalar int32 — next PID to allocate
     blue_suspicious_pids: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
+    host_process_creation_pids: chex.Array  # (GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
+    # pending monitor events
+    host_decoy_process_pids: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) int32 — live decoy process pids
 
-    green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 7) float — precomputed green agent randoms
+    green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
 
     red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
@@ -122,6 +127,11 @@ class CC4State:
 
     red_pending_fsm_action: chex.Array  # (NUM_RED_AGENTS,) int32 — stored FSM action type for deferred actions
     red_pending_target_host: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target host for deferred actions
+
+    red_pid_deltas: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed Host.create_pid deltas
+    use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed blue decoy pid deltas
+    use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
 
 
 def create_initial_const() -> CC4Const:
@@ -137,6 +147,7 @@ def create_initial_const() -> CC4Const:
         host_has_bruteforceable_user=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_has_rfi=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_respond_to_ping=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        host_initial_max_pid=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         blue_agent_subnets=jnp.zeros((NUM_BLUE_AGENTS, NUM_SUBNETS), dtype=jnp.bool_),
         blue_agent_hosts=jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_start_hosts=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
@@ -179,7 +190,6 @@ def create_initial_state() -> CC4State:
         red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-        blue_suspicious_pid_budget=jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         host_suspicious_process=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_has_malware=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
@@ -194,10 +204,18 @@ def create_initial_state() -> CC4State:
         ),
         red_next_abstract_rank=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_session_pids=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32),
+        red_session_abstract_pids=jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        ),
+        red_session_privileged_pids=jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        ),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),
         blue_suspicious_pids=jnp.full(
             (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
         ),
+        host_process_creation_pids=jnp.full((GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32),
+        host_decoy_process_pids=jnp.full((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), -1, dtype=jnp.int32),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
@@ -205,6 +223,10 @@ def create_initial_state() -> CC4State:
         use_detection_randoms=jnp.array(False),
         green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
+        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_pid_deltas=jnp.array(False),
+        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        use_blue_decoy_pid_deltas=jnp.array(False),
         red_pending_ticks=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),

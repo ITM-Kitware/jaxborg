@@ -7,6 +7,7 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.duration import (
     process_blue_with_duration,
     process_red_with_duration,
@@ -154,6 +155,13 @@ def _jit_apply_green(state, const, key):
 
 
 @jax.jit
+def _jit_apply_end_turn_monitors(state, const):
+    for b in range(NUM_BLUE_AGENTS):
+        state = apply_blue_monitor(state, const, b)
+    return state
+
+
+@jax.jit
 def _jit_reassign(state, const):
     return reassign_cross_subnet_sessions(state, const)
 
@@ -206,20 +214,12 @@ class CC4DifferentialHarness:
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
-        max_suspicious_tracked = int(MAX_TRACKED_SUSPICIOUS_PIDS)
         max_session_count = int(jnp.max(self.jax_state.red_session_count))
-        max_suspicious_budget = int(jnp.max(self.jax_state.blue_suspicious_pid_budget))
         if max_session_count > max_session_tracked:
             raise RuntimeError(
                 f"[{stage}] red_session_count overflow: observed {max_session_count} "
                 f"> MAX_TRACKED_SESSION_PIDS={max_session_tracked}. "
                 "CybORG session PID tracking is effectively unbounded; increase JAX PID capacity."
-            )
-        if max_suspicious_budget > max_suspicious_tracked:
-            raise RuntimeError(
-                f"[{stage}] blue_suspicious_pid_budget overflow: observed {max_suspicious_budget} "
-                f"> MAX_TRACKED_SUSPICIOUS_PIDS={max_suspicious_tracked}. "
-                "CybORG suspicious PID memory is unbounded; increase JAX PID capacity."
             )
 
     def reset(self):
@@ -303,6 +303,12 @@ class CC4DifferentialHarness:
         )
         start_next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
         start_session_pids = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32)
+        start_abstract_session_pids = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        )
+        start_privileged_session_pids = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        )
         max_pid_seen = 4999
         start_blue_suspicious_pids = jnp.full(
             (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32
@@ -346,9 +352,19 @@ class CC4DifferentialHarness:
                         start_session_pids = start_session_pids.at[red_idx, hidx].set(
                             append_pid_to_row(pid_row, sess_pid)
                         )
+                        if isinstance(sess, RedAbstractSession):
+                            abs_row = start_abstract_session_pids[red_idx, hidx]
+                            start_abstract_session_pids = start_abstract_session_pids.at[red_idx, hidx].set(
+                                append_pid_to_row(abs_row, sess_pid)
+                            )
                     level = 1
                     if hasattr(sess, "username") and sess.username in ("root", "SYSTEM"):
                         level = 2
+                        if sess_pid >= 0:
+                            priv_row = start_privileged_session_pids[red_idx, hidx]
+                            start_privileged_session_pids = start_privileged_session_pids.at[red_idx, hidx].set(
+                                append_pid_to_row(priv_row, sess_pid)
+                            )
                     start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
                     host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
                     for ip in getattr(sess, "ports", {}).keys():
@@ -396,6 +412,8 @@ class CC4DifferentialHarness:
             red_session_count=start_session_count,
             red_privilege=start_priv,
             red_session_pids=start_session_pids,
+            red_session_abstract_pids=start_abstract_session_pids,
+            red_session_privileged_pids=start_privileged_session_pids,
             red_next_pid=jnp.array(max_pid_seen + 1, dtype=jnp.int32),
             blue_suspicious_pids=start_blue_suspicious_pids,
             red_discovered_hosts=start_discovered,
@@ -419,6 +437,8 @@ class CC4DifferentialHarness:
             self.green_recorder.install(self.cyborg_env, self.mappings)
             self.jax_state = self.jax_state.replace(
                 use_green_randoms=jnp.array(True),
+                use_red_pid_deltas=jnp.array(True),
+                use_blue_decoy_pid_deltas=jnp.array(True),
             )
 
         from tests.differential.state_comparator import (
@@ -631,9 +651,21 @@ class CC4DifferentialHarness:
 
         # --- Green RNG sync ---
         if self.green_recorder:
-            step_fields = self.green_recorder.extract_step(int(self.jax_state.time))
+            step_fields, red_pid_deltas, blue_decoy_pid_deltas = self.green_recorder.extract_step(
+                int(self.jax_state.time)
+            )
             green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
-            self.jax_state = self.jax_state.replace(green_randoms=green_randoms)
+            red_pid_delta_row = self.jax_state.red_pid_deltas.at[self.jax_state.time].set(
+                jnp.array(red_pid_deltas, dtype=jnp.int32)
+            )
+            blue_decoy_pid_delta_row = self.jax_state.blue_decoy_pid_deltas.at[self.jax_state.time].set(
+                jnp.array(blue_decoy_pid_deltas, dtype=jnp.int32)
+            )
+            self.jax_state = self.jax_state.replace(
+                green_randoms=green_randoms,
+                red_pid_deltas=red_pid_delta_row,
+                blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
+            )
 
         # --- JAX action application via duration functions (training code path) ---
 
@@ -663,6 +695,7 @@ class CC4DifferentialHarness:
             )
 
         self.jax_state = _jit_reassign(self.jax_state, self.jax_const)
+        self.jax_state = _jit_apply_end_turn_monitors(self.jax_state, self.jax_const)
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
         )

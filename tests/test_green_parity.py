@@ -87,7 +87,7 @@ class TestGreenSyncParity:
             harness.jax_state = harness.jax_state.replace(time=t + 1)
 
         arr = harness.green_recorder.to_jax_array()
-        assert arr.shape == (500, GLOBAL_MAX_HOSTS, 7)
+        assert arr.shape == (500, GLOBAL_MAX_HOSTS, 8)
         assert arr.dtype == jnp.float32
         assert jnp.all(arr >= 0.0)
         assert jnp.all(arr <= 1.0)

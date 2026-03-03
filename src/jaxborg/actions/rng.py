@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 
+from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.state import CC4State
 
 
@@ -44,3 +45,29 @@ def sample_green_random(state: CC4State, time, host_idx, field_idx, key, *, int_
             return jax.random.uniform(key)
 
     return jax.lax.cond(state.use_green_randoms, from_precomputed, from_rng, None)
+
+
+def sample_red_pid_delta(state: CC4State, time, agent_id, key):
+    """Return Host.create_pid delta in [1, 9] for exploit session creation."""
+
+    def from_precomputed(_):
+        return jnp.maximum(state.red_pid_deltas[time, agent_id], jnp.int32(1))
+
+    def from_rng(_):
+        return jax.random.randint(key, (), minval=1, maxval=10, dtype=jnp.int32)
+
+    return jax.lax.cond(state.use_red_pid_deltas, from_precomputed, from_rng, None)
+
+
+def sample_blue_decoy_pid_delta(state: CC4State, time, agent_id):
+    """Return Host.create_pid delta in [1, 9] for blue decoy process creation."""
+
+    def from_precomputed(_):
+        return jnp.maximum(state.blue_decoy_pid_deltas[time, agent_id], jnp.int32(1))
+
+    def from_fallback_rng(_):
+        seed = jnp.int32(time * NUM_BLUE_AGENTS + agent_id)
+        key = jax.random.fold_in(jax.random.PRNGKey(0xB10E), seed)
+        return jax.random.randint(key, (), minval=1, maxval=10, dtype=jnp.int32)
+
+    return jax.lax.cond(state.use_blue_decoy_pid_deltas, from_precomputed, from_fallback_rng, None)

@@ -8,6 +8,7 @@ from flax import struct
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 from jaxmarl.environments.spaces import Box, Discrete
 
+from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.actions.green import apply_green_agents
@@ -48,6 +49,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_source_hosts = state.red_scanned_source_hosts
     red_session_pids = state.red_session_pids
+    red_session_abstract_pids = state.red_session_abstract_pids
     red_next_pid = state.red_next_pid
 
     for r in range(NUM_RED_AGENTS):
@@ -83,6 +85,12 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             is_active,
             red_session_pids.at[r, start_host].set(append_pid_to_row(pid_row, red_next_pid)),
             red_session_pids,
+        )
+        abstract_pid_row = red_session_abstract_pids[r, start_host]
+        red_session_abstract_pids = jnp.where(
+            is_active,
+            red_session_abstract_pids.at[r, start_host].set(append_pid_to_row(abstract_pid_row, red_next_pid)),
+            red_session_abstract_pids,
         )
         red_next_pid = jnp.where(is_active, red_next_pid + 1, red_next_pid)
         red_privilege = jnp.where(
@@ -131,6 +139,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,
         red_session_pids=red_session_pids,
+        red_session_abstract_pids=red_session_abstract_pids,
         red_next_pid=red_next_pid,
     )
 
@@ -233,6 +242,8 @@ class CC4Env(MultiAgentEnv):
             state = process_blue_with_duration(state, const, b, actions[f"blue_{b}"])
 
         state = reassign_cross_subnet_sessions(state, const)
+        for b in range(NUM_BLUE_AGENTS):
+            state = apply_blue_monitor(state, const, b)
 
         reward = compute_rewards(
             state,

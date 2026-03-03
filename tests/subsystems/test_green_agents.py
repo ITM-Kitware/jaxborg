@@ -10,6 +10,7 @@ from CybORG.Simulator.Actions.ConcreteActions.PhishingEmail import PhishingEmail
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action
+from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.green import (
     FP_DETECTION_RATE,
@@ -19,6 +20,7 @@ from jaxborg.actions.green import (
 )
 from jaxborg.actions.red_common import apply_exploit_success
 from jaxborg.constants import (
+    COMPROMISE_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     MAX_STEPS,
@@ -427,6 +429,97 @@ def test_phishing_creates_abstract_session_matches_cyborg():
     assert bool(jax_after.red_session_is_abstract[jax_owner, target_host])
 
 
+def test_phishing_does_not_reuse_stale_blue_suspicious_pid_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    for r in range(NUM_RED_AGENTS):
+        red_name = f"red_agent_{r}"
+        cy_state.sessions[red_name] = {}
+        cy_state.sessions_count[red_name] = 0
+    for host in cy_state.hosts.values():
+        for r in range(NUM_RED_AGENTS):
+            host.sessions[f"red_agent_{r}"] = []
+
+    target_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.green_agent_active[h]) and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    source_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if h != target_host
+        and bool(const.host_active[h])
+        and not bool(const.host_is_router[h])
+        and int(const.host_subnet[h]) == int(const.host_subnet[target_host])
+    )
+    target_hostname = mappings.idx_to_hostname[target_host]
+    source_hostname = mappings.idx_to_hostname[source_host]
+
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=source_hostname,
+            username="user",
+            agent="red_agent_0",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+    blue_idx = next(b for b in range(const.blue_agent_hosts.shape[0]) if bool(const.blue_agent_hosts[b, target_host]))
+    stale_pid = 424242
+    cy_blue_parent = cy_state.sessions[f"blue_agent_{blue_idx}"][0]
+    cy_blue_parent.add_sus_pids(hostname=target_hostname, pid=stale_pid)
+
+    green_name = f"green_agent_{int(const.green_agent_host[target_host])}"
+    target_ip = mappings.hostname_to_ip[target_hostname]
+    cy_action = PhishingEmail(session=0, agent=green_name, ip_address=target_ip)
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "TRUE"
+    cy_target_sessions = [s for s in cy_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
+    assert len(cy_target_sessions) == 1
+    cy_new_pid = int(cy_target_sessions[0].pid)
+    assert cy_new_pid != stale_pid
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[0, source_host].set(True),
+        red_session_count=jax_state.red_session_count.at[0, source_host].set(1),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[0, source_host].set(True),
+        red_privilege=jax_state.red_privilege.at[0, source_host].set(COMPROMISE_USER),
+        host_compromised=jax_state.host_compromised.at[source_host].set(COMPROMISE_USER),
+        blue_suspicious_pids=jax_state.blue_suspicious_pids.at[blue_idx, target_host, 0].set(stale_pid),
+    )
+
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, target_host, 0] = (GREEN_LOCAL_WORK + 0.5) / 3.0
+    green_randoms[0, target_host, 1] = 0.5
+    green_randoms[0, target_host, 2] = 0.0
+    green_randoms[0, target_host, 3] = 0.5
+    green_randoms[0, target_host, 4] = 0.0
+    jax_state = jax_state.replace(
+        green_randoms=jnp.array(green_randoms),
+        use_green_randoms=jnp.array(True),
+    )
+    jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+
+    jax_target_pids = np.array(jax_after.red_session_pids[0, target_host])
+    jax_target_pids = jax_target_pids[jax_target_pids >= 0]
+    assert len(jax_target_pids) == 1
+    assert int(jax_target_pids[0]) != stale_pid
+
+
 def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_cyborg():
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
@@ -496,18 +589,17 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
 
     blue_idx = next(b for b in range(const.blue_agent_hosts.shape[0]) if bool(const.blue_agent_hosts[b, target_host]))
     cy_blue_parent = cy_state.sessions[f"blue_agent_{blue_idx}"][0]
-    concrete_sessions = [s for s in cy_target_sessions if not isinstance(s, RedAbstractSession)]
-    for sess in concrete_sessions:
+    for sess in cy_target_sessions:
         cy_blue_parent.add_sus_pids(hostname=target_hostname, pid=sess.pid)
     cy_sus_pids = cy_blue_parent.sus_pids.get(target_hostname, [])
-    assert set(cy_sus_pids) == {sess.pid for sess in concrete_sessions}
+    assert set(cy_sus_pids) == {sess.pid for sess in cy_target_sessions}
 
     cy_remove = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
     cy_remove.duration = 1
     cy_remove_obs = cy_remove.execute(cy_state)
     assert cy_remove_obs.success
     cy_remaining = [s for s in cy_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
-    assert len(cy_remaining) == 1
+    assert len(cy_remaining) == 0
 
     jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
     jax_state = jax_state.replace(
@@ -534,19 +626,30 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
     jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after_green.red_sessions[r, target_host]))
     phish_pid_row = np.array(jax_after_green.red_session_pids[jax_owner, target_host])
     phish_pid = int(phish_pid_row[phish_pid_row >= 0][0])
+    jax_after_green = jax_after_green.replace(
+        blue_suspicious_pids=jax_after_green.blue_suspicious_pids.at[blue_idx, target_host, 0].set(phish_pid),
+    )
 
-    follow_on_pid = int(jax_after_green.red_next_pid)
+    pre_exploit_pid_row = np.array(jax_after_green.red_session_pids[jax_owner, target_host])
+    pre_exploit_pids = {int(pid) for pid in pre_exploit_pid_row if int(pid) >= 0}
     jax_before_remove = apply_exploit_success(
         jax_after_green,
         const,
         jax_owner,
         jnp.int32(target_host),
         jnp.array(True),
+        key=jax.random.PRNGKey(1),
     )
+    post_exploit_pid_row = np.array(jax_before_remove.red_session_pids[jax_owner, target_host])
+    post_exploit_pids = {int(pid) for pid in post_exploit_pid_row if int(pid) >= 0}
+    new_exploit_pids = post_exploit_pids - pre_exploit_pids
+    assert len(new_exploit_pids) == 1
+    follow_on_pid = next(iter(new_exploit_pids))
+    jax_before_remove = apply_blue_monitor(jax_before_remove, const, blue_idx)
 
     jax_sus_pids = np.array(jax_before_remove.blue_suspicious_pids[blue_idx, target_host])
     jax_sus_pids = jax_sus_pids[jax_sus_pids >= 0].tolist()
-    assert phish_pid not in jax_sus_pids
+    assert phish_pid in jax_sus_pids
     assert follow_on_pid in jax_sus_pids
 
     remove_idx = encode_blue_action("Remove", target_host, blue_idx)
@@ -554,5 +657,5 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
 
     assert int(jax_after_remove.red_session_count[jax_owner, target_host]) == len(cy_remaining)
     assert bool(jax_after_remove.red_sessions[jax_owner, target_host]) == (len(cy_remaining) > 0)
-    assert int(jax_after_remove.red_privilege[jax_owner, target_host]) == COMPROMISE_USER
-    assert int(jax_after_remove.host_compromised[target_host]) == COMPROMISE_USER
+    assert int(jax_after_remove.red_privilege[jax_owner, target_host]) == COMPROMISE_NONE
+    assert int(jax_after_remove.host_compromised[target_host]) == COMPROMISE_NONE

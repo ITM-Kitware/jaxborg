@@ -56,7 +56,12 @@ def _make_jax_state(const):
     start_host = int(const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
     red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
-    return state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
+    red_scan_anchor_host = state.red_scan_anchor_host.at[0].set(start_host)
+    return state.replace(
+        red_sessions=red_sessions,
+        red_session_is_abstract=red_session_is_abstract,
+        red_scan_anchor_host=red_scan_anchor_host,
+    )
 
 
 def _cyborg_hostname_to_idx(cyborg_env):

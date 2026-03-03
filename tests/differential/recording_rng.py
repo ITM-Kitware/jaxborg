@@ -29,7 +29,13 @@ class RecordingNPRandom:
 
     def integers(self, high, *args, **kwargs):
         result = self._orig.integers(high, *args, **kwargs)
-        self.log.append(("integers", int(result), int(high)))
+        if len(args) >= 1:
+            low = int(high)
+            high_val = int(args[0])
+        else:
+            low = 0
+            high_val = int(high)
+        self.log.append(("integers", int(result), low, high_val))
         return result
 
     def random(self, *args, **kwargs):

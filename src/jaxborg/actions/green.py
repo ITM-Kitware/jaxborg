@@ -1,14 +1,13 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.pids import allocate_host_pid_from_delta, append_pid_to_row
 from jaxborg.actions.rng import sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
-    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -61,7 +60,7 @@ def _apply_single_green(
     host_idx: jnp.int32,
     key: jax.Array,
 ) -> CC4State:
-    k1, k2, k3, k4, k5, k_svc, k_rel, k_phish_src = jax.random.split(key, 8)
+    k1, k2, k3, k4, k5, k_svc, k_rel, k_phish_src, k_pid = jax.random.split(key, 9)
     t = state.time
 
     action = sample_green_random(state, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
@@ -135,23 +134,26 @@ def _apply_single_green(
         state.red_next_abstract_rank.at[red_agent_idx].set(next_abstract_rank + 1),
         state.red_next_abstract_rank,
     )
-    reused_pid = jnp.int32(-1)
-    for b in range(NUM_BLUE_AGENTS):
-        cover_pid = first_valid_pid(state.blue_suspicious_pids[b, host_idx])
-        reused_pid = jnp.where(
-            (reused_pid < 0) & const.blue_agent_hosts[b, host_idx] & (cover_pid >= 0),
-            cover_pid,
-            reused_pid,
-        )
-    reuse_stale_pid = phish_creates_session & (reused_pid >= 0)
-    new_pid = jnp.where(reuse_stale_pid, reused_pid, state.red_next_pid)
-    red_next_pid = state.red_next_pid + (phish_creates_session & ~reuse_stale_pid).astype(jnp.int32)
+    pid_delta = sample_green_random(state, t, host_idx, 7, k_pid, int_range=9) + 1
+    new_pid = allocate_host_pid_from_delta(state, const, host_idx, pid_delta)
+    red_next_pid = jnp.where(
+        phish_creates_session,
+        jnp.maximum(state.red_next_pid, new_pid + 1),
+        state.red_next_pid,
+    )
     pid_row = state.red_session_pids[red_agent_idx, host_idx]
     updated_pid_row = append_pid_to_row(pid_row, new_pid)
     red_session_pids = jnp.where(
         phish_creates_session,
         state.red_session_pids.at[red_agent_idx, host_idx].set(updated_pid_row),
         state.red_session_pids,
+    )
+    abstract_pid_row = state.red_session_abstract_pids[red_agent_idx, host_idx]
+    updated_abstract_pid_row = append_pid_to_row(abstract_pid_row, new_pid)
+    red_session_abstract_pids = jnp.where(
+        phish_creates_session,
+        state.red_session_abstract_pids.at[red_agent_idx, host_idx].set(updated_abstract_pid_row),
+        state.red_session_abstract_pids,
     )
     red_privilege = jnp.where(
         phish_creates_session,
@@ -230,6 +232,7 @@ def _apply_single_green(
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,
         red_session_pids=red_session_pids,
+        red_session_abstract_pids=red_session_abstract_pids,
         red_next_pid=red_next_pid,
         red_privilege=red_privilege,
         red_scan_anchor_host=red_scan_anchor_host,

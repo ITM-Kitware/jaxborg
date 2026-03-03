@@ -76,6 +76,7 @@ def apply_red_action(
 ) -> CC4State:
     action_type, target_subnet, target_host = decode_red_action(action_idx, agent_id, const)
     k_agg, k_stealth, k_deception = jax.random.split(key, 3)
+    k_exploit = jax.random.fold_in(key, 0xCC4)
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_DISCOVER,
@@ -94,7 +95,7 @@ def apply_red_action(
     for atype, apply_fn in _EXPLOIT_DISPATCH:
         state = jax.lax.cond(
             action_type == atype,
-            lambda s, fn=apply_fn: fn(s, const, agent_id, target_host),
+            lambda s, fn=apply_fn: fn(s, const, agent_id, target_host, k_exploit),
             lambda s: s,
             state,
         )
@@ -156,7 +157,7 @@ def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_id
 
     state = jax.lax.cond(
         action_type == BLUE_ACTION_TYPE_MONITOR,
-        lambda s: apply_blue_monitor(s, const),
+        lambda s: apply_blue_monitor(s, const, agent_id),
         lambda s: s,
         state,
     )

@@ -173,6 +173,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     host_respond_to_ping = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_has_bruteforceable_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_has_rfi = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
+    host_initial_max_pid = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
     initial_services = np.zeros((GLOBAL_MAX_HOSTS, len(SERVICE_NAMES)), dtype=bool)
     subnet_router_idx = np.full(NUM_SUBNETS, -1, dtype=np.int32)
 
@@ -202,6 +203,10 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
             host_is_user[idx] = True
 
         host_respond_to_ping[idx] = host.respond_to_ping
+        if host.processes:
+            process_pids = [int(proc.pid) for proc in host.processes if proc.pid is not None]
+            if process_pids:
+                host_initial_max_pid[idx] = np.int32(max(process_pids))
 
         for user in host.users:
             if getattr(user, "bruteforceable", False):
@@ -299,6 +304,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         host_has_bruteforceable_user=jnp.array(host_has_bruteforceable_user),
         host_has_rfi=jnp.array(host_has_rfi),
         host_respond_to_ping=jnp.array(host_respond_to_ping),
+        host_initial_max_pid=jnp.array(host_initial_max_pid),
         blue_agent_subnets=jnp.array(blue_agent_subnets),
         blue_agent_hosts=jnp.array(blue_agent_hosts),
         red_start_hosts=jnp.array(red_start_hosts),
@@ -377,6 +383,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     host_respond_to_ping = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_has_bruteforceable_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
     host_has_rfi = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
+    host_initial_max_pid = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
     initial_services = np.zeros((GLOBAL_MAX_HOSTS, len(SERVICE_NAMES)), dtype=bool)
     subnet_router_idx = np.full(NUM_SUBNETS, -1, dtype=np.int32)
     subnet_host_counts = np.zeros(NUM_SUBNETS, dtype=np.int32)
@@ -413,6 +420,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
             host_is_user[host_idx] = True
             host_respond_to_ping[host_idx] = True
             host_has_bruteforceable_user[host_idx] = True
+            host_initial_max_pid[host_idx] = 5000
 
             initial_services[host_idx, SERVICE_IDS["SSHD"]] = True
             if "operational" in cyborg_suffix:
@@ -430,6 +438,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
             host_is_server[host_idx] = True
             host_respond_to_ping[host_idx] = True
             host_has_bruteforceable_user[host_idx] = True
+            host_initial_max_pid[host_idx] = 5000
 
             initial_services[host_idx, SERVICE_IDS["SSHD"]] = True
             if "operational" in cyborg_suffix:
@@ -530,6 +539,7 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         host_has_bruteforceable_user=jnp.array(host_has_bruteforceable_user),
         host_has_rfi=jnp.array(host_has_rfi),
         host_respond_to_ping=jnp.array(host_respond_to_ping),
+        host_initial_max_pid=jnp.array(host_initial_max_pid),
         blue_agent_subnets=jnp.array(blue_agent_subnets),
         blue_agent_hosts=jnp.array(blue_agent_hosts),
         red_start_hosts=jnp.array(red_start_hosts),

@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action
@@ -14,6 +15,7 @@ from jaxborg.actions.encoding import (
     decode_blue_action,
     encode_blue_action,
 )
+from jaxborg.actions.pids import host_current_max_pid
 from jaxborg.constants import (
     DECOY_IDS,
     GLOBAL_MAX_HOSTS,
@@ -193,3 +195,35 @@ class TestBlueActionOrder:
         )
 
         assert BLUE_ANALYSE_START < BLUE_REMOVE_START < BLUE_RESTORE_START < BLUE_DECOY_START
+
+
+class TestDifferentialWithCybORG:
+    def test_decoy_process_pid_advances_host_pid_base_matches_cyborg(self):
+        cyborg_env = _make_cyborg_env()
+        const = build_const_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "OPERATIONAL_ZONE_A")
+        assert target is not None
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+        target_hostname = sorted_hosts[target]
+
+        before_max = max((p.pid for p in cy_state.hosts[target_hostname].processes), default=4999)
+        cy_action = DeployDecoy(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        cy_obs = cy_action.execute(cy_state)
+        assert str(cy_obs.success).upper() == "TRUE"
+        after_max = max((p.pid for p in cy_state.hosts[target_hostname].processes), default=4999)
+        decoy_delta = after_max - before_max
+        assert 1 <= decoy_delta <= 9
+
+        state = _make_jax_state(const)
+        state = state.replace(
+            blue_decoy_pid_deltas=state.blue_decoy_pid_deltas.at[0, blue_idx].set(decoy_delta),
+            use_blue_decoy_pid_deltas=jnp.array(True),
+        )
+        new_state = apply_blue_decoy(state, const, blue_idx, target, APACHE_IDX)
+
+        jax_after_max = int(host_current_max_pid(new_state, const, target))
+        assert jax_after_max == after_max
