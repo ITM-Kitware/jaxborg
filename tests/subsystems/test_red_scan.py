@@ -1673,6 +1673,120 @@ class TestDeferredScanSessionBinding:
         )
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_target_scanned
 
+    def test_scan_bound_to_nonabstract_session_zero_does_not_fallback_to_other_abstract_host_matches_cyborg(self):
+        """Session-0 scan cannot silently switch to another abstract session on a different host."""
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=42)
+        cyborg_env.reset()
+
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        controller = cyborg_env.environment_controller
+
+        red_agent_id = 0
+        red_agent_name = "red_agent_0"
+        primary = cy_state.sessions[red_agent_name][0]
+        source_host = mappings.hostname_to_idx[primary.hostname]
+        source_subnet = int(const.host_subnet[source_host])
+
+        subnet_hosts = [
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and int(const.host_subnet[h]) == source_subnet
+            and h != source_host
+        ]
+        assert subnet_hosts, "Need another host in source subnet"
+        abstract_host = subnet_hosts[0]
+        target_host = abstract_host
+        target_ip = mappings.hostname_to_ip[mappings.idx_to_hostname[target_host]]
+
+        # Session 0 becomes non-abstract on source_host.
+        cy_state.sessions[red_agent_name][0] = Session(
+            ident=0,
+            hostname=primary.hostname,
+            username=getattr(primary, "username", "user") or "user",
+            agent=red_agent_name,
+            pid=getattr(primary, "pid", None),
+            parent=getattr(primary, "parent", None),
+            session_type="shell",
+        )
+        # A different abstract session exists on another host.
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=mappings.idx_to_hostname[abstract_host],
+                username="user",
+                agent=red_agent_name,
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        abstract_sid = max(cy_state.sessions[red_agent_name].keys())
+
+        iface = controller.agent_interfaces[red_agent_name]
+        iface.action_space.client_session[0] = True
+        iface.action_space.server_session[0] = True
+        iface.action_space.client_session[abstract_sid] = True
+        iface.action_space.server_session[abstract_sid] = True
+
+        subnet_name = next(name for name, sid in CYBORG_SUFFIX_TO_ID.items() if sid == source_subnet)
+        subnet_cidr = cy_state.subnet_name_to_cidr[subnet_name]
+        discover_action = DiscoverRemoteSystems(subnet=subnet_cidr, session=abstract_sid, agent=red_agent_name)
+        discover_action.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=discover_action)
+
+        scan_action = AggressiveServiceDiscovery(session=0, agent=red_agent_name, ip_address=target_ip)
+        scan_action.duration = 1
+        cyborg_env.step(agent=red_agent_name, action=scan_action)
+
+        cy_target_scanned = any(
+            target_ip in getattr(sess, "ports", {})
+            for sess in cy_state.sessions[red_agent_name].values()
+            if hasattr(sess, "ports")
+        )
+        assert not cy_target_scanned, "CybORG should fail non-abstract session-0 scan"
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, source_host]
+            .set(True)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[red_agent_id, source_host]
+            .set(1)
+            .at[red_agent_id, abstract_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
+            .set(False)
+            .at[red_agent_id, abstract_host]
+            .set(True),
+            red_abstract_host_rank=state.red_abstract_host_rank.at[red_agent_id, abstract_host].set(abstract_sid),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(source_host),
+        )
+
+        scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
+        new_state = process_red_with_duration(
+            state,
+            const,
+            red_agent_id,
+            scan_idx,
+            jax.random.PRNGKey(0),
+        )
+        assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_target_scanned
+
     def test_forced_primary_host_overrides_stale_anchor_for_same_tick_scan_matches_cyborg(self):
         """Differential regression: current scan tick must use CybORG's current session-0 host."""
         from jaxborg.topology import build_const_from_cyborg

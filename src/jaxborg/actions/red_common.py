@@ -144,7 +144,7 @@ def select_scan_source_host(
     fallback_any = jnp.where(has_any_fallback, jnp.argmax(abstract_hosts), -1)
     fallback = jnp.where(has_rank_fallback, fallback_by_rank, fallback_any)
 
-    return jnp.where(source_host >= 0, jnp.where(source_is_abstract, source_host, fallback), fallback)
+    return jnp.where(source_host >= 0, jnp.where(source_is_abstract, source_host, jnp.int32(-1)), fallback)
 
 
 def recompute_scan_anchor_hosts(
