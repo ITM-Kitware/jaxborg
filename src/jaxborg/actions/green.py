@@ -1,13 +1,14 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.rng import sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -134,8 +135,17 @@ def _apply_single_green(
         state.red_next_abstract_rank.at[red_agent_idx].set(next_abstract_rank + 1),
         state.red_next_abstract_rank,
     )
-    new_pid = state.red_next_pid
-    red_next_pid = state.red_next_pid + phish_creates_session.astype(jnp.int32)
+    reused_pid = jnp.int32(-1)
+    for b in range(NUM_BLUE_AGENTS):
+        cover_pid = first_valid_pid(state.blue_suspicious_pids[b, host_idx])
+        reused_pid = jnp.where(
+            (reused_pid < 0) & const.blue_agent_hosts[b, host_idx] & (cover_pid >= 0),
+            cover_pid,
+            reused_pid,
+        )
+    reuse_stale_pid = phish_creates_session & (reused_pid >= 0)
+    new_pid = jnp.where(reuse_stale_pid, reused_pid, state.red_next_pid)
+    red_next_pid = state.red_next_pid + (phish_creates_session & ~reuse_stale_pid).astype(jnp.int32)
     pid_row = state.red_session_pids[red_agent_idx, host_idx]
     updated_pid_row = append_pid_to_row(pid_row, new_pid)
     red_session_pids = jnp.where(

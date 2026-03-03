@@ -8,13 +8,12 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_NONE,
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
-from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
+from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     ACTIVITY_EXPLOIT,
     COMPROMISE_USER,
-    MAX_TRACKED_SESSION_PIDS,
     NUM_BLUE_AGENTS,
     NUM_SUBNETS,
 )
@@ -372,19 +371,11 @@ def apply_exploit_success(
         state.red_session_pids.at[agent_id, target_host].set(pid_row_updated),
         state.red_session_pids,
     )
-    target_pid_row = jnp.where(success, pid_row_updated, state.red_session_pids[agent_id, target_host])
-    anchor_host = state.red_scan_anchor_host[agent_id]
-    target_is_anchor = success & (anchor_host == target_host)
-    anchor_pid = first_valid_pid(target_pid_row)
     blue_suspicious_pids = state.blue_suspicious_pids
     for b in range(NUM_BLUE_AGENTS):
         covers = const.blue_agent_hosts[b, target_host]
         pid_row = blue_suspicious_pids[b, target_host]
-        updated_row = pid_row
-        for slot in range(MAX_TRACKED_SESSION_PIDS):
-            candidate_pid = target_pid_row[slot]
-            include_pid = (candidate_pid >= 0) & ~(target_is_anchor & (candidate_pid == anchor_pid))
-            updated_row = jnp.where(include_pid, append_pid_to_row(updated_row, candidate_pid), updated_row)
+        updated_row = append_pid_to_row(pid_row, new_pid)
         blue_suspicious_pids = blue_suspicious_pids.at[b, target_host].set(
             jnp.where(success & covers, updated_row, pid_row)
         )
