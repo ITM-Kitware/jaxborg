@@ -21,6 +21,8 @@ def apply_impact(
     has_bound_source = select_bound_source_host(state, const, agent_id) >= 0
     success = is_active & has_session & is_privileged & has_ot & has_bound_source
 
+    # CybORG BlueRewardMachine penalizes ALL Impact attempts, not just successes,
+    # because bool(TernaryEnum.FALSE) is True. See CYBORG_DIFFERENCES.md.
     red_impact_attempted = jnp.where(
         is_active,
         state.red_impact_attempted.at[target_host].set(True),

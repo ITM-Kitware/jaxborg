@@ -202,6 +202,8 @@ def _apply_single_green(
 
     do_access = (action == GREEN_ACCESS_SERVICE) & has_reachable
 
+    # CybORG only fails GreenAccessService on blocked traffic — the dest service
+    # availability check is dead code (method ref not called). See CYBORG_DIFFERENCES.md.
     access_blocked = do_access & is_blocked
     access_fp_roll = sample_green_random(state, t, host_idx, 6, k5)
     access_fp = do_access & ~is_blocked & (access_fp_roll < FP_DETECTION_RATE)

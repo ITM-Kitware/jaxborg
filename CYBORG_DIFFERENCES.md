@@ -21,23 +21,36 @@ list focused on remaining work.
 are no-ops (return state unchanged). CybORG's `FiniteStateRedAgent` never selects these
 exploit types, so this has no effect on FSM-driven training via `FsmRedCC4Env`.
 
-## CybORG Bugs Affecting Reward Semantics
+## Intentionally Matched CybORG Quirks
 
-### GreenAccessService.available_dest_service never called (line 176)
+These are CybORG behaviors that look like bugs but are intentionally replicated in
+JAXborg for parity. Do not "fix" them in JAXborg without also verifying CybORG changed.
 
-`if not self.available_dest_service:` checks the method object (always truthy), not its
-return value. Should be `self.available_dest_service(state)`. The service availability
-check is dead code — GreenAccessService only fails on blocked traffic, never on
-unavailable destination services. JAXborg matches this behavior by only triggering ASF
-on blocked traffic.
+### Impact rewards penalize all attempts, not just successes
+
+`BlueRewardMachine` line 118: `elif 'red' in agent_name and success and isinstance(action, Impact)`.
+`success` is a `TernaryEnum` where `bool(TernaryEnum.FALSE)` is `True`, so ALL Impact
+actions that reach execution get penalized regardless of outcome. JAXborg matches via
+`red_impact_attempted` flag set unconditionally in `apply_impact`.
+
+- CybORG: `Shared/BlueRewardMachine.py:118`
+- JAXborg: `src/jaxborg/actions/red_impact.py`, `src/jaxborg/env.py`
+
+### GreenAccessService never checks destination service availability
+
+`if not self.available_dest_service:` (line 176) checks the method object (always truthy),
+not its return value — should be `self.available_dest_service(state)`. The service
+availability check is dead code, so GreenAccessService only fails on blocked traffic.
+JAXborg matches by only triggering ASF on blocked traffic.
 
 - CybORG: `Simulator/Actions/GreenActions/GreenAccessService.py:176`
+- JAXborg: `src/jaxborg/actions/green.py` (ASF block at line ~205)
 
-### GreenAccessService.random_reachable_ip unreachable None branch (line 112)
+### GreenAccessService always assumes reachable hosts exist
 
-`if len(reachable_hosts) < 0:` is never true (len is never negative), so `None` is
-never returned. If reachable_hosts is empty, `np_random.choice([])` crashes instead.
-In practice there are always reachable servers, so this doesn't fire.
+`if len(reachable_hosts) < 0:` (line 112) is never true (len is never negative), so
+`None` is never returned. If reachable_hosts were empty, `np_random.choice([])`
+would crash. In practice there are always reachable servers.
 
 - CybORG: `Simulator/Actions/GreenActions/GreenAccessService.py:112`
 
