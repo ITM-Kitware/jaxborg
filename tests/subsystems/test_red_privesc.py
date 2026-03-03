@@ -35,6 +35,7 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import CYBORG_SUFFIX_TO_ID
+from tests.conftest import setup_red_agent_session
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
@@ -46,9 +47,7 @@ def _setup_exploited_state(jax_const, target_host):
     state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
     start_host = int(jax_const.red_start_hosts[0])
-    red_sessions = state.red_sessions.at[0, start_host].set(True)
-    red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
+    state = setup_red_agent_session(state, 0, start_host)
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
@@ -243,9 +242,7 @@ class TestDifferentialWithCybORG:
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
         start_host = int(const.red_start_hosts[0])
-        red_sessions = state.red_sessions.at[0, start_host].set(True)
-        red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
-        state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
+        state = setup_red_agent_session(state, 0, start_host)
         return cyborg_env, const, state
 
     def _find_and_exploit_host(self, cyborg_env, const, state):

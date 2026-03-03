@@ -3,10 +3,20 @@ import jax.numpy as jnp
 import pytest
 
 from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.state import CC4State
 from jaxborg.topology import build_topology
 
 jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
+
+
+def setup_red_agent_session(state: CC4State, agent_id: int, host: int) -> CC4State:
+    """Set up initial red agent session on a host (session + abstract flag + anchor)."""
+    return state.replace(
+        red_sessions=state.red_sessions.at[agent_id, host].set(True),
+        red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host].set(True),
+        red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(host),
+    )
 
 
 @pytest.fixture(scope="session")

@@ -35,6 +35,7 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
+from tests.conftest import setup_red_agent_session
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
@@ -43,9 +44,7 @@ _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 def jax_state_with_discovered(jax_const):
     state = create_initial_state()
     start_host = int(jax_const.red_start_hosts[0])
-    red_sessions = state.red_sessions.at[0, start_host].set(True)
-    red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
+    state = setup_red_agent_session(state, 0, start_host)
     start_subnet = int(jax_const.host_subnet[start_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
     state = _jit_apply_red(state, jax_const, 0, discover_idx, jax.random.PRNGKey(0))
