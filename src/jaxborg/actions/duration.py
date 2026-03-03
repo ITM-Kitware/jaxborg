@@ -54,6 +54,17 @@ def process_red_with_duration(
     pending_source_kind = state.red_pending_source_kind[agent_id]
     pending_source_host = state.red_pending_source_host[agent_id]
     source_is_bound = pending_source_kind != PENDING_SOURCE_KIND_NONE
+    forced_source_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
+    forced_source_valid = (
+        (forced_primary_host >= 0)
+        & state.red_sessions[agent_id, forced_source_idx]
+        & const.host_active[forced_source_idx]
+    )
+    bound_source_host = jnp.where(
+        forced_source_valid,
+        forced_primary_host,
+        select_bound_source_host(state, const, agent_id),
+    )
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
@@ -63,13 +74,17 @@ def process_red_with_duration(
         ),
         jnp.int32(-1),
     )
+    queued_source_host = jnp.where(
+        is_scan_action & ~source_is_bound & forced_source_valid,
+        bound_source_host,
+        queued_source_host,
+    )
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
     queued_source_idx = jnp.clip(queued_source_host, 0, state.red_sessions.shape[1] - 1)
     source_matrix = scan_sources(state)
     source_from_scan_memory = (
         is_scan_action & (queued_source_host >= 0) & source_matrix[agent_id, target_idx, queued_source_idx]
     )
-    bound_source_host = select_bound_source_host(state, const, agent_id)
     source_from_bound_session = is_scan_action & (queued_source_host >= 0) & (queued_source_host == bound_source_host)
     queued_source_kind = jnp.where(
         source_is_bound,
@@ -91,7 +106,7 @@ def process_red_with_duration(
     )
     effective_source_kind = jnp.where(is_busy, pending_source_kind, queued_source_kind)
     effective_source_binding_host = jnp.where(is_busy, pending_source_host, queued_source_binding_host)
-    anchor_source_host = select_bound_source_host(state, const, agent_id)
+    anchor_source_host = bound_source_host
     effective_source_host = jnp.where(
         is_scan_action
         & (

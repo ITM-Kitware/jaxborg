@@ -206,8 +206,12 @@ def apply_red_session_check(
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
     sampled = select_new_primary_session_host(session_counts, const.host_active, key)
-    promoted = jnp.where(forced_valid, forced_primary_host, sampled)
-    next_anchor = jnp.where(has_any_sessions, jnp.where(needs_primary, promoted, anchor), jnp.int32(-1))
+    promoted = jnp.where(needs_primary, sampled, anchor)
+    next_anchor = jnp.where(
+        has_any_sessions,
+        jnp.where(forced_valid, forced_primary_host, promoted),
+        jnp.int32(-1),
+    )
     return state.replace(red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor))
 
 
