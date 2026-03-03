@@ -22,6 +22,7 @@ from jaxborg.actions.red_common import (
     select_bound_source_host,
     select_scan_execution_source_host,
 )
+from jaxborg.constants import ABSTRACT_RANK_NONE
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -102,10 +103,20 @@ def process_red_with_duration(
         effective_source_binding_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
+    source_is_abstract_host = state.red_session_is_abstract[agent_id, source_idx]
+    source_abstract_rank = state.red_abstract_host_rank[agent_id, source_idx]
+    source_is_bound_session_abstract = source_is_abstract_host & (
+        (source_abstract_rank == jnp.int32(0)) | (source_abstract_rank == jnp.int32(ABSTRACT_RANK_NONE))
+    )
+    source_is_abstract = jnp.where(
+        effective_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING,
+        source_is_bound_session_abstract,
+        source_is_abstract_host,
+    )
     source_valid = (
         (effective_source_host >= 0)
         & state.red_sessions[agent_id, source_idx]
-        & state.red_session_is_abstract[agent_id, source_idx]
+        & source_is_abstract
         & const.host_active[source_idx]
     )
 
