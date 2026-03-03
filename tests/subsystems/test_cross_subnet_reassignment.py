@@ -4,7 +4,7 @@ import jax.numpy as jnp
 import numpy as np
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import encode_red_action
@@ -73,9 +73,28 @@ def test_cross_subnet_reassignment_drops_session_scan_memory_matches_cyborg():
     mappings = build_mappings_from_cyborg(env)
 
     source_agent = 5
-    target_idx, dest_agent = _find_reassignment_case(const, source_agent)
-    assert target_idx is not None
-    assert dest_agent is not None
+    target_idx = None
+    dest_agent = None
+    for host_idx in range(int(const.num_hosts)):
+        if not bool(const.host_active[host_idx]) or bool(const.host_is_router[host_idx]):
+            continue
+        subnet_idx = int(const.host_subnet[host_idx])
+        owners = np.flatnonzero(np.asarray(const.red_agent_subnets[:, subnet_idx]))
+        if owners.size != 1:
+            continue
+        owner = int(owners[0])
+        if owner == source_agent or bool(const.red_agent_subnets[source_agent, subnet_idx]):
+            continue
+        hostname = mappings.idx_to_hostname[host_idx]
+        owner_has_host_session = any(
+            sess.hostname == hostname for sess in cy_state.sessions[f"red_agent_{owner}"].values()
+        )
+        if owner_has_host_session:
+            continue
+        target_idx = host_idx
+        dest_agent = owner
+        break
+    assert target_idx is not None and dest_agent is not None
 
     target_hostname = mappings.idx_to_hostname[target_idx]
     seeded_scan_hosts = [target_idx]
@@ -145,6 +164,71 @@ def test_cross_subnet_reassignment_drops_session_scan_memory_matches_cyborg():
     jax_dst_scanned = {h for h in range(int(const.num_hosts)) if bool(jax_after.red_scanned_hosts[dest_agent, h])}
     assert jax_src_scanned == cy_src_scanned
     assert jax_dst_scanned == cy_dst_scanned
+
+
+def test_cross_subnet_reassignment_preserves_nonabstract_session_type_matches_cyborg():
+    env = _make_env(seed=0)
+    controller = env.environment_controller
+    cy_state = controller.state
+    const = build_const_from_cyborg(env)
+    mappings = build_mappings_from_cyborg(env)
+
+    source_agent = 5
+    target_idx = None
+    dest_agent = None
+    for host_idx in range(int(const.num_hosts)):
+        if not bool(const.host_active[host_idx]) or bool(const.host_is_router[host_idx]):
+            continue
+        subnet_idx = int(const.host_subnet[host_idx])
+        owners = np.flatnonzero(np.asarray(const.red_agent_subnets[:, subnet_idx]))
+        if owners.size != 1:
+            continue
+        owner = int(owners[0])
+        if owner == source_agent or bool(const.red_agent_subnets[source_agent, subnet_idx]):
+            continue
+        hostname = mappings.idx_to_hostname[host_idx]
+        owner_has_session = any(sess.hostname == hostname for sess in cy_state.sessions[f"red_agent_{owner}"].values())
+        if owner_has_session:
+            continue
+        target_idx = host_idx
+        dest_agent = owner
+        break
+    assert target_idx is not None and dest_agent is not None
+
+    target_hostname = mappings.idx_to_hostname[target_idx]
+    cy_state.add_session(
+        Session(
+            ident=999,
+            hostname=target_hostname,
+            username="user",
+            agent=f"red_agent_{source_agent}",
+            pid=9001,
+            parent=None,
+        )
+    )
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[source_agent, target_idx].set(True),
+        red_session_count=jax_state.red_session_count.at[source_agent, target_idx].set(1),
+        red_session_pids=jax_state.red_session_pids.at[source_agent, target_idx, 0].set(9001),
+        red_privilege=jax_state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+        red_discovered_hosts=jax_state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[source_agent, target_idx].set(False),
+        host_compromised=jax_state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+    )
+
+    controller.different_subnet_agent_reassignment()
+    jax_after = reassign_cross_subnet_sessions(jax_state, const)
+
+    cy_dst_sessions = [
+        sess for sess in cy_state.sessions[f"red_agent_{dest_agent}"].values() if sess.hostname == target_hostname
+    ]
+    assert cy_dst_sessions, "CybORG should move session to subnet owner"
+    cy_has_abstract = any(type(sess).__name__ == "RedAbstractSession" for sess in cy_dst_sessions)
+
+    assert bool(jax_after.red_sessions[dest_agent, target_idx])
+    assert bool(jax_after.red_session_is_abstract[dest_agent, target_idx]) == cy_has_abstract
 
 
 def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_matches_cyborg():

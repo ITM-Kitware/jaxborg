@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
-from CybORG.Shared.Session import RedAbstractSession
+from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Actions import Remove
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
@@ -562,7 +562,6 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[4, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -621,7 +620,6 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[1, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(1),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -680,7 +678,6 @@ class TestDifferentialWithCybORG:
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[5, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -738,7 +735,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(False),
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[1, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(4),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -758,6 +754,77 @@ class TestDifferentialWithCybORG:
 
         assert not cyborg_has_user_session
         assert bool(new_state.red_sessions[1, target]) == cyborg_has_user_session
+
+    def test_remove_clears_anchor_host_when_suspicious_pids_cover_all_user_sessions_matches_cyborg(
+        self, cyborg_and_jax
+    ):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        target_hostname = sorted_hosts[target]
+
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        cyborg_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent="red_agent_1",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+        cyborg_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent="red_agent_1",
+                parent=0,
+                session_type="shell",
+                pid=None,
+            )
+        )
+
+        cy_sessions = [s for s in cyborg_state.sessions["red_agent_1"].values() if s.hostname == target_hostname]
+        assert len(cy_sessions) == 2
+        cy_pids = [int(s.pid) for s in cy_sessions]
+        blue_parent = cyborg_state.sessions[f"blue_agent_{blue_idx}"][0]
+        for pid in cy_pids:
+            blue_parent.add_sus_pids(hostname=target_hostname, pid=pid)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[1, target].set(True),
+            red_session_count=state.red_session_count.at[1, target].set(2),
+            red_session_is_abstract=state.red_session_is_abstract.at[1, target].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[1].set(target),
+            red_privilege=state.red_privilege.at[1, target].set(COMPROMISE_USER),
+            red_suspicious_process_count=state.red_suspicious_process_count.at[1, target].set(2),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            host_suspicious_process=state.host_suspicious_process.at[target].set(True),
+        )
+        state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
+
+        remove_action = Remove(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        remove_action.duration = 1
+        cyborg_obs = remove_action.execute(cyborg_state)
+        assert cyborg_obs.success
+
+        action_idx = encode_blue_action("Remove", target, blue_idx)
+        new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
+
+        cy_remaining = [s for s in cyborg_state.sessions["red_agent_1"].values() if s.hostname == target_hostname]
+        assert len(cy_remaining) == 0
+        assert int(new_state.red_session_count[1, target]) == 0
+        assert not bool(new_state.red_sessions[1, target])
+        assert int(new_state.red_privilege[1, target]) == COMPROMISE_NONE
+        assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
         assert int(new_state.red_privilege[1, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
 
@@ -806,7 +873,6 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(1),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -869,7 +935,6 @@ class TestDifferentialWithCybORG:
             host_activity_detected=state.host_activity_detected.at[target].set(False),
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(4),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1063,7 +1128,6 @@ class TestDifferentialWithCybORG:
             red_session_is_abstract=state.red_session_is_abstract.at[5, target].set(True),
             red_privilege=state.red_privilege.at[5, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[5, target].set(2),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
@@ -1126,7 +1190,6 @@ class TestDifferentialWithCybORG:
             red_session_is_abstract=state.red_session_is_abstract.at[3, target].set(True),
             red_privilege=state.red_privilege.at[3, target].set(COMPROMISE_USER),
             red_suspicious_process_count=state.red_suspicious_process_count.at[3, target].set(1),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
@@ -1189,7 +1252,6 @@ class TestDifferentialWithCybORG:
             red_privilege=state.red_privilege.at[4, target].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[4, target].set(True),
             red_suspicious_process_count=state.red_suspicious_process_count.at[4, target].set(0),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(False),
             host_suspicious_process=state.host_suspicious_process.at[target].set(False),
@@ -1333,7 +1395,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1500,7 +1561,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1584,7 +1644,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1669,7 +1728,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(3),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1756,7 +1814,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(False),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(5),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1843,7 +1900,6 @@ class TestDifferentialWithCybORG:
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_activity_detected=state.host_activity_detected.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(2),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1910,7 +1966,6 @@ class TestDifferentialWithCybORG:
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(5),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)
@@ -1974,7 +2029,6 @@ class TestDifferentialWithCybORG:
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
             host_has_malware=state.host_has_malware.at[target].set(True),
             host_suspicious_process=state.host_suspicious_process.at[target].set(True),
-            blue_suspicious_pid_budget=state.blue_suspicious_pid_budget.at[blue_idx, target].set(9),
         )
 
         state = _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts)

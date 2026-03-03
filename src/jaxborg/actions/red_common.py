@@ -8,13 +8,17 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_NONE,
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
-from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.pids import (
+    allocate_host_pid_from_delta,
+    append_pid_to_row,
+    append_pid_to_row_allow_duplicates,
+)
+from jaxborg.actions.rng import sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     ACTIVITY_EXPLOIT,
     COMPROMISE_USER,
-    NUM_BLUE_AGENTS,
     NUM_SUBNETS,
 )
 from jaxborg.state import CC4Const, CC4State
@@ -297,6 +301,7 @@ def apply_exploit_success(
     agent_id: int,
     target_host: chex.Array,
     success: chex.Array,
+    key: jax.Array,
 ) -> CC4State:
     session_counts = effective_session_counts(state)
     had_count = session_counts[agent_id, target_host]
@@ -356,14 +361,9 @@ def apply_exploit_success(
         state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
         state.red_activity_this_step,
     )
-    blue_budget_inc = const.blue_agent_hosts[:, target_host].astype(jnp.int32)
-    blue_suspicious_pid_budget = jnp.where(
-        success,
-        state.blue_suspicious_pid_budget.at[:, target_host].add(blue_budget_inc),
-        state.blue_suspicious_pid_budget,
-    )
-    new_pid = state.red_next_pid
-    red_next_pid = jnp.where(success, state.red_next_pid + 1, state.red_next_pid)
+    pid_delta = sample_red_pid_delta(state, state.time, agent_id, key)
+    new_pid = allocate_host_pid_from_delta(state, const, target_host, pid_delta)
+    red_next_pid = jnp.where(success, jnp.maximum(state.red_next_pid, new_pid + 1), state.red_next_pid)
     session_pid_row = state.red_session_pids[agent_id, target_host]
     pid_row_updated = append_pid_to_row(session_pid_row, new_pid)
     red_session_pids = jnp.where(
@@ -371,14 +371,13 @@ def apply_exploit_success(
         state.red_session_pids.at[agent_id, target_host].set(pid_row_updated),
         state.red_session_pids,
     )
-    blue_suspicious_pids = state.blue_suspicious_pids
-    for b in range(NUM_BLUE_AGENTS):
-        covers = const.blue_agent_hosts[b, target_host]
-        pid_row = blue_suspicious_pids[b, target_host]
-        updated_row = append_pid_to_row(pid_row, new_pid)
-        blue_suspicious_pids = blue_suspicious_pids.at[b, target_host].set(
-            jnp.where(success & covers, updated_row, pid_row)
-        )
+    event_row = state.host_process_creation_pids[target_host]
+    updated_event_row = append_pid_to_row_allow_duplicates(event_row, new_pid)
+    host_process_creation_pids = jnp.where(
+        success,
+        state.host_process_creation_pids.at[target_host].set(updated_event_row),
+        state.host_process_creation_pids,
+    )
 
     return state.replace(
         red_sessions=red_sessions,
@@ -391,6 +390,5 @@ def apply_exploit_success(
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
-        blue_suspicious_pid_budget=blue_suspicious_pid_budget,
-        blue_suspicious_pids=blue_suspicious_pids,
+        host_process_creation_pids=host_process_creation_pids,
     )

@@ -1,7 +1,7 @@
 import chex
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import has_any_session
+from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
 
@@ -12,8 +12,11 @@ def apply_discover(
     agent_id: int,
     target_subnet: chex.Array,
 ) -> CC4State:
-    session_hosts = state.red_sessions[agent_id]
-    can_reach = has_any_session(session_hosts, const)
+    source_host = select_bound_source_host(state, const, agent_id)
+    source_idx = jnp.clip(source_host, 0, const.host_subnet.shape[0] - 1)
+    source_subnet = const.host_subnet[source_idx]
+    has_bound_source = source_host >= 0
+    can_reach = has_bound_source & (~state.blocked_zones[target_subnet, source_subnet])
 
     in_subnet = (const.host_subnet == target_subnet) & const.host_active
     pingable = in_subnet & const.host_respond_to_ping

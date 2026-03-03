@@ -4,7 +4,13 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE, COMPROMISE_USER, MAX_TRACKED_SUSPICIOUS_PIDS
+from jaxborg.constants import (
+    ABSTRACT_RANK_NONE,
+    COMPROMISE_NONE,
+    COMPROMISE_PRIVILEGED,
+    COMPROMISE_USER,
+    MAX_TRACKED_SUSPICIOUS_PIDS,
+)
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -15,34 +21,87 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     session_count_before = effective_session_counts(state)
     row_indices = jnp.arange(MAX_TRACKED_SUSPICIOUS_PIDS, dtype=jnp.int32)
     row_max_slot = jnp.max(jnp.where(suspicious_pid_row >= 0, row_indices, -1)) + 1
-    pid_budget = jnp.clip(state.blue_suspicious_pid_budget[agent_id, target_host], 0, MAX_TRACKED_SUSPICIOUS_PIDS)
-    slot_limit = jnp.clip(jnp.maximum(row_max_slot, pid_budget), 0, MAX_TRACKED_SUSPICIOUS_PIDS)
+    slot_limit = jnp.clip(row_max_slot, 0, MAX_TRACKED_SUSPICIOUS_PIDS)
 
     def _remove_slot(slot, carry):
-        new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed = carry
+        (
+            new_session_count,
+            new_suspicious_count,
+            new_privilege,
+            new_session_pids,
+            new_session_abstract_pids,
+            new_session_privileged_pids,
+            new_session_is_abstract,
+            new_abstract_host_rank,
+            any_removed,
+        ) = carry
         sus_pid = suspicious_pid_row[slot]
         has_pid = sus_pid >= 0
 
-        is_user = new_privilege[:, target_host] == COMPROMISE_USER
         has_sessions = new_session_count[:, target_host] > 0
         has_live_pid = jax.vmap(pid_row_contains, in_axes=(0, None))(new_session_pids[:, target_host, :], sus_pid)
-        match_by_red = covers_host & has_pid & is_user & has_sessions & has_live_pid
+        has_privileged_pid = jax.vmap(pid_row_contains, in_axes=(0, None))(
+            new_session_privileged_pids[:, target_host, :], sus_pid
+        )
+        has_any_tracked_privileged = jnp.any(new_session_privileged_pids[:, target_host, :] >= 0, axis=1)
+        privileged_without_pid_model = (
+            new_privilege[:, target_host] == COMPROMISE_PRIVILEGED
+        ) & ~has_any_tracked_privileged
+        pid_is_privileged = has_privileged_pid | privileged_without_pid_model
+        match_by_red = covers_host & has_pid & has_sessions & has_live_pid & ~pid_is_privileged
 
         any_match = jnp.any(match_by_red)
         matched_red = jnp.argmax(match_by_red)
 
         matched_count = new_session_count[matched_red, target_host]
-        is_anchor_target = state.red_scan_anchor_host[matched_red] == target_host
-        min_remaining = jnp.where(is_anchor_target, jnp.int32(1), jnp.int32(0))
-        count_after = jnp.maximum(matched_count - 1, min_remaining)
+        matched_suspicious = new_suspicious_count[matched_red, target_host]
+        count_after = jnp.maximum(matched_count - 1, 0)
         removed_one = any_match & (count_after < matched_count)
         any_removed = any_removed | removed_one
-        matched_suspicious = new_suspicious_count[matched_red, target_host]
         suspicious_after = jnp.where(removed_one, jnp.maximum(matched_suspicious - 1, 0), matched_suspicious)
 
         matched_pid_row = new_session_pids[matched_red, target_host]
+        matched_abstract_pid_row = new_session_abstract_pids[matched_red, target_host]
+        matched_privileged_pid_row = new_session_privileged_pids[matched_red, target_host]
         updated_pid_row = jnp.where(removed_one, remove_pid_from_row(matched_pid_row, sus_pid), matched_pid_row)
-        priv_after = jnp.where(count_after > 0, COMPROMISE_USER, COMPROMISE_NONE)
+        updated_abstract_pid_row = jnp.where(
+            removed_one,
+            remove_pid_from_row(matched_abstract_pid_row, sus_pid),
+            matched_abstract_pid_row,
+        )
+        updated_privileged_pid_row = jnp.where(
+            removed_one,
+            remove_pid_from_row(matched_privileged_pid_row, sus_pid),
+            matched_privileged_pid_row,
+        )
+
+        cleared_pid_row = jnp.full_like(updated_pid_row, -1)
+        cleared_abstract_pid_row = jnp.full_like(updated_abstract_pid_row, -1)
+        cleared_privileged_pid_row = jnp.full_like(updated_privileged_pid_row, -1)
+        updated_pid_row = jnp.where(removed_one & (count_after == 0), cleared_pid_row, updated_pid_row)
+        updated_abstract_pid_row = jnp.where(
+            removed_one & (count_after == 0),
+            cleared_abstract_pid_row,
+            updated_abstract_pid_row,
+        )
+        updated_privileged_pid_row = jnp.where(
+            removed_one & (count_after == 0),
+            cleared_privileged_pid_row,
+            updated_privileged_pid_row,
+        )
+
+        has_abstract_after = (count_after > 0) & jnp.any(updated_abstract_pid_row >= 0)
+        has_privileged_after = (count_after > 0) & jnp.any(updated_privileged_pid_row >= 0)
+        priv_after = jnp.where(
+            count_after == 0,
+            COMPROMISE_NONE,
+            jnp.where(has_privileged_after, COMPROMISE_PRIVILEGED, COMPROMISE_USER),
+        )
+        abstract_rank_after = jnp.where(
+            has_abstract_after,
+            new_abstract_host_rank[matched_red, target_host],
+            jnp.int32(ABSTRACT_RANK_NONE),
+        )
 
         new_session_count = jnp.where(
             removed_one,
@@ -64,18 +123,60 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
             new_session_pids.at[matched_red, target_host].set(updated_pid_row),
             new_session_pids,
         )
-        return new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed
+        new_session_abstract_pids = jnp.where(
+            removed_one,
+            new_session_abstract_pids.at[matched_red, target_host].set(updated_abstract_pid_row),
+            new_session_abstract_pids,
+        )
+        new_session_privileged_pids = jnp.where(
+            removed_one,
+            new_session_privileged_pids.at[matched_red, target_host].set(updated_privileged_pid_row),
+            new_session_privileged_pids,
+        )
+        new_session_is_abstract = jnp.where(
+            removed_one,
+            new_session_is_abstract.at[matched_red, target_host].set(has_abstract_after),
+            new_session_is_abstract,
+        )
+        new_abstract_host_rank = jnp.where(
+            removed_one,
+            new_abstract_host_rank.at[matched_red, target_host].set(abstract_rank_after),
+            new_abstract_host_rank,
+        )
+        return (
+            new_session_count,
+            new_suspicious_count,
+            new_privilege,
+            new_session_pids,
+            new_session_abstract_pids,
+            new_session_privileged_pids,
+            new_session_is_abstract,
+            new_abstract_host_rank,
+            any_removed,
+        )
 
     init = (
         session_count_before,
         state.red_suspicious_process_count,
         state.red_privilege,
         state.red_session_pids,
+        state.red_session_abstract_pids,
+        state.red_session_privileged_pids,
+        state.red_session_is_abstract,
+        state.red_abstract_host_rank,
         jnp.array(False),
     )
-    new_session_count, new_suspicious_count, new_privilege, new_session_pids, any_removed = jax.lax.fori_loop(
-        0, slot_limit, _remove_slot, init
-    )
+    (
+        new_session_count,
+        new_suspicious_count,
+        new_privilege,
+        new_session_pids,
+        new_session_abstract_pids,
+        new_session_privileged_pids,
+        red_session_is_abstract,
+        red_abstract_host_rank,
+        any_removed,
+    ) = jax.lax.fori_loop(0, slot_limit, _remove_slot, init)
 
     new_sessions = new_session_count > 0
     remaining_max_priv = jnp.max(new_privilege[:, target_host])
@@ -93,23 +194,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         covers_host,
         state.host_suspicious_process.at[target_host].set(any_suspicious_after),
         state.host_suspicious_process,
-    )
-    sessions_cleared_on_host = (session_count_before[:, target_host] > 0) & (new_session_count[:, target_host] == 0)
-    abstract_update = state.red_session_is_abstract.at[:, target_host].set(
-        state.red_session_is_abstract[:, target_host] & ~sessions_cleared_on_host
-    )
-    red_session_is_abstract = jnp.where(
-        covers_host,
-        abstract_update,
-        state.red_session_is_abstract,
-    )
-    rank_update = state.red_abstract_host_rank.at[:, target_host].set(
-        jnp.where(sessions_cleared_on_host, jnp.int32(ABSTRACT_RANK_NONE), state.red_abstract_host_rank[:, target_host])
-    )
-    red_abstract_host_rank = jnp.where(
-        covers_host,
-        rank_update,
-        state.red_abstract_host_rank,
     )
     red_scan_anchor_host = recompute_scan_anchor_hosts(
         state.red_scan_anchor_host,
@@ -131,6 +215,8 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_sessions=new_sessions,
         red_session_count=new_session_count,
         red_session_pids=new_session_pids,
+        red_session_abstract_pids=new_session_abstract_pids,
+        red_session_privileged_pids=new_session_privileged_pids,
         red_suspicious_process_count=new_suspicious_count,
         red_privilege=new_privilege,
         red_scan_anchor_host=red_scan_anchor_host,
@@ -138,7 +224,6 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_scanned_source_hosts=new_scanned_source_hosts,
         host_compromised=new_host_compromised,
         host_suspicious_process=new_suspicious_process,
-        blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
     )

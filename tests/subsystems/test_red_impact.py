@@ -42,7 +42,12 @@ def _setup_privileged_state(jax_const, target_host):
     start_host = int(jax_const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
     red_session_is_abstract = state.red_session_is_abstract.at[0, start_host].set(True)
-    state = state.replace(red_sessions=red_sessions, red_session_is_abstract=red_session_is_abstract)
+    red_scan_anchor_host = state.red_scan_anchor_host.at[0].set(start_host)
+    state = state.replace(
+        red_sessions=red_sessions,
+        red_session_is_abstract=red_session_is_abstract,
+        red_scan_anchor_host=red_scan_anchor_host,
+    )
 
     target_subnet = int(jax_const.host_subnet[target_host])
     discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
@@ -158,7 +163,11 @@ class TestApplyImpact:
         red_sessions = state.red_sessions.at[0, start_host].set(True)
         red_sessions = red_sessions.at[0, target].set(True)
         red_privilege = state.red_privilege.at[0, target].set(COMPROMISE_USER)
-        state = state.replace(red_sessions=red_sessions, red_privilege=red_privilege)
+        state = state.replace(
+            red_sessions=red_sessions,
+            red_privilege=red_privilege,
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(start_host),
+        )
 
         action_idx = encode_red_action("Impact", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -277,7 +286,10 @@ class TestDifferentialWithCybORG:
         state = state.replace(host_services=jnp.array(const.initial_services))
         start_host = int(const.red_start_hosts[0])
         red_sessions = state.red_sessions.at[0, start_host].set(True)
-        state = state.replace(red_sessions=red_sessions)
+        state = state.replace(
+            red_sessions=red_sessions,
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(start_host),
+        )
         return cyborg_env, const, state
 
     def _inject_privileged_session(self, cyborg_env, const, state, target_h):
@@ -396,6 +408,35 @@ class TestDifferentialWithCybORG:
 
         assert not jax_stopped
         assert not cyborg_success
+
+    def test_impact_requires_primary_session_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+
+        target_h = self._find_ot_host_idx(const)
+        assert target_h is not None
+
+        state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
+
+        cyborg_state.sessions["red_agent_0"].pop(0, None)
+        start_host = int(const.red_start_hosts[0])
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, start_host].set(False),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(-1),
+        )
+
+        impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
+        cyborg_obs = impact.execute(cyborg_state)
+        cyborg_success = str(cyborg_obs.success).upper() == "TRUE"
+
+        impact_idx = encode_red_action("Impact", target_h, 0)
+        new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        jax_stopped = bool(new_state.ot_service_stopped[target_h])
+        jax_ot_active = bool(new_state.host_services[target_h, OT_SVC])
+
+        assert not cyborg_success
+        assert not jax_stopped
+        assert jax_ot_active
 
     def test_impact_fails_on_non_ot_host_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax

@@ -33,7 +33,11 @@ def jax_state(jax_const):
     state = create_initial_state()
     start_host = int(jax_const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
-    return state.replace(red_sessions=red_sessions)
+    red_scan_anchor_host = state.red_scan_anchor_host.at[0].set(start_host)
+    return state.replace(
+        red_sessions=red_sessions,
+        red_scan_anchor_host=red_scan_anchor_host,
+    )
 
 
 class TestEncoding:
@@ -202,7 +206,11 @@ class TestDifferentialWithCybORG:
         state = create_initial_state()
         start_host = int(const.red_start_hosts[0])
         red_sessions = state.red_sessions.at[0, start_host].set(True)
-        state = state.replace(red_sessions=red_sessions)
+        red_scan_anchor_host = state.red_scan_anchor_host.at[0].set(start_host)
+        state = state.replace(
+            red_sessions=red_sessions,
+            red_scan_anchor_host=red_scan_anchor_host,
+        )
         return cyborg_env, const, state
 
     def test_discover_contractor_network(self, cyborg_and_jax):
@@ -281,3 +289,42 @@ class TestDifferentialWithCybORG:
         assert jax_discovered_hostnames == cyborg_discovered_hostnames, (
             f"JAX: {jax_discovered_hostnames}, CybORG: {cyborg_discovered_hostnames}"
         )
+
+    def test_discover_with_missing_primary_session_noops_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+
+        start_host = int(const.red_start_hosts[0])
+        start_subnet = int(const.host_subnet[start_host])
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        primary = cyborg_state.sessions["red_agent_0"].pop(0)
+        primary.ident = 1
+        cyborg_state.sessions["red_agent_0"][1] = primary
+
+        subnet_name = f"{sorted_hosts[start_host].split('_subnet')[0]}_subnet"
+        subnet_cidr = cyborg_state.subnet_name_to_cidr[subnet_name]
+        action = DiscoverRemoteSystems(subnet=subnet_cidr, session=0, agent="red_agent_0")
+        obs = action.execute(cyborg_state)
+
+        cyborg_new = set()
+        for key, val in obs.data.items():
+            if key in ("success", "action", "message"):
+                continue
+            if isinstance(val, dict) and "Interface" in val:
+                for iface in val["Interface"]:
+                    ip_addr = iface.get("ip_address")
+                    if ip_addr in cyborg_state.ip_addresses:
+                        cyborg_new.add(cyborg_state.ip_addresses[ip_addr])
+        assert str(obs.success).upper() == "FALSE"
+        assert not cyborg_new
+
+        jax_state = state.replace(
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(-1),
+        )
+        action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
+        jax_after = _jit_apply_red(jax_state, const, 0, action_idx, jax.random.PRNGKey(0))
+
+        before = set(np.where(np.array(jax_state.red_discovered_hosts[0]))[0].tolist())
+        after = set(np.where(np.array(jax_after.red_discovered_hosts[0]))[0].tolist())
+        assert after == before

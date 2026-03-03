@@ -48,6 +48,7 @@ def jax_state_with_discovered(jax_const):
     state = state.replace(
         red_sessions=state.red_sessions.at[0, start_host].set(True),
         red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+        red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(start_host),
     )
 
     start_subnet = int(jax_const.host_subnet[start_host])
@@ -260,6 +261,7 @@ class TestDifferentialWithCybORG:
         state = state.replace(
             red_sessions=state.red_sessions.at[0, start_host].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[0, start_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(start_host),
         )
         return cyborg_env, const, state
 
@@ -652,6 +654,7 @@ class TestScanRequiresAbstractSession:
         state = state.replace(
             red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(False),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(start_host),
         )
 
         # Discover hosts first
@@ -684,6 +687,7 @@ class TestScanRequiresAbstractSession:
         state = state.replace(
             red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(start_host),
         )
 
         # Discover hosts
@@ -720,6 +724,7 @@ class TestScanRequiresAbstractSession:
         state = state.replace(
             red_sessions=state.red_sessions.at[agent_id, start_host].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[agent_id, start_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(start_host),
         )
 
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, agent_id)
@@ -729,7 +734,14 @@ class TestScanRequiresAbstractSession:
         target = _first_discovered_non_router(const, state, agent_id)
         assert target is not None
 
-        new_state = apply_exploit_success(state, const, agent_id, target, success=jnp.bool_(True))
+        new_state = apply_exploit_success(
+            state,
+            const,
+            agent_id,
+            target,
+            success=jnp.bool_(True),
+            key=jax.random.PRNGKey(0),
+        )
 
         assert bool(new_state.red_sessions[agent_id, target]), "Exploit should create session on target"
         assert not bool(new_state.red_session_is_abstract[agent_id, target]), (

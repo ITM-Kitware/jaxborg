@@ -52,6 +52,16 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.red_session_pids.at[:, target_host].set(-1),
         state.red_session_pids,
     )
+    red_session_abstract_pids = jnp.where(
+        covers_host,
+        state.red_session_abstract_pids.at[:, target_host].set(-1),
+        state.red_session_abstract_pids,
+    )
+    red_session_privileged_pids = jnp.where(
+        covers_host,
+        state.red_session_privileged_pids.at[:, target_host].set(-1),
+        state.red_session_privileged_pids,
+    )
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
@@ -90,6 +100,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.host_decoys.at[target_host].set(False),
         state.host_decoys,
     )
+    host_decoy_process_pids = jnp.where(
+        covers_host,
+        state.host_decoy_process_pids.at[target_host].set(-1),
+        state.host_decoy_process_pids,
+    )
 
     host_activity_detected = jnp.where(
         covers_host,
@@ -118,6 +133,8 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_session_pids=red_session_pids,
+        red_session_abstract_pids=red_session_abstract_pids,
+        red_session_privileged_pids=red_session_privileged_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
@@ -126,9 +143,9 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_services=host_services,
         host_has_malware=host_has_malware,
         host_decoys=host_decoys,
+        host_decoy_process_pids=host_decoy_process_pids,
         host_activity_detected=host_activity_detected,
         host_suspicious_process=host_suspicious_process,
-        blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
         ot_service_stopped=ot_service_stopped,
         host_service_reliability=host_service_reliability,
         red_session_is_abstract=red_session_is_abstract,

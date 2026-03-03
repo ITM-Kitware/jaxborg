@@ -1,6 +1,7 @@
 import chex
 import jax.numpy as jnp
 
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
@@ -51,6 +52,25 @@ def apply_privesc(
         is_active & has_session & is_sandboxed,
         state.red_session_pids.at[agent_id, target_host].set(-1),
         state.red_session_pids,
+    )
+    red_session_abstract_pids = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_session_abstract_pids.at[agent_id, target_host].set(-1),
+        state.red_session_abstract_pids,
+    )
+    red_session_privileged_pids = jnp.where(
+        is_active & has_session & is_sandboxed,
+        state.red_session_privileged_pids.at[agent_id, target_host].set(-1),
+        state.red_session_privileged_pids,
+    )
+    target_pid_row = red_session_pids[agent_id, target_host]
+    escalate_pid = first_valid_pid(target_pid_row)
+    target_priv_pid_row = red_session_privileged_pids[agent_id, target_host]
+    escalated_priv_pid_row = append_pid_to_row(target_priv_pid_row, escalate_pid)
+    red_session_privileged_pids = jnp.where(
+        success,
+        red_session_privileged_pids.at[agent_id, target_host].set(escalated_priv_pid_row),
+        red_session_privileged_pids,
     )
 
     new_priv = jnp.where(success, COMPROMISE_PRIVILEGED, state.red_privilege[agent_id, target_host])
@@ -104,6 +124,8 @@ def apply_privesc(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_session_pids=red_session_pids,
+        red_session_abstract_pids=red_session_abstract_pids,
+        red_session_privileged_pids=red_session_privileged_pids,
         red_suspicious_process_count=red_suspicious_process_count,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
@@ -114,5 +136,4 @@ def apply_privesc(
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
-        blue_suspicious_pid_budget=state.blue_suspicious_pid_budget,
     )

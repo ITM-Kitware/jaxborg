@@ -1,6 +1,7 @@
 import chex
 import jax.numpy as jnp
 
+from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED, SERVICE_IDS
 from jaxborg.state import CC4Const, CC4State
 
@@ -17,7 +18,8 @@ def apply_impact(
     has_session = state.red_sessions[agent_id, target_host]
     is_privileged = state.red_privilege[agent_id, target_host] >= COMPROMISE_PRIVILEGED
     has_ot = state.host_services[target_host, OTSERVICE_IDX]
-    success = is_active & has_session & is_privileged & has_ot
+    has_bound_source = select_bound_source_host(state, const, agent_id) >= 0
+    success = is_active & has_session & is_privileged & has_ot & has_bound_source
 
     host_services = jnp.where(
         success,
