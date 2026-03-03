@@ -15,6 +15,12 @@ list focused on remaining work.
    - `src/jaxborg/constants.py`
    - `tests/differential/harness.py`
 
+## Stubbed Exploits: EternalBlue & BlueKeep
+
+`apply_exploit_eternalblue` and `apply_exploit_bluekeep` in `src/jaxborg/actions/red_exploit.py`
+are no-ops (return state unchanged). CybORG's `FiniteStateRedAgent` never selects these
+exploit types, so this has no effect on FSM-driven training via `FsmRedCC4Env`.
+
 ## Additional Open Differences
 
 ### CC4Env Agent Interface: Blue-Only vs Exposed Red Actions
