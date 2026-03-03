@@ -30,34 +30,37 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
         any_match = jnp.any(match_by_red)
         matched_red = jnp.argmax(match_by_red)
-        any_removed = any_removed | any_match
 
         matched_count = new_session_count[matched_red, target_host]
-        count_after = jnp.maximum(matched_count - 1, 0)
+        is_anchor_target = state.red_scan_anchor_host[matched_red] == target_host
+        min_remaining = jnp.where(is_anchor_target, jnp.int32(1), jnp.int32(0))
+        count_after = jnp.maximum(matched_count - 1, min_remaining)
+        removed_one = any_match & (count_after < matched_count)
+        any_removed = any_removed | removed_one
         matched_suspicious = new_suspicious_count[matched_red, target_host]
-        suspicious_after = jnp.maximum(matched_suspicious - 1, 0)
+        suspicious_after = jnp.where(removed_one, jnp.maximum(matched_suspicious - 1, 0), matched_suspicious)
 
         matched_pid_row = new_session_pids[matched_red, target_host]
-        updated_pid_row = remove_pid_from_row(matched_pid_row, sus_pid)
+        updated_pid_row = jnp.where(removed_one, remove_pid_from_row(matched_pid_row, sus_pid), matched_pid_row)
         priv_after = jnp.where(count_after > 0, COMPROMISE_USER, COMPROMISE_NONE)
 
         new_session_count = jnp.where(
-            any_match,
+            removed_one,
             new_session_count.at[matched_red, target_host].set(count_after),
             new_session_count,
         )
         new_suspicious_count = jnp.where(
-            any_match,
+            removed_one,
             new_suspicious_count.at[matched_red, target_host].set(suspicious_after),
             new_suspicious_count,
         )
         new_privilege = jnp.where(
-            any_match,
+            removed_one,
             new_privilege.at[matched_red, target_host].set(priv_after),
             new_privilege,
         )
         new_session_pids = jnp.where(
-            any_match,
+            removed_one,
             new_session_pids.at[matched_red, target_host].set(updated_pid_row),
             new_session_pids,
         )

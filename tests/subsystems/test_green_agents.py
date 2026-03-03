@@ -17,7 +17,7 @@ from jaxborg.actions.green import (
     PHISHING_ERROR_RATE,
     apply_green_agents,
 )
-from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.red_common import apply_exploit_success
 from jaxborg.constants import (
     COMPROMISE_NONE,
     COMPROMISE_USER,
@@ -514,6 +514,7 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
         red_sessions=jax_state.red_sessions.at[0, source_host].set(True),
         red_session_count=jax_state.red_session_count.at[0, source_host].set(1),
         red_session_is_abstract=jax_state.red_session_is_abstract.at[0, source_host].set(True),
+        red_scan_anchor_host=jax_state.red_scan_anchor_host.at[0].set(source_host),
         red_privilege=jax_state.red_privilege.at[0, source_host].set(COMPROMISE_USER),
         host_compromised=jax_state.host_compromised.at[source_host].set(COMPROMISE_USER),
     )
@@ -534,20 +535,12 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
     phish_pid_row = np.array(jax_after_green.red_session_pids[jax_owner, target_host])
     phish_pid = int(phish_pid_row[phish_pid_row >= 0][0])
 
-    follow_on_pid = int(jax_after_green.red_next_pid)
-    updated_session_pid_row = append_pid_to_row(jax_after_green.red_session_pids[jax_owner, target_host], follow_on_pid)
-    updated_sus_pid_row = append_pid_to_row(jax_after_green.blue_suspicious_pids[blue_idx, target_host], follow_on_pid)
-    jax_before_remove = jax_after_green.replace(
-        red_sessions=jax_after_green.red_sessions.at[jax_owner, target_host].set(True),
-        red_session_count=jax_after_green.red_session_count.at[jax_owner, target_host].set(
-            jax_after_green.red_session_count[jax_owner, target_host] + 1
-        ),
-        red_session_pids=jax_after_green.red_session_pids.at[jax_owner, target_host].set(updated_session_pid_row),
-        red_next_pid=jax_after_green.red_next_pid + 1,
-        red_privilege=jax_after_green.red_privilege.at[jax_owner, target_host].set(COMPROMISE_USER),
-        host_compromised=jax_after_green.host_compromised.at[target_host].set(COMPROMISE_USER),
-        blue_suspicious_pids=jax_after_green.blue_suspicious_pids.at[blue_idx, target_host].set(updated_sus_pid_row),
-        blue_suspicious_pid_budget=jax_after_green.blue_suspicious_pid_budget.at[blue_idx, target_host].add(1),
+    jax_before_remove = apply_exploit_success(
+        jax_after_green,
+        const,
+        jax_owner,
+        jnp.int32(target_host),
+        jnp.array(True),
     )
 
     jax_sus_pids = np.array(jax_before_remove.blue_suspicious_pids[blue_idx, target_host])
