@@ -3,8 +3,8 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.actions.encoding import BLUE_SLEEP
+from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
 SEEDS = [42, 123, 456]

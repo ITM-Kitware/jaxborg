@@ -227,14 +227,13 @@ class CC4Env(MultiAgentEnv):
             red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
             green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
             green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         )
-
-        ot_before = state.ot_service_stopped
 
         for r in range(NUM_RED_AGENTS):
             state = process_red_with_duration(state, const, r, actions[f"red_{r}"], red_keys[r])
 
-        impact_hosts = state.ot_service_stopped & ~ot_before
+        impact_hosts = state.red_impact_attempted
 
         state = apply_green_agents(state, const, key_green)
 

@@ -4,22 +4,20 @@ Runs both systems with identical topology and sleep actions for N steps.
 Reports per-step reward differences to find dynamics gaps.
 """
 
+from statistics import mean
+
 import jax
 import jax.numpy as jnp
 import numpy as np
-from statistics import mean
-
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
-from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import CC4Env, CC4EnvState
+from jaxborg.actions.encoding import BLUE_SLEEP
+from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.fsm_red_env import FsmRedCC4Env
-from jaxborg.topology import build_const_from_cyborg
 
 SEED = 42
 NUM_STEPS = 100
@@ -62,9 +60,7 @@ def main():
         # JAXborg step: all blue sleep
         key, step_key = jax.random.split(key)
         blue_actions = {f"blue_{i}": jnp.int32(BLUE_SLEEP) for i in range(NUM_BLUE_AGENTS)}
-        jax_obs, jax_state, jax_rewards, jax_dones, _ = fsm_env.step(
-            step_key, jax_state, blue_actions
-        )
+        jax_obs, jax_state, jax_rewards, jax_dones, _ = fsm_env.step(step_key, jax_state, blue_actions)
         jax_r = float(jax_rewards["blue_0"])
 
         diff = cyborg_r - jax_r
@@ -76,8 +72,7 @@ def main():
             print(f"{step:5d} {cyborg_r:10.2f} {jax_r:10.2f} {diff:10.2f} {cum_cyborg:10.1f} {cum_jax:10.1f}")
 
     print("-" * 70)
-    print(f"Total: CybORG={cum_cyborg:.1f}  JAXborg={cum_jax:.1f}  "
-          f"Diff={cum_cyborg - cum_jax:.1f}")
+    print(f"Total: CybORG={cum_cyborg:.1f}  JAXborg={cum_jax:.1f}  Diff={cum_cyborg - cum_jax:.1f}")
     print(f"Mean step diff: {np.mean(diffs):.3f} ± {np.std(diffs):.3f}")
     nonzero_diffs = [d for d in diffs if abs(d) > 0.01]
     print(f"Steps with diff > 0.01: {len(nonzero_diffs)}/{NUM_STEPS}")

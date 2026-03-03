@@ -10,7 +10,6 @@ import sys
 from pathlib import Path
 from statistics import mean
 
-import jax
 import jax.numpy as jnp
 import numpy as np
 from CybORG import CybORG
@@ -19,8 +18,6 @@ from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.observations import get_blue_obs
-from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
     build_mappings_from_cyborg,
@@ -105,6 +102,7 @@ def run_trained_verbose(checkpoint_path, steps=20):
     # Check mask validity at step 0
     print("\nMASK VALIDATION (step 0):")
     from jaxborg.topology import BLUE_AGENT_SUBNETS, SUBNET_IDS
+
     for agent_idx, agent_name in enumerate(env.agents):
         mask = np.array(compute_blue_action_mask(const, agent_idx), dtype=bool)
         valid_indices = np.where(mask)[0]
@@ -112,7 +110,8 @@ def run_trained_verbose(checkpoint_path, steps=20):
         agent_subnet_ids = [SUBNET_IDS[s] for s in agent_subnets]
 
         # Check which hosts are marked valid for host-based actions
-        from jaxborg.actions.encoding import BLUE_ANALYSE_START, BLUE_ANALYSE_END
+        from jaxborg.actions.encoding import BLUE_ANALYSE_END, BLUE_ANALYSE_START
+
         valid_analyse = valid_indices[(valid_indices >= BLUE_ANALYSE_START) & (valid_indices < BLUE_ANALYSE_END)]
         valid_host_indices = valid_analyse - BLUE_ANALYSE_START
 
@@ -123,9 +122,11 @@ def run_trained_verbose(checkpoint_path, steps=20):
                 hostname = mappings.idx_to_hostname.get(int(hidx), f"host_{hidx}")
                 wrong_subnet_hosts.append((int(hidx), hostname, h_subnet))
 
-        print(f"  {agent_name}: subnets={agent_subnets}, "
-              f"valid_analyse_hosts={len(valid_analyse)}, "
-              f"wrong_subnet={len(wrong_subnet_hosts)}")
+        print(
+            f"  {agent_name}: subnets={agent_subnets}, "
+            f"valid_analyse_hosts={len(valid_analyse)}, "
+            f"wrong_subnet={len(wrong_subnet_hosts)}"
+        )
         if wrong_subnet_hosts:
             for hidx, hname, hsub in wrong_subnet_hosts[:5]:
                 print(f"    BUG: host_idx={hidx} {hname} in subnet {hsub} allowed!")

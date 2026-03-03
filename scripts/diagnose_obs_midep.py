@@ -16,12 +16,11 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
-    NUM_RED_AGENTS,
     NUM_SUBNETS,
 )
 from jaxborg.observations import get_blue_obs
-from jaxborg.state import CC4State, create_initial_state
-from jaxborg.topology import build_const_from_cyborg, CYBORG_SUFFIX_TO_ID
+from jaxborg.state import create_initial_state
+from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
 
 SEED = 42
 CHECK_STEPS = [0, 5, 10, 20, 50]
@@ -50,12 +49,8 @@ def extract_jax_state_from_cyborg(cyborg_env, const):
 
     for hostname, idx in hostname_to_idx.items():
         host = state_obj.hosts[hostname]
-        proc_events = (
-            host.events.old_process_creation + host.events.process_creation
-        )
-        conn_events = (
-            host.events.old_network_connections + host.events.network_connections
-        )
+        proc_events = host.events.old_process_creation + host.events.process_creation
+        conn_events = host.events.old_network_connections + host.events.network_connections
         host_has_malware[idx] = len(proc_events) > 0
         host_activity_detected[idx] = len(conn_events) > 0
 
@@ -101,8 +96,7 @@ def main():
             n_malware = int(jax_state.host_has_malware.sum())
             n_activity = int(jax_state.host_activity_detected.sum())
             n_blocked = int(jax_state.blocked_zones.sum())
-            print(f"  CybORG state: malware={n_malware} hosts, "
-                  f"activity={n_activity} hosts, blocked_pairs={n_blocked}")
+            print(f"  CybORG state: malware={n_malware} hosts, activity={n_activity} hosts, blocked_pairs={n_blocked}")
 
             total_diffs = 0
             for agent_idx in range(NUM_BLUE_AGENTS):
@@ -118,11 +112,10 @@ def main():
                     diff_indices = np.where(diff_mask)[0]
                     print(f"  {agent_name}: {n_diff} diffs at indices {diff_indices[:15].tolist()}")
                     for idx in diff_indices[:5]:
-                        print(f"    [{idx:3d}] CybORG={cyborg_obs[idx]:.4f}  "
-                              f"JAXborg={jax_obs[idx]:.4f}")
+                        print(f"    [{idx:3d}] CybORG={cyborg_obs[idx]:.4f}  JAXborg={jax_obs[idx]:.4f}")
 
             if total_diffs == 0:
-                print(f"  ALL AGENTS: observations match perfectly")
+                print("  ALL AGENTS: observations match perfectly")
 
         actions = {a: Sleep() for a in env.agents}
         observations, rewards, _, _, _ = env.step(actions=actions)

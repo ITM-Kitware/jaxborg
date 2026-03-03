@@ -133,6 +133,8 @@ class CC4State:
     blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed blue decoy pid deltas
     use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
 
+    red_impact_attempted: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — any red Impact reached execution this step
+
 
 def create_initial_const() -> CC4Const:
     return CC4Const(
@@ -236,4 +238,5 @@ def create_initial_state() -> CC4State:
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_target_host=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
     )

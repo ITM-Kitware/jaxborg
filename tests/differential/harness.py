@@ -43,7 +43,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.reassignment import reassign_cross_subnet_sessions
-from jaxborg.rewards import advance_mission_phase
+from jaxborg.rewards import advance_mission_phase, compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
@@ -125,12 +125,18 @@ def _jit_apply_blue_action(state, const, agent_id, action_idx):
 
 
 @jax.jit
+def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf):
+    return compute_rewards(state, const, impact_hosts, green_lwf, green_asf)
+
+
+@jax.jit
 def _jit_advance_and_clear(state, const):
     state = advance_mission_phase(state, const)
     return state.replace(
         red_activity_this_step=_ZERO_INT_HOSTS,
         green_lwf_this_step=_ZERO_BOOL_HOSTS,
         green_asf_this_step=_ZERO_BOOL_HOSTS,
+        red_impact_attempted=_ZERO_BOOL_HOSTS,
     )
 
 
@@ -723,8 +729,21 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(time=self.jax_state.time + 1)
         self._assert_pid_capacity("full_step")
 
+        # --- Reward comparison ---
+        impact_hosts = self.jax_state.red_impact_attempted
+        jax_reward = float(
+            _jit_compute_rewards(
+                self.jax_state,
+                self.jax_const,
+                impact_hosts,
+                self.jax_state.green_lwf_this_step,
+                self.jax_state.green_asf_this_step,
+            )
+        )
+        cyborg_reward = controller.reward.get("Blue", {}).get("BlueRewardMachine", 0.0)
+
         # --- Compare ---
-        from tests.differential.state_comparator import compare_fast
+        from tests.differential.state_comparator import StateDiff, compare_fast
 
         diffs = compare_fast(
             self.cyborg_env,
@@ -732,6 +751,9 @@ class CC4DifferentialHarness:
             self.jax_const,
             self.mappings,
         )
+
+        if abs(jax_reward - cyborg_reward) > 1e-6:
+            diffs.append(StateDiff("rewards", cyborg_reward, jax_reward))
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 

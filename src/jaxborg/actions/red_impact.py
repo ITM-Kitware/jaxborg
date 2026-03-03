@@ -21,6 +21,12 @@ def apply_impact(
     has_bound_source = select_bound_source_host(state, const, agent_id) >= 0
     success = is_active & has_session & is_privileged & has_ot & has_bound_source
 
+    red_impact_attempted = jnp.where(
+        is_active,
+        state.red_impact_attempted.at[target_host].set(True),
+        state.red_impact_attempted,
+    )
+
     host_services = jnp.where(
         success,
         state.host_services.at[target_host, OTSERVICE_IDX].set(False),
@@ -43,4 +49,5 @@ def apply_impact(
         host_services=host_services,
         ot_service_stopped=ot_service_stopped,
         red_activity_this_step=activity,
+        red_impact_attempted=red_impact_attempted,
     )
