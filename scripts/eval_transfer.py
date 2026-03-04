@@ -4,6 +4,7 @@ import argparse
 import json
 import pickle
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, stdev
 
@@ -24,7 +25,13 @@ from jaxborg.actions.encoding import (
     BLUE_SLEEP,
 )
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS
+from jaxborg.constants import (
+    COMPROMISE_PRIVILEGED,
+    COMPROMISE_USER,
+    GLOBAL_MAX_HOSTS,
+    NUM_BLUE_AGENTS,
+    NUM_RED_AGENTS,
+)
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
@@ -73,6 +80,72 @@ def action_distribution(actions):
     return counts / total if total > 0 else counts
 
 
+@dataclass
+class StepSnapshot:
+    reward: float
+    cumulative_reward: float
+    hosts_compromised_user: int
+    hosts_compromised_priv: int
+    red_sessions_total: int
+    mission_phase: int
+
+
+@dataclass
+class EpisodeResult:
+    actions_by_agent: list = field(default_factory=list)  # [agent_idx][step] = action_id
+    rewards: list = field(default_factory=list)  # per-step rewards
+    cumulative_reward: float = 0.0
+    trajectory: list = field(default_factory=list)  # list[StepSnapshot]
+
+
+def print_per_agent_action_dist(all_actions_by_agent, label="JAXborg"):
+    """Print per-agent action distribution table."""
+    n_agents = len(all_actions_by_agent)
+    if n_agents == 0:
+        return
+    header = f"{'Agent':<10}"
+    for name in ACTION_TYPE_NAMES:
+        header += f" {name:>8}"
+    print(f"\nPer-Agent Action Distribution ({label}):")
+    print(header)
+    print("-" * len(header))
+    for agent_idx in range(n_agents):
+        dist = action_distribution(all_actions_by_agent[agent_idx])
+        row = f"{'blue_' + str(agent_idx):<10}"
+        for pct in dist:
+            row += f" {pct * 100:7.1f}%"
+        print(row)
+
+
+def print_trajectory_summary(trajectory, label="JAXborg ep"):
+    """Print compact trajectory table sampled at key steps and phase boundaries."""
+    if not trajectory:
+        return
+    # Collect indices to show: every 50 steps + phase transitions + last step
+    shown = set()
+    prev_phase = -1
+    for i, snap in enumerate(trajectory):
+        if i % 50 == 0 or i == len(trajectory) - 1:
+            shown.add(i)
+        if snap.mission_phase != prev_phase:
+            shown.add(i)
+            prev_phase = snap.mission_phase
+
+    phase_labels = {1: "MissionA", 2: "MissionB"}
+    print(f"\nTrajectory ({label}):")
+    print(f" {'Step':>4}  {'Phase':>5}  {'Reward':>7}  {'CumRew':>8}  {'Compromised(U/P)':>17}  {'RedSessions':>11}")
+    for i in sorted(shown):
+        s = trajectory[i]
+        marker = ""
+        if i > 0 and trajectory[i].mission_phase != trajectory[i - 1].mission_phase:
+            marker = f"  <- {phase_labels.get(s.mission_phase, f'Phase{s.mission_phase}')}"
+        print(
+            f" {i:>4}  {s.mission_phase:>5}  {s.reward:>7.1f}  {s.cumulative_reward:>8.1f}"
+            f"  {s.hosts_compromised_user:>8}/{s.hosts_compromised_priv:<8}"
+            f"  {s.red_sessions_total:>11}{marker}"
+        )
+
+
 def load_checkpoint(path):
     with open(path, "rb") as f:
         ckpt = pickle.load(f)
@@ -107,6 +180,7 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
     env = FsmRedCC4Env(num_steps=500)
     all_actions = []
     episode_rewards = []
+    episode_results = []
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
@@ -114,7 +188,10 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
         obs, env_state = env.reset(key)
 
         ep_reward = np.zeros(NUM_BLUE_AGENTS)
-        ep_actions = []
+        ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_step_rewards = []
+        ep_trajectory = []
+        cum_reward = 0.0
 
         for step in range(500):
             key, step_key = jax.random.split(key)
@@ -132,11 +209,29 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
                     action = pi.sample(seed=act_keys[agent_idx])
 
                 actions[agent] = action
-                ep_actions.append(int(action))
+                ep_actions_by_agent[agent_idx].append(int(action))
 
             obs, env_state, rewards, dones, _ = env.step(step_key, env_state, actions)
+            step_reward = float(np.mean([float(rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
+            cum_reward += step_reward
+            ep_step_rewards.append(step_reward)
             for i in range(NUM_BLUE_AGENTS):
                 ep_reward[i] += float(rewards[f"blue_{i}"])
+
+            # Extract trajectory snapshot from state
+            st = env_state.state
+            active = np.array(env_state.const.host_active, dtype=bool)
+            compromised = np.array(st.host_compromised)
+            ep_trajectory.append(
+                StepSnapshot(
+                    reward=step_reward,
+                    cumulative_reward=cum_reward,
+                    hosts_compromised_user=int(np.sum((compromised == COMPROMISE_USER) & active)),
+                    hosts_compromised_priv=int(np.sum((compromised == COMPROMISE_PRIVILEGED) & active)),
+                    red_sessions_total=int(np.sum(np.array(st.red_sessions)[:NUM_RED_AGENTS])),
+                    mission_phase=int(st.mission_phase),
+                )
+            )
 
             if dones["__all__"]:
                 break
@@ -144,15 +239,27 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
         elapsed = time.perf_counter() - t0
         total = ep_reward.mean()
         print(f"  JAXborg ep {ep + 1}: reward={total:.1f} ({elapsed:.1f}s)")
-        all_actions.extend(ep_actions)
-        episode_rewards.append(total)
 
-    return np.array(all_actions), np.array(episode_rewards)
+        # Flatten per-agent actions for backward compat
+        flat_actions = [a for step_actions in zip(*ep_actions_by_agent) for a in step_actions]
+        all_actions.extend(flat_actions)
+        episode_rewards.append(total)
+        episode_results.append(
+            EpisodeResult(
+                actions_by_agent=ep_actions_by_agent,
+                rewards=ep_step_rewards,
+                cumulative_reward=cum_reward,
+                trajectory=ep_trajectory,
+            )
+        )
+
+    return np.array(all_actions), np.array(episode_rewards), episode_results
 
 
 def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0):
     all_actions = []
     episode_rewards = []
+    all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
@@ -182,6 +289,7 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
                 cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings)
                 actions[agent_name] = cyborg_action
                 ep_actions.append(action_idx)
+                all_actions_by_agent[agent_idx].append(action_idx)
 
             observations, rewards, _, _, _ = env.step(actions=actions)
             total += mean(rewards.values())
@@ -191,7 +299,7 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
         all_actions.extend(ep_actions)
         episode_rewards.append(total)
 
-    return np.array(all_actions), np.array(episode_rewards)
+    return np.array(all_actions), np.array(episode_rewards), all_actions_by_agent
 
 
 # --- Report / plotting ---
@@ -467,13 +575,24 @@ def main():
     print("\n" + "=" * 70)
     print("JAXBORG ROLLOUT")
     print("=" * 70)
-    jax_actions, jax_rewards = rollout_jaxborg(network, params, args.episodes, deterministic)
+    jax_actions, jax_rewards, jax_results = rollout_jaxborg(network, params, args.episodes, deterministic)
+
+    # Per-agent action dist (all episodes pooled)
+    jax_pooled_by_agent = [[a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)]
+    print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+
+    # Trajectory summary for last episode
+    print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
 
     # CybORG rollout
     print("\n" + "=" * 70)
     print("CYBORG ROLLOUT")
     print("=" * 70)
-    cyborg_actions, cyborg_rewards = rollout_cyborg(network, params, args.episodes, deterministic, seed=args.seed)
+    cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
+        network, params, args.episodes, deterministic, seed=args.seed
+    )
+
+    print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
 
     # Comparison report
     print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
