@@ -169,7 +169,7 @@ def make_train(config):
                 done=jnp.stack([dones[a] for a in agents]),
                 action=action,
                 value=value,
-                reward=jnp.stack([rewards[a] for a in agents]),
+                reward=jnp.stack([rewards[a] for a in agents]) * config["REWARD_SCALE"],
                 log_prob=log_prob,
                 obs=obs_batch,
                 avail_actions=avail_batch,
