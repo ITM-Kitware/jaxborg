@@ -2,6 +2,7 @@
 
 Based on PureJaxRL PPO and JaxMARL's ippo_ff_cage.py.
 Trains Blue agents against scripted FSM red agents using feedforward networks.
+Fully JIT'd: rollout collection via jax.lax.scan + PPO update in one compiled fn.
 """
 
 import json
@@ -20,9 +21,10 @@ import numpy as np
 import optax
 from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
-from jaxmarl.wrappers.baselines import LogEnvState, LogWrapper
+from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
+from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
 
@@ -67,16 +69,6 @@ class Transition(NamedTuple):
     info: jnp.ndarray
 
 
-def batchify(x: dict, agent_list, num_actors):
-    x = jnp.stack([x[a] for a in agent_list])
-    return x.reshape((num_actors, -1))
-
-
-def unbatchify(x: jnp.ndarray, agent_list, num_envs, num_actors):
-    x = x.reshape((num_actors, num_envs, -1))
-    return {a: x[i] for i, a in enumerate(agent_list)}
-
-
 class MetricsLogger:
     """Logs to both JSONL file and MLflow."""
 
@@ -100,52 +92,39 @@ class MetricsLogger:
 
 
 def make_train(config):
-    """Returns (env, network, init_obsv, init_env_state, init_train_state_fn,
-    env_step_fn, update_params_fn).
+    """Build env, network, and a single JIT'd collect_and_update function.
 
-    Splits JIT into two small functions to avoid massive trace graphs:
-    - env_step_fn: single env step (JIT'd individually)
-    - update_params_fn: GAE + PPO gradient update (JIT'd individually)
+    Returns (env, network, init_obs, init_env_state, init_train_state_fn,
+    collect_and_update_fn).
 
-    The outer loop calls env_step_fn NUM_STEPS times from Python,
-    then passes the collected trajectory to update_params_fn.
+    collect_and_update scans NUM_STEPS env steps then runs GAE + PPO update,
+    all inside one XLA program.
     """
-    env = FsmRedCC4Env(num_steps=500)
-    config["NUM_ACTORS"] = env.num_agents * config["NUM_ENVS"]
-    config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"] // config["NUM_ENVS"]
-    config["MINIBATCH_SIZE"] = config["NUM_ACTORS"] * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+    inner_env = FsmRedCC4Env(num_steps=500)
+    agents = list(inner_env.agents)
+    num_agents = inner_env.num_agents  # 5
+    config["NUM_ACTORS"] = num_agents
+    config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"]
+    config["MINIBATCH_SIZE"] = num_agents * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
 
-    env = LogWrapper(env)
+    env = LogWrapper(inner_env)
 
-    inner_env = env._env
-    obs_list, state_list = [], []
-    for i in range(config["NUM_ENVS"]):
-        key_i = jax.random.PRNGKey(config["SEED"] * 1000 + i)
-        obs_i, state_i = inner_env.reset(key_i)
-        log_state_i = LogEnvState(
-            state_i,
-            jnp.zeros((env.num_agents,)),
-            jnp.zeros((env.num_agents,)),
-            jnp.zeros((env.num_agents,)),
-            jnp.zeros((env.num_agents,)),
-        )
-        obs_list.append(obs_i)
-        state_list.append(log_state_i)
-    init_obsv = jax.tree.map(lambda *xs: jnp.stack(xs), *obs_list)
-    init_env_state = jax.tree.map(lambda *xs: jnp.stack(xs), *state_list)
+    # Single env init (no env-batch dimension)
+    init_key = jax.random.PRNGKey(config["SEED"])
+    init_obs, init_env_state = env.reset(init_key)
+
+    network = ActorCritic(
+        inner_env.action_space(agents[0]).n,
+        hidden_dim=config.get("HIDDEN_DIM", 256),
+        activation=config["ACTIVATION"],
+    )
 
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
 
-    network = ActorCritic(
-        env.action_space(env.agents[0]).n,
-        hidden_dim=config.get("HIDDEN_DIM", 256),
-        activation=config["ACTIVATION"],
-    )
-
     def _init_train_state(rng):
-        init_x = jnp.zeros(env.observation_space(env.agents[0]).shape)
+        init_x = jnp.zeros(inner_env.observation_space(agents[0]).shape)
         network_params = network.init(rng, init_x)
 
         if config["ANNEAL_LR"]:
@@ -165,82 +144,64 @@ def make_train(config):
             tx=tx,
         )
 
-    def _env_step(params, env_state, last_obs, rng):
-        """Single env step — runs eagerly (no JIT/vmap) because the CC4
-        env state tree is too large for XLA compilation on CPU."""
-        obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
-
-        avail_list = []
-        for i in range(config["NUM_ENVS"]):
-            state_i = jax.tree.map(lambda x: x[i], env_state.env_state)
-            avail_list.append(inner_env.get_avail_actions(state_i))
-        avail_actions = jax.tree.map(lambda *xs: jnp.stack(xs), *avail_list)
-        avail_batch = batchify(avail_actions, env.agents, config["NUM_ACTORS"])
-
-        rng, _rng = jax.random.split(rng)
-        pi, value = network.apply(params, obs_batch, avail_batch)
-        action = pi.sample(seed=_rng)
-        log_prob = pi.log_prob(action)
-        env_act = unbatchify(action, env.agents, config["NUM_ENVS"], env.num_agents)
-        env_act = {k: v.squeeze(-1) for k, v in env_act.items()}
-
-        rng, _rng = jax.random.split(rng)
-        rng_step = jax.random.split(_rng, config["NUM_ENVS"])
-
-        obs_list, state_list, reward_list, done_list, info_list = [], [], [], [], []
-        for i in range(config["NUM_ENVS"]):
-            state_i = jax.tree.map(lambda x: x[i], env_state)
-            act_i = {k: v[i] for k, v in env_act.items()}
-            o, s, r, d, inf = env.step(rng_step[i], state_i, act_i)
-            obs_list.append(o)
-            state_list.append(s)
-            reward_list.append(r)
-            done_list.append(d)
-            info_list.append(inf)
-        obsv = jax.tree.map(lambda *xs: jnp.stack(xs), *obs_list)
-        env_state = jax.tree.map(lambda *xs: jnp.stack(xs), *state_list)
-        reward = jax.tree.map(lambda *xs: jnp.stack(xs), *reward_list)
-        done = jax.tree.map(lambda *xs: jnp.stack(xs), *done_list)
-        info = jax.tree.map(lambda *xs: jnp.stack(xs), *info_list)
-
-        info = jax.tree.map(lambda x: x.reshape((config["NUM_ACTORS"])), info)
-        transition = Transition(
-            batchify(done, env.agents, config["NUM_ACTORS"]).squeeze(),
-            action,
-            value,
-            batchify(reward, env.agents, config["NUM_ACTORS"]).squeeze(),
-            log_prob,
-            obs_batch,
-            avail_batch,
-            info,
-        )
-        return env_state, obsv, rng, transition
-
     @jax.jit
-    def _update_params(train_state, traj_batch, last_obs, rng):
-        last_obs_batch = batchify(last_obs, env.agents, config["NUM_ACTORS"])
+    def _collect_and_update(train_state, env_state, obs, rng):
+        """Scan NUM_STEPS env steps, compute GAE, run PPO epochs — all JIT'd."""
+
+        # --- Rollout via scan ---
+        def _env_step(carry, _):
+            env_state, obs, rng = carry
+
+            obs_batch = jnp.stack([obs[a] for a in agents])
+            avail_batch = jnp.stack([compute_blue_action_mask(env_state.env_state.const, i) for i in range(num_agents)])
+
+            rng, _rng = jax.random.split(rng)
+            pi, value = network.apply(train_state.params, obs_batch, avail_batch)
+            action = pi.sample(seed=_rng)
+            log_prob = pi.log_prob(action)
+
+            env_act = {agents[i]: action[i] for i in range(num_agents)}
+
+            rng, _rng = jax.random.split(rng)
+            new_obs, new_env_state, rewards, dones, info = env.step(_rng, env_state, env_act)
+
+            transition = Transition(
+                done=jnp.stack([dones[a] for a in agents]),
+                action=action,
+                value=value,
+                reward=jnp.stack([rewards[a] for a in agents]),
+                log_prob=log_prob,
+                obs=obs_batch,
+                avail_actions=avail_batch,
+                info=info,
+            )
+
+            return (new_env_state, new_obs, rng), transition
+
+        (env_state, obs, rng), traj_batch = jax.lax.scan(_env_step, (env_state, obs, rng), None, config["NUM_STEPS"])
+
+        # --- GAE ---
+        last_obs_batch = jnp.stack([obs[a] for a in agents])
         _, last_val = network.apply(train_state.params, last_obs_batch)
 
-        def _calculate_gae(traj_batch, last_val):
-            def _get_advantages(gae_and_next_value, transition):
-                gae, next_value = gae_and_next_value
-                done, value, reward = transition.done, transition.value, transition.reward
-                delta = reward + config["GAMMA"] * next_value * (1 - done) - value
-                gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
-                return (gae, value), gae
+        def _get_advantages(gae_and_next_value, transition):
+            gae, next_value = gae_and_next_value
+            done, value, reward = transition.done, transition.value, transition.reward
+            delta = reward + config["GAMMA"] * next_value * (1 - done) - value
+            gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
+            return (gae, value), gae
 
-            _, advantages = jax.lax.scan(
-                _get_advantages,
-                (jnp.zeros_like(last_val), last_val),
-                traj_batch,
-                reverse=True,
-                unroll=8,
-            )
-            return advantages, advantages + traj_batch.value
-
-        advantages, targets = _calculate_gae(traj_batch, last_val)
+        _, advantages = jax.lax.scan(
+            _get_advantages,
+            (jnp.zeros_like(last_val), last_val),
+            traj_batch,
+            reverse=True,
+            unroll=8,
+        )
+        targets = advantages + traj_batch.value
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
+        # --- PPO update epochs ---
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
                 traj_batch, advantages, targets = batch_info
@@ -314,9 +275,10 @@ def make_train(config):
         loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
         metric = jax.tree.map(lambda x: x.mean(), traj_batch.info)
         metric = {**metric, **loss_info}
-        return train_state, metric, rng
 
-    return env, network, init_obsv, init_env_state, _init_train_state, _env_step, _update_params
+        return train_state, env_state, obs, rng, metric
+
+    return env, network, init_obs, init_env_state, _init_train_state, _collect_and_update
 
 
 EXP_DIR = Path(__file__).resolve().parent.parent / "jaxborg-exp"
@@ -338,7 +300,6 @@ def main(cfg):
         {
             "algorithm": "IPPO-FF",
             "seed": config["SEED"],
-            "num_envs": config["NUM_ENVS"],
             "num_steps": config["NUM_STEPS"],
             "total_timesteps": config["TOTAL_TIMESTEPS"],
             "update_epochs": config["UPDATE_EPOCHS"],
@@ -360,20 +321,19 @@ def main(cfg):
     print("IPPO-FF CC4 Training: Blue vs FSM Red")
     print("=" * 60)
     print(f"Total timesteps: {config['TOTAL_TIMESTEPS']:,}")
-    print(f"Num envs: {config['NUM_ENVS']}")
-    print(f"Num steps: {config['NUM_STEPS']}")
+    print(f"Num steps per rollout: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
     print("=" * 60)
 
-    env, network, init_obsv, init_env_state, init_train_state, env_step, update_params = make_train(config)
+    env, network, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config)
 
     rng = jax.random.PRNGKey(config["SEED"] + 1)
     rng, _rng = jax.random.split(rng)
     train_state = init_train_state(_rng)
 
     env_state = init_env_state
-    obs = init_obsv
+    obs = init_obs
 
     config_path = save_dir / "config.json"
     with open(config_path, "w") as f:
@@ -381,28 +341,22 @@ def main(cfg):
 
     num_updates = int(config["NUM_UPDATES"])
     num_steps = int(config["NUM_STEPS"])
-    steps_per_update = config["NUM_ENVS"] * num_steps
 
     logger = MetricsLogger(save_dir / "metrics.jsonl")
     best_reward = float("-inf")
 
     start_time = time.perf_counter()
-    print(f"Starting training ({num_updates} updates, env steps run eagerly)...")
+    print(f"Starting training ({num_updates} updates, fully JIT'd)...")
+    print("  (first update includes XLA compilation — may take a few minutes)")
 
     for update_idx in range(num_updates):
-        transitions = []
-        for _step in range(num_steps):
-            env_state, obs, rng, transition = env_step(train_state.params, env_state, obs, rng)
-            transitions.append(transition)
-
-        traj_batch = jax.tree.map(lambda *xs: jnp.stack(xs), *transitions)
-        train_state, metric, rng = update_params(train_state, traj_batch, obs, rng)
+        train_state, env_state, obs, rng, metric = collect_and_update(train_state, env_state, obs, rng)
 
         if update_idx == 0:
             elapsed_first = time.perf_counter() - start_time
-            print(f"  first update done in {elapsed_first:.1f}s (includes JIT for gradient update)")
+            print(f"  first update compiled + ran in {elapsed_first:.1f}s")
 
-        step = (update_idx + 1) * steps_per_update
+        step = (update_idx + 1) * num_steps
         reward = float(metric["returned_episode_returns"])
         record = {
             "update": update_idx + 1,
