@@ -137,6 +137,8 @@ def _jit_advance_and_clear(state, const):
         green_lwf_this_step=_ZERO_BOOL_HOSTS,
         green_asf_this_step=_ZERO_BOOL_HOSTS,
         red_impact_attempted=_ZERO_BOOL_HOSTS,
+        host_activity_detected=_ZERO_BOOL_HOSTS,
+        host_exploit_detected=_ZERO_BOOL_HOSTS,
     )
 
 
@@ -217,6 +219,7 @@ class CC4DifferentialHarness:
         self.mappings = None
         self.rng_key = None
         self.green_recorder = None
+        self._blue_wrapper = None
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -237,6 +240,11 @@ class CC4DifferentialHarness:
         )
         self.cyborg_env = CybORG(scenario_generator=sg, seed=self.seed)
         self.cyborg_env.reset()
+
+        if self.check_obs:
+            from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
+
+            self._blue_wrapper = BlueFlatWrapper(env=self.cyborg_env, pad_spaces=True)
 
         self.jax_const = build_const_from_cyborg(self.cyborg_env)
         self.mappings = build_mappings_from_cyborg(self.cyborg_env)
@@ -754,6 +762,32 @@ class CC4DifferentialHarness:
 
         if abs(jax_reward - cyborg_reward) > 1e-6:
             diffs.append(StateDiff("rewards", cyborg_reward, jax_reward))
+
+        # --- Observation comparison ---
+        if self.check_obs and self._blue_wrapper is not None:
+            import numpy as np
+
+            from jaxborg.observations import get_blue_obs
+
+            for b in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{b}"
+                cyborg_obs_dict = self.cyborg_env.get_observation(agent_name)
+                cyborg_obs = self._blue_wrapper.observation_change(agent_name, cyborg_obs_dict)
+                cyborg_obs = np.asarray(cyborg_obs, dtype=np.float32)
+
+                jax_obs = np.asarray(get_blue_obs(self.jax_state, self.jax_const, b), dtype=np.float32)
+
+                # Trim to same length (padded wrapper may be longer)
+                min_len = min(len(cyborg_obs), len(jax_obs))
+                cyborg_trimmed = cyborg_obs[:min_len]
+                jax_trimmed = jax_obs[:min_len]
+
+                if not np.allclose(cyborg_trimmed, jax_trimmed, atol=1e-5):
+                    mismatched_indices = np.where(np.abs(cyborg_trimmed - jax_trimmed) > 1e-5)[0]
+                    detail = ", ".join(
+                        f"idx={i} cy={cyborg_trimmed[i]:.0f} jax={jax_trimmed[i]:.4f}" for i in mismatched_indices[:10]
+                    )
+                    diffs.append(StateDiff("observation", cyborg_trimmed, jax_trimmed, f"{agent_name}: {detail}"))
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 

@@ -26,6 +26,7 @@ _ERROR_FIELDS = {
     "blocked_zones",
     "mission_phase",
     "rewards",
+    "observation",
 }
 
 _WARNING_FIELDS = {

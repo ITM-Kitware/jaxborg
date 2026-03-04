@@ -175,14 +175,14 @@ class TestBlockedSubnets:
 
 
 class TestHostEvents:
-    def test_malicious_processes_reflect_malware(self, jax_const, jax_state):
+    def test_malicious_processes_reflect_exploit_detected(self, jax_const, jax_state):
         sid = int(jax_const.blue_obs_subnets[0, 0])
         host_idx = int(jax_const.obs_host_map[sid, 0])
         if host_idx >= GLOBAL_MAX_HOSTS:
             pytest.skip("no active server host in first slot")
 
-        malware = jax_state.host_has_malware.at[host_idx].set(True)
-        state = jax_state.replace(host_has_malware=malware)
+        exploit = jax_state.host_exploit_detected.at[host_idx].set(True)
+        state = jax_state.replace(host_exploit_detected=exploit)
 
         obs = np.array(get_blue_obs(state, jax_const, 0))
         proc_start = 1 + 3 * NUM_SUBNETS
@@ -204,8 +204,8 @@ class TestHostEvents:
         assert conn_vec[0] == 1.0, "first host should show network connection"
 
     def test_inactive_host_slots_zero(self, jax_const, jax_state):
-        malware = jax_state.host_has_malware.at[:].set(True)
-        state = jax_state.replace(host_has_malware=malware)
+        exploit = jax_state.host_exploit_detected.at[:].set(True)
+        state = jax_state.replace(host_exploit_detected=exploit)
 
         obs = np.array(get_blue_obs(state, jax_const, 0))
         proc_start = 1 + 3 * NUM_SUBNETS

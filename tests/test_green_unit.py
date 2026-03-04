@@ -66,7 +66,8 @@ class TestPrecomputedFP:
             pytest.skip("Host has no services")
         state = _make_precomputed_state(jax_state, jax_const, overrides)
         result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
-        assert result.host_activity_detected[h]
+        # GreenLocalWork FP creates process_creation events (host_exploit_detected)
+        assert result.host_exploit_detected[h]
 
     def test_fp_does_not_trigger_when_roll_above_threshold(self, jax_const, jax_state):
         h = _first_active_green_host(jax_const)

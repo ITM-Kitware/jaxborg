@@ -84,7 +84,8 @@ class CC4State:
     red_scan_anchor_host: chex.Array  # (NUM_RED_AGENTS,) int — host owning CybORG-like scan memory session
 
     red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
-    host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
+    host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — network_connections obs (scans)
+    host_exploit_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — malicious_processes obs, transient
     host_suspicious_process: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
     host_has_malware: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
@@ -192,6 +193,7 @@ def create_initial_state() -> CC4State:
         red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        host_exploit_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_suspicious_process=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         host_has_malware=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),

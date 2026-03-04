@@ -44,6 +44,12 @@ class GreenRecorder:
         for host in state.hosts.values():
             host.np_random = self._state_recorder
 
+        # Build IP → JAX host_idx mapping for server ordering parity
+        self._ip_to_host_idx = {}
+        for ip, hostname in state.ip_addresses.items():
+            if hostname in mappings.hostname_to_idx:
+                self._ip_to_host_idx[ip] = mappings.hostname_to_idx[hostname]
+
         for name, interface in controller.agent_interfaces.items():
             if not name.startswith("green_agent_"):
                 continue
@@ -97,7 +103,7 @@ class GreenRecorder:
 
             jax_action = _ACTION_TYPE_TO_JAX.get(action_type, GREEN_SLEEP_JAX)
             fields[host_idx, 0] = (jax_action + 0.5) / 3.0
-            _map_calls_to_fields(fields, host_idx, action_type, calls)
+            _map_calls_to_fields(fields, host_idx, action_type, calls, self._ip_to_host_idx)
 
         self._per_step_data.append(fields.copy())
 
@@ -119,12 +125,12 @@ class GreenRecorder:
         return jnp.array(result)
 
 
-def _map_calls_to_fields(fields, host_idx, action_type, calls):
+def _map_calls_to_fields(fields, host_idx, action_type, calls, ip_to_host_idx=None):
     """Map state.np_random calls to the 8-field format based on action type."""
     if action_type == "GreenLocalWork":
         _map_local_work_calls(fields, host_idx, calls)
     elif action_type == "GreenAccessService":
-        _map_access_service_calls(fields, host_idx, calls)
+        _map_access_service_calls(fields, host_idx, calls, ip_to_host_idx)
 
 
 def _extract_create_pid_delta(calls):
@@ -154,7 +160,7 @@ def _map_local_work_calls(fields, host_idx, calls):
     if len(calls) < 2:
         return
 
-    _, svc_idx, n_services = calls[0]
+    svc_idx, n_services = calls[0][1], calls[0][2]
     fields[host_idx, 1] = (svc_idx + 0.5) / max(n_services, 1)
 
     rel_call = calls[1]
@@ -183,19 +189,26 @@ def _map_local_work_calls(fields, host_idx, calls):
             break
 
 
-def _map_access_service_calls(fields, host_idx, calls):
+def _map_access_service_calls(fields, host_idx, calls, ip_to_host_idx=None):
     """Map GreenAccessService state.np_random calls to fields.
 
     Call pattern:
     [0] choice(reachable_hosts) -> destination server selection
     If not blocked:
         [1] random() -> FP roll
+
+    Field 5 stores the actual JAX host index of the chosen destination
+    (not an index into CybORG's list) to avoid server ordering mismatches.
     """
     if len(calls) < 1:
         return
 
-    _, dest_idx, n_reachable = calls[0]
-    fields[host_idx, 5] = (dest_idx + 0.5) / max(n_reachable, 1)
+    chosen_ip = calls[0][3]
+    if ip_to_host_idx and chosen_ip in ip_to_host_idx:
+        fields[host_idx, 5] = float(ip_to_host_idx[chosen_ip])
+    else:
+        dest_idx, n_reachable = calls[0][1], calls[0][2]
+        fields[host_idx, 5] = (dest_idx + 0.5) / max(n_reachable, 1)
 
     for call in calls[1:]:
         if call[0] == "random":

@@ -230,6 +230,7 @@ class CC4Env(MultiAgentEnv):
             red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
             # Reset per-step observation signals (CybORG events are transient per step)
             host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            host_exploit_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         )
 
         for r in range(NUM_RED_AGENTS):

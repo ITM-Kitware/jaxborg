@@ -363,7 +363,8 @@ class TestDifferentialWithCybORG:
         int(state.red_activity_this_step[target_h]) != ACTIVITY_NONE
 
         state = apply_blue_monitor(state, const)
-        jax_has_target = bool(state.host_activity_detected[target_h])
+        # Exploit activity goes to host_exploit_detected (process_creation events)
+        jax_has_target = bool(state.host_activity_detected[target_h]) or bool(state.host_exploit_detected[target_h])
 
         if cyborg_has_events:
             assert cyborg_has_target == jax_has_target, (

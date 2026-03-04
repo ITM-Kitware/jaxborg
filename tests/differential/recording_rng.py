@@ -24,7 +24,7 @@ class RecordingNPRandom:
         else:
             n = int(a)
             idx = int(result)
-        self.log.append(("choice", idx, n))
+        self.log.append(("choice", idx, n, result))
         return result
 
     def integers(self, high, *args, **kwargs):

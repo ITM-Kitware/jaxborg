@@ -191,8 +191,18 @@ def _apply_single_green(
 
     server_indices = jnp.where(is_reachable_server, jnp.arange(GLOBAL_MAX_HOSTS), GLOBAL_MAX_HOSTS)
     sorted_servers = jnp.sort(server_indices)
-    rand_idx = sample_green_random(state, t, host_idx, 5, k4, int_range=num_reachable)
-    dest_host = sorted_servers[rand_idx]
+
+    # In precomputed mode, field 5 stores the actual JAX host index directly
+    # (to match CybORG's server ordering). In RNG mode, pick randomly from sorted list.
+    dest_host_precomputed = jnp.int32(state.green_randoms[t, host_idx, 5])
+    rand_idx_rng = jax.random.randint(k4, (), 0, jnp.maximum(num_reachable, 1))
+    dest_host_rng = sorted_servers[rand_idx_rng]
+    dest_host = jax.lax.cond(
+        state.use_green_randoms,
+        lambda _: dest_host_precomputed,
+        lambda _: dest_host_rng,
+        None,
+    )
     dest_host = jnp.where(has_reachable, dest_host, jnp.int32(0))
 
     dest_subnet = const.host_subnet[dest_host]
@@ -214,6 +224,7 @@ def _apply_single_green(
         state.green_asf_this_step,
     )
 
+    # CybORG: GreenAccessService blocked/FP creates network_connections events on dest host
     host_activity_detected = state.host_activity_detected
     host_activity_detected = jnp.where(
         access_blocked | access_fp,
@@ -221,10 +232,12 @@ def _apply_single_green(
         host_activity_detected,
     )
 
-    host_activity_detected = jnp.where(
+    # CybORG: GreenLocalWork FP creates process_creation events on source host
+    host_exploit_detected = state.host_exploit_detected
+    host_exploit_detected = jnp.where(
         local_fp,
-        host_activity_detected.at[host_idx].set(True),
-        host_activity_detected,
+        host_exploit_detected.at[host_idx].set(True),
+        host_exploit_detected,
     )
 
     return state.replace(
@@ -240,6 +253,7 @@ def _apply_single_green(
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         host_activity_detected=host_activity_detected,
+        host_exploit_detected=host_exploit_detected,
         green_lwf_this_step=green_lwf_this_step,
         green_asf_this_step=green_asf_this_step,
     )
