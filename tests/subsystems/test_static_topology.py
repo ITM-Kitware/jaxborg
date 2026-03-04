@@ -56,7 +56,7 @@ class TestPureToplogy:
         c = jax_const
         num_active = int(jnp.sum(c.host_active))
         assert 9 * 4 + 1 <= num_active <= 8 * 17 + 1
-        assert c.num_hosts == num_active
+        assert int(c.num_hosts) == num_active
 
     def test_every_subnet_has_hosts(self, jax_const):
         c = jax_const
@@ -82,7 +82,7 @@ class TestPureToplogy:
 
     def test_host_type_mutually_exclusive(self, jax_const):
         c = jax_const
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if not c.host_active[h]:
                 continue
             types = int(c.host_is_router[h]) + int(c.host_is_server[h]) + int(c.host_is_user[h])
@@ -94,13 +94,13 @@ class TestPureToplogy:
 
     def test_routers_dont_respond_to_ping(self, jax_const):
         c = jax_const
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if c.host_is_router[h]:
                 assert not c.host_respond_to_ping[h]
 
     def test_user_and_server_respond_to_ping(self, jax_const):
         c = jax_const
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if c.host_is_user[h] or c.host_is_server[h]:
                 assert c.host_respond_to_ping[h]
 
@@ -109,7 +109,7 @@ class TestPureToplogy:
 
         c = jax_const
         ssh_idx = SERVICE_IDS["SSHD"]
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if c.host_active[h] and not c.host_is_router[h] and SUBNET_NAMES[int(c.host_subnet[h])] != "INTERNET":
                 assert c.initial_services[h, ssh_idx]
 
@@ -118,7 +118,7 @@ class TestPureToplogy:
 
         c = jax_const
         ot_idx = SERVICE_IDS["OTSERVICE"]
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if not c.host_active[h]:
                 continue
             sid = int(c.host_subnet[h])
@@ -137,7 +137,7 @@ class TestPureToplogy:
     def test_non_router_hosts_linked_to_their_router(self, jax_const):
         c = jax_const
         dl = np.array(c.data_links)
-        for h in range(c.num_hosts):
+        for h in range(int(c.num_hosts)):
             if not c.host_active[h]:
                 continue
             sid = int(c.host_subnet[h])
@@ -146,7 +146,7 @@ class TestPureToplogy:
                 continue
             router_hosts = [
                 r
-                for r in range(c.num_hosts)
+                for r in range(int(c.num_hosts))
                 if c.host_active[r] and c.host_is_router[r] and int(c.host_subnet[r]) == sid
             ]
             assert len(router_hosts) == 1
@@ -174,7 +174,7 @@ class TestPureToplogy:
     def test_blue_agent_hosts_match_subnets(self, jax_const):
         c = jax_const
         for i in range(NUM_BLUE_AGENTS):
-            for h in range(c.num_hosts):
+            for h in range(int(c.num_hosts)):
                 if not c.host_active[h]:
                     continue
                 sid = int(c.host_subnet[h])
@@ -197,8 +197,8 @@ class TestPureToplogy:
     def test_green_agents_on_user_hosts(self, jax_const):
         c = jax_const
         num_user = int(jnp.sum(c.host_is_user))
-        assert c.num_green_agents == num_user
-        for h in range(c.num_hosts):
+        assert int(c.num_green_agents) == num_user
+        for h in range(int(c.num_hosts)):
             if c.host_is_user[h]:
                 assert c.green_agent_active[h]
                 assert c.green_agent_host[h] >= 0
@@ -229,7 +229,7 @@ class TestDifferentialWithCybORG:
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
-        assert c.num_hosts == len(state.hosts)
+        assert int(c.num_hosts) == len(state.hosts)
 
     def test_subnet_assignment_matches(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
@@ -320,7 +320,7 @@ class TestDifferentialWithCybORG:
         c = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
         cyborg_green_count = sum(1 for name in scenario.agents if name.startswith("green_agent_"))
-        assert c.num_green_agents == cyborg_green_count
+        assert int(c.num_green_agents) == cyborg_green_count
 
     def test_phase_boundaries_match(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg

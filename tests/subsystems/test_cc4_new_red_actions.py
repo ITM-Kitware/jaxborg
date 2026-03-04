@@ -54,7 +54,7 @@ def jax_state_with_discovered(jax_const):
 
 def _first_discovered_non_router(jax_const, state, agent_id=0):
     discovered = np.array(state.red_discovered_hosts[agent_id])
-    for h in range(jax_const.num_hosts):
+    for h in range(int(jax_const.num_hosts)):
         if discovered[h] and not jax_const.host_is_router[h]:
             return h
     return None
@@ -98,7 +98,7 @@ class TestApplyAggressiveScan:
         state = jax_state_with_discovered
         discovered = np.array(state.red_discovered_hosts[0])
         undiscovered = None
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not discovered[h]:
                 undiscovered = h
                 break
@@ -344,8 +344,15 @@ class TestApplyWithdraw:
 
     def test_withdraw_no_session_no_effect(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
-        target = _first_discovered_non_router(jax_const, state)
+        start_host = int(jax_const.red_start_hosts[0])
+        discovered = np.array(state.red_discovered_hosts[0])
+        target = None
+        for h in range(int(jax_const.num_hosts)):
+            if discovered[h] and not jax_const.host_is_router[h] and h != start_host:
+                target = h
+                break
         assert target is not None
+        assert not bool(state.red_sessions[0, target])
 
         action_idx = encode_red_action("Withdraw", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -415,7 +422,7 @@ class TestDifferentialWithCybORG:
         sorted_hosts = sorted(cyborg_state.hosts.keys())
 
         target = None
-        for h in range(const.num_hosts):
+        for h in range(int(const.num_hosts)):
             if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
                 continue
             if bool(np.any(np.array(const.initial_services[h]))):

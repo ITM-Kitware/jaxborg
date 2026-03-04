@@ -172,11 +172,11 @@ class CC4Env(MultiAgentEnv):
         return obs, env_state
 
     @partial(jax.jit, static_argnums=[0])
-    def _reset_state(self, env_state: CC4EnvState) -> CC4EnvState:
-        """Reset dynamic state while keeping the same topology (for auto-reset)."""
-        const = env_state.const
+    def _reset_state(self, env_state: CC4EnvState, key: chex.PRNGKey) -> CC4EnvState:
+        """Reset with a new random topology (for auto-reset)."""
+        const = build_topology(key, num_steps=self.num_steps)
         state = create_initial_state()
-        state = state.replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(host_services=const.initial_services)
         state = _init_red_state(const, state)
         return CC4EnvState(state=state, const=const)
 
@@ -194,7 +194,7 @@ class CC4Env(MultiAgentEnv):
         if reset_state is not None:
             states_re = reset_state
         else:
-            states_re = self._reset_state(states_st)
+            states_re = self._reset_state(states_st, key_reset)
         obs_re = self.get_obs(states_re)
 
         states = jax.tree.map(

@@ -60,7 +60,7 @@ def jax_state_with_discovered(jax_const):
 
 def _first_discovered_non_router(jax_const, state, agent_id=0):
     discovered = np.array(state.red_discovered_hosts[agent_id])
-    for h in range(jax_const.num_hosts):
+    for h in range(int(jax_const.num_hosts)):
         if discovered[h] and not jax_const.host_is_router[h]:
             return h
     return None
@@ -142,7 +142,7 @@ class TestApplyScan:
         action_idx = encode_red_action("DiscoverNetworkServices", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if h != target:
                 assert not bool(new_state.red_scanned_hosts[0, h])
 
@@ -150,7 +150,7 @@ class TestApplyScan:
         state = jax_state_with_discovered
         discovered = np.array(state.red_discovered_hosts[0])
         undiscovered = None
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not discovered[h]:
                 undiscovered = h
                 break
@@ -282,7 +282,7 @@ class TestDifferentialWithCybORG:
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         discovered_jax = np.array(state.red_discovered_hosts[0])
-        discovered_hosts = [h for h in range(const.num_hosts) if discovered_jax[h] and not const.host_is_router[h]]
+        discovered_hosts = [h for h in range(int(const.num_hosts)) if discovered_jax[h] and not const.host_is_router[h]]
         assert len(discovered_hosts) > 0
 
         target_h = discovered_hosts[0]
@@ -643,7 +643,7 @@ class TestScanRequiresAbstractSession:
         """Scan must fail when agent only has non-abstract sessions (from phishing)."""
         from jaxborg.topology import build_topology
 
-        const = build_topology(jnp.array([42]), num_steps=500)
+        const = build_topology(jax.random.PRNGKey(42), num_steps=500)
         state = create_initial_state()
 
         agent_id = 0
@@ -676,7 +676,7 @@ class TestScanRequiresAbstractSession:
         """Scan succeeds when agent has an abstract session (from exploit)."""
         from jaxborg.topology import build_topology
 
-        const = build_topology(jnp.array([42]), num_steps=500)
+        const = build_topology(jax.random.PRNGKey(42), num_steps=500)
         state = create_initial_state()
 
         agent_id = 0
@@ -714,7 +714,7 @@ class TestScanRequiresAbstractSession:
         from jaxborg.actions.red_common import apply_exploit_success
         from jaxborg.topology import build_topology
 
-        const = build_topology(jnp.array([42]), num_steps=500)
+        const = build_topology(jax.random.PRNGKey(42), num_steps=500)
         state = create_initial_state()
 
         agent_id = 0
@@ -731,7 +731,12 @@ class TestScanRequiresAbstractSession:
         state = _jit_apply_red(state, const, agent_id, discover_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
-        target = _first_discovered_non_router(const, state, agent_id)
+        discovered = np.array(state.red_discovered_hosts[agent_id])
+        target = None
+        for h in range(int(const.num_hosts)):
+            if discovered[h] and not const.host_is_router[h] and h != start_host:
+                target = h
+                break
         assert target is not None
 
         new_state = apply_exploit_success(

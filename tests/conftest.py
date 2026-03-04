@@ -1,5 +1,4 @@
 import jax
-import jax.numpy as jnp
 import pytest
 
 from jaxborg.actions import apply_blue_action, apply_red_action
@@ -21,7 +20,7 @@ def setup_red_agent_session(state: CC4State, agent_id: int, host: int) -> CC4Sta
 
 @pytest.fixture(scope="session")
 def jax_const():
-    return build_topology(jnp.array([42]), num_steps=500)
+    return build_topology(jax.random.PRNGKey(42), num_steps=500)
 
 
 @pytest.fixture

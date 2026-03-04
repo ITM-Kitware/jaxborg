@@ -131,43 +131,43 @@ class TestDynamicTopology:
     def test_different_seeds_different_host_counts(self):
         counts = set()
         for seed in range(20):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             counts.add(int(const.num_hosts))
         assert len(counts) > 1, "Different seeds should produce different host counts"
 
     def test_host_count_range(self):
         for seed in range(10):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             num = int(const.num_hosts)
             assert 37 <= num <= 137, f"Seed {seed}: host count {num} out of expected range"
 
     def test_padding_to_global_max(self):
         for seed in range(5):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             assert const.host_active.shape == (GLOBAL_MAX_HOSTS,)
             assert const.host_subnet.shape == (GLOBAL_MAX_HOSTS,)
             assert const.data_links.shape == (GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS)
 
     def test_host_active_consistency(self):
         for seed in range(5):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             active_count = int(jnp.sum(const.host_active))
-            assert active_count == const.num_hosts
+            assert active_count == int(const.num_hosts)
             for h in range(GLOBAL_MAX_HOSTS):
-                if h >= const.num_hosts:
+                if h >= int(const.num_hosts):
                     assert not const.host_active[h]
 
     def test_green_agents_present(self):
         for seed in range(5):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             num_green = int(jnp.sum(const.green_agent_active))
             num_user = int(jnp.sum(const.host_is_user))
             assert num_green == num_user
-            assert const.num_green_agents == num_user
+            assert int(const.num_green_agents) == num_user
 
     def test_all_subnets_have_hosts(self):
         for seed in range(10):
-            const = build_topology(jnp.array([seed]), num_steps=500)
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             for sid in range(NUM_SUBNETS):
                 count = int(jnp.sum(const.host_active & (const.host_subnet == sid)))
                 assert count >= 1, f"Seed {seed}: subnet {sid} has no hosts"
@@ -190,13 +190,13 @@ class TestDifferentialGreen:
         const = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
         cyborg_green_count = sum(1 for name in scenario.agents if name.startswith("green_agent_"))
-        assert const.num_green_agents == cyborg_green_count
+        assert int(const.num_green_agents) == cyborg_green_count
 
     def test_green_agents_on_user_hosts(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
-        for h in range(const.num_hosts):
+        for h in range(int(const.num_hosts)):
             if const.host_is_user[h]:
                 assert const.green_agent_active[h]
                 assert const.green_agent_host[h] >= 0

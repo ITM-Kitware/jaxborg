@@ -48,7 +48,7 @@ class CC4Const:
 
     green_agent_host: chex.Array  # (GLOBAL_MAX_HOSTS,) int — green agent index per host, -1 if none
     green_agent_active: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
-    num_green_agents: int
+    num_green_agents: chex.Array  # scalar int32
 
     phase_rewards: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, 3) float — LWF/ASF/RIA per subnet per phase
     phase_boundaries: chex.Array  # (MISSION_PHASES,) int — step at which each phase starts
@@ -59,7 +59,7 @@ class CC4Const:
     comms_policy: chex.Array  # (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool — True = not connected
 
     max_steps: int
-    num_hosts: int
+    num_hosts: chex.Array  # scalar int32
 
 
 @struct.dataclass
@@ -160,7 +160,7 @@ def create_initial_const() -> CC4Const:
         host_info_links=jnp.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         green_agent_host=jnp.full(GLOBAL_MAX_HOSTS, -1, dtype=jnp.int32),
         green_agent_active=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-        num_green_agents=0,
+        num_green_agents=jnp.int32(0),
         phase_rewards=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=jnp.float32),
         phase_boundaries=jnp.zeros(MISSION_PHASES, dtype=jnp.int32),
         allowed_subnet_pairs=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
@@ -168,7 +168,7 @@ def create_initial_const() -> CC4Const:
         blue_obs_subnets=jnp.full((NUM_BLUE_AGENTS, 3), -1, dtype=jnp.int32),
         comms_policy=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         max_steps=MAX_STEPS,
-        num_hosts=0,
+        num_hosts=jnp.int32(0),
     )
 
 

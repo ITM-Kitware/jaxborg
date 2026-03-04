@@ -1,3 +1,4 @@
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -91,7 +92,7 @@ class TestPhaseRewardsMatchCybORG:
         from jaxborg.topology import build_const_from_cyborg, build_topology
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
-        pure_const = build_topology(jnp.array([42]), num_steps=500)
+        pure_const = build_topology(jax.random.PRNGKey(42), num_steps=500)
 
         np.testing.assert_array_equal(
             np.array(cyborg_const.phase_rewards),
@@ -111,7 +112,7 @@ class TestComputeRewards:
         no_events = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
         target = None
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not jax_const.host_is_router[h]:
                 target = h
                 break
@@ -128,7 +129,7 @@ class TestComputeRewards:
         no_events = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
         target = None
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not jax_const.host_is_router[h]:
                 target = h
                 break
@@ -145,7 +146,7 @@ class TestComputeRewards:
         no_events = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
         target = None
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not jax_const.host_is_router[h]:
                 target = h
                 break
@@ -162,7 +163,7 @@ class TestComputeRewards:
         no_events = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
         targets = []
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and not jax_const.host_is_router[h]:
                 targets.append(h)
             if len(targets) == 2:
@@ -183,7 +184,7 @@ class TestComputeRewards:
 
         oa_host = None
         oa_sid = SUBNET_IDS["OPERATIONAL_ZONE_A"]
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_active[h] and int(jax_const.host_subnet[h]) == oa_sid and not jax_const.host_is_router[h]:
                 oa_host = h
                 break

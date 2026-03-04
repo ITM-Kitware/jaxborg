@@ -65,7 +65,7 @@ def _setup_exploited_state(jax_const, target_host):
 
 
 def _find_exploitable_host(jax_const, exclude_start=True):
-    for h in range(jax_const.num_hosts):
+    for h in range(int(jax_const.num_hosts)):
         if (
             jax_const.host_active[h]
             and not jax_const.host_is_router[h]
@@ -161,7 +161,8 @@ class TestApplyPrivesc:
         if target is None:
             pytest.skip("No exploitable host found")
 
-        linked_host = next((h for h in range(jax_const.num_hosts) if h != target and jax_const.host_active[h]), None)
+        nh = int(jax_const.num_hosts)
+        linked_host = next((h for h in range(nh) if h != target and jax_const.host_active[h]), None)
         if linked_host is None:
             pytest.skip("No linked host candidate found")
 
@@ -194,7 +195,7 @@ class TestApplyPrivesc:
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if h == target:
                 continue
             assert int(new_state.red_privilege[0, h]) == int(state.red_privilege[0, h])
@@ -264,7 +265,7 @@ class TestDifferentialWithCybORG:
         discovered_jax = np.array(state.red_discovered_hosts[0])
         exploitable = [
             h
-            for h in range(const.num_hosts)
+            for h in range(int(const.num_hosts))
             if (
                 discovered_jax[h]
                 and not const.host_is_router[h]
@@ -366,7 +367,7 @@ class TestDifferentialWithCybORG:
 
         start_host = int(const.red_start_hosts[0])
         target_h = None
-        for h in range(const.num_hosts):
+        for h in range(int(const.num_hosts)):
             if (
                 const.host_active[h]
                 and not const.host_is_router[h]

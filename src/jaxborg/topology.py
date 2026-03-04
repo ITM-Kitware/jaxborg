@@ -9,6 +9,7 @@ from jaxborg.constants import (
     MISSION_PHASES,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
+    NUM_SERVICES,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
     SERVICE_IDS,
@@ -315,7 +316,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         host_info_links=jnp.array(host_info_links),
         green_agent_host=jnp.array(green_agent_host),
         green_agent_active=jnp.array(green_agent_active),
-        num_green_agents=green_count,
+        num_green_agents=jnp.int32(green_count),
         phase_rewards=jnp.array(_build_phase_rewards_from_cyborg(cyborg_env)),
         phase_boundaries=jnp.array(phase_boundaries),
         allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
@@ -323,7 +324,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         blue_obs_subnets=jnp.array(_build_blue_obs_subnets()),
         comms_policy=jnp.array(_build_comms_policy()),
         max_steps=500,
-        num_hosts=num_hosts,
+        num_hosts=jnp.int32(num_hosts),
     )
 
 
@@ -366,242 +367,179 @@ def _compute_allowed_subnet_pairs(allowed_per_mphase) -> np.ndarray:
     return pairs
 
 
-def _pick_addon_services(rng: np.random.Generator) -> set[str]:
-    addon_options = ["APACHE2", "MYSQLD", "SMTP"]
-    num_addons = rng.integers(0, len(addon_options), endpoint=True)
-    chosen = rng.choice(addon_options, size=num_addons, replace=False)
-    return set(chosen)
-
-
-def _generate_host_specs(rng: np.random.Generator) -> list[dict]:
-    """Generate host specs sorted alphabetically by name."""
-    specs = []
-    for sname in SUBNET_NAMES:
-        sid = SUBNET_IDS[sname]
-        if sname == "INTERNET":
-            specs.append(
-                {
-                    "name": "root_internet_host_0",
-                    "sid": sid,
-                    "is_internet": True,
-                    "is_router": False,
-                    "is_server": False,
-                    "is_user": False,
-                    "services": set(),
-                }
-            )
-            continue
-
-        cyborg_suffix = CYBORG_SUBNET_SUFFIX[sname]
-        specs.append(
-            {
-                "name": f"{cyborg_suffix}_router",
-                "sid": sid,
-                "is_router": True,
-                "is_internet": False,
-                "is_server": False,
-                "is_user": False,
-                "services": set(),
-            }
-        )
-
-        num_users = rng.integers(3, 10, endpoint=True)
-        for u in range(num_users):
-            svcs = {"SSHD"}
-            if "operational" in cyborg_suffix:
-                svcs.add("OTSERVICE")
-            svcs |= _pick_addon_services(rng)
-            specs.append(
-                {
-                    "name": f"{cyborg_suffix}_user_host_{u}",
-                    "sid": sid,
-                    "is_router": False,
-                    "is_internet": False,
-                    "is_server": False,
-                    "is_user": True,
-                    "services": svcs,
-                }
-            )
-
-        num_servers = rng.integers(1, 6, endpoint=True)
-        for sv in range(num_servers):
-            svcs = {"SSHD"}
-            if "operational" in cyborg_suffix:
-                svcs.add("OTSERVICE")
-            svcs |= _pick_addon_services(rng)
-            specs.append(
-                {
-                    "name": f"{cyborg_suffix}_server_host_{sv}",
-                    "sid": sid,
-                    "is_router": False,
-                    "is_internet": False,
-                    "is_server": True,
-                    "is_user": False,
-                    "services": svcs,
-                }
-            )
-
-    specs.sort(key=lambda h: h["name"])
-    return specs
-
-
 def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
-    """Build CC4 topology purely in JAX/numpy (no CybORG dependency).
+    """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
-    1 router + random user hosts (3-10) + random server hosts (1-6).
+    1 router + random server hosts (1-6) + random user hosts (3-10).
     Internet subnet gets 1 host (root_internet_host_0).
 
-    Hosts are sorted alphabetically by name before index assignment,
-    matching the convention used by build_const_from_cyborg().
+    Host indices follow alphabetical hostname ordering (same as build_const_from_cyborg):
+    subnets ordered by CYBORG_SUBNET_SUFFIX, within each subnet: router < servers < users.
     """
-    rng = np.random.default_rng(int(key[0]) if hasattr(key, "__getitem__") else int(key))
+    k_counts, k_services, k_red = jax.random.split(key, 3)
+    k_users, k_servers = jax.random.split(k_counts)
 
-    host_specs = _generate_host_specs(rng)
-    num_hosts = len(host_specs)
+    n_users = jax.random.randint(k_users, (8,), 3, 11)
+    n_servers = jax.random.randint(k_servers, (8,), 1, 7)
 
-    host_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_subnet_arr = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
-    host_is_router = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_is_server = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_is_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_respond_to_ping = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_has_bruteforceable_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_has_rfi = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_initial_max_pid = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
-    initial_services = np.zeros((GLOBAL_MAX_HOSTS, len(SERVICE_NAMES)), dtype=bool)
-    subnet_router_idx = np.full(NUM_SUBNETS, -1, dtype=np.int32)
-    host_names = []
+    hosts_per_alpha = jnp.concatenate([1 + n_servers + n_users, jnp.array([1])])
+    cumsum = jnp.cumsum(hosts_per_alpha)
+    starts = jnp.concatenate([jnp.array([0]), cumsum[:-1]])
+    num_hosts = cumsum[-1]
 
-    for idx, spec in enumerate(host_specs):
-        host_active[idx] = True
-        host_subnet_arr[idx] = spec["sid"]
-        host_names.append(spec["name"])
+    j = jnp.arange(GLOBAL_MAX_HOSTS)
+    alpha_idx = jnp.clip(jnp.searchsorted(cumsum, j + 1), 0, 8)
+    offset = j - starts[alpha_idx]
+    host_active = j < num_hosts
 
-        if spec["is_internet"]:
-            subnet_router_idx[spec["sid"]] = idx
-        elif spec["is_router"]:
-            host_is_router[idx] = True
-            subnet_router_idx[spec["sid"]] = idx
-        elif spec["is_server"]:
-            host_is_server[idx] = True
-            host_respond_to_ping[idx] = True
-            host_has_bruteforceable_user[idx] = True
-            host_initial_max_pid[idx] = 5000
-        elif spec["is_user"]:
-            host_is_user[idx] = True
-            host_respond_to_ping[idx] = True
-            host_has_bruteforceable_user[idx] = True
-            host_initial_max_pid[idx] = 5000
+    host_subnet = _ALPHA_SUBNET_ORDER[alpha_idx]
+    n_servers_pad = jnp.concatenate([n_servers, jnp.array([0])])
 
-        for svc in spec["services"]:
-            initial_services[idx, SERVICE_IDS[svc]] = True
+    host_is_internet = (alpha_idx == 8) & host_active
+    host_is_router = (offset == 0) & (alpha_idx < 8) & host_active
+    host_is_server = (offset >= 1) & (offset <= n_servers_pad[alpha_idx]) & (alpha_idx < 8) & host_active
+    host_is_user = (offset > n_servers_pad[alpha_idx]) & (alpha_idx < 8) & host_active
 
-    data_links = _build_data_links(host_subnet_arr, host_is_router, num_hosts, subnet_router_idx)
+    host_respond_to_ping = host_is_server | host_is_user
+    host_has_bruteforceable_user = host_is_server | host_is_user
+    host_has_rfi = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+    host_initial_max_pid = jnp.where(host_is_server | host_is_user, 5000, 0).astype(jnp.int32)
 
-    subnet_adjacency = _subnet_nacl_adjacency()
+    svc_host = host_is_server | host_is_user
+    is_operational = (host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_A"]) | (
+        host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_B"]
+    )
+    initial_services = jnp.zeros((GLOBAL_MAX_HOSTS, NUM_SERVICES), dtype=jnp.bool_)
+    initial_services = initial_services.at[:, SERVICE_IDS["SSHD"]].set(svc_host)
+    initial_services = initial_services.at[:, SERVICE_IDS["OTSERVICE"]].set(svc_host & is_operational)
 
-    blue_agent_subnets = np.zeros((NUM_BLUE_AGENTS, NUM_SUBNETS), dtype=bool)
-    blue_agent_hosts = np.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    k_addon_n, k_addon_sel = jax.random.split(k_services)
+    num_addons = jax.random.randint(k_addon_n, (GLOBAL_MAX_HOSTS,), 0, 4)
+    gumbel = jax.random.gumbel(k_addon_sel, (GLOBAL_MAX_HOSTS, 3))
+    ranks = jnp.argsort(jnp.argsort(-gumbel, axis=1), axis=1)
+    addon_selected = (ranks < num_addons[:, None]) & svc_host[:, None]
+    initial_services = initial_services.at[:, SERVICE_IDS["APACHE2"]].set(
+        initial_services[:, SERVICE_IDS["APACHE2"]] | addon_selected[:, 0]
+    )
+    initial_services = initial_services.at[:, SERVICE_IDS["MYSQLD"]].set(
+        initial_services[:, SERVICE_IDS["MYSQLD"]] | addon_selected[:, 1]
+    )
+    initial_services = initial_services.at[:, SERVICE_IDS["SMTP"]].set(
+        initial_services[:, SERVICE_IDS["SMTP"]] | addon_selected[:, 2]
+    )
+
+    subnet_router_idx = jnp.full(NUM_SUBNETS, -1, dtype=jnp.int32)
+    for alpha_i in range(9):
+        sid = int(_ALPHA_SUBNET_ORDER_NP[alpha_i])
+        subnet_router_idx = subnet_router_idx.at[sid].set(starts[alpha_i])
+
+    data_links = jnp.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
+    router_of = subnet_router_idx[host_subnet]
+    is_regular = host_active & ~host_is_router & ~host_is_internet
+    data_links = data_links.at[j, router_of].set(is_regular)
+    data_links = data_links.at[router_of, j].set(is_regular)
+    for src_name, neighbor_names in _ROUTER_LINKS.items():
+        src_r = subnet_router_idx[SUBNET_IDS[src_name]]
+        for dst_name in neighbor_names:
+            dst_r = subnet_router_idx[SUBNET_IDS[dst_name]]
+            data_links = data_links.at[src_r, dst_r].set(True)
+            data_links = data_links.at[dst_r, src_r].set(True)
+
+    blue_agent_hosts = jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
     for i, snames in enumerate(BLUE_AGENT_SUBNETS):
+        mask = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
         for sn in snames:
-            sid = SUBNET_IDS[sn]
-            blue_agent_subnets[i, sid] = True
-            for h in range(num_hosts):
-                if host_active[h] and host_subnet_arr[h] == sid:
-                    blue_agent_hosts[i, h] = True
+            mask = mask | (host_active & (host_subnet == SUBNET_IDS[sn]))
+        blue_agent_hosts = blue_agent_hosts.at[i].set(mask)
 
-    red_start_hosts = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
-    red_agent_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
-    red_agent_subnets = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
+    red_start_hosts = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
+    red_agent_active = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
     for i, snames in enumerate(RED_AGENT_SUBNETS):
+        k_i = jax.random.fold_in(k_red, i)
+        subnet_mask = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_)
         for sn in snames:
-            red_agent_subnets[i, SUBNET_IDS[sn]] = True
-        non_router_hosts = [
-            h
-            for h in range(num_hosts)
-            if host_active[h]
-            and SUBNET_NAMES[int(host_subnet_arr[h])] in snames
-            and not host_is_router[h]
-            and host_names[h] != "root_internet_host_0"
-        ]
-        if non_router_hosts:
-            red_start_hosts[i] = rng.choice(non_router_hosts)
-            red_agent_active[i] = True
-    red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    for red_idx in range(NUM_RED_AGENTS):
-        if red_agent_active[red_idx]:
-            red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
-    host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    host_name_to_idx = {name: idx for idx, name in enumerate(host_names)}
-    server0_idx_by_subnet = np.full(NUM_SUBNETS, -1, dtype=np.int32)
-    for sname in SUBNET_NAMES:
-        if sname == "INTERNET":
-            continue
-        sid = SUBNET_IDS[sname]
-        server0_name = f"{CYBORG_SUBNET_SUFFIX[sname]}_server_host_0"
-        if server0_name in host_name_to_idx:
-            server0_idx_by_subnet[sid] = host_name_to_idx[server0_name]
+            subnet_mask = subnet_mask.at[SUBNET_IDS[sn]].set(True)
+        valid = host_active & ~host_is_router & ~host_is_internet & subnet_mask[host_subnet]
+        gumbel_noise = jax.random.gumbel(k_i, (GLOBAL_MAX_HOSTS,))
+        masked_gumbel = jnp.where(valid, gumbel_noise, jnp.float32(-1e9))
+        red_start_hosts = red_start_hosts.at[i].set(jnp.argmax(masked_gumbel))
+        red_agent_active = red_agent_active.at[i].set(jnp.any(valid))
+
+    red_initial_discovered = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
+    red_initial_scanned = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
+    for r in range(NUM_RED_AGENTS):
+        red_initial_discovered = jnp.where(
+            red_agent_active[r],
+            red_initial_discovered.at[r, red_start_hosts[r]].set(True),
+            red_initial_discovered,
+        )
+
+    host_info_links = jnp.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
+    server0_idx = jnp.full(NUM_SUBNETS, -1, dtype=jnp.int32)
+    for alpha_i in range(8):
+        sid = int(_ALPHA_SUBNET_ORDER_NP[alpha_i])
+        server0_idx = server0_idx.at[sid].set(starts[alpha_i] + 1)
     for src_name, neighbor_names in _ROUTER_LINKS.items():
         if src_name == "INTERNET":
             continue
-        src_sid = SUBNET_IDS[src_name]
-        src_idx = int(server0_idx_by_subnet[src_sid])
-        if src_idx < 0:
-            continue
+        src_s0 = server0_idx[SUBNET_IDS[src_name]]
         for dst_name in neighbor_names:
             if dst_name == "INTERNET":
                 continue
-            dst_sid = SUBNET_IDS[dst_name]
-            dst_idx = int(server0_idx_by_subnet[dst_sid])
-            if dst_idx >= 0:
-                host_info_links[src_idx, dst_idx] = True
+            dst_s0 = server0_idx[SUBNET_IDS[dst_name]]
+            host_info_links = host_info_links.at[src_s0, dst_s0].set(True)
 
-    green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
-    green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    green_count = 0
-    for h in range(num_hosts):
-        if host_is_user[h]:
-            green_agent_host[h] = green_count
-            green_agent_active[h] = True
-            green_count += 1
+    cum_users = jnp.cumsum(host_is_user.astype(jnp.int32)) - 1
+    green_agent_host = jnp.where(host_is_user, cum_users, jnp.int32(-1))
+    green_agent_active = host_is_user
+    num_green_agents = jnp.sum(host_is_user.astype(jnp.int32))
 
-    phase_boundaries = _compute_phase_boundaries(_compute_mission_phases(num_steps))
-    allowed_subnet_pairs = _build_allowed_subnet_pairs_pure()
+    obs_host_map = jnp.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+    for sid in range(NUM_SUBNETS):
+        is_srv = host_active & host_is_server & (host_subnet == sid)
+        srv_idx = jnp.where(is_srv, j, GLOBAL_MAX_HOSTS)
+        sorted_srv = jnp.sort(srv_idx)
+        for slot in range(MAX_SERVER_HOSTS):
+            obs_host_map = obs_host_map.at[sid, slot].set(sorted_srv[slot])
+        is_usr = host_active & host_is_user & (host_subnet == sid)
+        usr_idx = jnp.where(is_usr, j, GLOBAL_MAX_HOSTS)
+        sorted_usr = jnp.sort(usr_idx)
+        for slot in range(MAX_USER_HOSTS):
+            obs_host_map = obs_host_map.at[sid, MAX_SERVER_HOSTS + slot].set(sorted_usr[slot])
 
-    obs_host_map = _build_obs_host_map(host_subnet_arr, host_is_server, host_is_user, host_active, num_hosts)
+    phase_boundaries = jnp.array(_compute_phase_boundaries(_compute_mission_phases(num_steps)))
 
     return CC4Const(
-        host_active=jnp.array(host_active),
-        host_subnet=jnp.array(host_subnet_arr),
-        host_is_router=jnp.array(host_is_router),
-        host_is_server=jnp.array(host_is_server),
-        host_is_user=jnp.array(host_is_user),
-        subnet_adjacency=jnp.array(subnet_adjacency),
-        data_links=jnp.array(data_links),
-        initial_services=jnp.array(initial_services),
-        host_has_bruteforceable_user=jnp.array(host_has_bruteforceable_user),
-        host_has_rfi=jnp.array(host_has_rfi),
-        host_respond_to_ping=jnp.array(host_respond_to_ping),
-        host_initial_max_pid=jnp.array(host_initial_max_pid),
-        blue_agent_subnets=jnp.array(blue_agent_subnets),
-        blue_agent_hosts=jnp.array(blue_agent_hosts),
-        red_start_hosts=jnp.array(red_start_hosts),
-        red_agent_active=jnp.array(red_agent_active),
-        red_agent_subnets=jnp.array(red_agent_subnets),
-        red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
-        red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
-        host_info_links=jnp.array(host_info_links),
-        green_agent_host=jnp.array(green_agent_host),
-        green_agent_active=jnp.array(green_agent_active),
-        num_green_agents=green_count,
-        phase_rewards=jnp.array(_build_phase_rewards()),
-        phase_boundaries=jnp.array(phase_boundaries),
-        allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
-        obs_host_map=jnp.array(obs_host_map),
-        blue_obs_subnets=jnp.array(_build_blue_obs_subnets()),
-        comms_policy=jnp.array(_build_comms_policy()),
+        host_active=host_active,
+        host_subnet=host_subnet.astype(jnp.int32),
+        host_is_router=host_is_router,
+        host_is_server=host_is_server,
+        host_is_user=host_is_user,
+        subnet_adjacency=_SUBNET_ADJACENCY,
+        data_links=data_links,
+        initial_services=initial_services,
+        host_has_bruteforceable_user=host_has_bruteforceable_user,
+        host_has_rfi=host_has_rfi,
+        host_respond_to_ping=host_respond_to_ping,
+        host_initial_max_pid=host_initial_max_pid,
+        blue_agent_subnets=_BLUE_AGENT_SUBNETS_BOOL,
+        blue_agent_hosts=blue_agent_hosts,
+        red_start_hosts=red_start_hosts,
+        red_agent_active=red_agent_active,
+        red_agent_subnets=_RED_AGENT_SUBNETS_BOOL,
+        red_initial_discovered_hosts=red_initial_discovered,
+        red_initial_scanned_hosts=red_initial_scanned,
+        host_info_links=host_info_links,
+        green_agent_host=green_agent_host,
+        green_agent_active=green_agent_active,
+        num_green_agents=num_green_agents,
+        phase_rewards=_PHASE_REWARDS,
+        phase_boundaries=phase_boundaries,
+        allowed_subnet_pairs=_ALLOWED_SUBNET_PAIRS,
+        obs_host_map=obs_host_map,
+        blue_obs_subnets=_BLUE_OBS_SUBNETS,
+        comms_policy=_COMMS_POLICY,
         max_steps=num_steps,
         num_hosts=num_hosts,
     )
@@ -673,6 +611,9 @@ def _build_phase_rewards_from_cyborg(cyborg_env) -> np.ndarray:
 
 
 JAX_TO_CYBORG_ORDER = np.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=np.int32)
+
+_ALPHA_SUBNET_ORDER_NP = np.array([5, 4, 6, 2, 3, 7, 0, 1, 8])
+_ALPHA_SUBNET_ORDER = jnp.array(_ALPHA_SUBNET_ORDER_NP)
 
 
 def _build_obs_host_map(
@@ -811,3 +752,28 @@ def _build_allowed_subnet_pairs_pure() -> np.ndarray:
             pairs[phase_idx, si, di] = True
             pairs[phase_idx, di, si] = True
     return pairs
+
+
+def _build_blue_agent_subnets_bool():
+    arr = np.zeros((NUM_BLUE_AGENTS, NUM_SUBNETS), dtype=bool)
+    for i, snames in enumerate(BLUE_AGENT_SUBNETS):
+        for sn in snames:
+            arr[i, SUBNET_IDS[sn]] = True
+    return jnp.array(arr)
+
+
+def _build_red_agent_subnets_bool():
+    arr = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
+    for i, snames in enumerate(RED_AGENT_SUBNETS):
+        for sn in snames:
+            arr[i, SUBNET_IDS[sn]] = True
+    return jnp.array(arr)
+
+
+_SUBNET_ADJACENCY = jnp.array(_subnet_nacl_adjacency())
+_PHASE_REWARDS = jnp.array(_build_phase_rewards())
+_ALLOWED_SUBNET_PAIRS = jnp.array(_build_allowed_subnet_pairs_pure())
+_COMMS_POLICY = jnp.array(_build_comms_policy())
+_BLUE_OBS_SUBNETS = jnp.array(_build_blue_obs_subnets())
+_BLUE_AGENT_SUBNETS_BOOL = _build_blue_agent_subnets_bool()
+_RED_AGENT_SUBNETS_BOOL = _build_red_agent_subnets_bool()

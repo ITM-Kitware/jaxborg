@@ -53,7 +53,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         if reset_state is not None:
             states_re = reset_state
         else:
-            states_re = self._env._reset_state(states_st)
+            states_re = self._env._reset_state(states_st, key_reset)
         obs_re = self._get_blue_obs(states_re)
 
         states = jax.tree.map(

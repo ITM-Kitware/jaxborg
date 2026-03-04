@@ -70,7 +70,7 @@ def _setup_privileged_state(jax_const, target_host):
 
 
 def _find_ot_host(jax_const):
-    for h in range(jax_const.num_hosts):
+    for h in range(int(jax_const.num_hosts)):
         if (
             jax_const.host_active[h]
             and not jax_const.host_is_router[h]
@@ -84,7 +84,7 @@ def _find_ot_host(jax_const):
 
 
 def _find_non_ot_host(jax_const):
-    for h in range(jax_const.num_hosts):
+    for h in range(int(jax_const.num_hosts)):
         if (
             jax_const.host_active[h]
             and not jax_const.host_is_router[h]
@@ -231,7 +231,7 @@ class TestApplyImpact:
         action_idx = encode_red_action("Impact", target, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if h == target:
                 continue
             assert bool(new_state.host_services[h, OT_SVC]) == bool(state.host_services[h, OT_SVC])
@@ -320,13 +320,13 @@ class TestDifferentialWithCybORG:
         return state, target_hostname
 
     def _find_ot_host_idx(self, const):
-        for h in range(const.num_hosts):
+        for h in range(int(const.num_hosts)):
             if const.host_active[h] and not const.host_is_router[h] and const.initial_services[h, OT_SVC]:
                 return h
         return None
 
     def _find_non_ot_host_idx(self, const):
-        for h in range(const.num_hosts):
+        for h in range(int(const.num_hosts)):
             if (
                 const.host_active[h]
                 and not const.host_is_router[h]

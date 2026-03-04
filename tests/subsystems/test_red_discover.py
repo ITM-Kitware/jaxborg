@@ -89,7 +89,7 @@ class TestApplyDiscover:
         new_state = _jit_apply_red(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if (
                 jax_const.host_active[h]
                 and int(jax_const.host_subnet[h]) == start_subnet
@@ -104,7 +104,7 @@ class TestApplyDiscover:
         new_state = _jit_apply_red(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if jax_const.host_is_router[h]:
                 assert not discovered[h], f"Router host {h} should not be discovered"
 
@@ -121,7 +121,7 @@ class TestApplyDiscover:
         new_state = _jit_apply_red(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         discovered = np.array(new_state.red_discovered_hosts[0])
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if (
                 jax_const.host_active[h]
                 and int(jax_const.host_subnet[h]) == target_subnet
@@ -146,7 +146,7 @@ class TestApplyDiscover:
         new_state = _jit_apply_red(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         activity = np.array(new_state.red_activity_this_step)
-        for h in range(jax_const.num_hosts):
+        for h in range(int(jax_const.num_hosts)):
             if (
                 jax_const.host_active[h]
                 and int(jax_const.host_subnet[h]) == start_subnet
@@ -241,7 +241,7 @@ class TestDifferentialWithCybORG:
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         jax_discovered = np.array(jax_new_state.red_discovered_hosts[0])
 
-        jax_discovered_hostnames = {sorted_hosts[h] for h in range(const.num_hosts) if jax_discovered[h]}
+        jax_discovered_hostnames = {sorted_hosts[h] for h in range(int(const.num_hosts)) if jax_discovered[h]}
 
         cyborg_discovered_hostnames = set()
         for ip_str in cyborg_discovered_ips:
@@ -284,7 +284,7 @@ class TestDifferentialWithCybORG:
 
         sorted_hosts = sorted(cyborg_state.hosts.keys())
         jax_discovered = np.array(jax_new_state.red_discovered_hosts[0])
-        jax_discovered_hostnames = {sorted_hosts[h] for h in range(const.num_hosts) if jax_discovered[h]}
+        jax_discovered_hostnames = {sorted_hosts[h] for h in range(int(const.num_hosts)) if jax_discovered[h]}
 
         assert jax_discovered_hostnames == cyborg_discovered_hostnames, (
             f"JAX: {jax_discovered_hostnames}, CybORG: {cyborg_discovered_hostnames}"
