@@ -92,7 +92,7 @@ Do NOT write tests that only check JAX in isolation. Every test must compare JAX
    - Every test must run both CybORG and JAX and compare.
 5. Run: uv run pytest tests/subsystems/test_${NAME}.py -v
 6. Fix failures until tests pass.
-7. Run: uv run pytest tests/ -v -m "not slow" to verify no regressions.
+7. Run: uv run pytest tests/ -v to verify no regressions.
 8. Mark subsystem as passing:
    uv run python -c \"from tests.catalog import mark_passing; mark_passing($ID)\"
 9. Commit: git add -A && git commit -m 'subsystem $ID: $NAME'

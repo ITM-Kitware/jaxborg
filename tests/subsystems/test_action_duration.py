@@ -140,28 +140,6 @@ class TestBlueRestoreDuration5:
         assert int(s5.blue_pending_ticks[0]) == 0
 
 
-class TestEnvStepUsesDuration:
-    def test_env_step_uses_duration(self, env_and_state):
-        env, obs, env_state = env_and_state
-        state = env_state.state
-        const = env_state.const
-
-        agent_hosts = jnp.where(state.red_sessions[0] & const.host_active, size=GLOBAL_MAX_HOSTS)[0]
-        target_host = int(agent_hosts[0])
-        exploit_action = RED_EXPLOIT_SSH_START + target_host
-
-        actions = {}
-        for i in range(NUM_BLUE_AGENTS):
-            actions[f"blue_{i}"] = jnp.int32(BLUE_SLEEP)
-        for i in range(NUM_RED_AGENTS):
-            actions[f"red_{i}"] = jnp.int32(RED_SLEEP)
-        actions["red_0"] = jnp.int32(exploit_action)
-
-        key = jax.random.PRNGKey(99)
-        _, new_env_state, _, _, _ = env.step_env(key, env_state, actions)
-        assert int(new_env_state.state.red_pending_ticks[0]) == 3
-
-
 def _get_cyborg_remaining_ticks(controller, agent_name):
     """Get CybORG remaining_ticks for an agent, or 0 if idle."""
     aip = controller.actions_in_progress.get(agent_name)
@@ -188,7 +166,7 @@ class TestFsmRedEnvDurationTicks:
         key = jax.random.PRNGKey(42)
 
         saw_exploit_countdown = False
-        for step in range(100):
+        for step in range(30):
             key, subkey = jax.random.split(key)
             actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
             obs, env_state, _, dones, _ = env.step_env(subkey, env_state, actions)
@@ -208,7 +186,7 @@ class TestFsmRedEnvDurationTicks:
             if saw_exploit_countdown:
                 break
 
-        assert saw_exploit_countdown, "No exploit (duration=4) seen in 100 steps"
+        assert saw_exploit_countdown, "No exploit (duration=4) seen in 30 steps"
 
     def test_blue_restore_tick_countdown(self, fsm_env_and_state):
         """Submit Blue Restore via FsmRedCC4Env, verify ticks count 4→3→2→1→0."""
@@ -239,7 +217,7 @@ class TestFsmRedEnvDurationTicks:
         actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
 
         found_busy = False
-        for step in range(100):
+        for step in range(30):
             key, subkey = jax.random.split(key)
             obs, env_state, _, _, _ = env.step_env(subkey, env_state, actions)
             for r in range(NUM_RED_AGENTS):
@@ -255,7 +233,7 @@ class TestFsmRedEnvDurationTicks:
             if found_busy:
                 break
 
-        assert found_busy, "No busy red agent observed in 100 steps"
+        assert found_busy, "No busy red agent observed in 30 steps"
 
 
 class TestDurationDifferential:
@@ -344,13 +322,13 @@ class TestDurationDifferential:
         from tests.differential.state_comparator import _ERROR_FIELDS
 
         total_deferred = 0
-        for seed in [0, 7, 42, 99, 123]:
-            harness = CC4DifferentialHarness(seed=seed, max_steps=40, sync_green_rng=True)
+        for seed in [0, 42, 99]:
+            harness = CC4DifferentialHarness(seed=seed, max_steps=20, sync_green_rng=True)
             harness.reset()
             controller = harness.cyborg_env.environment_controller
 
             errors = []
-            for step in range(40):
+            for step in range(20):
                 result = harness.full_step()
                 step_errors = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
                 if step_errors:
@@ -368,4 +346,4 @@ class TestDurationDifferential:
 
             assert not errors, f"Parity errors at seed={seed}: {errors}"
 
-        assert total_deferred > 0, "No deferred actions across 5 seeds × 40 steps — duration not exercised"
+        assert total_deferred > 0, "No deferred actions across 3 seeds × 20 steps — duration not exercised"

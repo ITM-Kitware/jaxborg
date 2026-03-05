@@ -33,8 +33,7 @@ uv sync
 
 ```bash
 uv sync                                              # install deps
-uv run pytest tests/ -v -m "not slow"  # fast tests only (~10 min)
-uv run pytest tests/ -v  # all tests including slow integration
+uv run pytest tests/ -v  # all tests (~9 min)
 uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
 uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
 ```
@@ -43,7 +42,6 @@ Training output goes to `../jaxborg-exp/`.
 
 **Do NOT use pytest-xdist (`-n auto`, `-n 4`, etc.).** Each worker loads JAX + CybORG into a separate process, which exhausts WSL memory and crashes the system. Always run tests serially.
 
-Tests marked `@pytest.mark.slow` are integration/smoke tests (full episode runs, JIT training, bugcheck catalog). Skip them during core logic iteration with `-m "not slow"`.
 
 ## Architecture
 
@@ -165,7 +163,7 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
 3. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
 4. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
 5. **Verify targeted tests first** (new regression + closest subsystem tests), then run:
-   - `uv run pytest tests/ -v -m "not slow" -x`
+   - `uv run pytest tests/ -v -x`
    - rerun differential fuzzing to find the next gap
 6. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
 7. **Commit** with a message describing the gap and fix

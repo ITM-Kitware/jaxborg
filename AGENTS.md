@@ -43,7 +43,7 @@ Follow the 'Fixing Differential Gaps' workflow in CLAUDE.md:
 1. Write a failing regression test that reproduces this mismatch
 2. Read CybORG source at .venv/lib/python3.11/site-packages/CybORG/
 3. Fix the JAX code in src/jaxborg/
-4. Verify: uv run pytest tests/ -v -m "not slow" -x
+4. Verify: uv run pytest tests/ -v -x
 5. Lint: uv run ruff check --fix . && uv run ruff format .
 6. Commit with a message describing the gap and fix."
 ```

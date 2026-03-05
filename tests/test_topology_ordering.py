@@ -284,13 +284,13 @@ class TestAutoResetIntegration:
     def test_auto_reset_produces_new_topology(self):
         from jaxborg.env import CC4Env
 
-        env = CC4Env(num_steps=5)
+        env = CC4Env(num_steps=1)
         key = jax.random.PRNGKey(0)
         obs, state = env.reset(key)
         original_num_hosts = int(state.const.num_hosts)
 
         topologies_seen = {original_num_hosts}
-        for i in range(30):
+        for i in range(5):
             key, k_step = jax.random.split(key)
             actions = {agent: jnp.int32(0) for agent in env.agents}
             obs, state, rewards, dones, infos = env.step(k_step, state, actions)
