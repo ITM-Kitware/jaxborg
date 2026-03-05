@@ -13,26 +13,17 @@ from jaxborg.actions.duration import (
     process_red_with_duration,
 )
 from jaxborg.actions.encoding import (
-    ACTION_TYPE_AGGRESSIVE_SCAN,
-    ACTION_TYPE_SCAN,
-    ACTION_TYPE_STEALTH_SCAN,
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
-    decode_red_action,
 )
 from jaxborg.actions.green import apply_green_agents
-from jaxborg.actions.pending_source import (
-    PENDING_SOURCE_KIND_NONE,
-    PENDING_SOURCE_KIND_SESSION_BINDING,
-)
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.agents.fsm_red import (
-    fsm_red_get_action_and_info,
     fsm_red_init_states,
     fsm_red_post_step_update,
+    fsm_red_select_actions,
 )
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -110,8 +101,8 @@ def _cy_action_succeeded(controller, agent_name: str) -> bool | None:
 
 
 @jax.jit
-def _jit_fsm_red_get_action_and_info(state, const, agent_id, key):
-    return fsm_red_get_action_and_info(state, const, jnp.int32(agent_id), key)
+def _jit_fsm_red_select_actions(state, const, red_keys):
+    return fsm_red_select_actions(state, const, red_keys)
 
 
 @jax.jit
@@ -562,63 +553,20 @@ class CC4DifferentialHarness:
         controller = self.cyborg_env.environment_controller
         self._assert_duration_parity(controller)
 
-        # --- FSM red action selection (matches FsmRedCC4Env.step_env) ---
-        red_actions = {}
-        target_hosts = []
-        fsm_actions = []
-        eligible_flags = []
-        for r in range(NUM_RED_AGENTS):
-            if use_fsm:
-                is_busy = bool(self.jax_state.red_pending_ticks[r] > 0)
-                is_active = bool(self.jax_state.red_agent_active[r])
-                if is_busy or not is_active:
-                    action = RED_SLEEP
-                    host = jnp.int32(0)
-                    fsm_act = jnp.int32(0)
-                    eligible = jnp.bool_(False)
-                else:
-                    action, host, fsm_act, eligible = _jit_fsm_red_get_action_and_info(
-                        self.jax_state, self.jax_const, r, red_keys[r]
-                    )
-                eff_host = jnp.where(is_busy, self.jax_state.red_pending_target_host[r], host)
-                eff_fsm_act = jnp.where(is_busy, self.jax_state.red_pending_fsm_action[r], fsm_act)
-                eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
-                red_actions[r] = int(action)
-                target_hosts.append(eff_host)
-                fsm_actions.append(eff_fsm_act)
-                eligible_flags.append(eff_eligible)
-                prebound_source_kind = self.jax_state.red_pending_source_kind[r]
-                prebound_source_host = self.jax_state.red_pending_source_host[r]
-                if not is_busy:
-                    action_type, _, target_host = decode_red_action(action, r, self.jax_const)
-                    is_scan_action = (
-                        (action_type == ACTION_TYPE_SCAN)
-                        | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
-                        | (action_type == ACTION_TYPE_STEALTH_SCAN)
-                    )
-                    bound_anchor_source = select_bound_source_host(self.jax_state, self.jax_const, r)
-                    prebound_source_kind = jnp.where(
-                        is_scan_action,
-                        jnp.where(
-                            bound_anchor_source >= 0,
-                            PENDING_SOURCE_KIND_SESSION_BINDING,
-                            PENDING_SOURCE_KIND_NONE,
-                        ),
-                        PENDING_SOURCE_KIND_NONE,
-                    )
-                    prebound_source_host = jnp.int32(-1)
-
-                self.jax_state = self.jax_state.replace(
-                    red_pending_fsm_action=self.jax_state.red_pending_fsm_action.at[r].set(eff_fsm_act),
-                    red_pending_target_host=self.jax_state.red_pending_target_host.at[r].set(eff_host),
-                    red_pending_source_kind=self.jax_state.red_pending_source_kind.at[r].set(prebound_source_kind),
-                    red_pending_source_host=self.jax_state.red_pending_source_host.at[r].set(prebound_source_host),
-                )
-            else:
-                red_actions[r] = RED_SLEEP
-                target_hosts.append(jnp.int32(0))
-                fsm_actions.append(jnp.int32(0))
-                eligible_flags.append(jnp.bool_(False))
+        # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
+        if use_fsm:
+            red_action_arr, target_hosts_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
+                _jit_fsm_red_select_actions(self.jax_state, self.jax_const, red_keys)
+            )
+            red_actions = {r: int(red_action_arr[r]) for r in range(NUM_RED_AGENTS)}
+            target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
+            fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
+            eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
+        else:
+            red_actions = {r: RED_SLEEP for r in range(NUM_RED_AGENTS)}
+            target_hosts = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
+            fsm_actions = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
+            eligible_flags = [jnp.bool_(False) for _ in range(NUM_RED_AGENTS)]
 
         # --- CybORG side ---
         cyborg_actions = {}

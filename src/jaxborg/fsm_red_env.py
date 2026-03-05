@@ -7,11 +7,11 @@ import jax.numpy as jnp
 from jaxmarl.environments.multi_agent_env import MultiAgentEnv
 from jaxmarl.environments.spaces import Box, Discrete
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_SLEEP
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.agents.fsm_red import (
-    fsm_red_get_action_and_info,
     fsm_red_post_step_update,
+    fsm_red_select_actions,
 )
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import CC4Env, CC4EnvState
@@ -79,32 +79,13 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
         state_before = env_state.state
-        state = state_before
-        red_actions = {}
-        target_hosts = []
-        fsm_actions = []
-        eligible_flags = []
-        for r in range(NUM_RED_AGENTS):
-            is_busy = state.red_pending_ticks[r] > 0
-            is_active = state.red_agent_active[r]
-            action, host, fsm_act, eligible = jax.lax.cond(
-                is_busy | ~is_active,
-                lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
-                lambda: fsm_red_get_action_and_info(state, env_state.const, r, red_keys[r]),
-            )
-            eff_host = jnp.where(is_busy, state.red_pending_target_host[r], host)
-            eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r], fsm_act)
-            eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
-
-            red_actions[f"red_{r}"] = action
-            target_hosts.append(eff_host)
-            fsm_actions.append(eff_fsm_act)
-            eligible_flags.append(eff_eligible)
-
-            state = state.replace(
-                red_pending_fsm_action=state.red_pending_fsm_action.at[r].set(eff_fsm_act),
-                red_pending_target_host=state.red_pending_target_host.at[r].set(eff_host),
-            )
+        red_action_arr, target_hosts_arr, fsm_actions_arr, eligible_arr, state = fsm_red_select_actions(
+            state_before, env_state.const, red_keys
+        )
+        red_actions = {f"red_{r}": red_action_arr[r] for r in range(NUM_RED_AGENTS)}
+        target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
+        fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
+        eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
         env_state = CC4EnvState(state=state, const=env_state.const)
 
         all_actions = {**blue_actions, **red_actions}

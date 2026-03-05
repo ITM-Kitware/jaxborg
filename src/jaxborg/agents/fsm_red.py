@@ -2,6 +2,9 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_SCAN,
+    ACTION_TYPE_STEALTH_SCAN,
     RED_AGGRESSIVE_SCAN_START,
     RED_DEGRADE_START,
     RED_DISCOVER_DECEPTION_START,
@@ -12,7 +15,13 @@ from jaxborg.actions.encoding import (
     RED_SLEEP,
     RED_STEALTH_SCAN_START,
     RED_WITHDRAW_START,
+    decode_red_action,
 )
+from jaxborg.actions.pending_source import (
+    PENDING_SOURCE_KIND_NONE,
+    PENDING_SOURCE_KIND_SESSION_BINDING,
+)
+from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
@@ -174,6 +183,84 @@ def fsm_red_get_action(
 ) -> int:
     action, _, _, _ = fsm_red_get_action_and_info(state, const, agent_id, key)
     return action
+
+
+def _compute_scan_source_binding(state, const, agent_id, action):
+    """Compute pending_source_kind and pending_source_host for scan actions."""
+    action_type, _, _ = decode_red_action(action, agent_id, const)
+    is_scan_action = (
+        (action_type == ACTION_TYPE_SCAN)
+        | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
+        | (action_type == ACTION_TYPE_STEALTH_SCAN)
+    )
+    bound_anchor_source = select_bound_source_host(state, const, agent_id)
+    source_kind = jnp.where(
+        is_scan_action,
+        jnp.where(
+            bound_anchor_source >= 0,
+            PENDING_SOURCE_KIND_SESSION_BINDING,
+            PENDING_SOURCE_KIND_NONE,
+        ),
+        PENDING_SOURCE_KIND_NONE,
+    )
+    source_host = jnp.int32(-1)
+    return source_kind, source_host
+
+
+def _select_one_agent(state, const, r, key):
+    """Select action for a single red agent, handling busy/inactive gating and scan source binding."""
+    is_busy = state.red_pending_ticks[r] > 0
+    is_active = state.red_agent_active[r]
+    action, host, fsm_act, eligible = jax.lax.cond(
+        is_busy | ~is_active,
+        lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
+        lambda: fsm_red_get_action_and_info(state, const, r, key),
+    )
+    eff_host = jnp.where(is_busy, state.red_pending_target_host[r], host)
+    eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r], fsm_act)
+    eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
+
+    # Scan source pre-binding: compute only when not busy
+    new_source_kind, new_source_host = _compute_scan_source_binding(state, const, r, action)
+    source_kind = jnp.where(is_busy, state.red_pending_source_kind[r], new_source_kind)
+    source_host = jnp.where(is_busy, state.red_pending_source_host[r], new_source_host)
+
+    return action, eff_host, eff_fsm_act, eff_eligible, source_kind, source_host
+
+
+def fsm_red_select_actions(
+    state: CC4State,
+    const: CC4Const,
+    red_keys: jax.Array,
+) -> tuple:
+    """Select FSM red actions for all agents. Shared by training env and differential harness.
+
+    Returns (red_actions, target_hosts, fsm_actions, eligible_flags, updated_state)
+    where red_actions is shape (NUM_RED_AGENTS,) int32 array, and the rest are
+    (NUM_RED_AGENTS,) arrays. updated_state has pending fields written.
+    """
+    red_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
+    target_hosts = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
+    fsm_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
+    eligible_flags = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
+
+    for r in range(NUM_RED_AGENTS):
+        action, eff_host, eff_fsm_act, eff_eligible, source_kind, source_host = _select_one_agent(
+            state, const, r, red_keys[r]
+        )
+        red_actions = red_actions.at[r].set(action)
+        target_hosts = target_hosts.at[r].set(eff_host)
+        fsm_actions = fsm_actions.at[r].set(eff_fsm_act)
+        eligible_flags = eligible_flags.at[r].set(eff_eligible)
+
+        state = state.replace(
+            red_pending_fsm_action=state.red_pending_fsm_action.at[r].set(eff_fsm_act),
+            red_pending_target_host=state.red_pending_target_host.at[r].set(eff_host),
+            red_pending_source_kind=state.red_pending_source_kind.at[r].set(source_kind),
+            red_pending_source_host=state.red_pending_source_host.at[r].set(source_host),
+        )
+
+    return red_actions, target_hosts, fsm_actions, eligible_flags, state
 
 
 def determine_fsm_success(

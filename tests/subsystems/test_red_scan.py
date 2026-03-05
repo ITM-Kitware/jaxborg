@@ -1953,3 +1953,43 @@ class TestDeferredScanSessionBinding:
         new_state = process_red_with_duration(state, jax_const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host])
         assert bool(new_state.red_scanned_source_hosts[red_agent_id, target_host, low_rank_host])
+
+
+class TestScanSourceBinding(TestDifferentialWithCybORG):
+    """Tests for _compute_scan_source_binding used by FSM orchestration."""
+
+    def test_none_without_anchor(self, cyborg_and_jax):
+        """Returns PENDING_SOURCE_KIND_NONE when no bound anchor session exists."""
+        from jaxborg.actions.pending_source import PENDING_SOURCE_KIND_NONE
+        from jaxborg.agents.fsm_red import _compute_scan_source_binding
+
+        _, jax_const, jax_state = cyborg_and_jax
+        red_agent_id = 0
+        target_host = int(jax_const.red_start_hosts[red_agent_id])
+        scan_action = encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+
+        state = jax_state.replace(
+            red_sessions=jax_state.red_sessions.at[red_agent_id].set(False),
+            red_scan_anchor_host=jax_state.red_scan_anchor_host.at[red_agent_id].set(-1),
+        )
+
+        source_kind, source_host = _compute_scan_source_binding(state, jax_const, red_agent_id, jnp.int32(scan_action))
+        assert int(source_kind) == int(PENDING_SOURCE_KIND_NONE)
+        assert int(source_host) == -1
+
+    def test_session_binding_with_anchor(self, cyborg_and_jax):
+        """Returns PENDING_SOURCE_KIND_SESSION_BINDING when anchor session exists."""
+        from jaxborg.actions.pending_source import PENDING_SOURCE_KIND_SESSION_BINDING
+        from jaxborg.agents.fsm_red import _compute_scan_source_binding
+
+        _, jax_const, jax_state = cyborg_and_jax
+        red_agent_id = 0
+        target_host = int(jax_const.red_start_hosts[red_agent_id])
+        scan_action = encode_red_action("StealthServiceDiscovery", target_host, red_agent_id)
+
+        state = jax_state.replace(
+            red_scan_anchor_host=jax_state.red_scan_anchor_host.at[red_agent_id].set(target_host),
+        )
+
+        source_kind, _ = _compute_scan_source_binding(state, jax_const, red_agent_id, jnp.int32(scan_action))
+        assert int(source_kind) == int(PENDING_SOURCE_KIND_SESSION_BINDING)
