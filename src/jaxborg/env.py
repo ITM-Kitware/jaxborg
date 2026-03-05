@@ -29,6 +29,42 @@ from jaxborg.state import CC4Const, CC4State, create_initial_state
 from jaxborg.topology import build_topology
 
 
+def apply_all_actions(
+    state: CC4State,
+    const: CC4Const,
+    blue_actions: jnp.ndarray,
+    red_actions: jnp.ndarray,
+    key_green: chex.PRNGKey,
+    red_keys: jnp.ndarray,
+    forced_primary_hosts: jnp.ndarray,
+) -> CC4State:
+    """Apply all agent actions in CybORG-correct order: blue → green → red → reassign → monitors.
+
+    Shared by CC4Env.step_env and the differential harness.
+
+    Args:
+        blue_actions: (NUM_BLUE_AGENTS,) int32
+        red_actions: (NUM_RED_AGENTS,) int32
+        red_keys: (NUM_RED_AGENTS, 2) PRNGKey per red agent
+        forced_primary_hosts: (NUM_RED_AGENTS,) int32, -1 for no override
+    """
+    for b in range(NUM_BLUE_AGENTS):
+        state = process_blue_with_duration(state, const, b, blue_actions[b])
+
+    state = apply_green_agents(state, const, key_green)
+
+    for r in range(NUM_RED_AGENTS):
+        state = process_red_with_duration(
+            state, const, r, red_actions[r], red_keys[r], forced_primary_host=forced_primary_hosts[r]
+        )
+
+    state = reassign_cross_subnet_sessions(state, const)
+    for b in range(NUM_BLUE_AGENTS):
+        state = apply_blue_monitor(state, const, b)
+
+    return state
+
+
 @struct.dataclass
 class CC4EnvState:
     state: CC4State
@@ -223,12 +259,11 @@ class CC4Env(MultiAgentEnv):
         state = env_state.state
         const = env_state.const
 
-        key, key_green, *red_keys = jax.random.split(key, 2 + NUM_RED_AGENTS)
+        key, key_green, key_red = jax.random.split(key, 3)
+        red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
         state = advance_mission_phase(state, const)
 
-        # Clear detection flags only on hosts covered by any blue agent (CybORG
-        # Monitor clears events after reading; uncovered hosts accumulate).
         any_covered = jnp.any(const.blue_agent_hosts, axis=0)
         state = state.replace(
             red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
@@ -239,24 +274,16 @@ class CC4Env(MultiAgentEnv):
             host_exploit_detected=jnp.where(any_covered, False, state.host_exploit_detected),
         )
 
-        for r in range(NUM_RED_AGENTS):
-            state = process_red_with_duration(state, const, r, actions[f"red_{r}"], red_keys[r])
+        blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(NUM_BLUE_AGENTS)], dtype=jnp.int32)
+        red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(NUM_RED_AGENTS)], dtype=jnp.int32)
+        no_forced = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
 
-        impact_hosts = state.red_impact_attempted
-
-        state = apply_green_agents(state, const, key_green)
-
-        for b in range(NUM_BLUE_AGENTS):
-            state = process_blue_with_duration(state, const, b, actions[f"blue_{b}"])
-
-        state = reassign_cross_subnet_sessions(state, const)
-        for b in range(NUM_BLUE_AGENTS):
-            state = apply_blue_monitor(state, const, b)
+        state = apply_all_actions(state, const, blue_action_arr, red_action_arr, key_green, red_keys, no_forced)
 
         reward = compute_rewards(
             state,
             const,
-            impact_hosts,
+            state.red_impact_attempted,
             state.green_lwf_this_step,
             state.green_asf_this_step,
         )

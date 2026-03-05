@@ -7,18 +7,12 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.actions.blue_monitor import apply_blue_monitor
-from jaxborg.actions.duration import (
-    process_blue_with_duration,
-    process_red_with_duration,
-)
 from jaxborg.actions.encoding import (
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
 )
-from jaxborg.actions.green import apply_green_agents
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.agents.fsm_red import (
     fsm_red_init_states,
@@ -33,7 +27,7 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
 )
-from jaxborg.reassignment import reassign_cross_subnet_sessions
+from jaxborg.env import apply_all_actions
 from jaxborg.rewards import advance_mission_phase, compute_rewards
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
@@ -123,8 +117,6 @@ def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf):
 @jax.jit
 def _jit_advance_and_clear(state, const):
     state = advance_mission_phase(state, const)
-    # Clear detection flags only on hosts covered by any blue agent (CybORG
-    # Monitor clears events after reading; uncovered hosts accumulate).
     any_covered = jnp.any(const.blue_agent_hosts, axis=0)
     return state.replace(
         red_activity_this_step=_ZERO_INT_HOSTS,
@@ -152,37 +144,8 @@ def _jit_fsm_red_post_step_update(
 
 
 @jax.jit
-def _jit_apply_green(state, const, key):
-    return apply_green_agents(state, const, key)
-
-
-@jax.jit
-def _jit_apply_end_turn_monitors(state, const):
-    for b in range(NUM_BLUE_AGENTS):
-        state = apply_blue_monitor(state, const, b)
-    return state
-
-
-@jax.jit
-def _jit_reassign(state, const):
-    return reassign_cross_subnet_sessions(state, const)
-
-
-@jax.jit
-def _jit_process_red_with_duration(state, const, agent_id, action_idx, key, forced_primary_host):
-    return process_red_with_duration(
-        state,
-        const,
-        jnp.int32(agent_id),
-        jnp.int32(action_idx),
-        key,
-        forced_primary_host=jnp.int32(forced_primary_host),
-    )
-
-
-@jax.jit
-def _jit_process_blue_with_duration(state, const, agent_id, action_idx):
-    return process_blue_with_duration(state, const, jnp.int32(agent_id), jnp.int32(action_idx))
+def _jit_apply_all_actions(state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts):
+    return apply_all_actions(state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts)
 
 
 class CC4DifferentialHarness:
@@ -641,35 +604,30 @@ class CC4DifferentialHarness:
                 blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
             )
 
-        # --- JAX action application via duration functions (training code path) ---
+        # --- JAX action application via shared apply_all_actions (same as training code path) ---
+        blue_action_arr = jnp.array(
+            [
+                self._resolve_blue_action(controller, b, blue_actions.get(b, BLUE_SLEEP))
+                if blue_actions is not None
+                else self._resolve_blue_action(controller, b)
+                for b in range(NUM_BLUE_AGENTS)
+            ],
+            dtype=jnp.int32,
+        )
+        red_action_arr = jnp.array(
+            [self._resolve_red_action(controller, r, red_actions.get(r, RED_SLEEP)) for r in range(NUM_RED_AGENTS)],
+            dtype=jnp.int32,
+        )
 
-        # Blue actions
-        if blue_actions is not None:
-            for b in range(NUM_BLUE_AGENTS):
-                action_idx = self._resolve_blue_action(controller, b, blue_actions.get(b, BLUE_SLEEP))
-                self.jax_state = _jit_process_blue_with_duration(self.jax_state, self.jax_const, b, action_idx)
-        else:
-            for b in range(NUM_BLUE_AGENTS):
-                action_idx = self._resolve_blue_action(controller, b)
-                self.jax_state = _jit_process_blue_with_duration(self.jax_state, self.jax_const, b, action_idx)
-
-        # Green
-        self.jax_state = _jit_apply_green(self.jax_state, self.jax_const, key_green)
-
-        # Red actions
-        for r in range(NUM_RED_AGENTS):
-            action_idx = self._resolve_red_action(controller, r, red_actions.get(r, RED_SLEEP))
-            self.jax_state = _jit_process_red_with_duration(
-                self.jax_state,
-                self.jax_const,
-                r,
-                action_idx,
-                subkeys[r],
-                forced_primary_hosts_pre[r],
-            )
-
-        self.jax_state = _jit_reassign(self.jax_state, self.jax_const)
-        self.jax_state = _jit_apply_end_turn_monitors(self.jax_state, self.jax_const)
+        self.jax_state = _jit_apply_all_actions(
+            self.jax_state,
+            self.jax_const,
+            blue_action_arr,
+            red_action_arr,
+            key_green,
+            jnp.stack(subkeys[:NUM_RED_AGENTS]),
+            forced_primary_hosts_pre,
+        )
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
         )
