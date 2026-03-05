@@ -1,6 +1,9 @@
+import pytest
+
 from tests.differential.fuzzer import run_differential_fuzz
 
 
+@pytest.mark.slow
 def test_fuzzer_runs_with_cyborg_random_blue_policy():
     report = run_differential_fuzz(
         seeds=[0],

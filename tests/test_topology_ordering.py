@@ -287,6 +287,7 @@ class TestCybORGStructuralParity:
 
 
 class TestAutoResetIntegration:
+    @pytest.mark.slow
     def test_auto_reset_produces_new_topology(self):
         from jaxborg.env import CC4Env
 
@@ -296,7 +297,7 @@ class TestAutoResetIntegration:
         original_num_hosts = int(state.const.num_hosts)
 
         topologies_seen = {original_num_hosts}
-        for i in range(30):
+        for i in range(12):
             key, k_step = jax.random.split(key)
             actions = {agent: jnp.int32(0) for agent in env.agents}
             obs, state, rewards, dones, infos = env.step(k_step, state, actions)

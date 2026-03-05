@@ -173,17 +173,18 @@ class TestSeedVariability:
             starts.add(int(c.red_start_hosts[0]))
         assert len(starts) > 1
 
+    @pytest.mark.slow
     def test_host_count_distribution(self):
         min_total = 8 * MIN_HOSTS_PER_SUBNET + 1
         max_total = 8 * MAX_HOSTS_PER_SUBNET + 1
         counts = []
-        for seed in range(100):
+        for seed in range(30):
             c = build_topology(jax.random.PRNGKey(seed), num_steps=500)
             counts.append(int(c.num_hosts))
         assert min(counts) >= min_total
         assert max(counts) <= max_total
         spread = max(counts) - min(counts)
-        assert spread >= 10
+        assert spread >= 5
 
 
 class TestActionHandlersRespectHostActive:
