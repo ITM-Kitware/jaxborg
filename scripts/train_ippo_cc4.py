@@ -100,18 +100,20 @@ def make_train(config):
     collect_and_update scans NUM_STEPS env steps then runs GAE + PPO update,
     all inside one XLA program.
     """
+    num_envs = config.get("NUM_ENVS", 1)
     inner_env = FsmRedCC4Env(num_steps=500)
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents  # 5
-    config["NUM_ACTORS"] = num_agents
-    config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // config["NUM_STEPS"]
-    config["MINIBATCH_SIZE"] = num_agents * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
+    config["NUM_ACTORS"] = num_agents * num_envs
+    config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // (config["NUM_STEPS"] * num_envs)
+    config["MINIBATCH_SIZE"] = num_agents * num_envs * config["NUM_STEPS"] // config["NUM_MINIBATCHES"]
 
     env = LogWrapper(inner_env)
 
-    # Single env init (no env-batch dimension)
+    # Batched env init via vmap
     init_key = jax.random.PRNGKey(config["SEED"])
-    init_obs, init_env_state = env.reset(init_key)
+    init_keys = jax.random.split(init_key, num_envs)
+    init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
 
     network = ActorCritic(
         inner_env.action_space(agents[0]).n,
@@ -148,28 +150,45 @@ def make_train(config):
     def _collect_and_update(train_state, env_state, obs, rng):
         """Scan NUM_STEPS env steps, compute GAE, run PPO epochs — all JIT'd."""
 
-        # --- Rollout via scan ---
+        # --- Rollout via scan (vmapped over NUM_ENVS) ---
         def _env_step(carry, _):
             env_state, obs, rng = carry
 
-            obs_batch = jnp.stack([obs[a] for a in agents])
-            avail_batch = jnp.stack([compute_blue_action_mask(env_state.env_state.const, i) for i in range(num_agents)])
+            # obs/env_state have leading (num_envs,) dim
+            # Stack agents: (num_envs, num_agents, obs_dim)
+            obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
+            avail_batch = jnp.stack(
+                [
+                    jax.vmap(compute_blue_action_mask, in_axes=(0, None))(env_state.env_state.const, i)
+                    for i in range(num_agents)
+                ],
+                axis=-2,
+            )
 
             rng, _rng = jax.random.split(rng)
-            pi, value = network.apply(train_state.params, obs_batch, avail_batch)
-            action = pi.sample(seed=_rng)
-            log_prob = pi.log_prob(action)
+            # Flatten (num_envs, num_agents) for network, then reshape back
+            flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
+            flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
+            pi, value = network.apply(train_state.params, flat_obs, flat_avail)
 
-            env_act = {agents[i]: action[i] for i in range(num_agents)}
+            action_flat = pi.sample(seed=_rng)
+            log_prob_flat = pi.log_prob(action_flat)
+
+            action = action_flat.reshape(num_envs, num_agents)
+            log_prob = log_prob_flat.reshape(num_envs, num_agents)
+            value = value.reshape(num_envs, num_agents)
+
+            env_act = {agents[i]: action[:, i] for i in range(num_agents)}
 
             rng, _rng = jax.random.split(rng)
-            new_obs, new_env_state, rewards, dones, info = env.step(_rng, env_state, env_act)
+            step_keys = jax.random.split(_rng, num_envs)
+            new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
 
             transition = Transition(
-                done=jnp.stack([dones[a] for a in agents]),
+                done=jnp.stack([dones[a] for a in agents], axis=-1),
                 action=action,
                 value=value,
-                reward=jnp.stack([rewards[a] for a in agents]) * config["REWARD_SCALE"],
+                reward=jnp.stack([rewards[a] for a in agents], axis=-1) * config["REWARD_SCALE"],
                 log_prob=log_prob,
                 obs=obs_batch,
                 avail_actions=avail_batch,
@@ -181,8 +200,11 @@ def make_train(config):
         (env_state, obs, rng), traj_batch = jax.lax.scan(_env_step, (env_state, obs, rng), None, config["NUM_STEPS"])
 
         # --- GAE ---
-        last_obs_batch = jnp.stack([obs[a] for a in agents])
-        _, last_val = network.apply(train_state.params, last_obs_batch)
+        # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
+        last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
+        flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
+        _, last_val = network.apply(train_state.params, flat_last_obs)
+        last_val = last_val.reshape(num_envs, num_agents)
 
         def _get_advantages(gae_and_next_value, transition):
             gae, next_value = gae_and_next_value
@@ -257,7 +279,8 @@ def make_train(config):
             batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
             permutation = jax.random.permutation(_rng, batch_size)
             batch = (traj_batch, advantages, targets)
-            batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[2:]), batch)
+            # Flatten (NUM_STEPS, num_envs, num_agents, ...) -> (batch_size, ...)
+            batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
             shuffled_batch = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
             minibatches = jax.tree.map(
                 lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
@@ -300,6 +323,7 @@ def main(cfg):
         {
             "algorithm": "IPPO-FF",
             "seed": config["SEED"],
+            "num_envs": config.get("NUM_ENVS", 1),
             "num_steps": config["NUM_STEPS"],
             "total_timesteps": config["TOTAL_TIMESTEPS"],
             "update_epochs": config["UPDATE_EPOCHS"],
@@ -320,6 +344,7 @@ def main(cfg):
     print("=" * 60, flush=True)
     print("IPPO-FF CC4 Training: Blue vs FSM Red")
     print(f"Total timesteps: {config['TOTAL_TIMESTEPS']:,}")
+    print(f"Num envs: {config.get('NUM_ENVS', 1)}")
     print(f"Num steps per rollout: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
@@ -376,7 +401,10 @@ def main(cfg):
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             elapsed = time.perf_counter() - start_time
             sps = step / elapsed
-            print(f"  update {update_idx + 1}/{num_updates} | step {step} | reward {reward:.1f} | {sps:.0f} sps", flush=True)
+            print(
+                f"  update {update_idx + 1}/{num_updates} | step {step} | reward {reward:.1f} | {sps:.0f} sps",
+                flush=True,
+            )
 
         # Periodic checkpoint every 500 updates + final
         if (update_idx + 1) % 500 == 0 or update_idx == num_updates - 1:
@@ -400,7 +428,6 @@ def main(cfg):
     total_steps = int(config["TOTAL_TIMESTEPS"])
     sps = total_steps / elapsed
 
-    checkpoint_path = save_dir / "checkpoint_final.pkl"
     mlflow.log_artifact(str(config_path))
 
     final_return = float(metric["returned_episode_returns"])
