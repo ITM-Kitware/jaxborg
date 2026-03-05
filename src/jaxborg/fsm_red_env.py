@@ -86,8 +86,9 @@ class FsmRedCC4Env(MultiAgentEnv):
         eligible_flags = []
         for r in range(NUM_RED_AGENTS):
             is_busy = state.red_pending_ticks[r] > 0
+            is_active = state.red_agent_active[r]
             action, host, fsm_act, eligible = jax.lax.cond(
-                is_busy,
+                is_busy | ~is_active,
                 lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
                 lambda: fsm_red_get_action_and_info(state, env_state.const, r, red_keys[r]),
             )

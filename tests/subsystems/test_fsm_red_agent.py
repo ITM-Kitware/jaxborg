@@ -318,3 +318,105 @@ class TestFsmRedDifferential:
         roundtrip = jax_red_to_cyborg(jax_idx, 0, mappings)
         assert type(roundtrip).__name__ == "ExploitRemoteService"
         assert roundtrip.ip_address == ip
+
+
+class TestRedAgentActivation:
+    """Red agents should only be active when CybORG would activate them.
+
+    CybORG only activates red_agent_0 at episode start. Others activate
+    through different_subnet_agent_reassignment when red_0 compromises
+    a host in their subnet.
+    """
+
+    def test_only_red_0_active_at_reset(self):
+        """JAXborg should match CybORG: only red_agent_0 active at reset."""
+        from tests.differential.harness import CC4DifferentialHarness
+
+        h = CC4DifferentialHarness(seed=42, max_steps=500)
+        h.reset()
+
+        controller = h.cyborg_env.environment_controller
+        cyborg_active = {
+            r for r in range(NUM_RED_AGENTS)
+            if controller.agent_interfaces.get(f"red_agent_{r}")
+            and controller.agent_interfaces[f"red_agent_{r}"].active
+        }
+
+        jax_active = {r for r in range(NUM_RED_AGENTS) if h.jax_state.red_agent_active[r]}
+
+        assert cyborg_active == {0}, (
+            f"CybORG should have only red_agent_0 active, got {cyborg_active}"
+        )
+        assert jax_active == cyborg_active, (
+            f"JAXborg activates {jax_active} but CybORG only activates "
+            f"{cyborg_active}. Extra agents: {jax_active - cyborg_active}"
+        )
+
+    @pytest.mark.parametrize("seed", [0, 1, 42, 100])
+    def test_only_red_0_active_at_reset_multi_seed(self, seed):
+        """CybORG activates only red_0 at reset across seeds."""
+        from tests.differential.harness import CC4DifferentialHarness
+
+        h = CC4DifferentialHarness(seed=seed, max_steps=500)
+        h.reset()
+
+        controller = h.cyborg_env.environment_controller
+        cyborg_active = {
+            r for r in range(NUM_RED_AGENTS)
+            if controller.agent_interfaces.get(f"red_agent_{r}")
+            and controller.agent_interfaces[f"red_agent_{r}"].active
+        }
+
+        jax_active = {r for r in range(NUM_RED_AGENTS) if h.jax_state.red_agent_active[r]}
+
+        assert jax_active == cyborg_active, (
+            f"seed={seed}: JAXborg activates {jax_active} but CybORG "
+            f"activates {cyborg_active}. Extra: {jax_active - cyborg_active}"
+        )
+
+    def test_fsm_init_state_matches_cyborg(self):
+        """JAX FSM initial host state should match CybORG's FSM host_states at step 0."""
+        from tests.differential.harness import CC4DifferentialHarness
+
+        h = CC4DifferentialHarness(seed=42, max_steps=500)
+        h.reset()
+
+        # CybORG: get_action processes the initial observation and populates host_states
+        controller = h.cyborg_env.environment_controller
+        cyborg_agent = controller.agent_interfaces["red_agent_0"].agent
+        obs = h.cyborg_env.get_observation("red_agent_0")
+        aspace = controller.get_action_space("red_agent_0")
+        cyborg_agent.set_initial_values(aspace, obs)
+        cyborg_agent.get_action(obs, aspace)
+
+        # CybORG FSM state map: IP -> {'state': 'U'/'K'/etc, 'hostname': ...}
+        cyborg_fsm_states = {}
+        for ip, info in cyborg_agent.host_states.items():
+            hostname = info.get("hostname")
+            if hostname and hostname in h.mappings.hostname_to_idx:
+                hidx = h.mappings.hostname_to_idx[hostname]
+                cyborg_fsm_states[hidx] = info["state"]
+
+        # JAX FSM state
+        jax_fsm = h.jax_state.fsm_host_states[0]
+        state_name_to_int = {"K": FSM_K, "S": FSM_S, "U": FSM_U, "R": FSM_R, "F": FSM_F,
+                             "KD": FSM_KD, "SD": FSM_S + 1, "UD": FSM_U + 1, "RD": FSM_R + 1}
+
+        # Start host should be in state U in both
+        start_host = int(h.jax_const.red_start_hosts[0])
+        assert start_host in cyborg_fsm_states, "CybORG should know about start host"
+        assert cyborg_fsm_states[start_host] == "U", (
+            f"CybORG start host state should be 'U', got '{cyborg_fsm_states[start_host]}'"
+        )
+        assert int(jax_fsm[start_host]) == FSM_U, (
+            f"JAX start host FSM state should be FSM_U={FSM_U}, got {int(jax_fsm[start_host])}"
+        )
+
+        # All other hosts should be in state K (unknown) in JAX
+        for hidx in range(int(h.jax_const.num_hosts)):
+            if hidx == start_host:
+                continue
+            assert int(jax_fsm[hidx]) == FSM_K, (
+                f"JAX host {hidx} should be FSM_K={FSM_K} at reset, got {int(jax_fsm[hidx])}"
+            )
+

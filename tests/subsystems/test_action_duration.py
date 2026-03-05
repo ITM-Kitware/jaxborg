@@ -141,7 +141,6 @@ class TestBlueRestoreDuration5:
 
 
 class TestEnvStepUsesDuration:
-    @pytest.mark.slow
     def test_env_step_uses_duration(self, env_and_state):
         env, obs, env_state = env_and_state
         state = env_state.state
@@ -183,14 +182,13 @@ class TestFsmRedEnvDurationTicks:
         obs, env_state = env.reset(key)
         return env, env_state
 
-    @pytest.mark.slow
     def test_exploit_tick_countdown(self, fsm_env_and_state):
         """Run FsmRedCC4Env until an exploit fires, verify tick countdown 3→2→1→0."""
         env, env_state = fsm_env_and_state
         key = jax.random.PRNGKey(42)
 
         saw_exploit_countdown = False
-        for step in range(30):
+        for step in range(100):
             key, subkey = jax.random.split(key)
             actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
             obs, env_state, _, dones, _ = env.step_env(subkey, env_state, actions)
@@ -210,9 +208,8 @@ class TestFsmRedEnvDurationTicks:
             if saw_exploit_countdown:
                 break
 
-        assert saw_exploit_countdown, "No exploit (duration=4) seen in 30 steps"
+        assert saw_exploit_countdown, "No exploit (duration=4) seen in 100 steps"
 
-    @pytest.mark.slow
     def test_blue_restore_tick_countdown(self, fsm_env_and_state):
         """Submit Blue Restore via FsmRedCC4Env, verify ticks count 4→3→2→1→0."""
         env, env_state = fsm_env_and_state
@@ -234,7 +231,6 @@ class TestFsmRedEnvDurationTicks:
 
         assert countdown == [4, 3, 2, 1, 0, 0], f"Expected [4,3,2,1,0,0], got {countdown}"
 
-    @pytest.mark.slow
     def test_busy_agent_pending_ticks_nonzero_across_steps(self, fsm_env_and_state):
         """While red agent has pending exploit, new actions submitted are ignored."""
         env, env_state = fsm_env_and_state
@@ -243,7 +239,7 @@ class TestFsmRedEnvDurationTicks:
         actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
 
         found_busy = False
-        for step in range(30):
+        for step in range(100):
             key, subkey = jax.random.split(key)
             obs, env_state, _, _, _ = env.step_env(subkey, env_state, actions)
             for r in range(NUM_RED_AGENTS):
@@ -259,7 +255,7 @@ class TestFsmRedEnvDurationTicks:
             if found_busy:
                 break
 
-        assert found_busy, "No busy red agent observed in 30 steps"
+        assert found_busy, "No busy red agent observed in 100 steps"
 
 
 class TestDurationDifferential:
@@ -341,7 +337,6 @@ class TestDurationDifferential:
         assert jax_ticks_per_step[0] == 4, f"Step 0: expected ticks=4, got {jax_ticks_per_step[0]}"
         assert jax_ticks_per_step[4] == 0, f"Step 4: expected ticks=0 (executed), got {jax_ticks_per_step[4]}"
 
-    @pytest.mark.slow
     def test_multi_seed_tick_parity(self):
         """Multiple seeds × 40 steps: verify tick parity for red agents at every step."""
         pytest.importorskip("CybORG")

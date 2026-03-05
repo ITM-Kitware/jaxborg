@@ -40,7 +40,6 @@ class CC4Const:
     blue_agent_subnets: chex.Array  # (NUM_BLUE_AGENTS, NUM_SUBNETS) bool
     blue_agent_hosts: chex.Array  # (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_start_hosts: chex.Array  # (NUM_RED_AGENTS,) int
-    red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool
     red_agent_subnets: chex.Array  # (NUM_RED_AGENTS, NUM_SUBNETS) bool — allowed subnets per red agent
     red_initial_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_initial_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
@@ -136,6 +135,8 @@ class CC4State:
 
     red_impact_attempted: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — any red Impact reached execution this step
 
+    red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool — dynamically activated via session reassignment
+
 
 def create_initial_const() -> CC4Const:
     return CC4Const(
@@ -154,7 +155,6 @@ def create_initial_const() -> CC4Const:
         blue_agent_subnets=jnp.zeros((NUM_BLUE_AGENTS, NUM_SUBNETS), dtype=jnp.bool_),
         blue_agent_hosts=jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_start_hosts=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
-        red_agent_active=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_agent_subnets=jnp.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=jnp.bool_),
         red_initial_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_initial_scanned_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
@@ -241,4 +241,5 @@ def create_initial_state() -> CC4State:
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_target_host=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+        red_agent_active=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
     )

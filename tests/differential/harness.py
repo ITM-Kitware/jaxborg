@@ -259,7 +259,7 @@ class CC4DifferentialHarness:
         known_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
         scanned_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
         red_start_hosts = self.jax_const.red_start_hosts
-        red_agent_active = self.jax_const.red_agent_active
+        red_agent_active = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
         red_initial_discovered = self.jax_const.red_initial_discovered_hosts
         red_initial_scanned = self.jax_const.red_initial_scanned_hosts
 
@@ -282,8 +282,9 @@ class CC4DifferentialHarness:
                     if hostname in self.mappings.hostname_to_idx:
                         scanned_hosts_by_red[r].add(self.mappings.hostname_to_idx[hostname])
 
-            if known_hosts_by_red[r]:
+            if iface is not None and iface.active:
                 red_agent_active = red_agent_active.at[r].set(True)
+            if known_hosts_by_red[r]:
                 red_start_hosts = red_start_hosts.at[r].set(min(known_hosts_by_red[r]))
 
             for hidx in known_hosts_by_red[r]:
@@ -293,7 +294,6 @@ class CC4DifferentialHarness:
 
         self.jax_const = self.jax_const.replace(
             red_start_hosts=red_start_hosts,
-            red_agent_active=red_agent_active,
             red_initial_discovered_hosts=red_initial_discovered,
             red_initial_scanned_hosts=red_initial_scanned,
         )
@@ -398,7 +398,7 @@ class CC4DifferentialHarness:
                 if primary.hostname in self.mappings.hostname_to_idx:
                     anchor_host = self.mappings.hostname_to_idx[primary.hostname]
                     start_scan_anchor = start_scan_anchor.at[red_idx].set(anchor_host)
-            if self.jax_const.red_agent_active[red_idx]:
+            if red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
                 start_host = int(self.jax_const.red_start_hosts[red_idx])
                 start_scanned_source_hosts = start_scanned_source_hosts.at[red_idx, :, start_host].set(
@@ -442,6 +442,7 @@ class CC4DifferentialHarness:
             red_session_is_abstract=start_abstract,
             red_abstract_host_rank=start_abstract_rank,
             red_next_abstract_rank=start_next_abstract_rank,
+            red_agent_active=red_agent_active,
         )
         self._assert_pid_capacity("reset")
 
@@ -569,7 +570,8 @@ class CC4DifferentialHarness:
         for r in range(NUM_RED_AGENTS):
             if use_fsm:
                 is_busy = bool(self.jax_state.red_pending_ticks[r] > 0)
-                if is_busy:
+                is_active = bool(self.jax_state.red_agent_active[r])
+                if is_busy or not is_active:
                     action = RED_SLEEP
                     host = jnp.int32(0)
                     fsm_act = jnp.int32(0)

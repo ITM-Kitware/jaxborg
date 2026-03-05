@@ -52,9 +52,12 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_session_abstract_pids = state.red_session_abstract_pids
     red_next_pid = state.red_next_pid
 
+    # Only red_agent_0 is active at reset; others activate via session reassignment
+    red_agent_active = state.red_agent_active.at[0].set(True)
+
     for r in range(NUM_RED_AGENTS):
         start_host = const.red_start_hosts[r]
-        is_active = const.red_agent_active[r]
+        is_active = red_agent_active[r]
         red_sessions = jnp.where(
             is_active,
             red_sessions.at[r, start_host].set(True),
@@ -141,6 +144,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_next_pid=red_next_pid,
+        red_agent_active=red_agent_active,
     )
 
 

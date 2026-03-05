@@ -11,6 +11,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
+    SERVICE_IDS,
     SUBNET_IDS,
     SUBNET_NAMES,
 )
@@ -41,6 +42,29 @@ class TestJITCompatibility:
         assert int(c1.num_hosts) == int(c2.num_hosts)
 
 
+class TestHostCounts:
+    def test_host_counts_in_range(self):
+        for seed in range(20):
+            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+            n = int(c.num_hosts)
+            assert 41 <= n <= 137, f"seed={seed}: num_hosts={n}"
+
+    def test_non_internet_subnets_have_5_to_17_hosts(self):
+        for seed in range(10):
+            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+            for sid, sname in enumerate(SUBNET_NAMES):
+                if sname == "INTERNET":
+                    continue
+                count = int(jnp.sum(c.host_active & (c.host_subnet == sid)))
+                assert 5 <= count <= 17, f"seed={seed} subnet {sname}: {count}"
+
+    def test_internet_has_1_host(self):
+        c = build_topology(jax.random.PRNGKey(0), num_steps=100)
+        sid = SUBNET_IDS["INTERNET"]
+        count = int(jnp.sum(c.host_active & (c.host_subnet == sid)))
+        assert count == 1
+
+
 class TestAlphabeticalOrdering:
     def test_host_types_ordered_within_subnet(self, const):
         for sid, sname in enumerate(SUBNET_NAMES):
@@ -61,7 +85,31 @@ class TestAlphabeticalOrdering:
                     assert pattern == ["router", "server", "user"], f"seed={seed} {sname}"
 
 
+class TestSubnetRouters:
+    def test_every_subnet_has_router(self, const):
+        for sid, sname in enumerate(SUBNET_NAMES):
+            mask = const.host_active & (const.host_subnet == sid)
+            if sname == "INTERNET":
+                assert int(jnp.sum(mask)) == 1
+            else:
+                router_count = int(jnp.sum(mask & const.host_is_router))
+                assert router_count == 1, f"{sname}: {router_count} routers"
+
+
 class TestDataLinks:
+    def test_regular_hosts_connect_to_router(self, const):
+        n = int(const.num_hosts)
+        for h in range(n):
+            if bool(const.host_is_router[h]):
+                continue
+            sid = int(const.host_subnet[h])
+            sname = SUBNET_NAMES[sid]
+            if sname == "INTERNET":
+                continue
+            router_mask = const.host_active & const.host_is_router & (const.host_subnet == sid)
+            router_idx = int(jnp.argmax(router_mask))
+            assert bool(const.data_links[h, router_idx]), f"host {h} not linked to router {router_idx}"
+
     def test_router_links_match_topology(self, const):
         for src_name, neighbor_names in _ROUTER_LINKS.items():
             if src_name == "INTERNET":
@@ -86,11 +134,36 @@ class TestDataLinks:
                 )
 
 
+class TestServices:
+    def test_servers_and_users_have_sshd(self, const):
+        n = int(const.num_hosts)
+        for h in range(n):
+            if bool(const.host_is_server[h]) or bool(const.host_is_user[h]):
+                assert bool(const.initial_services[h, SERVICE_IDS["SSHD"]])
+
+    def test_operational_hosts_have_otservice(self, const):
+        n = int(const.num_hosts)
+        op_sids = {SUBNET_IDS["OPERATIONAL_ZONE_A"], SUBNET_IDS["OPERATIONAL_ZONE_B"]}
+        for h in range(n):
+            sid = int(const.host_subnet[h])
+            if sid in op_sids and (bool(const.host_is_server[h]) or bool(const.host_is_user[h])):
+                assert bool(const.initial_services[h, SERVICE_IDS["OTSERVICE"]])
+
+    def test_addon_services_subset(self, const):
+        addon_ids = {SERVICE_IDS["APACHE2"], SERVICE_IDS["MYSQLD"], SERVICE_IDS["SMTP"]}
+        n = int(const.num_hosts)
+        for h in range(n):
+            if bool(const.host_is_router[h]):
+                assert not jnp.any(const.initial_services[h])
+                continue
+            for svc_id in range(len(SERVICE_IDS)):
+                if svc_id not in addon_ids and svc_id != SERVICE_IDS["SSHD"] and svc_id != SERVICE_IDS["OTSERVICE"]:
+                    assert not bool(const.initial_services[h, svc_id])
+
+
 class TestRedStartHosts:
     def test_red_start_hosts_valid(self, const):
         for r in range(NUM_RED_AGENTS):
-            if not bool(const.red_agent_active[r]):
-                continue
             h = int(const.red_start_hosts[r])
             assert bool(const.host_active[h]), f"red {r}: start host {h} not active"
             assert not bool(const.host_is_router[h]), f"red {r}: start host {h} is router"
@@ -99,10 +172,6 @@ class TestRedStartHosts:
             assert bool(const.red_agent_subnets[r, int(const.host_subnet[h])]), (
                 f"red {r}: start host subnet {sname} not in allowed subnets"
             )
-
-    def test_all_red_agents_active(self, const):
-        for r in range(NUM_RED_AGENTS):
-            assert bool(const.red_agent_active[r]), f"red {r} not active"
 
 
 class TestObsHostMap:
@@ -118,6 +187,15 @@ class TestObsHostMap:
                     assert bool(const.host_is_server[h]), f"obs[{sid},{slot}]={h} expected server"
                 else:
                     assert bool(const.host_is_user[h]), f"obs[{sid},{slot}]={h} expected user"
+
+
+class TestTopologyVariation:
+    def test_topology_varies_across_keys(self):
+        counts = set()
+        for seed in range(20):
+            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+            counts.add(int(c.num_hosts))
+        assert len(counts) > 1
 
 
 class TestCybORGStructuralParity:
@@ -169,6 +247,14 @@ class TestCybORGStructuralParity:
         )
         np.testing.assert_array_equal(np.array(cyborg_const.red_agent_subnets), np.array(pure_const.red_agent_subnets))
 
+    def test_services_from_same_set(self, cyborg_env):
+        from jaxborg.topology import build_const_from_cyborg
+
+        cyborg_const = build_const_from_cyborg(cyborg_env)
+        for h in range(int(cyborg_const.num_hosts)):
+            if bool(cyborg_const.host_is_server[h]) or bool(cyborg_const.host_is_user[h]):
+                assert bool(cyborg_const.initial_services[h, SERVICE_IDS["SSHD"]])
+
     def test_structural_parity_multiple_seeds(self):
         from CybORG import CybORG
         from CybORG.Agents import SleepAgent
@@ -195,7 +281,6 @@ class TestCybORGStructuralParity:
 
 
 class TestAutoResetIntegration:
-    @pytest.mark.slow
     def test_auto_reset_produces_new_topology(self):
         from jaxborg.env import CC4Env
 
@@ -205,7 +290,7 @@ class TestAutoResetIntegration:
         original_num_hosts = int(state.const.num_hosts)
 
         topologies_seen = {original_num_hosts}
-        for i in range(12):
+        for i in range(30):
             key, k_step = jax.random.split(key)
             actions = {agent: jnp.int32(0) for agent in env.agents}
             obs, state, rewards, dones, infos = env.step(k_step, state, actions)

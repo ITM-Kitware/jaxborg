@@ -242,8 +242,8 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
                     blue_agent_hosts[i, h] = True
 
     red_start_hosts = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
-    red_agent_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
     red_agent_subnets = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
+    _red_agent_initially_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
     for agent_name, agent_info in scenario.agents.items():
         if not agent_name.startswith("red_agent_"):
             continue
@@ -254,7 +254,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
             sess = agent_info.starting_sessions[0]
             if sess.hostname in hostname_to_idx:
                 red_start_hosts[red_idx] = hostname_to_idx[sess.hostname]
-        red_agent_active[red_idx] = agent_info.active
+        _red_agent_initially_active[red_idx] = agent_info.active
         if agent_info.allowed_subnets:
             for sub_enum in agent_info.allowed_subnets:
                 cyborg_suffix = str(sub_enum)
@@ -263,7 +263,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
     red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
     for red_idx in range(NUM_RED_AGENTS):
-        if red_agent_active[red_idx]:
+        if _red_agent_initially_active[red_idx]:
             red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
     host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
     for src_hostname, host in state.hosts.items():
@@ -309,7 +309,6 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         blue_agent_subnets=jnp.array(blue_agent_subnets),
         blue_agent_hosts=jnp.array(blue_agent_hosts),
         red_start_hosts=jnp.array(red_start_hosts),
-        red_agent_active=jnp.array(red_agent_active),
         red_agent_subnets=jnp.array(red_agent_subnets),
         red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
         red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
@@ -454,7 +453,6 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         blue_agent_hosts = blue_agent_hosts.at[i].set(mask)
 
     red_start_hosts = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
-    red_agent_active = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
     for i, snames in enumerate(RED_AGENT_SUBNETS):
         k_i = jax.random.fold_in(k_red, i)
         subnet_mask = jnp.zeros(NUM_SUBNETS, dtype=jnp.bool_)
@@ -464,16 +462,11 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         gumbel_noise = jax.random.gumbel(k_i, (GLOBAL_MAX_HOSTS,))
         masked_gumbel = jnp.where(valid, gumbel_noise, jnp.float32(-1e9))
         red_start_hosts = red_start_hosts.at[i].set(jnp.argmax(masked_gumbel))
-        red_agent_active = red_agent_active.at[i].set(jnp.any(valid))
 
+    # Only red_agent_0 is initially active; others activate via session reassignment
     red_initial_discovered = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
     red_initial_scanned = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
-    for r in range(NUM_RED_AGENTS):
-        red_initial_discovered = jnp.where(
-            red_agent_active[r],
-            red_initial_discovered.at[r, red_start_hosts[r]].set(True),
-            red_initial_discovered,
-        )
+    red_initial_discovered = red_initial_discovered.at[0, red_start_hosts[0]].set(True)
 
     host_info_links = jnp.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
     server0_idx = jnp.full(NUM_SUBNETS, -1, dtype=jnp.int32)
@@ -526,7 +519,6 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         blue_agent_subnets=_BLUE_AGENT_SUBNETS_BOOL,
         blue_agent_hosts=blue_agent_hosts,
         red_start_hosts=red_start_hosts,
-        red_agent_active=red_agent_active,
         red_agent_subnets=_RED_AGENT_SUBNETS_BOOL,
         red_initial_discovered_hosts=red_initial_discovered,
         red_initial_scanned_hosts=red_initial_scanned,

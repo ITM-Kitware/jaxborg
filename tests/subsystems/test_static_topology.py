@@ -48,7 +48,6 @@ class TestPureToplogy:
         assert c.blue_agent_subnets.shape == (NUM_BLUE_AGENTS, NUM_SUBNETS)
         assert c.blue_agent_hosts.shape == (NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS)
         assert c.red_start_hosts.shape == (NUM_RED_AGENTS,)
-        assert c.red_agent_active.shape == (NUM_RED_AGENTS,)
         assert c.phase_boundaries.shape == (MISSION_PHASES,)
         assert c.allowed_subnet_pairs.shape == (MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS)
 
@@ -183,16 +182,16 @@ class TestPureToplogy:
                 else:
                     assert not c.blue_agent_hosts[i, h]
 
-    def test_red_agent_0_is_active_contractor(self, jax_const):
+    def test_red_agent_0_starts_in_contractor(self, jax_const):
         c = jax_const
-        assert c.red_agent_active[0]
         start = int(c.red_start_hosts[0])
         assert SUBNET_NAMES[int(c.host_subnet[start])] == "CONTRACTOR_NETWORK"
 
-    def test_all_red_agents_active(self, jax_const):
+    def test_all_red_agents_have_valid_start_hosts(self, jax_const):
         c = jax_const
         for i in range(NUM_RED_AGENTS):
-            assert c.red_agent_active[i]
+            start = int(c.red_start_hosts[i])
+            assert c.host_active[start], f"red_agent_{i} start host {start} is not active"
 
     def test_green_agents_on_user_hosts(self, jax_const):
         c = jax_const
@@ -303,16 +302,19 @@ class TestDifferentialWithCybORG:
                     if svc_str in SERVICE_IDS:
                         assert c.initial_services[idx, SERVICE_IDS[svc_str]], f"Missing service {svc_str} on {hostname}"
 
-    def test_red_agent_active_matches(self, cyborg_env):
+    def test_red_agent_0_only_active_at_reset(self, cyborg_env):
+        from jaxborg.env import _init_red_state
+        from jaxborg.state import create_initial_state
         from jaxborg.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
-        scenario = cyborg_env.environment_controller.state.scenario
-        for agent_name, agent_info in scenario.agents.items():
-            if not agent_name.startswith("red_agent_"):
-                continue
-            red_idx = int(agent_name.split("_")[-1])
-            assert bool(c.red_agent_active[red_idx]) == agent_info.active, f"Mismatch for {agent_name}"
+        state = create_initial_state()
+        state = state.replace(host_services=c.initial_services)
+        state = _init_red_state(c, state)
+        # Only red_agent_0 should be active at reset
+        assert bool(state.red_agent_active[0])
+        for r in range(1, NUM_RED_AGENTS):
+            assert not bool(state.red_agent_active[r]), f"red_agent_{r} should not be active at reset"
 
     def test_green_count_matches(self, cyborg_env):
         from jaxborg.topology import build_const_from_cyborg
