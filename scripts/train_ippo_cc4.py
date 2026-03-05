@@ -291,8 +291,8 @@ def main(cfg):
     save_dir = EXP_DIR / "ippo_cc4"
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    if not mlflow.get_tracking_uri().startswith("sqlite"):
-        mlflow.set_tracking_uri(f"sqlite:///{save_dir / 'mlflow.db'}")
+    mlflow_db = EXP_DIR / "mlflow.db"
+    mlflow.set_tracking_uri(f"sqlite:///{mlflow_db}")
     mlflow.set_experiment("ippo-cc4")
     mlflow.start_run(run_name="ippo-vs-fsm-red")
 
@@ -317,14 +317,13 @@ def main(cfg):
         }
     )
 
-    print("=" * 60)
+    print("=" * 60, flush=True)
     print("IPPO-FF CC4 Training: Blue vs FSM Red")
-    print("=" * 60)
     print(f"Total timesteps: {config['TOTAL_TIMESTEPS']:,}")
     print(f"Num steps per rollout: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
-    print("=" * 60)
+    print("=" * 60, flush=True)
 
     env, network, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config)
 
@@ -346,15 +345,15 @@ def main(cfg):
     best_reward = float("-inf")
 
     start_time = time.perf_counter()
-    print(f"Starting training ({num_updates} updates, fully JIT'd)...")
-    print("  (first update includes XLA compilation — may take a few minutes)")
+    print(f"Starting training ({num_updates} updates, fully JIT'd)...", flush=True)
+    print("  (first update includes XLA compilation — may take a few minutes)", flush=True)
 
     for update_idx in range(num_updates):
         train_state, env_state, obs, rng, metric = collect_and_update(train_state, env_state, obs, rng)
 
         if update_idx == 0:
             elapsed_first = time.perf_counter() - start_time
-            print(f"  first update compiled + ran in {elapsed_first:.1f}s")
+            print(f"  first update compiled + ran in {elapsed_first:.1f}s", flush=True)
 
         step = (update_idx + 1) * num_steps
         reward = float(metric["returned_episode_returns"])
@@ -377,7 +376,23 @@ def main(cfg):
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             elapsed = time.perf_counter() - start_time
             sps = step / elapsed
-            print(f"  update {update_idx + 1}/{num_updates} | step {step} | reward {reward:.1f} | {sps:.0f} sps")
+            print(f"  update {update_idx + 1}/{num_updates} | step {step} | reward {reward:.1f} | {sps:.0f} sps", flush=True)
+
+        # Periodic checkpoint every 500 updates + final
+        if (update_idx + 1) % 500 == 0 or update_idx == num_updates - 1:
+            ckpt_name = f"checkpoint_{step}.pkl" if update_idx < num_updates - 1 else "checkpoint_final.pkl"
+            ckpt_path = save_dir / ckpt_name
+            with open(ckpt_path, "wb") as f:
+                pickle.dump(
+                    {
+                        "params": train_state.params,
+                        "hidden_dim": config.get("HIDDEN_DIM", 256),
+                        "activation": config["ACTIVATION"],
+                        "action_dim": env.action_space(env.agents[0]).n,
+                    },
+                    f,
+                )
+            mlflow.log_artifact(str(ckpt_path), artifact_path="checkpoints")
 
     logger.close()
 
@@ -385,20 +400,7 @@ def main(cfg):
     total_steps = int(config["TOTAL_TIMESTEPS"])
     sps = total_steps / elapsed
 
-    params = train_state.params
     checkpoint_path = save_dir / "checkpoint_final.pkl"
-    with open(checkpoint_path, "wb") as f:
-        pickle.dump(
-            {
-                "params": params,
-                "hidden_dim": config.get("HIDDEN_DIM", 256),
-                "activation": config["ACTIVATION"],
-                "action_dim": env.action_space(env.agents[0]).n,
-            },
-            f,
-        )
-
-    mlflow.log_artifact(str(checkpoint_path), artifact_path="checkpoints")
     mlflow.log_artifact(str(config_path))
 
     final_return = float(metric["returned_episode_returns"])
