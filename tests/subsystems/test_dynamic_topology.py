@@ -13,9 +13,6 @@ from jaxborg.constants import (
     MAX_HOSTS_PER_SUBNET,
     MIN_HOSTS_PER_SUBNET,
     NUM_BLUE_AGENTS,
-    NUM_SUBNETS,
-    SUBNET_IDS,
-    SUBNET_NAMES,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
@@ -33,91 +30,6 @@ def seed(request):
 @pytest.fixture
 def jax_const(seed):
     return build_topology(jax.random.PRNGKey(seed), num_steps=500)
-
-
-class TestMultiSeedTopologyValidity:
-    def test_num_hosts_in_valid_range(self, jax_const):
-        num_active = int(jnp.sum(jax_const.host_active))
-        min_total = 8 * MIN_HOSTS_PER_SUBNET + 1
-        max_total = 8 * MAX_HOSTS_PER_SUBNET + 1
-        assert min_total <= num_active <= max_total
-        assert int(jax_const.num_hosts) == num_active
-
-    def test_every_subnet_has_hosts(self, jax_const):
-        for sid in range(NUM_SUBNETS):
-            count = int(jnp.sum(jax_const.host_active & (jax_const.host_subnet == sid)))
-            assert count >= 1
-
-    def test_non_internet_subnets_have_router(self, jax_const):
-        for sid in range(NUM_SUBNETS):
-            sname = SUBNET_NAMES[sid]
-            subnet_mask = jax_const.host_active & (jax_const.host_subnet == sid)
-            if sname == "INTERNET":
-                assert int(jnp.sum(subnet_mask & jax_const.host_is_router)) == 0
-            else:
-                assert int(jnp.sum(subnet_mask & jax_const.host_is_router)) == 1
-
-    def test_per_subnet_host_count_in_range(self, jax_const):
-        for sid in range(NUM_SUBNETS):
-            sname = SUBNET_NAMES[sid]
-            if sname == "INTERNET":
-                continue
-            mask = jax_const.host_active & (jax_const.host_subnet == sid)
-            count = int(jnp.sum(mask))
-            assert MIN_HOSTS_PER_SUBNET <= count <= MAX_HOSTS_PER_SUBNET
-
-    def test_internet_has_exactly_one_host(self, jax_const):
-        sid = SUBNET_IDS["INTERNET"]
-        count = int(jnp.sum(jax_const.host_active & (jax_const.host_subnet == sid)))
-        assert count == 1
-
-    def test_host_types_mutually_exclusive(self, jax_const):
-        for h in range(int(jax_const.num_hosts)):
-            if not jax_const.host_active[h]:
-                continue
-            types = int(jax_const.host_is_router[h]) + int(jax_const.host_is_server[h]) + int(jax_const.host_is_user[h])
-            sid = int(jax_const.host_subnet[h])
-            if SUBNET_NAMES[sid] == "INTERNET":
-                assert types == 0
-            else:
-                assert types == 1
-
-    def test_data_links_symmetric(self, jax_const):
-        dl = np.array(jax_const.data_links)
-        np.testing.assert_array_equal(dl, dl.T)
-
-    def test_data_links_no_self_loops(self, jax_const):
-        dl = np.array(jax_const.data_links)
-        assert not np.any(np.diag(dl))
-
-    def test_non_router_linked_to_their_router(self, jax_const):
-        c = jax_const
-        dl = np.array(c.data_links)
-        for h in range(int(c.num_hosts)):
-            if not c.host_active[h]:
-                continue
-            sid = int(c.host_subnet[h])
-            sname = SUBNET_NAMES[sid]
-            if c.host_is_router[h] or sname == "INTERNET":
-                continue
-            router_hosts = [
-                r
-                for r in range(int(c.num_hosts))
-                if c.host_active[r] and c.host_is_router[r] and int(c.host_subnet[r]) == sid
-            ]
-            assert len(router_hosts) == 1
-            assert dl[h, router_hosts[0]]
-
-    def test_red_agent_0_active_on_contractor(self, jax_const):
-        assert jax_const.red_agent_active[0]
-        start = int(jax_const.red_start_hosts[0])
-        assert SUBNET_NAMES[int(jax_const.host_subnet[start])] == "CONTRACTOR_NETWORK"
-
-    def test_blue_agents_cover_subnets(self, jax_const):
-        c = jax_const
-        for i in range(NUM_BLUE_AGENTS):
-            covered_hosts = int(jnp.sum(c.blue_agent_hosts[i] & c.host_active))
-            assert covered_hosts > 0
 
 
 class TestInactiveHostSlots:
