@@ -33,8 +33,8 @@ uv sync
 
 ```bash
 uv sync                                              # install deps
-uv run pytest tests/ -v -m "not slow" --ignore=tests/test_env_smoke.py  # fast tests only (~10 min)
-uv run pytest tests/ -v --ignore=tests/test_env_smoke.py  # all tests including slow integration
+uv run pytest tests/ -v -m "not slow"  # fast tests only (~10 min)
+uv run pytest tests/ -v  # all tests including slow integration
 uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
 uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
 ```
@@ -165,7 +165,7 @@ It returns a `MismatchReport` on the first error: seed, step, field name, CybORG
 3. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
 4. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
 5. **Verify targeted tests first** (new regression + closest subsystem tests), then run:
-   - `uv run pytest tests/ -v --ignore=tests/test_env_smoke.py --ignore=tests/test_training_parity.py -x`
+   - `uv run pytest tests/ -v -m "not slow" -x`
    - rerun differential fuzzing to find the next gap
 6. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
 7. **Commit** with a message describing the gap and fix
