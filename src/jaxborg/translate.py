@@ -53,7 +53,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_SUBNETS
+from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
 from jaxborg.topology import CYBORG_SUBNET_SUFFIX, CYBORG_SUFFIX_TO_ID
 
 
@@ -100,6 +100,13 @@ def build_mappings_from_cyborg(cyborg_env) -> CC4Mappings:
         cidr_to_subnet_idx=cidr_to_subnet_idx,
         num_hosts=len(sorted_hostnames),
     )
+
+
+def _slot_to_global(flat_slot: int, const) -> int:
+    """Resolve a canonical flat slot to a global host index via const.obs_host_map."""
+    sid = flat_slot // OBS_HOSTS_PER_SUBNET
+    slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+    return int(const.obs_host_map[sid, slot_within])
 
 
 _RED_HOST_RANGES = [
@@ -310,7 +317,7 @@ def jax_red_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
     raise ValueError(f"Unknown JAX red action index: {action_idx}")
 
 
-def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings) -> int:
+def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings, const=None) -> int:
     cls_name = type(action).__name__
     aid = _agent_idx(agent_name)
 
@@ -323,16 +330,16 @@ def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings) -> int:
     hostname_actions = {"Analyse": "Analyse", "Remove": "Remove", "Restore": "Restore"}
     if cls_name in hostname_actions:
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
-        return encode_blue_action(hostname_actions[cls_name], host_idx, aid)
+        return encode_blue_action(hostname_actions[cls_name], host_idx, aid, const=const)
 
     if cls_name in _CYBORG_BLUE_DECOY_NAMES:
         encode_name = _CYBORG_BLUE_DECOY_NAMES[cls_name]
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
-        return encode_blue_action(encode_name, host_idx, aid)
+        return encode_blue_action(encode_name, host_idx, aid, const=const)
 
     if cls_name == "DeployDecoy":
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
-        return encode_blue_action("DeployDecoy_HarakaSMPT", host_idx, aid)
+        return encode_blue_action("DeployDecoy_HarakaSMPT", host_idx, aid, const=const)
 
     if cls_name == "BlockTrafficZone":
         from_sid = CYBORG_SUFFIX_TO_ID[action.from_subnet]
@@ -347,7 +354,7 @@ def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings) -> int:
     raise ValueError(f"Unknown CybORG blue action class: {cls_name}")
 
 
-def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
+def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, const=None):
     from CybORG.Simulator.Actions import (
         Analyse,
         Monitor,
@@ -380,14 +387,16 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
     ]
     for start, end, cls in _hostname_actions:
         if start <= action_idx < end:
-            host_idx = action_idx - start
+            flat_slot = action_idx - start
+            host_idx = _slot_to_global(flat_slot, const)
             hostname = mappings.idx_to_hostname[host_idx]
             return cls(session=session, agent=agent_name, hostname=hostname)
 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
         offset = action_idx - BLUE_DECOY_START
-        decoy_type = offset // GLOBAL_MAX_HOSTS
-        host_idx = offset % GLOBAL_MAX_HOSTS
+        decoy_type = offset // ACTION_HOST_SLOTS
+        flat_slot = offset % ACTION_HOST_SLOTS
+        host_idx = _slot_to_global(flat_slot, const)
         hostname = mappings.idx_to_hostname[host_idx]
         decoy_cls = [DecoyHarakaSMPT, DecoyApache, DecoyTomcat, DecoyVsftpd][decoy_type]
         return decoy_cls(session=session, agent=agent_name, hostname=hostname)
@@ -426,7 +435,7 @@ def describe_red_action(action_idx: int, mappings: CC4Mappings) -> str:
     return f"Unknown({action_idx})"
 
 
-def describe_blue_action(action_idx: int, mappings: CC4Mappings) -> str:
+def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> str:
     if action_idx == BLUE_SLEEP:
         return "Sleep"
     if action_idx == BLUE_MONITOR:
@@ -439,15 +448,23 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings) -> str:
     ]
     for start, end, name in _blue_host_ranges:
         if start <= action_idx < end:
-            host_idx = action_idx - start
-            hostname = mappings.idx_to_hostname.get(host_idx, f"host_{host_idx}")
+            flat_slot = action_idx - start
+            if const is not None:
+                host_idx = _slot_to_global(flat_slot, const)
+            else:
+                host_idx = flat_slot
+            hostname = mappings.idx_to_hostname.get(host_idx, f"slot_{flat_slot}")
             return f"{name}({hostname})"
 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
         offset = action_idx - BLUE_DECOY_START
-        decoy_type = offset // GLOBAL_MAX_HOSTS
-        host_idx = offset % GLOBAL_MAX_HOSTS
-        hostname = mappings.idx_to_hostname.get(host_idx, f"host_{host_idx}")
+        decoy_type = offset // ACTION_HOST_SLOTS
+        flat_slot = offset % ACTION_HOST_SLOTS
+        if const is not None:
+            host_idx = _slot_to_global(flat_slot, const)
+        else:
+            host_idx = flat_slot
+        hostname = mappings.idx_to_hostname.get(host_idx, f"slot_{flat_slot}")
         decoy_names = ["HarakaSMPT", "Apache", "Tomcat", "Vsftpd"]
         return f"DeployDecoy_{decoy_names[decoy_type]}({hostname})"
 

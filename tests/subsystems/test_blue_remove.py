@@ -12,7 +12,6 @@ from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.encoding import (
     BLUE_ACTION_TYPE_REMOVE,
-    BLUE_REMOVE_START,
     decode_blue_action,
     encode_blue_action,
     encode_red_action,
@@ -170,14 +169,17 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
 
 
 class TestBlueRemoveEncoding:
-    def test_encode_remove(self):
-        assert encode_blue_action("Remove", 5, 0) == BLUE_REMOVE_START + 5
-
-    def test_decode_remove(self, jax_const):
-        action_idx = BLUE_REMOVE_START + 10
+    def test_encode_remove(self, jax_const):
+        action_idx = encode_blue_action("Remove", 5, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_REMOVE
-        assert int(target_host) == 10
+        assert int(target_host) == 5
+
+    def test_decode_remove(self, jax_const):
+        action_idx = encode_blue_action("Remove", 5, 0, const=jax_const)
+        action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_REMOVE
+        assert int(target_host) == 5
 
 
 class TestApplyBlueRemove:
@@ -346,7 +348,7 @@ class TestRemoveViaDispatch:
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.red_privilege[0, target]) == COMPROMISE_NONE
@@ -397,7 +399,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -454,7 +456,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -512,7 +514,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -571,7 +573,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -629,7 +631,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -687,7 +689,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -744,7 +746,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -816,7 +818,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_remaining = [s for s in cyborg_state.sessions["red_agent_1"].values() if s.hostname == target_hostname]
@@ -882,7 +884,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -944,7 +946,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_red_sessions = [
@@ -1011,7 +1013,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned_hosts = set()
@@ -1082,7 +1084,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
@@ -1140,7 +1142,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions[agent_name].values() if s.hostname == target_hostname]
@@ -1202,7 +1204,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions[agent_name].values() if s.hostname == target_hostname]
@@ -1265,7 +1267,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions[agent_name].values() if s.hostname == target_hostname]
@@ -1326,7 +1328,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_0"].values() if s.hostname == target_hostname]
@@ -1404,7 +1406,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1483,7 +1485,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1570,7 +1572,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1653,7 +1655,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1737,7 +1739,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1823,7 +1825,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = apply_blue_action(state, const, blue_idx, action_idx)
 
         cyborg_target_remaining = [
@@ -1909,7 +1911,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -1975,7 +1977,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]
@@ -2038,7 +2040,7 @@ class TestDifferentialWithCybORG:
         cyborg_obs = remove_action.execute(cyborg_state)
         assert cyborg_obs.success
 
-        action_idx = encode_blue_action("Remove", target, blue_idx)
+        action_idx = encode_blue_action("Remove", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cyborg_remaining = [s for s in cyborg_state.sessions["red_agent_3"].values() if s.hostname == target_hostname]

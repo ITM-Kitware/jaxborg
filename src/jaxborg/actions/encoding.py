@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS
+from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
 from jaxborg.state import CC4Const
 
 RED_SLEEP = 0
@@ -90,13 +90,13 @@ _ENCODE_MAP = {
 BLUE_SLEEP = 0
 BLUE_MONITOR = 1
 BLUE_ANALYSE_START = 2
-BLUE_ANALYSE_END = BLUE_ANALYSE_START + GLOBAL_MAX_HOSTS
+BLUE_ANALYSE_END = BLUE_ANALYSE_START + ACTION_HOST_SLOTS
 BLUE_REMOVE_START = BLUE_ANALYSE_END
-BLUE_REMOVE_END = BLUE_REMOVE_START + GLOBAL_MAX_HOSTS
+BLUE_REMOVE_END = BLUE_REMOVE_START + ACTION_HOST_SLOTS
 BLUE_RESTORE_START = BLUE_REMOVE_END
-BLUE_RESTORE_END = BLUE_RESTORE_START + GLOBAL_MAX_HOSTS
+BLUE_RESTORE_END = BLUE_RESTORE_START + ACTION_HOST_SLOTS
 BLUE_DECOY_START = BLUE_RESTORE_END
-BLUE_DECOY_END = BLUE_DECOY_START + GLOBAL_MAX_HOSTS * NUM_DECOY_TYPES
+BLUE_DECOY_END = BLUE_DECOY_START + ACTION_HOST_SLOTS * NUM_DECOY_TYPES
 BLUE_BLOCK_TRAFFIC_START = BLUE_DECOY_END
 BLUE_BLOCK_TRAFFIC_END = BLUE_BLOCK_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS
 BLUE_ALLOW_TRAFFIC_START = BLUE_BLOCK_TRAFFIC_END
@@ -206,11 +206,24 @@ _BLUE_DECOY_ENCODE_MAP = {
 }
 
 
+def _global_host_to_slot(const: CC4Const, global_host: int) -> int:
+    """Convert a global host index to a canonical (subnet_id * OBS_HOSTS_PER_SUBNET + slot) index.
+
+    Returns -1 if the host is not in obs_host_map (e.g. routers, internet host).
+    """
+    sid = int(const.host_subnet[global_host])
+    for slot in range(OBS_HOSTS_PER_SUBNET):
+        if int(const.obs_host_map[sid, slot]) == global_host:
+            return sid * OBS_HOSTS_PER_SUBNET + slot
+    return -1
+
+
 def encode_blue_action(
     action_name: str,
     target_host: int,
     agent_id: int,
     *,
+    const: CC4Const = None,
     src_subnet: int = -1,
     dst_subnet: int = -1,
 ) -> int:
@@ -220,15 +233,28 @@ def encode_blue_action(
         return BLUE_MONITOR
     base = _BLUE_ENCODE_MAP.get(action_name)
     if base is not None:
-        return base + target_host
+        slot = _global_host_to_slot(const, target_host)
+        if slot < 0:
+            return BLUE_SLEEP
+        return base + slot
     if action_name in _BLUE_DECOY_ENCODE_MAP:
         decoy_type = _BLUE_DECOY_ENCODE_MAP[action_name]
-        return BLUE_DECOY_START + decoy_type * GLOBAL_MAX_HOSTS + target_host
+        slot = _global_host_to_slot(const, target_host)
+        if slot < 0:
+            return BLUE_SLEEP
+        return BLUE_DECOY_START + decoy_type * ACTION_HOST_SLOTS + slot
     if action_name == "BlockTrafficZone":
         return BLUE_BLOCK_TRAFFIC_START + src_subnet * NUM_SUBNETS + dst_subnet
     if action_name == "AllowTrafficZone":
         return BLUE_ALLOW_TRAFFIC_START + src_subnet * NUM_SUBNETS + dst_subnet
     raise NotImplementedError(f"Unknown blue action {action_name}")
+
+
+def _slot_to_global_host(const: CC4Const, flat_slot):
+    """Resolve a flat canonical slot to a global host index via obs_host_map."""
+    subnet_id = flat_slot // OBS_HOSTS_PER_SUBNET
+    slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+    return const.obs_host_map[subnet_id, slot_within]
 
 
 def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
@@ -247,14 +273,18 @@ def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
     action_type = jnp.where(is_block, BLUE_ACTION_TYPE_BLOCK_TRAFFIC, action_type)
     action_type = jnp.where(is_allow, BLUE_ACTION_TYPE_ALLOW_TRAFFIC, action_type)
 
-    target_host = jnp.int32(-1)
-    target_host = jnp.where(is_analyse, action_idx - BLUE_ANALYSE_START, target_host)
-    target_host = jnp.where(is_remove, action_idx - BLUE_REMOVE_START, target_host)
-    target_host = jnp.where(is_restore, action_idx - BLUE_RESTORE_START, target_host)
+    # Resolve canonical slot → global host via obs_host_map
+    flat_slot = jnp.int32(0)
+    flat_slot = jnp.where(is_analyse, action_idx - BLUE_ANALYSE_START, flat_slot)
+    flat_slot = jnp.where(is_remove, action_idx - BLUE_REMOVE_START, flat_slot)
+    flat_slot = jnp.where(is_restore, action_idx - BLUE_RESTORE_START, flat_slot)
 
     decoy_offset = action_idx - BLUE_DECOY_START
-    decoy_type = jnp.where(is_decoy, decoy_offset // GLOBAL_MAX_HOSTS, jnp.int32(-1))
-    target_host = jnp.where(is_decoy, decoy_offset % GLOBAL_MAX_HOSTS, target_host)
+    decoy_type = jnp.where(is_decoy, decoy_offset // ACTION_HOST_SLOTS, jnp.int32(-1))
+    flat_slot = jnp.where(is_decoy, decoy_offset % ACTION_HOST_SLOTS, flat_slot)
+
+    is_host_action = is_analyse | is_remove | is_restore | is_decoy
+    target_host = jnp.where(is_host_action, _slot_to_global_host(const, flat_slot), jnp.int32(-1))
 
     traffic_offset_block = action_idx - BLUE_BLOCK_TRAFFIC_START
     traffic_offset_allow = action_idx - BLUE_ALLOW_TRAFFIC_START

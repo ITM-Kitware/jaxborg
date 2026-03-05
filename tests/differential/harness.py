@@ -482,7 +482,7 @@ class CC4DifferentialHarness:
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 
     def step_blue_only(self, agent_id: int, action_idx: int) -> StepResult:
-        cyborg_action = jax_blue_to_cyborg(action_idx, agent_id, self.mappings)
+        cyborg_action = jax_blue_to_cyborg(action_idx, agent_id, self.mappings, const=self.jax_const)
         agent_name = f"blue_agent_{agent_id}"
         self.cyborg_env.step(agent=agent_name, action=cyborg_action)
 
@@ -507,7 +507,9 @@ class CC4DifferentialHarness:
             if agent_name.startswith("red_agent_"):
                 cyborg_action = jax_red_to_cyborg(action_idx, _agent_idx(agent_name), self.mappings)
             else:
-                cyborg_action = jax_blue_to_cyborg(action_idx, _agent_idx(agent_name), self.mappings)
+                cyborg_action = jax_blue_to_cyborg(
+                    action_idx, _agent_idx(agent_name), self.mappings, const=self.jax_const
+                )
             self.cyborg_env.step(agent=agent_name, action=cyborg_action)
 
         for agent_name, action_idx in actions.items():
@@ -574,7 +576,9 @@ class CC4DifferentialHarness:
             cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(action_idx, r, self.mappings)
         if blue_actions is not None:
             for b, action_idx in blue_actions.items():
-                cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(action_idx, b, self.mappings)
+                cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(
+                    action_idx, b, self.mappings, const=self.jax_const
+                )
 
         pre_services = {}
         cy_state = controller.state
@@ -825,7 +829,7 @@ class CC4DifferentialHarness:
         if isinstance(action, InvalidAction) or type(action).__name__ == "Sleep":
             return BLUE_SLEEP
 
-        return cyborg_blue_to_jax(action, agent_name, self.mappings)
+        return cyborg_blue_to_jax(action, agent_name, self.mappings, const=self.jax_const)
 
     _SERVICE_TO_DECOY = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
 
@@ -836,8 +840,12 @@ class CC4DifferentialHarness:
             pending_action = int(self.jax_state.blue_pending_action[b])
             if not (BLUE_DECOY_START <= pending_action < BLUE_DECOY_END):
                 continue
+            from jaxborg.constants import ACTION_HOST_SLOTS, OBS_HOSTS_PER_SUBNET
             offset = pending_action - BLUE_DECOY_START
-            target_host = offset % GLOBAL_MAX_HOSTS
+            flat_slot = offset % ACTION_HOST_SLOTS
+            sid = flat_slot // OBS_HOSTS_PER_SUBNET
+            slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+            target_host = int(self.jax_const.obs_host_map[sid, slot_within])
             hostname = self.mappings.idx_to_hostname.get(target_host)
             new_svcs = new_services_by_host.get(hostname, set())
             resolved_type = None
@@ -846,7 +854,7 @@ class CC4DifferentialHarness:
                     resolved_type = self._SERVICE_TO_DECOY[svc_name]
                     break
             if resolved_type is not None:
-                correct_action = BLUE_DECOY_START + resolved_type * GLOBAL_MAX_HOSTS + target_host
+                correct_action = BLUE_DECOY_START + resolved_type * ACTION_HOST_SLOTS + flat_slot
                 self.jax_state = self.jax_state.replace(
                     blue_pending_action=self.jax_state.blue_pending_action.at[b].set(correct_action)
                 )

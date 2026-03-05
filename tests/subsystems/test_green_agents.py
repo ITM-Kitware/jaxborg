@@ -652,7 +652,7 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
     assert phish_pid in jax_sus_pids
     assert follow_on_pid in jax_sus_pids
 
-    remove_idx = encode_blue_action("Remove", target_host, blue_idx)
+    remove_idx = encode_blue_action("Remove", target_host, blue_idx, const=const)
     jax_after_remove = apply_blue_action(jax_before_remove, const, blue_idx, remove_idx)
 
     assert int(jax_after_remove.red_session_count[jax_owner, target_host]) == len(cy_remaining)

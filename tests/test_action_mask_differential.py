@@ -4,14 +4,13 @@ import numpy as np
 import pytest
 
 from jaxborg.actions.encoding import (
-    BLUE_DECOY_START,
     BLUE_SLEEP,
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.topology import build_const_from_cyborg
 
 
-def _cyborg_action_to_jax_index(action, label, agent_name, mappings):
+def _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=None):
     """Translate a CybORG action to JAX index, or None if untranslatable."""
     from jaxborg.translate import cyborg_blue_to_jax
 
@@ -26,15 +25,8 @@ def _cyborg_action_to_jax_index(action, label, agent_name, mappings):
     if cls_name == "Sleep" and label.startswith("[Invalid]"):
         return None
 
-    if cls_name == "DeployDecoy":
-        hostname = action.hostname
-        host_idx = mappings.hostname_to_idx.get(hostname)
-        if host_idx is None:
-            return None
-        return BLUE_DECOY_START + host_idx
-
     try:
-        return cyborg_blue_to_jax(action, agent_name, mappings)
+        return cyborg_blue_to_jax(action, agent_name, mappings, const=const)
     except (KeyError, ValueError):
         return None
 
@@ -61,7 +53,7 @@ class TestActionMaskDifferential:
 
             mismatches = []
             for i, (action, valid, label) in enumerate(zip(cyborg_actions, cyborg_mask, cyborg_labels)):
-                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings)
+                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=const)
                 if jax_idx is None:
                     continue
 
@@ -96,7 +88,7 @@ class TestActionMaskDifferential:
             mapped_disagree = 0
 
             for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
-                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings)
+                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=const)
                 if jax_idx is None:
                     continue
                 if bool(valid) == bool(jax_mask[jax_idx]):

@@ -11,7 +11,6 @@ from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.blue_analyse import apply_blue_analyse
 from jaxborg.actions.encoding import (
     BLUE_ACTION_TYPE_ANALYSE,
-    BLUE_ANALYSE_START,
     decode_blue_action,
     encode_blue_action,
     encode_red_action,
@@ -83,18 +82,23 @@ def _find_exploitable_monitored_host(const):
 
 
 class TestBlueAnalyseEncoding:
-    def test_encode_analyse(self):
-        assert encode_blue_action("Analyse", 5, 0) == BLUE_ANALYSE_START + 5
-
-    def test_decode_analyse(self, jax_const):
-        action_idx = BLUE_ANALYSE_START + 10
+    def test_encode_analyse(self, jax_const):
+        action_idx = encode_blue_action("Analyse", 5, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_ANALYSE
-        assert int(target_host) == 10
+        assert int(target_host) == 5
+
+    def test_decode_analyse(self, jax_const):
+        action_idx = encode_blue_action("Analyse", 5, 0, const=jax_const)
+        action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_ANALYSE
+        assert int(target_host) == 5
 
     def test_roundtrip(self, jax_const):
         for h in range(min(int(jax_const.num_hosts), 20)):
-            action_idx = encode_blue_action("Analyse", h, 0)
+            if not bool(jax_const.host_active[h]) or bool(jax_const.host_is_router[h]):
+                continue
+            action_idx = encode_blue_action("Analyse", h, 0, const=jax_const)
             action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
             assert int(action_type) == BLUE_ACTION_TYPE_ANALYSE
             assert int(target_host) == h
@@ -198,7 +202,7 @@ class TestApplyBlueActionDispatch:
                 break
         assert blue_idx is not None
 
-        action_idx = encode_blue_action("Analyse", target, blue_idx)
+        action_idx = encode_blue_action("Analyse", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert bool(new_state.host_activity_detected[target])
 

@@ -5,12 +5,12 @@ import pytest
 from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import (
     BLUE_ACTION_DURATIONS,
-    BLUE_RESTORE_START,
     BLUE_SLEEP,
     RED_ACTION_DURATIONS,
     RED_EXPLOIT_SSH_START,
     RED_PRIVESC_START,
     RED_SLEEP,
+    encode_blue_action,
 )
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import CC4Env
@@ -118,9 +118,9 @@ class TestBlueRestoreDuration5:
         state = env_state.state
         const = env_state.const
 
-        host_indices = jnp.where(const.host_active, size=GLOBAL_MAX_HOSTS)[0]
+        host_indices = jnp.where(const.host_active & const.host_is_server, size=GLOBAL_MAX_HOSTS)[0]
         target_host = int(host_indices[0])
-        restore_action = BLUE_RESTORE_START + target_host
+        restore_action = encode_blue_action("Restore", target_host, 0, const=const)
 
         process_jit = jax.jit(process_blue_with_duration, static_argnums=(2,))
 
@@ -194,9 +194,9 @@ class TestFsmRedEnvDurationTicks:
         key = jax.random.PRNGKey(43)
 
         active = env_state.const.host_active
-        blue_hosts = env_state.const.blue_agent_hosts[0] & active
+        blue_hosts = env_state.const.blue_agent_hosts[0] & active & ~env_state.const.host_is_router
         target = int(jnp.argmax(blue_hosts))
-        restore_action = BLUE_RESTORE_START + target
+        restore_action = encode_blue_action("Restore", target, 0, const=env_state.const)
 
         countdown = []
         for step in range(6):
@@ -286,7 +286,7 @@ class TestDurationDifferential:
         controller = harness.cyborg_env.environment_controller
 
         active = harness.jax_const.host_active
-        blue_hosts = harness.jax_const.blue_agent_hosts[0] & active
+        blue_hosts = harness.jax_const.blue_agent_hosts[0] & active & ~harness.jax_const.host_is_router
         target = int(jnp.argmax(blue_hosts))
 
         errors = []
@@ -295,7 +295,7 @@ class TestDurationDifferential:
         for step in range(10):
             if step == 0:
                 blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
-                blue_actions[0] = BLUE_RESTORE_START + target
+                blue_actions[0] = encode_blue_action("Restore", target, 0, const=harness.jax_const)
             else:
                 blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
 

@@ -18,9 +18,7 @@ from jaxborg.actions.encoding import (
 from jaxborg.actions.pids import host_current_max_pid
 from jaxborg.constants import (
     DECOY_IDS,
-    GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
-    NUM_DECOY_TYPES,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
@@ -78,25 +76,32 @@ VSFTPD_IDX = DECOY_IDS["Vsftpd"]
 
 
 class TestBlueDecoyEncoding:
-    def test_encode_decoy_haraka(self):
-        idx = encode_blue_action("DeployDecoy_HarakaSMPT", 5, 0)
-        assert idx == BLUE_DECOY_START + HARAKA_IDX * GLOBAL_MAX_HOSTS + 5
+    def test_encode_decoy_haraka_roundtrip(self, jax_const):
+        idx = encode_blue_action("DeployDecoy_HarakaSMPT", 5, 0, const=jax_const)
+        action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_DECOY
+        assert int(target_host) == 5
+        assert int(decoy_type) == HARAKA_IDX
 
-    def test_encode_decoy_apache(self):
-        idx = encode_blue_action("DeployDecoy_Apache", 10, 0)
-        assert idx == BLUE_DECOY_START + APACHE_IDX * GLOBAL_MAX_HOSTS + 10
+    def test_encode_decoy_apache_roundtrip(self, jax_const):
+        idx = encode_blue_action("DeployDecoy_Apache", 10, 0, const=jax_const)
+        action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_DECOY
+        assert int(target_host) == 10
+        assert int(decoy_type) == APACHE_IDX
 
     def test_decode_decoy(self, jax_const):
-        action_idx = BLUE_DECOY_START + TOMCAT_IDX * GLOBAL_MAX_HOSTS + 7
-        action_type, target_host, decoy_type, *_ = decode_blue_action(action_idx, 0, jax_const)
+        idx = encode_blue_action("DeployDecoy_Tomcat", 7, 0, const=jax_const)
+        action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_DECOY
         assert int(target_host) == 7
         assert int(decoy_type) == TOMCAT_IDX
 
     def test_decode_all_decoy_types(self, jax_const):
-        for dtype in range(NUM_DECOY_TYPES):
-            action_idx = BLUE_DECOY_START + dtype * GLOBAL_MAX_HOSTS + 3
-            action_type, target_host, decoy_type, *_ = decode_blue_action(action_idx, 0, jax_const)
+        decoy_names = ["DeployDecoy_HarakaSMPT", "DeployDecoy_Apache", "DeployDecoy_Tomcat", "DeployDecoy_Vsftpd"]
+        for dtype, name in enumerate(decoy_names):
+            idx = encode_blue_action(name, 3, 0, const=jax_const)
+            action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
             assert int(action_type) == BLUE_ACTION_TYPE_DECOY
             assert int(target_host) == 3
             assert int(decoy_type) == dtype
@@ -180,7 +185,7 @@ class TestDecoyViaDispatch:
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
 
-        action_idx = encode_blue_action("DeployDecoy_Tomcat", target, blue_idx)
+        action_idx = encode_blue_action("DeployDecoy_Tomcat", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert bool(new_state.host_decoys[target, TOMCAT_IDX])
 
@@ -189,7 +194,6 @@ class TestBlueActionOrder:
     def test_action_order_is_analyse_remove_restore_decoy(self):
         from jaxborg.actions.encoding import (
             BLUE_ANALYSE_START,
-            BLUE_DECOY_START,
             BLUE_REMOVE_START,
             BLUE_RESTORE_START,
         )

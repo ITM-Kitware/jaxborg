@@ -51,12 +51,10 @@ class TestCC4EnvDifferential:
         harness.reset()
 
         from jaxborg.actions.encoding import (
-            BLUE_ANALYSE_START,
-            BLUE_REMOVE_START,
-            BLUE_RESTORE_START,
             RED_DISCOVER_START,
             RED_EXPLOIT_SSH_START,
             RED_SCAN_START,
+            encode_blue_action,
         )
         from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
@@ -68,9 +66,9 @@ class TestCC4EnvDifferential:
         harness.step_red_only(0, RED_EXPLOIT_SSH_START + start_host)
 
         blue_actions = [
-            BLUE_ANALYSE_START + start_host,
-            BLUE_REMOVE_START + start_host,
-            BLUE_RESTORE_START + start_host,
+            encode_blue_action("Analyse", start_host, 0, const=harness.jax_const),
+            encode_blue_action("Remove", start_host, 0, const=harness.jax_const),
+            encode_blue_action("Restore", start_host, 0, const=harness.jax_const),
         ]
 
         for action in blue_actions:

@@ -478,7 +478,7 @@ class TestDifferentialWithCybORG:
         )
         cyborg_env.step(agent=f"blue_agent_{blue_agent_id}", action=restore_action)
 
-        blue_restore_idx = encode_blue_action("Restore", low_host, blue_agent_id)
+        blue_restore_idx = encode_blue_action("Restore", low_host, blue_agent_id, const=const)
         state = _jit_apply_blue(state, const, blue_agent_id, blue_restore_idx)
 
         cy_target_scanned = target_host in _cy_scanned_hosts()
@@ -626,7 +626,7 @@ class TestDifferentialWithCybORG:
 
         scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
         state = _jit_apply_red(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
-        restore_idx = encode_blue_action("Restore", source_host, blue_agent_id)
+        restore_idx = encode_blue_action("Restore", source_host, blue_agent_id, const=const)
         state = _jit_apply_blue(state, const, blue_agent_id, restore_idx)
 
         assert bool(state.red_scanned_hosts[red_agent_id, target_host]) == (target_host in _cy_scanned_hosts())
@@ -1081,7 +1081,7 @@ class TestDeferredScanSessionBinding:
 
         scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
         state = process_red_with_duration(state, const, red_agent_id, scan_idx, jax.random.PRNGKey(0))
-        restore_idx = encode_blue_action("Restore", anchor_host, blue_agent_id)
+        restore_idx = encode_blue_action("Restore", anchor_host, blue_agent_id, const=const)
         state = _jit_apply_blue(state, const, blue_agent_id, restore_idx)
 
         assert bool(state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned

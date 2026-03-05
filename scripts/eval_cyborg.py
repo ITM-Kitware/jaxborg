@@ -64,7 +64,7 @@ def run_episode(env, network, params, deterministic, rng):
                 rng, _rng = jax.random.split(rng)
                 action_idx = int(pi.sample(seed=_rng))
 
-            cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings)
+            cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             actions[agent_name] = cyborg_action
 
         observations, rewards, _, _, _ = env.step(actions=actions)

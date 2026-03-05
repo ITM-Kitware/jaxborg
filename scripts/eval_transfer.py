@@ -286,7 +286,7 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
                     rng, _rng = jax.random.split(rng)
                     action_idx = int(pi.sample(seed=_rng))
 
-                cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings)
+                cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
                 actions[agent_name] = cyborg_action
                 ep_actions.append(action_idx)
                 all_actions_by_agent[agent_idx].append(action_idx)
@@ -454,7 +454,7 @@ def run_random_baseline(episodes=5, seed=42):
                 mask = np.array(compute_blue_action_mask(const, agent_idx), dtype=bool)
                 valid = np.where(mask)[0]
                 action_idx = int(rng.choice(valid))
-                actions[agent_name] = jax_blue_to_cyborg(action_idx, agent_idx, mappings)
+                actions[agent_name] = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             _, rewards, _, _, _ = env.step(actions=actions)
             total += mean(rewards.values())
         totals.append(total)
@@ -509,10 +509,10 @@ def run_verbose_trace(network, params, steps=20, seed=42):
             pi, _value = network.apply(params, obs_jax, mask)
             action_idx = int(jnp.argmax(pi.logits))
             is_valid = bool(mask_np[action_idx])
-            cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings)
+            cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             actions[agent_name] = cyborg_action
 
-            desc = describe_blue_action(action_idx, mappings)
+            desc = describe_blue_action(action_idx, mappings, const=const)
             cyborg_cls = type(cyborg_action).__name__
             valid_str = "OK" if is_valid else "MASKED!"
             step_actions_desc.append(

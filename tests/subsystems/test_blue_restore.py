@@ -13,7 +13,6 @@ from jaxborg.actions import apply_blue_action
 from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.encoding import (
     BLUE_ACTION_TYPE_RESTORE,
-    BLUE_RESTORE_START,
     decode_blue_action,
     encode_blue_action,
 )
@@ -74,14 +73,17 @@ def _find_blue_for_host(const, host):
 
 
 class TestBlueRestoreEncoding:
-    def test_encode_restore(self):
-        assert encode_blue_action("Restore", 5, 0) == BLUE_RESTORE_START + 5
-
-    def test_decode_restore(self, jax_const):
-        action_idx = BLUE_RESTORE_START + 10
+    def test_encode_restore(self, jax_const):
+        action_idx = encode_blue_action("Restore", 5, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_RESTORE
-        assert int(target_host) == 10
+        assert int(target_host) == 5
+
+    def test_decode_restore(self, jax_const):
+        action_idx = encode_blue_action("Restore", 5, 0, const=jax_const)
+        action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
+        assert int(action_type) == BLUE_ACTION_TYPE_RESTORE
+        assert int(target_host) == 5
 
 
 class TestApplyBlueRestore:
@@ -228,7 +230,7 @@ class TestRestoreViaDispatch:
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
         assert not bool(new_state.red_sessions[0, target])
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
@@ -305,7 +307,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -378,7 +380,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -466,7 +468,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -555,7 +557,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -642,7 +644,7 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        action_idx = encode_blue_action("Restore", target, blue_idx)
+        action_idx = encode_blue_action("Restore", target, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
@@ -751,7 +753,7 @@ class TestDifferentialWithCybORG:
         cy_obs_1 = restore_1.execute(cy_state)
         assert cy_obs_1.success
 
-        action_1 = encode_blue_action("Restore", target, blue_target)
+        action_1 = encode_blue_action("Restore", target, blue_target, const=const)
         state = _jit_apply_blue(state, const, blue_target, action_1)
 
         # CybORG promotes a new primary session when id=0 is removed; make this deterministic.
@@ -779,7 +781,7 @@ class TestDifferentialWithCybORG:
         cy_obs_2 = restore_2.execute(cy_state)
         assert cy_obs_2.success
 
-        action_2 = encode_blue_action("Restore", promoted_now, blue_promoted)
+        action_2 = encode_blue_action("Restore", promoted_now, blue_promoted, const=const)
         new_state = _jit_apply_blue(state, const, blue_promoted, action_2)
 
         cy_scanned = set()
@@ -893,7 +895,7 @@ class TestDifferentialWithCybORG:
             red_scan_anchor_host=state.red_scan_anchor_host.at[2].set(restore_host),
         )
 
-        action_idx = encode_blue_action("Restore", restore_host, blue_idx)
+        action_idx = encode_blue_action("Restore", restore_host, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
         assert bool(new_state.red_scanned_hosts[2, scanned_target]) == (scanned_target in cy_scanned)
 
@@ -959,7 +961,8 @@ class TestDifferentialWithCybORG:
         restore_1.duration = 1
         cy_obs_1 = restore_1.execute(cy_state)
         assert cy_obs_1.success
-        state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        restore_act = encode_blue_action("Restore", target, blue_target, const=const)
+        state = _jit_apply_blue(state, const, blue_target, restore_act)
 
         # Deterministic primary-session promotion to id=0 after removing the original primary.
         cy_state.np_random = np.random.default_rng(0)
@@ -982,7 +985,7 @@ class TestDifferentialWithCybORG:
         assert cy_obs_2.success
 
         new_state = _jit_apply_blue(
-            state, const, blue_promoted, encode_blue_action("Restore", promoted_now, blue_promoted)
+            state, const, blue_promoted, encode_blue_action("Restore", promoted_now, blue_promoted, const=const)
         )
 
         cy_scanned = set()
@@ -1086,7 +1089,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        restore_act = encode_blue_action("Restore", target, blue_target, const=const)
+        new_state = _jit_apply_blue(state, const, blue_target, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -1163,7 +1167,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_target, encode_blue_action("Restore", target, blue_target))
+        restore_act = encode_blue_action("Restore", target, blue_target, const=const)
+        new_state = _jit_apply_blue(state, const, blue_target, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_3"].values():
@@ -1257,7 +1262,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        restore_act = encode_blue_action("Restore", target, blue_idx, const=const)
+        new_state = _jit_apply_blue(state, const, blue_idx, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_1"].values():
@@ -1363,7 +1369,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        restore_act = encode_blue_action("Restore", target, blue_idx, const=const)
+        new_state = _jit_apply_blue(state, const, blue_idx, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_2"].values():
@@ -1504,7 +1511,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        restore_act = encode_blue_action("Restore", target, blue_idx, const=const)
+        new_state = _jit_apply_blue(state, const, blue_idx, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_4"].values():
@@ -1617,7 +1625,8 @@ class TestDifferentialWithCybORG:
         cy_obs = restore_action.execute(cy_state)
         assert cy_obs.success
 
-        new_state = _jit_apply_blue(state, const, blue_idx, encode_blue_action("Restore", target, blue_idx))
+        restore_act = encode_blue_action("Restore", target, blue_idx, const=const)
+        new_state = _jit_apply_blue(state, const, blue_idx, restore_act)
 
         cy_scanned = set()
         for sess in cy_state.sessions["red_agent_3"].values():
@@ -1646,7 +1655,7 @@ class TestRestoreOnNonFoothold:
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
         )
 
-        action = BLUE_RESTORE_START + target
+        action = encode_blue_action("Restore", target, blue_agent, const=jax_const)
         state = _jit_apply_blue(state, jax_const, blue_agent, action)
 
         assert int(state.red_sessions[0, target]) == 0
@@ -1738,7 +1747,7 @@ class TestRestorePreservesOtherSessionScanData:
         restore_action.duration = 1
         restore_action.execute(cy_state)
 
-        action_idx = encode_blue_action("Restore", other_host, blue_idx)
+        action_idx = encode_blue_action("Restore", other_host, blue_idx, const=const)
         new_state = _jit_apply_blue(state, const, blue_idx, action_idx)
 
         cy_scanned = set()
