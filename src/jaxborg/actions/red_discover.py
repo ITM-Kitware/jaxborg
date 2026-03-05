@@ -2,7 +2,6 @@ import chex
 import jax.numpy as jnp
 
 from jaxborg.actions.red_common import select_bound_source_host
-from jaxborg.constants import ACTIVITY_SCAN
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -25,10 +24,6 @@ def apply_discover(
     new_discovered = state.red_discovered_hosts[agent_id] | newly_discovered
     red_discovered_hosts = state.red_discovered_hosts.at[agent_id].set(new_discovered)
 
-    activity = jnp.where(newly_discovered, ACTIVITY_SCAN, state.red_activity_this_step)
-    red_activity_this_step = jnp.where(can_reach, activity, state.red_activity_this_step)
-
     return state.replace(
         red_discovered_hosts=red_discovered_hosts,
-        red_activity_this_step=red_activity_this_step,
     )

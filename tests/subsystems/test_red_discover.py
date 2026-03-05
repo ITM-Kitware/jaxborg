@@ -16,7 +16,6 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.red_common import has_any_session
 from jaxborg.constants import (
-    ACTIVITY_SCAN,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
@@ -138,21 +137,6 @@ class TestApplyDiscover:
             np.array(new_state.red_discovered_hosts),
             np.array(state.red_discovered_hosts),
         )
-
-    def test_discover_sets_scan_activity(self, jax_const, jax_state):
-        start_host = int(jax_const.red_start_hosts[0])
-        start_subnet = int(jax_const.host_subnet[start_host])
-        action_idx = encode_red_action("DiscoverRemoteSystems", start_subnet, 0)
-        new_state = _jit_apply_red(jax_state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
-
-        activity = np.array(new_state.red_activity_this_step)
-        for h in range(int(jax_const.num_hosts)):
-            if (
-                jax_const.host_active[h]
-                and int(jax_const.host_subnet[h]) == start_subnet
-                and jax_const.host_respond_to_ping[h]
-            ):
-                assert activity[h] == ACTIVITY_SCAN
 
     def test_discover_idempotent(self, jax_const, jax_state):
         start_host = int(jax_const.red_start_hosts[0])
