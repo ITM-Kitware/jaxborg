@@ -5,6 +5,7 @@ import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import DecoyApache
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import DecoyHarakaSMPT
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
@@ -25,6 +26,8 @@ from jaxborg.constants import (
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
+from jaxborg.translate import build_mappings_from_cyborg
+from tests.differential.state_comparator import compare_fast
 
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 
@@ -295,3 +298,25 @@ class TestDifferentialWithCybORG:
         assert before_decoys == after_decoys
         assert int(new_state.blue_pending_ticks[blue_idx]) == 0
         assert not bool(new_state.host_decoys[target, APACHE_IDX])
+
+    def test_compare_fast_recognizes_haraka_decoy_enum_service_names(self):
+        cyborg_env = _make_cyborg_env()
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+
+        target_hostname = "operational_zone_b_subnet_router"
+        target = mappings.hostname_to_idx[target_hostname]
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        cy_action = DecoyHarakaSMPT(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
+        cy_obs = cy_action.execute(cy_state)
+        assert str(cy_obs.success).upper() == "TRUE"
+
+        jax_state = _make_jax_state(const)
+        jax_state = apply_blue_decoy(jax_state, const, blue_idx, target, HARAKA_IDX)
+
+        diffs = compare_fast(cyborg_env, jax_state, const, mappings)
+        host_decoy_diffs = [d for d in diffs if d.field_name == "host_decoys" and d.host_or_agent == f"host_{target}"]
+        assert host_decoy_diffs == []

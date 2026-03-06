@@ -345,14 +345,15 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             continue
         hidx = mappings.hostname_to_idx[hostname]
         for svc_name, svc in host.services.items():
-            if svc_name not in _DECOY_SVC_TO_IDX:
+            svc_str = str(svc_name).split(".")[-1].lower()
+            if svc_str not in _DECOY_SVC_TO_IDX:
                 continue
             pid = svc.process if hasattr(svc, "process") else svc.get("process")
             if pid is None:
                 continue
             proc = host.get_process(pid)
             if proc is not None and proc.decoy_type & DecoyType.EXPLOIT:
-                cyborg_decoys[hidx, _DECOY_SVC_TO_IDX[svc_name]] = True
+                cyborg_decoys[hidx, _DECOY_SVC_TO_IDX[svc_str]] = True
 
     for h in range(n):
         if not np.array_equal(cyborg_decoys[h], jax_decoys[h]):
