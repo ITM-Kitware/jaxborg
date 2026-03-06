@@ -7,11 +7,16 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
+from jaxborg.actions.blue_analyse import apply_blue_analyse
+from jaxborg.actions.blue_decoys import apply_blue_decoy
+from jaxborg.actions.blue_remove import apply_blue_remove
+from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.encoding import (
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
+    encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.agents.fsm_red import (
@@ -177,6 +182,7 @@ class CC4DifferentialHarness:
         self.rng_key = None
         self.green_recorder = None
         self._blue_wrapper = None
+        self._blue_unsupported_pending = {}
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -189,6 +195,7 @@ class CC4DifferentialHarness:
             )
 
     def reset(self):
+        self._blue_unsupported_pending = {}
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=self.blue_cls,
             green_agent_class=self.green_cls,
@@ -628,6 +635,8 @@ class CC4DifferentialHarness:
             jnp.stack(subkeys[:NUM_RED_AGENTS]),
             forced_primary_hosts_pre,
         )
+        self._schedule_pending_generic_decoys(controller)
+        self._sync_pending_unsupported_blue_actions(controller, new_services_by_host)
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
         )
@@ -725,7 +734,7 @@ class CC4DifferentialHarness:
                     f"CybORG {cy_detail}"
                 )
         for b in range(NUM_BLUE_AGENTS):
-            jax_busy = bool(self.jax_state.blue_pending_ticks[b] > 0)
+            jax_busy = self._blue_agent_is_busy(b)
             cy_entry = controller.actions_in_progress.get(f"blue_agent_{b}")
             cy_busy = cy_entry is not None
             if jax_busy != cy_busy:
@@ -764,7 +773,7 @@ class CC4DifferentialHarness:
         """
         from CybORG.Simulator.Actions.Action import InvalidAction
 
-        if bool(self.jax_state.blue_pending_ticks[agent_idx] > 0):
+        if self._blue_agent_is_busy(agent_idx):
             return BLUE_SLEEP
 
         agent_name = f"blue_agent_{agent_idx}"
@@ -778,6 +787,10 @@ class CC4DifferentialHarness:
         pending = controller.actions_in_progress.get(agent_name)
         if pending is not None:
             action = pending["action"]
+            if type(action).__name__ == "DeployDecoy":
+                return BLUE_SLEEP
+            if self._is_unsupported_blue_host_action(action):
+                return BLUE_SLEEP
         else:
             executed = controller.action.get(agent_name, [])
             if not executed:
@@ -790,6 +803,29 @@ class CC4DifferentialHarness:
         return cyborg_blue_to_jax(action, agent_name, self.mappings, const=self.jax_const)
 
     _SERVICE_TO_DECOY = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
+    _GENERIC_DECOY_PLACEHOLDER = "DeployDecoy_HarakaSMPT"
+    _UNSUPPORTED_BLUE_HOST_ACTIONS = {
+        "Analyse": apply_blue_analyse,
+        "Remove": apply_blue_remove,
+        "Restore": apply_blue_restore,
+    }
+
+    def _blue_agent_is_busy(self, agent_idx: int) -> bool:
+        return bool(self.jax_state.blue_pending_ticks[agent_idx] > 0) or agent_idx in self._blue_unsupported_pending
+
+    def _is_unsupported_blue_host_action(self, action) -> bool:
+        action_name = type(action).__name__
+        if action_name not in self._UNSUPPORTED_BLUE_HOST_ACTIONS:
+            return False
+        host_idx = self.mappings.hostname_to_idx.get(getattr(action, "hostname", None))
+        if host_idx is None:
+            return False
+        encoded = encode_blue_action(action_name, host_idx, 0, const=self.jax_const)
+        return encoded == BLUE_SLEEP
+
+    def _apply_unsupported_blue_host_action(self, agent_idx: int, action_name: str, host_idx: int):
+        apply_fn = self._UNSUPPORTED_BLUE_HOST_ACTIONS[action_name]
+        self.jax_state = apply_fn(self.jax_state, self.jax_const, agent_idx, host_idx)
 
     def _correct_pending_decoys(self, new_services_by_host):
         for b in range(NUM_BLUE_AGENTS):
@@ -822,6 +858,93 @@ class CC4DifferentialHarness:
                     blue_pending_ticks=self.jax_state.blue_pending_ticks.at[b].set(0),
                     blue_pending_action=self.jax_state.blue_pending_action.at[b].set(BLUE_SLEEP),
                 )
+
+    def _schedule_pending_generic_decoys(self, controller):
+        blue_pending_ticks = self.jax_state.blue_pending_ticks
+        blue_pending_action = self.jax_state.blue_pending_action
+        changed = False
+
+        for b in range(NUM_BLUE_AGENTS):
+            if int(blue_pending_ticks[b]) != 0:
+                continue
+            pending = controller.actions_in_progress.get(f"blue_agent_{b}")
+            if pending is None:
+                continue
+            action = pending["action"]
+            if type(action).__name__ != "DeployDecoy":
+                continue
+            host_idx = self.mappings.hostname_to_idx.get(action.hostname)
+            if host_idx is None:
+                continue
+            placeholder = encode_blue_action(
+                self._GENERIC_DECOY_PLACEHOLDER,
+                host_idx,
+                b,
+                const=self.jax_const,
+            )
+            if placeholder == BLUE_SLEEP:
+                continue
+            blue_pending_ticks = blue_pending_ticks.at[b].set(int(pending["remaining_ticks"]))
+            blue_pending_action = blue_pending_action.at[b].set(placeholder)
+            changed = True
+
+        if changed:
+            self.jax_state = self.jax_state.replace(
+                blue_pending_ticks=blue_pending_ticks,
+                blue_pending_action=blue_pending_action,
+            )
+
+    def _sync_pending_unsupported_blue_actions(self, controller, new_services_by_host):
+        from CybORG.Simulator.Actions.Action import InvalidAction
+
+        next_pending = {}
+
+        for b in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{b}"
+            pending = controller.actions_in_progress.get(agent_name)
+            if pending is not None and type(pending["action"]).__name__ == "DeployDecoy":
+                hostname = pending["action"].hostname
+                host_idx = self.mappings.hostname_to_idx.get(hostname)
+                if host_idx is not None:
+                    placeholder = encode_blue_action(
+                        self._GENERIC_DECOY_PLACEHOLDER,
+                        host_idx,
+                        b,
+                        const=self.jax_const,
+                    )
+                    if placeholder == BLUE_SLEEP:
+                        next_pending[b] = ("DeployDecoy", host_idx, int(pending["remaining_ticks"]))
+                        continue
+            if pending is not None and self._is_unsupported_blue_host_action(pending["action"]):
+                action = pending["action"]
+                host_idx = self.mappings.hostname_to_idx[action.hostname]
+                next_pending[b] = (type(action).__name__, host_idx, int(pending["remaining_ticks"]))
+                continue
+
+            prior = self._blue_unsupported_pending.get(b)
+            if prior is None:
+                continue
+
+            action_name, host_idx, _ = prior
+            hostname = self.mappings.idx_to_hostname[host_idx]
+            executed = controller.action.get(agent_name, [])
+            failed = any(isinstance(act, InvalidAction) for act in executed)
+            completed = any(
+                type(act).__name__ == action_name and getattr(act, "hostname", None) == hostname for act in executed
+            )
+            if completed and not failed:
+                if action_name == "DeployDecoy":
+                    resolved = None
+                    for service_name in new_services_by_host.get(hostname, set()):
+                        if service_name in self._SERVICE_TO_DECOY:
+                            resolved = self._SERVICE_TO_DECOY[service_name]
+                            break
+                    if resolved is not None:
+                        self.jax_state = apply_blue_decoy(self.jax_state, self.jax_const, b, host_idx, resolved)
+                    continue
+                self._apply_unsupported_blue_host_action(b, action_name, host_idx)
+
+        self._blue_unsupported_pending = next_pending
 
     def run_episode(self, blue_policies=None, red_policy=None, max_steps=None) -> TestResult:
         max_steps = max_steps or self.max_steps
