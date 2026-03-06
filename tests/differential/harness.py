@@ -2,6 +2,7 @@ from dataclasses import dataclass, field
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
@@ -214,6 +215,15 @@ class CC4DifferentialHarness:
         self.mappings = build_mappings_from_cyborg(self.cyborg_env)
         cyborg_state = self.cyborg_env.environment_controller.state
         controller = self.cyborg_env.environment_controller
+
+        for name, interface in controller.agent_interfaces.items():
+            if not name.startswith("blue_agent_"):
+                continue
+            agent = getattr(interface, "agent", None)
+            if agent is None or not hasattr(agent, "np_random"):
+                continue
+            agent_idx = int(name.split("_")[-1])
+            agent.np_random = np.random.default_rng(self.seed * 100 + agent_idx)
 
         # CybORG action spaces seed red knowledge (known IPs/processes) even for
         # agents without active sessions. Mirror that into JAX init state.

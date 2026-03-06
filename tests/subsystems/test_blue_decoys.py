@@ -229,6 +229,7 @@ class TestDifferentialWithCybORG:
         assert blue_idx is not None
         target_hostname = sorted_hosts[target]
 
+        before_services = {str(name).split(".")[-1].lower() for name in cy_state.hosts[target_hostname].services}
         before_max = max((p.pid for p in cy_state.hosts[target_hostname].processes), default=4999)
         cy_action = DeployDecoy(session=0, agent=f"blue_agent_{blue_idx}", hostname=target_hostname)
         cy_obs = cy_action.execute(cy_state)
@@ -236,13 +237,24 @@ class TestDifferentialWithCybORG:
         after_max = max((p.pid for p in cy_state.hosts[target_hostname].processes), default=4999)
         decoy_delta = after_max - before_max
         assert 1 <= decoy_delta <= 9
+        after_services = {str(name).split(".")[-1].lower() for name in cy_state.hosts[target_hostname].services}
+        added_services = after_services - before_services
+        assert len(added_services) == 1
+        added_service = next(iter(added_services))
+        service_to_decoy = {
+            "haraka": HARAKA_IDX,
+            "apache2": APACHE_IDX,
+            "tomcat": TOMCAT_IDX,
+            "vsftpd": VSFTPD_IDX,
+        }
+        decoy_type = service_to_decoy[added_service]
 
         state = _make_jax_state(const)
         state = state.replace(
             blue_decoy_pid_deltas=state.blue_decoy_pid_deltas.at[0, blue_idx].set(decoy_delta),
             use_blue_decoy_pid_deltas=jnp.array(True),
         )
-        new_state = apply_blue_decoy(state, const, blue_idx, target, APACHE_IDX)
+        new_state = apply_blue_decoy(state, const, blue_idx, target, decoy_type)
 
         jax_after_max = int(host_current_max_pid(new_state, const, target))
         assert jax_after_max == after_max
