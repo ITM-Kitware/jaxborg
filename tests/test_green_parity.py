@@ -2,7 +2,7 @@
 
 import jax.numpy as jnp
 
-from jaxborg.constants import GLOBAL_MAX_HOSTS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SERVICES
 
 
 class TestGreenSyncParity:
@@ -90,10 +90,11 @@ class TestGreenSyncParity:
         assert arr.shape == (500, GLOBAL_MAX_HOSTS, 8)
         assert arr.dtype == jnp.float32
         assert jnp.all(arr >= 0.0)
-        # Field 5 stores JAX host indices (0-136) for GreenAccessService dest_host;
-        # other fields are uniforms in [0, 1).
-        uniform_fields = jnp.concatenate([arr[:, :, :5], arr[:, :, 6:]], axis=2)
+        # Field 1 stores concrete local-work service/decoy tokens and field 5
+        # stores JAX host indices for GreenAccessService destinations.
+        uniform_fields = jnp.concatenate([arr[:, :, :1], arr[:, :, 2:5], arr[:, :, 6:]], axis=2)
         assert jnp.all(uniform_fields <= 1.0)
+        assert jnp.all(arr[:, :, 1] < NUM_SERVICES + NUM_DECOY_TYPES)
         assert jnp.all(arr[:, :, 5] < GLOBAL_MAX_HOSTS)
 
     def test_full_episode_green_sync_10_steps(self):

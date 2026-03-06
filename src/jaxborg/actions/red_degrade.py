@@ -16,7 +16,7 @@ def apply_degrade(
     is_active = const.host_active[target_host]
     has_session = state.red_sessions[agent_id, target_host]
     is_privileged = state.red_privilege[agent_id, target_host] >= COMPROMISE_PRIVILEGED
-    has_services = jnp.any(state.host_services[target_host])
+    has_services = jnp.any(state.host_services[target_host]) | jnp.any(state.host_decoys[target_host])
     success = is_active & has_session & is_privileged & has_services
 
     activity = jnp.where(
@@ -34,8 +34,18 @@ def apply_degrade(
         state.host_service_reliability.at[target_host].set(degraded),
         state.host_service_reliability,
     )
+    current_decoy_reliability = state.host_decoy_reliability[target_host]
+    active_decoys = state.host_decoys[target_host]
+    degraded_decoys = jnp.maximum(current_decoy_reliability - DEGRADE_AMOUNT, 0)
+    degraded_decoys = jnp.where(active_decoys, degraded_decoys, current_decoy_reliability)
+    decoy_reliability = jnp.where(
+        success,
+        state.host_decoy_reliability.at[target_host].set(degraded_decoys),
+        state.host_decoy_reliability,
+    )
 
     return state.replace(
         red_activity_this_step=activity,
         host_service_reliability=reliability,
+        host_decoy_reliability=decoy_reliability,
     )

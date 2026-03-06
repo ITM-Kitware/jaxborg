@@ -2,7 +2,7 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import can_reach_subnet
+from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.actions.rng import sample_detection_random
 from jaxborg.state import CC4Const, CC4State
 
@@ -18,26 +18,30 @@ def apply_discover_deception(
     key: jax.Array,
 ) -> CC4State:
     is_active = const.host_active[target_host]
-    is_scanned = state.red_scanned_hosts[agent_id, target_host]
+    source_host = select_bound_source_host(state, const, agent_id)
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
     target_subnet = const.host_subnet[target_host]
-    can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
+    source_subnet = const.host_subnet[source_idx]
+    has_bound_source = (source_host >= 0) & state.red_sessions[agent_id, source_idx] & const.host_active[source_idx]
+    can_reach = has_bound_source & (~state.blocked_zones[source_subnet, target_subnet])
 
-    success = is_active & is_scanned & can_reach
+    success = is_active & can_reach
     has_decoys = jnp.any(state.host_decoys[target_host])
 
-    k1, k2 = jax.random.split(key)
-    r1, state = sample_detection_random(state, k1)
-    r2, state = sample_detection_random(state, k2)
+    def _on_success(state_in: CC4State) -> CC4State:
+        k1, k2 = jax.random.split(key)
+        r1, next_state = sample_detection_random(state_in, k1)
+        r2, next_state = sample_detection_random(next_state, k2)
+        detected = (has_decoys & (r1 < DECEPTION_TP_RATE)) | (~has_decoys & (r2 < DECEPTION_FP_RATE))
+        return next_state.replace(
+            fsm_host_states=jnp.where(
+                detected,
+                _apply_decoy_detection(next_state.fsm_host_states, agent_id, target_host),
+                next_state.fsm_host_states,
+            ),
+        )
 
-    detected = success & ((has_decoys & (r1 < DECEPTION_TP_RATE)) | (~has_decoys & (r2 < DECEPTION_FP_RATE)))
-
-    return state.replace(
-        fsm_host_states=jnp.where(
-            detected,
-            _apply_decoy_detection(state.fsm_host_states, agent_id, target_host),
-            state.fsm_host_states,
-        ),
-    )
+    return jax.lax.cond(success, _on_success, lambda state_in: state_in, state)
 
 
 def _apply_decoy_detection(fsm_host_states, agent_id, target_host):

@@ -77,6 +77,7 @@ def apply_red_action(
     action_type, target_subnet, target_host = decode_red_action(action_idx, agent_id, const)
     k_agg, k_stealth, k_deception = jax.random.split(key, 3)
     k_exploit = jax.random.fold_in(key, 0xCC4)
+    k_privesc = jax.random.fold_in(key, 0xC4E5)
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_DISCOVER,
@@ -102,7 +103,7 @@ def apply_red_action(
 
     state = jax.lax.cond(
         action_type == ACTION_TYPE_PRIVESC,
-        lambda s: apply_privesc(s, const, agent_id, target_host),
+        lambda s: apply_privesc(s, const, agent_id, target_host, k_privesc),
         lambda s: s,
         state,
     )

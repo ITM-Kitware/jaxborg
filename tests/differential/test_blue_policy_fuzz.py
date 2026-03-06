@@ -1,8 +1,13 @@
+import numpy as np
 from CybORG.Agents import SleepAgent
 from CybORG.Agents.SimpleAgents.BaseAgent import BaseAgent
 from CybORG.Simulator.Actions import Restore, Sleep
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import DecoyTomcat
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import DecoyVsftpd
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
 
+from jaxborg.actions.blue_decoys import apply_blue_decoy
+from jaxborg.constants import DECOY_IDS
 from tests.differential.fuzzer import run_differential_fuzz
 from tests.differential.harness import CC4DifferentialHarness
 
@@ -167,3 +172,73 @@ def test_fuzzer_runs_with_cyborg_random_blue_policy():
         verbose=False,
     )
     assert report is None
+
+
+def test_reward_parity_when_green_local_work_selects_decoy_service():
+    report = run_differential_fuzz(
+        seeds=[1],
+        max_steps_per_seed=74,
+        blue_agent="random",
+        blue_action_source="cyborg_policy",
+        strict_random_sync=True,
+        verbose=False,
+    )
+    assert report is None
+
+
+def test_generic_deploy_decoy_reusing_service_name_matches_jax():
+    target_hostname = "operational_zone_a_subnet_server_host_0"
+    blue_cls = _make_scripted_blue_agent(
+        "blue_agent_1",
+        lambda agent_name: DeployDecoy(session=0, agent=agent_name, hostname=target_hostname),
+    )
+    harness = CC4DifferentialHarness(
+        seed=42,
+        max_steps=20,
+        blue_cls=blue_cls,
+        green_cls=SleepAgent,
+        red_cls=SleepAgent,
+        sync_green_rng=False,
+        use_cyborg_blue_policy=True,
+    )
+    harness.reset()
+    target_host_idx = harness.mappings.hostname_to_idx[target_hostname]
+    controller = harness.cyborg_env.environment_controller
+    cy_state = controller.state
+
+    decoy_vsftpd = DecoyVsftpd(session=0, agent="blue_agent_1", hostname=target_hostname)
+    decoy_tomcat = DecoyTomcat(session=0, agent="blue_agent_1", hostname=target_hostname)
+    assert str(decoy_vsftpd.execute(cy_state).success).upper() == "TRUE"
+    assert str(decoy_tomcat.execute(cy_state).success).upper() == "TRUE"
+    harness.jax_state = apply_blue_decoy(
+        harness.jax_state,
+        harness.jax_const,
+        1,
+        target_host_idx,
+        DECOY_IDS["Vsftpd"],
+    )
+    harness.jax_state = apply_blue_decoy(
+        harness.jax_state,
+        harness.jax_const,
+        1,
+        target_host_idx,
+        DECOY_IDS["Tomcat"],
+    )
+
+    cy_state.np_random = np.random.default_rng(0)
+    for host in cy_state.hosts.values():
+        host.np_random = cy_state.np_random
+
+    step0 = harness.full_step()
+    pending = controller.actions_in_progress["blue_agent_1"]
+    assert not any(d.field_name == "host_decoys" and d.host_or_agent == f"host_{target_host_idx}" for d in step0.diffs)
+    assert type(pending["action"]).__name__ == "DeployDecoy"
+    assert int(pending["remaining_ticks"]) == 1
+    assert tuple(bool(v) for v in harness.jax_state.host_decoys[target_host_idx]) == (False, False, True, True)
+
+    step1 = harness.full_step()
+    service_names = {str(name).split(".")[-1].lower() for name in controller.state.hosts[target_hostname].services}
+
+    assert not any(d.field_name == "host_decoys" and d.host_or_agent == f"host_{target_host_idx}" for d in step1.diffs)
+    assert service_names == {"sshd", "otservice", "tomcat", "vsftpd"}
+    assert tuple(bool(v) for v in harness.jax_state.host_decoys[target_host_idx]) == (False, False, True, True)

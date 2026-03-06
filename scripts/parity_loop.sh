@@ -11,6 +11,7 @@
 #   FUZZ_MISMATCH_MODE      - "error" (default) or "all"
 #   FUZZ_BLUE_AGENT         - "sleep" (default), "monitor", or "random"
 #   FUZZ_BLUE_ACTION_SOURCE - "sleep" (default) or "cyborg_policy"
+#   FUZZ_STRICT_RANDOM_SYNC - "1" (default) to fail on unsupported CybORG RNG paths
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -21,6 +22,7 @@ FUZZ_STEPS="${FUZZ_STEPS:-100}"
 FUZZ_MISMATCH_MODE="${FUZZ_MISMATCH_MODE:-error}"
 FUZZ_BLUE_AGENT="${FUZZ_BLUE_AGENT:-sleep}"
 FUZZ_BLUE_ACTION_SOURCE="${FUZZ_BLUE_ACTION_SOURCE:-sleep}"
+FUZZ_STRICT_RANDOM_SYNC="${FUZZ_STRICT_RANDOM_SYNC:-1}"
 
 # Persist JAX compilations between loop iterations so repeated uv/python
 # processes avoid recompilation costs.
@@ -35,7 +37,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo "  Parity Loop — Iteration $i / $MAX_ITERATIONS"
     echo "============================================"
 
-    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE, strict_differential=True)..."
+    echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE, strict_random_sync=$FUZZ_STRICT_RANDOM_SYNC, strict_differential=True)..."
     output=$(uv run python -u -c "
 from tests.differential.fuzzer import run_differential_fuzz
 r = run_differential_fuzz(
@@ -45,6 +47,7 @@ r = run_differential_fuzz(
     mismatch_mode='$FUZZ_MISMATCH_MODE',
     blue_agent='$FUZZ_BLUE_AGENT',
     blue_action_source='$FUZZ_BLUE_ACTION_SOURCE',
+    strict_random_sync=bool(int($FUZZ_STRICT_RANDOM_SYNC)),
 )
 if r:
     print(f'MISMATCH|{r.seed}|{r.step}|{r.field_name}|{r.host_or_agent}|{r.cyborg_value}|{r.jax_value}')

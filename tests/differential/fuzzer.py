@@ -50,6 +50,7 @@ def run_differential_fuzz(
     mismatch_mode: str = "error",
     blue_agent: str = "sleep",
     blue_action_source: str = "sleep",
+    strict_random_sync: bool = False,
 ) -> MismatchReport | None:
     if mismatch_mode not in {"error", "all"}:
         raise ValueError("mismatch_mode must be one of: error, all")
@@ -74,12 +75,24 @@ def run_differential_fuzz(
             green_cls=EnterpriseGreenAgent,
             red_cls=FiniteStateRedAgent,
             sync_green_rng=True,
+            strict_random_sync=strict_random_sync,
             use_cyborg_blue_policy=use_cyborg_blue_policy,
         )
         harness.reset()
 
         for t in range(max_steps_per_seed):
-            result = harness.full_step()
+            try:
+                result = harness.full_step()
+            except AssertionError as err:
+                return MismatchReport(
+                    seed=seed,
+                    step=t,
+                    field_name="random_sync",
+                    host_or_agent="",
+                    cyborg_value="strict_random_sync",
+                    jax_value="unsupported",
+                    all_diffs_str=str(err),
+                )
 
             if mismatch_mode == "all":
                 candidate_diffs = result.diffs

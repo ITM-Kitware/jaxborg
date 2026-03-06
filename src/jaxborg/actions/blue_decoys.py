@@ -31,6 +31,11 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
         state.host_decoys.at[target_host, decoy_type].set(True),
         state.host_decoys,
     )
+    host_decoy_reliability = jnp.where(
+        can_deploy,
+        state.host_decoy_reliability.at[target_host, decoy_type].set(100),
+        state.host_decoy_reliability,
+    )
     host_decoy_process_pids = jnp.where(
         can_deploy,
         state.host_decoy_process_pids.at[target_host, decoy_type].set(new_pid),
@@ -38,5 +43,6 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
     )
     return state.replace(
         host_decoys=host_decoys,
+        host_decoy_reliability=host_decoy_reliability,
         host_decoy_process_pids=host_decoy_process_pids,
     )

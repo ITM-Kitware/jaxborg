@@ -44,7 +44,19 @@ def count_pid_matches(pid_row, candidate_pids):
     return jnp.sum((candidate_pids[:, None] >= 0) & (pid_row[None, :] == candidate_pids[:, None]))
 
 
+def count_valid_pids(pid_row):
+    return jnp.sum(pid_row >= 0).astype(jnp.int32)
+
+
 def first_valid_pid(pid_row):
     valid = pid_row >= 0
     idx = jnp.argmax(valid)
     return jnp.where(jnp.any(valid), pid_row[idx], -1)
+
+
+def nth_valid_pid(pid_row, n):
+    valid = pid_row >= 0
+    ordinals = jnp.cumsum(valid.astype(jnp.int32)) - 1
+    target = valid & (ordinals == n)
+    idx = jnp.argmax(target)
+    return jnp.where(jnp.any(target), pid_row[idx], first_valid_pid(pid_row))

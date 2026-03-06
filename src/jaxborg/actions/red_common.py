@@ -13,15 +13,18 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
 )
-from jaxborg.actions.rng import sample_red_pid_delta
+from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     ACTIVITY_EXPLOIT,
     COMPROMISE_USER,
+    GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
 )
 from jaxborg.state import CC4Const, CC4State
+
+EXPLOIT_ROUTE_DETECTION_RATE = 0.95
 
 
 def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
@@ -293,6 +296,105 @@ def select_scan_execution_source_host(
         pending_source,
         computed,
     )
+
+
+def shortest_path_nodes(
+    data_links: chex.Array,
+    host_active: chex.Array,
+    source_host: chex.Array,
+    target_host: chex.Array,
+) -> tuple[chex.Array, chex.Array]:
+    """Return ordered shortest-path hosts from source to target, padded with -1."""
+    n_hosts = data_links.shape[0]
+    empty_path = jnp.full((GLOBAL_MAX_HOSTS,), -1, dtype=jnp.int32)
+    source_idx = jnp.clip(source_host, 0, n_hosts - 1)
+    target_idx = jnp.clip(target_host, 0, n_hosts - 1)
+    valid = (source_host >= 0) & (target_host >= 0) & host_active[source_idx] & host_active[target_idx]
+
+    def _compute_path(_):
+        visited = jnp.zeros((n_hosts,), dtype=jnp.bool_).at[source_idx].set(True)
+        frontier = jnp.zeros((n_hosts,), dtype=jnp.bool_).at[source_idx].set(True)
+        parent = jnp.full((n_hosts,), -1, dtype=jnp.int32)
+        found = visited[target_idx]
+
+        def _cond(carry):
+            _, frontier_mask, _, _, found_target = carry
+            return (~found_target) & jnp.any(frontier_mask)
+
+        def _body(carry):
+            step, frontier_mask, visited_mask, parent_idx, _ = carry
+            edge_mask = frontier_mask[:, None] & data_links
+            new_frontier = jnp.any(edge_mask, axis=0) & ~visited_mask & host_active
+            new_parents = jnp.argmax(edge_mask, axis=0).astype(jnp.int32)
+            parent_idx = jnp.where(new_frontier, new_parents, parent_idx)
+            visited_mask = visited_mask | new_frontier
+            return step + 1, new_frontier, visited_mask, parent_idx, visited_mask[target_idx]
+
+        _, _, visited, parent, found = jax.lax.while_loop(
+            _cond,
+            _body,
+            (jnp.int32(0), frontier, visited, parent, found),
+        )
+
+        def _reconstruct(_):
+            reverse_path = jnp.full((GLOBAL_MAX_HOSTS,), -1, dtype=jnp.int32)
+
+            def _rev_cond(carry):
+                idx, current, _ = carry
+                return (current >= 0) & (idx < GLOBAL_MAX_HOSTS)
+
+            def _rev_body(carry):
+                idx, current, rev = carry
+                rev = rev.at[idx].set(current)
+                next_current = jnp.where(current == source_idx, jnp.int32(-1), parent[current])
+                return idx + 1, next_current, rev
+
+            rev_len, _, reverse_path = jax.lax.while_loop(
+                _rev_cond,
+                _rev_body,
+                (jnp.int32(0), target_idx, reverse_path),
+            )
+            ordered = jnp.full((GLOBAL_MAX_HOSTS,), -1, dtype=jnp.int32)
+
+            def _write_path(i, arr):
+                return arr.at[i].set(reverse_path[rev_len - i - 1])
+
+            ordered = jax.lax.fori_loop(0, rev_len, _write_path, ordered)
+            return ordered, rev_len
+
+        return jax.lax.cond(found, _reconstruct, lambda _: (empty_path, jnp.int32(0)), operand=None)
+
+    return jax.lax.cond(valid, _compute_path, lambda _: (empty_path, jnp.int32(0)), operand=None)
+
+
+def apply_exploit_route_detection(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+    target_host: chex.Array,
+    enabled: chex.Array,
+    key: jax.Array,
+) -> CC4State:
+    """Mirror SSHBruteForce route-level network connection events."""
+    source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
+    path_nodes, path_len = shortest_path_nodes(const.data_links, const.host_active, source_host, target_host)
+
+    def _apply(state_in):
+        def _body(i, current_state):
+            host_idx = path_nodes[i]
+            draw_key = jax.random.fold_in(key, i)
+            rand_val, current_state = sample_detection_random(current_state, draw_key)
+            detected = rand_val > jnp.float32(1.0 - EXPLOIT_ROUTE_DETECTION_RATE)
+            host_activity_detected = jnp.where(
+                detected,
+                current_state.host_activity_detected.at[host_idx].set(True),
+                current_state.host_activity_detected,
+            )
+            return current_state.replace(host_activity_detected=host_activity_detected)
+
+        return jax.lax.fori_loop(0, path_len, _body, state_in)
+
+    return jax.lax.cond(enabled & (path_len > 0), _apply, lambda s: s, state)
 
 
 def apply_exploit_success(

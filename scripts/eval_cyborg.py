@@ -2,6 +2,7 @@
 
 import argparse
 import pickle
+from pathlib import Path
 from statistics import mean, stdev
 
 import jax
@@ -31,7 +32,10 @@ def make_env(seed=None):
 
 
 def load_checkpoint(path):
-    with open(path, "rb") as f:
+    ckpt_path = Path(path)
+    if not ckpt_path.is_file():
+        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
+    with ckpt_path.open("rb") as f:
         ckpt = pickle.load(f)
     network = ActorCritic(
         action_dim=ckpt["action_dim"],
@@ -67,8 +71,10 @@ def run_episode(env, network, params, deterministic, rng):
             cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             actions[agent_name] = cyborg_action
 
-        observations, rewards, _, _, _ = env.step(actions=actions)
+        observations, rewards, terminations, truncations, _ = env.step(actions=actions)
         total += mean(rewards.values())
+        if terminations.get("__all__", False) or truncations.get("__all__", False):
+            break
 
     return total
 
@@ -91,11 +97,20 @@ def evaluate(checkpoint_path, episodes, seed, deterministic):
         print(f"stdev:     {stdev(episode_rewards):.4f}")
 
 
-if __name__ == "__main__":
+def build_arg_parser():
     parser = argparse.ArgumentParser(description="Evaluate JAXborg policy in CybORG")
     parser.add_argument("--checkpoint", required=True, help="Path to checkpoint_final.pkl")
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
-    args = parser.parse_args()
+    return parser
+
+
+def main(argv=None):
+    parser = build_arg_parser()
+    args = parser.parse_args(argv)
     evaluate(args.checkpoint, args.episodes, args.seed, args.deterministic)
+
+
+if __name__ == "__main__":
+    main()

@@ -13,10 +13,14 @@ from jaxborg.actions.blue_decoys import apply_blue_decoy
 from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_DISCOVER_DECEPTION,
+    ACTION_TYPE_EXPLOIT_SSH,
+    ACTION_TYPE_PRIVESC,
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
     RED_SLEEP,
+    decode_red_action,
     encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
@@ -84,6 +88,18 @@ class TestResult:
 
 _ZERO_INT_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
 _ZERO_BOOL_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+
+
+def _capture_service_process_map(cy_state):
+    service_map = {}
+    for hostname, host in cy_state.hosts.items():
+        host_services = {}
+        for svc_name, svc in host.services.items():
+            svc_str = str(svc_name).split(".")[-1].lower()
+            pid = svc.process if hasattr(svc, "process") else svc.get("process")
+            host_services[svc_str] = int(pid) if pid is not None else -1
+        service_map[hostname] = host_services
+    return service_map
 
 
 def _cy_action_succeeded(controller, agent_name: str) -> bool | None:
@@ -165,6 +181,7 @@ class CC4DifferentialHarness:
         check_rewards=True,
         check_obs=False,
         sync_green_rng=False,
+        strict_random_sync=False,
         use_cyborg_blue_policy=False,
     ):
         self.seed = seed
@@ -175,6 +192,7 @@ class CC4DifferentialHarness:
         self.check_rewards = check_rewards
         self.check_obs = check_obs
         self.sync_green_rng = sync_green_rng
+        self.strict_random_sync = strict_random_sync
         self.use_cyborg_blue_policy = use_cyborg_blue_policy
         self.cyborg_env = None
         self.jax_state = None
@@ -184,6 +202,7 @@ class CC4DifferentialHarness:
         self.green_recorder = None
         self._blue_wrapper = None
         self._blue_unsupported_pending = {}
+        self.last_random_sync_report = None
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -197,6 +216,7 @@ class CC4DifferentialHarness:
 
     def reset(self):
         self._blue_unsupported_pending = {}
+        self.last_random_sync_report = None
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=self.blue_cls,
             green_agent_class=self.green_cls,
@@ -520,6 +540,9 @@ class CC4DifferentialHarness:
         """
         self.rng_key, key_green, key_red, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 3)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
+        detection_index_before = int(self.jax_state.detection_random_index)
+        detection_count = 0
+        using_detection_sync = False
 
         if blue_actions is None and not self.use_cyborg_blue_policy:
             blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
@@ -560,11 +583,9 @@ class CC4DifferentialHarness:
                     action_idx, b, self.mappings, const=self.jax_const
                 )
 
-        pre_services = {}
         cy_state = controller.state
         forced_primary_hosts_pre = _extract_primary_hosts(cy_state, self.mappings)
-        for hostname in cy_state.hosts:
-            pre_services[hostname] = set(cy_state.hosts[hostname].services.keys())
+        pre_service_map = _capture_service_process_map(cy_state)
 
         controller.step(cyborg_actions)
 
@@ -595,19 +616,24 @@ class CC4DifferentialHarness:
             red_next_abstract_rank=next_abstract_rank,
         )
 
-        new_services_by_host = {}
-        for hostname in cy_state.hosts:
-            added = set(cy_state.hosts[hostname].services.keys()) - pre_services.get(hostname, set())
-            if added:
-                new_services_by_host[hostname] = added
+        changed_services_by_host = {}
+        post_service_map = _capture_service_process_map(cy_state)
+        for hostname, post_services in post_service_map.items():
+            before_services = pre_service_map.get(hostname, {})
+            changed = {svc_name for svc_name, pid in post_services.items() if before_services.get(svc_name) != pid}
+            if changed:
+                changed_services_by_host[hostname] = changed
 
-        self._correct_pending_decoys(new_services_by_host)
+        self._correct_pending_decoys(changed_services_by_host)
 
         # --- Green RNG sync ---
         if self.green_recorder:
-            step_fields, red_pid_deltas, blue_decoy_pid_deltas = self.green_recorder.extract_step(
+            step_fields, red_pid_deltas, blue_decoy_pid_deltas, random_sync_report = self.green_recorder.extract_step(
                 int(self.jax_state.time)
             )
+            self._sync_red_action_randoms(random_sync_report, red_actions)
+            self._validate_blue_action_randoms(random_sync_report, controller)
+            self.last_random_sync_report = random_sync_report
             green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
             red_pid_delta_row = self.jax_state.red_pid_deltas.at[self.jax_state.time].set(
                 jnp.array(red_pid_deltas, dtype=jnp.int32)
@@ -615,11 +641,29 @@ class CC4DifferentialHarness:
             blue_decoy_pid_delta_row = self.jax_state.blue_decoy_pid_deltas.at[self.jax_state.time].set(
                 jnp.array(blue_decoy_pid_deltas, dtype=jnp.int32)
             )
+            detection_count = len(random_sync_report.detection_randoms)
+            detection_randoms = self.jax_state.detection_randoms
+            if detection_count:
+                end_idx = detection_index_before + detection_count
+                if end_idx > detection_randoms.shape[0]:
+                    raise RuntimeError(
+                        "Detection random overflow while syncing CybORG RNG at "
+                        f"step {int(self.jax_state.time)}: end_idx={end_idx} "
+                        f"> capacity={int(detection_randoms.shape[0])}"
+                    )
+                detection_randoms = detection_randoms.at[detection_index_before:end_idx].set(
+                    jnp.array(random_sync_report.detection_randoms, dtype=jnp.float32)
+                )
+            using_detection_sync = bool(detection_count) and random_sync_report.detection_sync_supported
             self.jax_state = self.jax_state.replace(
                 green_randoms=green_randoms,
                 red_pid_deltas=red_pid_delta_row,
                 blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
+                detection_randoms=detection_randoms,
+                use_detection_randoms=jnp.array(using_detection_sync),
             )
+            if self.strict_random_sync and random_sync_report.has_issues:
+                raise AssertionError(random_sync_report.format(int(self.jax_state.time)))
 
         # --- JAX action application via shared apply_all_actions (same as training code path) ---
         blue_action_arr = jnp.array(
@@ -645,8 +689,17 @@ class CC4DifferentialHarness:
             jnp.stack(subkeys[:NUM_RED_AGENTS]),
             forced_primary_hosts_pre,
         )
+        if self.green_recorder:
+            detection_consumed = int(self.jax_state.detection_random_index) - detection_index_before
+            expected_consumed = detection_count if using_detection_sync else 0
+            if detection_consumed != expected_consumed:
+                raise AssertionError(
+                    "Detection RNG sync mismatch at step "
+                    f"{int(self.jax_state.time)}: expected JAX to consume {expected_consumed} "
+                    f"precomputed draw(s), consumed {detection_consumed}"
+                )
         self._schedule_pending_generic_decoys(controller)
-        self._sync_pending_unsupported_blue_actions(controller, new_services_by_host)
+        self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
         )
@@ -724,6 +777,137 @@ class CC4DifferentialHarness:
                     diffs.append(StateDiff("observation", cyborg_trimmed, jax_trimmed, f"{agent_name}: {detail}"))
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def _sync_red_action_randoms(self, random_sync_report, red_actions):
+        synced_randoms = list(random_sync_report.detection_randoms)
+
+        for usage in random_sync_report.red_action_rng_usage:
+            action_idx = self._effective_red_action_for_sync(
+                usage.agent_idx,
+                red_actions.get(usage.agent_idx, RED_SLEEP),
+            )
+            action_type, _, _ = decode_red_action(action_idx, usage.agent_idx, self.jax_const)
+            action_type = int(action_type)
+            if usage.action_type in {"AggressiveServiceDiscovery", "StealthServiceDiscovery"}:
+                if len(usage.random_calls) == 1 and not usage.choice_sizes and not usage.integer_ranges:
+                    synced_randoms.extend(usage.random_calls)
+                    continue
+                random_sync_report.unsupported_detection_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if usage.action_type == "DiscoverDeception":
+                synced = self._sync_discover_deception_randoms(usage, action_type, action_idx)
+                if synced is not None:
+                    synced_randoms.extend(synced)
+                    continue
+                random_sync_report.unsupported_detection_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if usage.action_type == "RedSessionCheck":
+                if not usage.random_calls and not usage.integer_ranges and len(usage.choice_sizes) == 1:
+                    continue
+                random_sync_report.unsupported_random_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if action_type == ACTION_TYPE_EXPLOIT_SSH:
+                if usage.random_calls and not usage.choice_sizes and not usage.integer_ranges:
+                    synced_randoms.extend(usage.random_calls)
+                    continue
+                random_sync_report.unsupported_random_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if action_type == ACTION_TYPE_PRIVESC:
+                if not usage.random_calls and not usage.integer_ranges and len(usage.choice_sizes) == 1:
+                    continue
+                random_sync_report.unsupported_random_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            random_sync_report.unsupported_random_actions.append(
+                f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+            )
+
+        random_sync_report.detection_randoms = synced_randoms
+
+    def _effective_red_action_for_sync(self, agent_idx: int, proposed_action: int) -> int:
+        if bool(self.jax_state.red_pending_ticks[agent_idx] > 0):
+            return int(self.jax_state.red_pending_action[agent_idx])
+        return int(proposed_action)
+
+    def _validate_blue_action_randoms(self, random_sync_report, controller) -> None:
+        for usage in random_sync_report.blue_action_rng_usage:
+            if usage.action_type != "DeployDecoy":
+                random_sync_report.unsupported_random_actions.append(
+                    f"blue_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if usage.random_calls or usage.integer_ranges or len(usage.choice_sizes) != 1:
+                random_sync_report.unsupported_random_actions.append(
+                    f"blue_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            pending = controller.actions_in_progress.get(f"blue_agent_{usage.agent_idx}")
+            executed = controller.action.get(f"blue_agent_{usage.agent_idx}", [])
+            executed_is_generic_decoy = bool(executed) and type(executed[0]).__name__ == "DeployDecoy"
+            pending_is_generic_decoy = pending is not None and type(pending["action"]).__name__ == "DeployDecoy"
+            if not pending_is_generic_decoy and not executed_is_generic_decoy:
+                random_sync_report.unsupported_random_actions.append(
+                    f"blue_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+
+    def _sync_discover_deception_randoms(self, usage, action_type: int, action_idx: int) -> list[float] | None:
+        if action_type != ACTION_TYPE_DISCOVER_DECEPTION:
+            return None
+        if usage.choice_sizes or usage.integer_ranges or not usage.random_calls:
+            return None
+
+        _, _, target_host = decode_red_action(action_idx, usage.agent_idx, self.jax_const)
+        target_host = int(target_host)
+        hostname = self.mappings.idx_to_hostname.get(target_host)
+        if hostname is None:
+            return None
+        target = self.cyborg_env.environment_controller.state.hosts.get(hostname)
+        if target is None:
+            return None
+
+        detected = self._cyborg_discover_deception_detected(target.processes, usage.random_calls)
+        if detected is None:
+            return None
+
+        has_decoys = bool(np.any(np.asarray(self.jax_state.host_decoys[target_host])))
+        if detected:
+            return [0.0, 1.0] if has_decoys else [1.0, 0.0]
+        return [1.0, 1.0]
+
+    @staticmethod
+    def _cyborg_discover_deception_detected(processes, random_calls: list[float]) -> bool | None:
+        call_idx = 0
+        detected = False
+
+        for process in processes:
+            if call_idx >= len(random_calls):
+                return None
+            decoy_draw = random_calls[call_idx]
+            call_idx += 1
+            is_exploit_decoy = getattr(getattr(process, "decoy_type", None), "name", "") == "EXPLOIT"
+            if decoy_draw <= 0.5 and is_exploit_decoy:
+                detected = True
+                continue
+
+            if call_idx >= len(random_calls):
+                return None
+            fp_draw = random_calls[call_idx]
+            call_idx += 1
+            if fp_draw <= 0.1 and not is_exploit_decoy:
+                detected = True
+
+        if call_idx != len(random_calls):
+            return None
+        return detected
 
     def _assert_duration_parity(self, controller):
         """Assert JAX and CybORG agree on which agents are busy (action in progress).

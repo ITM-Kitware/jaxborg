@@ -8,6 +8,7 @@ from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
@@ -65,18 +66,42 @@ def _apply_single_green(
 
     action = sample_green_random(state, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
 
-    has_service = jnp.any(state.host_services[host_idx])
-
     active_services = state.host_services[host_idx]
-    num_active = jnp.sum(active_services)
-    svc_indices = jnp.where(active_services, jnp.arange(NUM_SERVICES), NUM_SERVICES)
-    sorted_svcs = jnp.sort(svc_indices)
-    svc_rand_idx = sample_green_random(state, t, host_idx, 1, k_svc, int_range=num_active)
-    chosen_svc = sorted_svcs[svc_rand_idx]
-    chosen_svc = jnp.where(has_service, chosen_svc, jnp.int32(0))
-    svc_reliability = state.host_service_reliability[host_idx, chosen_svc]
+    active_decoys = state.host_decoys[host_idx]
+    service_tokens = jnp.where(active_services, jnp.arange(NUM_SERVICES), NUM_SERVICES + NUM_DECOY_TYPES)
+    decoy_tokens = jnp.where(
+        active_decoys,
+        NUM_SERVICES + jnp.arange(NUM_DECOY_TYPES),
+        NUM_SERVICES + NUM_DECOY_TYPES,
+    )
+    available_tokens = jnp.concatenate([service_tokens, decoy_tokens], axis=0)
+    num_available = jnp.sum(active_services.astype(jnp.int32)) + jnp.sum(active_decoys.astype(jnp.int32))
+    sorted_tokens = jnp.sort(available_tokens)
+    chosen_token_precomputed = jnp.int32(state.green_randoms[t, host_idx, 1])
+    chosen_token_rng = sorted_tokens[sample_green_random(state, t, host_idx, 1, k_svc, int_range=num_available)]
+    chosen_token = jax.lax.cond(
+        state.use_green_randoms,
+        lambda _: chosen_token_precomputed,
+        lambda _: chosen_token_rng,
+        None,
+    )
+    has_service = num_available > 0
+    chosen_token = jnp.where(has_service, chosen_token, jnp.int32(0))
+    chosen_is_decoy = chosen_token >= NUM_SERVICES
+    chosen_service = jnp.minimum(chosen_token, jnp.int32(NUM_SERVICES - 1))
+    chosen_decoy = jnp.clip(chosen_token - NUM_SERVICES, 0, NUM_DECOY_TYPES - 1)
+    chosen_valid = jnp.where(
+        chosen_is_decoy,
+        active_decoys[chosen_decoy],
+        active_services[chosen_service],
+    )
+    svc_reliability = jnp.where(
+        chosen_is_decoy,
+        state.host_decoy_reliability[host_idx, chosen_decoy],
+        state.host_service_reliability[host_idx, chosen_service],
+    )
     rel_roll = sample_green_random(state, t, host_idx, 2, k_rel, int_range=100)
-    work_succeeds = has_service & (rel_roll < svc_reliability)
+    work_succeeds = has_service & chosen_valid & (rel_roll < svc_reliability)
 
     # -- GreenLocalWork --
     local_work_failed = (action == GREEN_LOCAL_WORK) & ~work_succeeds

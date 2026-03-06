@@ -71,6 +71,7 @@ class CC4State:
     host_services: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) bool
     host_service_reliability: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_SERVICES) int32 — 0-100
     host_decoys: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) bool
+    host_decoy_reliability: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) int32 — 0-100
     ot_service_stopped: chex.Array  # (GLOBAL_MAX_HOSTS,) bool
 
     red_sessions: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
@@ -182,6 +183,7 @@ def create_initial_state() -> CC4State:
         host_services=jnp.zeros((GLOBAL_MAX_HOSTS, NUM_SERVICES), dtype=jnp.bool_),
         host_service_reliability=jnp.full((GLOBAL_MAX_HOSTS, NUM_SERVICES), 100, dtype=jnp.int32),
         host_decoys=jnp.zeros((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), dtype=jnp.bool_),
+        host_decoy_reliability=jnp.full((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), 100, dtype=jnp.int32),
         ot_service_stopped=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_sessions=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),

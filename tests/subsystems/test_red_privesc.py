@@ -12,6 +12,7 @@ from CybORG.Simulator.Actions.AbstractActions.DiscoverNetworkServices import (
 from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import (
     ExploitRemoteService,
 )
+from CybORG.Simulator.Process import Process
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
@@ -30,6 +31,7 @@ from jaxborg.constants import (
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SESSION_PIDS,
     NUM_RED_AGENTS,
     SERVICE_IDS,
 )
@@ -743,3 +745,118 @@ class TestDifferentialWithCybORG:
 
         assert cy_success
         assert jax_success == cy_success
+
+    def test_privesc_random_target_session_choice_matches_cyborg_for_mixed_sessions(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        agent_id = 0
+        source_host = int(const.red_start_hosts[agent_id])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and h != source_host
+            and cy_state.hosts[sorted_hosts[h]].os_type.name == "LINUX"
+        )
+        target_hostname = sorted_hosts[target_host]
+        target_host_obj = cy_state.hosts[target_hostname]
+
+        red_name = "red_agent_0"
+        assert isinstance(cy_state.sessions[red_name][0], RedAbstractSession)
+        cy_state.np_random = np.random.default_rng(11)
+        target_host_obj.processes.extend(
+            [
+                Process(process_name="cmd.sh", pid=6001, username="user"),
+                Process(process_name="cmd.sh", pid=6002, username="user"),
+                Process(process_name="cmd.sh", pid=6003, username="user"),
+            ]
+        )
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=red_name,
+                parent=0,
+                session_type="shell",
+                pid=6001,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=red_name,
+                parent=0,
+                session_type="shell",
+                pid=6002,
+            )
+        )
+        cy_state.add_session(
+            RedAbstractSession(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=red_name,
+                parent=0,
+                session_type="shell",
+                pid=6003,
+            )
+        )
+
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent=red_name)
+        cy_action.duration = 1
+        cy_result = cy_action.execute(cy_state)
+        cy_success = str(cy_result.success).upper() == "TRUE"
+
+        target_sessions_after = [
+            sess for sess in cy_state.sessions[red_name].values() if sess.hostname == target_hostname
+        ]
+        assert cy_success
+        assert len(target_sessions_after) == 3
+        privileged_target_sessions = [sess for sess in target_sessions_after if sess.has_privileged_access()]
+        assert len(privileged_target_sessions) == 1
+        assert privileged_target_sessions[0].pid == 6001
+
+        target_pid_row = (
+            jnp.full(MAX_TRACKED_SESSION_PIDS, -1, dtype=jnp.int32).at[:3].set(jnp.array([6001, 6002, 6003]))
+        )
+        target_abstract_pid_row = (
+            jnp.full(MAX_TRACKED_SESSION_PIDS, -1, dtype=jnp.int32).at[:2].set(jnp.array([6002, 6003]))
+        )
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True).at[agent_id, target_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, source_host].set(1).at[agent_id, target_host].set(3),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host]
+            .set(True)
+            .at[agent_id, target_host]
+            .set(True),
+            red_abstract_host_rank=state.red_abstract_host_rank.at[agent_id, source_host].set(0),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(source_host),
+            red_privilege=state.red_privilege.at[agent_id, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+            red_session_pids=state.red_session_pids.at[agent_id, target_host].set(target_pid_row),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, target_host].set(
+                target_abstract_pid_row
+            ),
+        )
+
+        privesc_idx = encode_red_action("PrivilegeEscalate", target_host, agent_id)
+        new_state = _jit_apply_red(state, const, agent_id, privesc_idx, jax.random.PRNGKey(4))
+        jax_success = int(new_state.red_privilege[agent_id, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert jax_success == cy_success
+        assert int(new_state.red_privilege[agent_id, target_host]) == COMPROMISE_PRIVILEGED
+        assert int(new_state.red_session_count[agent_id, target_host]) == 3
+        np.testing.assert_array_equal(
+            np.array(new_state.red_session_pids[agent_id, target_host]),
+            np.array(target_pid_row),
+        )
+        np.testing.assert_array_equal(
+            np.array(new_state.red_session_privileged_pids[agent_id, target_host]),
+            np.array(jnp.full(MAX_TRACKED_SESSION_PIDS, -1, dtype=jnp.int32).at[0].set(6001)),
+        )
