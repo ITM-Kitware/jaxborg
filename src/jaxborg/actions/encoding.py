@@ -120,7 +120,7 @@ RED_ACTION_DURATIONS = jnp.array(
 
 BLUE_ACTION_DURATIONS = jnp.array(
     #  Sleep Monitor Analyse Remove Restore Decoy Block Allow
-    [1, 1, 2, 3, 5, 2, 1, 1],
+    [1, 1, 2, 3, 5, 1, 1, 1],
     dtype=jnp.int32,
 )
 

@@ -799,6 +799,7 @@ class CC4DifferentialHarness:
             if not (BLUE_DECOY_START <= pending_action < BLUE_DECOY_END):
                 continue
             from jaxborg.constants import ACTION_HOST_SLOTS, OBS_HOSTS_PER_SUBNET
+
             offset = pending_action - BLUE_DECOY_START
             flat_slot = offset % ACTION_HOST_SLOTS
             sid = flat_slot // OBS_HOSTS_PER_SUBNET

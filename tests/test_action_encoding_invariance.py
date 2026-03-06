@@ -123,13 +123,11 @@ class TestActionEncodingTopologyInvariance:
                         continue
                     if slot < MAX_SERVER_HOSTS:
                         assert bool(c.host_is_server[h]), (
-                            f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: "
-                            f"host {h} should be server"
+                            f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: host {h} should be server"
                         )
                     else:
                         assert bool(c.host_is_user[h]), (
-                            f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: "
-                            f"host {h} should be user"
+                            f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: host {h} should be user"
                         )
 
 
@@ -200,6 +198,4 @@ class TestCybORGActionEncodingParity:
                             f"jax_valid={jax_valid}"
                         )
 
-        assert not mismatches, (
-            f"{len(mismatches)} mask mismatches:\n" + "\n".join(mismatches[:10])
-        )
+        assert not mismatches, f"{len(mismatches)} mask mismatches:\n" + "\n".join(mismatches[:10])

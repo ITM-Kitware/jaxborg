@@ -337,16 +337,15 @@ class TestRedAgentActivation:
 
         controller = h.cyborg_env.environment_controller
         cyborg_active = {
-            r for r in range(NUM_RED_AGENTS)
+            r
+            for r in range(NUM_RED_AGENTS)
             if controller.agent_interfaces.get(f"red_agent_{r}")
             and controller.agent_interfaces[f"red_agent_{r}"].active
         }
 
         jax_active = {r for r in range(NUM_RED_AGENTS) if h.jax_state.red_agent_active[r]}
 
-        assert cyborg_active == {0}, (
-            f"CybORG should have only red_agent_0 active, got {cyborg_active}"
-        )
+        assert cyborg_active == {0}, f"CybORG should have only red_agent_0 active, got {cyborg_active}"
         assert jax_active == cyborg_active, (
             f"JAXborg activates {jax_active} but CybORG only activates "
             f"{cyborg_active}. Extra agents: {jax_active - cyborg_active}"
@@ -362,7 +361,8 @@ class TestRedAgentActivation:
 
         controller = h.cyborg_env.environment_controller
         cyborg_active = {
-            r for r in range(NUM_RED_AGENTS)
+            r
+            for r in range(NUM_RED_AGENTS)
             if controller.agent_interfaces.get(f"red_agent_{r}")
             and controller.agent_interfaces[f"red_agent_{r}"].active
         }
@@ -399,9 +399,6 @@ class TestRedAgentActivation:
 
         # JAX FSM state
         jax_fsm = h.jax_state.fsm_host_states[0]
-        state_name_to_int = {"K": FSM_K, "S": FSM_S, "U": FSM_U, "R": FSM_R, "F": FSM_F,
-                             "KD": FSM_KD, "SD": FSM_S + 1, "UD": FSM_U + 1, "RD": FSM_R + 1}
-
         # Start host should be in state U in both
         start_host = int(h.jax_const.red_start_hosts[0])
         assert start_host in cyborg_fsm_states, "CybORG should know about start host"
@@ -419,4 +416,3 @@ class TestRedAgentActivation:
             assert int(jax_fsm[hidx]) == FSM_K, (
                 f"JAX host {hidx} should be FSM_K={FSM_K} at reset, got {int(jax_fsm[hidx])}"
             )
-

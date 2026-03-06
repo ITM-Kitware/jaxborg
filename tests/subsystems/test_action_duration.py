@@ -35,7 +35,7 @@ class TestDurationLookupRed:
 
 class TestDurationLookupBlue:
     def test_duration_lookup_blue(self):
-        expected = [1, 1, 2, 3, 5, 2, 1, 1]
+        expected = [1, 1, 2, 3, 5, 1, 1, 1]
         for i, val in enumerate(expected):
             assert int(BLUE_ACTION_DURATIONS[i]) == val, (
                 f"BLUE_ACTION_DURATIONS[{i}] = {int(BLUE_ACTION_DURATIONS[i])}, expected {val}"
@@ -314,6 +314,44 @@ class TestDurationDifferential:
         assert not errors, f"Blue restore parity errors: {errors[:3]}"
         assert jax_ticks_per_step[0] == 4, f"Step 0: expected ticks=4, got {jax_ticks_per_step[0]}"
         assert jax_ticks_per_step[4] == 0, f"Step 4: expected ticks=0 (executed), got {jax_ticks_per_step[4]}"
+
+    def test_blue_decoy_ticks_match_cyborg(self):
+        """Submit Blue Decoy, verify CybORG and JAX both execute it in one step."""
+        pytest.importorskip("CybORG")
+        from CybORG.Agents import SleepAgent
+
+        from tests.differential.harness import CC4DifferentialHarness
+        from tests.differential.state_comparator import _ERROR_FIELDS
+
+        harness = CC4DifferentialHarness(
+            seed=0,
+            max_steps=10,
+            blue_cls=SleepAgent,
+            green_cls=SleepAgent,
+            red_cls=SleepAgent,
+            sync_green_rng=False,
+        )
+        harness.reset()
+        controller = harness.cyborg_env.environment_controller
+
+        active = harness.jax_const.host_active
+        blue_hosts = harness.jax_const.blue_agent_hosts[0] & active & ~harness.jax_const.host_is_router
+        target = int(jnp.argmax(blue_hosts))
+
+        blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
+        blue_actions[0] = encode_blue_action("DeployDecoy_Tomcat", target, 0, const=harness.jax_const)
+
+        result = harness.full_step(blue_actions=blue_actions)
+        step_errors = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
+
+        cy_ticks = _get_cyborg_remaining_ticks(controller, "blue_agent_0")
+        jax_ticks = int(harness.jax_state.blue_pending_ticks[0])
+
+        assert not step_errors, f"Blue decoy parity errors: {step_errors[:3]}"
+        assert cy_ticks == 0, f"CybORG decoy should execute immediately, got remaining_ticks={cy_ticks}"
+        assert jax_ticks == cy_ticks, (
+            f"Blue decoy duration mismatch: CybORG remaining_ticks={cy_ticks}, JAX pending_ticks={jax_ticks}"
+        )
 
     def test_multi_seed_tick_parity(self):
         """Multiple seeds × 40 steps: verify tick parity for red agents at every step."""
