@@ -22,6 +22,14 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     When `state` is provided, decoy validity reflects live services/decoys.
     Otherwise it falls back to reset-time services from `const`.
     """
+    if state is not None:
+        busy = state.blue_pending_ticks[agent_id] > 0
+        pending_action = jnp.clip(state.blue_pending_action[agent_id], 0, BLUE_ALLOW_TRAFFIC_END - 1)
+        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[pending_action].set(True)
+    else:
+        busy = jnp.bool_(False)
+        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_)
+
     # (NUM_SUBNETS, OBS_HOSTS_PER_SUBNET) — True where slot has a valid host
     obs_valid = const.obs_host_map < GLOBAL_MAX_HOSTS
     # (NUM_SUBNETS,) — True where agent controls this subnet
@@ -68,4 +76,4 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     mask = mask.at[BLUE_BLOCK_TRAFFIC_START : BLUE_BLOCK_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS].set(traffic_flat)
     mask = mask.at[BLUE_ALLOW_TRAFFIC_START : BLUE_ALLOW_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS].set(traffic_flat)
 
-    return mask
+    return jnp.where(busy, pending_mask, mask)

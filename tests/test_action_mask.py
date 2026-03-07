@@ -2,6 +2,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxborg.actions.duration import process_blue_with_duration
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
     BLUE_ALLOW_TRAFFIC_START,
@@ -10,6 +11,7 @@ from jaxborg.actions.encoding import (
     BLUE_DECOY_START,
     BLUE_REMOVE_START,
     BLUE_RESTORE_START,
+    encode_blue_action,
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
@@ -147,6 +149,30 @@ class TestJITCompatibility:
         mask = jitted(const, 0)
         assert mask.shape == (BLUE_ALLOW_TRAFFIC_END,)
         assert mask[0]
+
+
+class TestBusyBlueMask:
+    def test_busy_agent_only_exposes_pending_action(self):
+        from jaxborg.env import CC4Env
+
+        env = CC4Env(num_steps=100)
+        _, env_state = env.reset(jax.random.PRNGKey(42))
+        const = env_state.const
+        state = env_state.state
+
+        active = np.array(const.host_active, dtype=bool)
+        controllable = (
+            np.array(const.blue_agent_hosts[0], dtype=bool) & active & ~np.array(const.host_is_router, dtype=bool)
+        )
+        target_host = int(np.flatnonzero(controllable)[0])
+        pending_action = encode_blue_action("Restore", target_host, 0, const=const)
+
+        busy_state = process_blue_with_duration(state, const, 0, pending_action)
+        mask = np.array(compute_blue_action_mask(const, 0, busy_state), dtype=bool)
+
+        assert int(busy_state.blue_pending_ticks[0]) == 4
+        assert mask.sum() == 1
+        assert mask[pending_action]
 
 
 class TestWithRealTopology:
