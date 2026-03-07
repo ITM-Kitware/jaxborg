@@ -200,7 +200,7 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
             actions = {}
             for agent_idx in range(NUM_BLUE_AGENTS):
                 agent = f"blue_{agent_idx}"
-                avail = compute_blue_action_mask(env_state.const, agent_idx)
+                avail = compute_blue_action_mask(env_state.const, agent_idx, env_state.state)
                 pi, _ = network.apply(params, obs[agent], avail)
 
                 if deterministic:
@@ -538,7 +538,7 @@ def print_mask_summary():
     _, env_state = env.reset(key)
 
     for agent_idx in range(NUM_BLUE_AGENTS):
-        mask = np.array(compute_blue_action_mask(env_state.const, agent_idx))
+        mask = np.array(compute_blue_action_mask(env_state.const, agent_idx, env_state.state))
         total_valid = mask.sum()
         by_type = []
         for name, (start, end) in zip(ACTION_TYPE_NAMES, ACTION_TYPE_RANGES):

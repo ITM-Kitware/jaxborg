@@ -324,7 +324,7 @@ class CC4Env(MultiAgentEnv):
     def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
         masks = {}
         for i in range(NUM_BLUE_AGENTS):
-            masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i)
+            masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i, env_state.state)
         for agent in self.red_agents:
             masks[agent] = jnp.ones(RED_WITHDRAW_END, dtype=jnp.bool_)
         return masks

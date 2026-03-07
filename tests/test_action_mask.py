@@ -12,7 +12,14 @@ from jaxborg.actions.encoding import (
     BLUE_RESTORE_START,
 )
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
+from jaxborg.constants import (
+    ACTION_HOST_SLOTS,
+    DECOY_IDS,
+    GLOBAL_MAX_HOSTS,
+    NUM_SUBNETS,
+    OBS_HOSTS_PER_SUBNET,
+    SERVICE_IDS,
+)
 from jaxborg.topology import build_topology
 
 
@@ -77,15 +84,30 @@ class TestHostBasedActions:
             s = bool(mask[BLUE_RESTORE_START + slot])
             assert a == r == s, f"Mismatch at slot {slot}: analyse={a}, remove={r}, restore={s}"
 
-    def test_decoy_same_host_mask_per_type(self):
+    def test_decoy_mask_respects_initial_service_compatibility(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
         mask = compute_blue_action_mask(const, 0)
-        for d in range(NUM_DECOY_TYPES):
-            offset = BLUE_DECOY_START + d * ACTION_HOST_SLOTS
-            for slot in range(ACTION_HOST_SLOTS):
-                expected = bool(mask[BLUE_ANALYSE_START + slot])
+        for slot in range(ACTION_HOST_SLOTS):
+            host_valid = bool(mask[BLUE_ANALYSE_START + slot])
+            sid = slot // OBS_HOSTS_PER_SUBNET
+            subslot = slot % OBS_HOSTS_PER_SUBNET
+            host_idx = int(const.obs_host_map[sid, subslot])
+
+            expected_by_type = {
+                DECOY_IDS["HarakaSMPT"]: host_valid
+                and host_idx != GLOBAL_MAX_HOSTS
+                and not bool(const.initial_services[host_idx, SERVICE_IDS["SMTP"]]),
+                DECOY_IDS["Apache"]: host_valid
+                and host_idx != GLOBAL_MAX_HOSTS
+                and not bool(const.initial_services[host_idx, SERVICE_IDS["APACHE2"]]),
+                DECOY_IDS["Tomcat"]: host_valid,
+                DECOY_IDS["Vsftpd"]: host_valid,
+            }
+
+            for decoy_type, expected in expected_by_type.items():
+                offset = BLUE_DECOY_START + decoy_type * ACTION_HOST_SLOTS
                 actual = bool(mask[offset + slot])
-                assert actual == expected, f"Decoy type {d} slot {slot} mismatch"
+                assert actual == expected, f"Decoy type {decoy_type} slot {slot} mismatch"
 
 
 class TestTrafficActions:

@@ -123,7 +123,9 @@ class FsmRedCC4Env(MultiAgentEnv):
 
     @partial(jax.jit, static_argnums=[0])
     def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
-        return {f"blue_{i}": compute_blue_action_mask(env_state.const, i) for i in range(NUM_BLUE_AGENTS)}
+        return {
+            f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state) for i in range(NUM_BLUE_AGENTS)
+        }
 
     @property
     def name(self) -> str:

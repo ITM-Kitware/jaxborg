@@ -159,7 +159,9 @@ def make_train(config):
             obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
             avail_batch = jnp.stack(
                 [
-                    jax.vmap(compute_blue_action_mask, in_axes=(0, None))(env_state.env_state.const, i)
+                    jax.vmap(compute_blue_action_mask, in_axes=(0, None, 0))(
+                        env_state.env_state.const, i, env_state.env_state.state
+                    )
                     for i in range(num_agents)
                 ],
                 axis=-2,
