@@ -540,7 +540,6 @@ class CC4DifferentialHarness:
         """
         self.rng_key, key_green, key_red, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 3)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
-        detection_index_before = int(self.jax_state.detection_random_index)
         detection_count = 0
         using_detection_sync = False
 
@@ -643,15 +642,16 @@ class CC4DifferentialHarness:
             )
             detection_count = len(random_sync_report.detection_randoms)
             detection_randoms = self.jax_state.detection_randoms
+            # Detection replay is step-local. Reusing the same buffer each step
+            # avoids leaking stale prior-step consumption into current-step sync.
             if detection_count:
-                end_idx = detection_index_before + detection_count
-                if end_idx > detection_randoms.shape[0]:
+                if detection_count > detection_randoms.shape[0]:
                     raise RuntimeError(
                         "Detection random overflow while syncing CybORG RNG at "
-                        f"step {int(self.jax_state.time)}: end_idx={end_idx} "
-                        f"> capacity={int(detection_randoms.shape[0])}"
+                        f"step {int(self.jax_state.time)}: count={detection_count} "
+                        f"> step_capacity={int(detection_randoms.shape[0])}"
                     )
-                detection_randoms = detection_randoms.at[detection_index_before:end_idx].set(
+                detection_randoms = detection_randoms.at[:detection_count].set(
                     jnp.array(random_sync_report.detection_randoms, dtype=jnp.float32)
                 )
             using_detection_sync = bool(detection_count) and random_sync_report.detection_sync_supported
@@ -660,6 +660,7 @@ class CC4DifferentialHarness:
                 red_pid_deltas=red_pid_delta_row,
                 blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
                 detection_randoms=detection_randoms,
+                detection_random_index=jnp.array(0, dtype=jnp.int32),
                 use_detection_randoms=jnp.array(using_detection_sync),
             )
             if self.strict_random_sync and random_sync_report.has_issues:
@@ -690,7 +691,7 @@ class CC4DifferentialHarness:
             forced_primary_hosts_pre,
         )
         if self.green_recorder:
-            detection_consumed = int(self.jax_state.detection_random_index) - detection_index_before
+            detection_consumed = int(self.jax_state.detection_random_index)
             expected_consumed = detection_count if using_detection_sync else 0
             if detection_consumed != expected_consumed:
                 raise AssertionError(
