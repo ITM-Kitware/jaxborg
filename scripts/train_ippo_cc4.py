@@ -484,7 +484,7 @@ def make_train(config):
     return env, network, init_obs, init_env_state, _init_train_state, _collect_and_update
 
 
-EXP_DIR = Path(__file__).resolve().parent.parent / "jaxborg-exp"
+EXP_DIR = Path(__file__).resolve().parent.parent.parent / "jaxborg-exp"
 
 
 @hydra.main(config_path="configs", config_name="ippo_cc4", version_base=None)
