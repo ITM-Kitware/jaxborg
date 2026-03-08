@@ -12,6 +12,7 @@ from jaxborg.actions.pids import (
     allocate_host_pid_from_delta,
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
+    count_valid_pids,
 )
 from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
@@ -233,7 +234,34 @@ def apply_red_session_check(
         jnp.where(forced_valid, forced_primary_host, promoted),
         jnp.int32(-1),
     )
-    return state.replace(red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor))
+    next_idx = jnp.clip(next_anchor, 0, state.red_sessions.shape[1] - 1)
+    next_session_count = jnp.where(next_anchor >= 0, session_counts[next_idx], jnp.int32(0))
+    next_abstract_count = jax.lax.cond(
+        next_anchor >= 0,
+        lambda _: count_valid_pids(state.red_session_abstract_pids[agent_id, next_idx]),
+        lambda _: jnp.int32(0),
+        operand=None,
+    )
+    # CybORG's RedSessionCheck can promote a newly reassigned abstract foothold
+    # into session 0. When every session on the promoted host is abstract, the
+    # bound primary session must therefore be treated as abstract in JAX too.
+    promoted_abstract_primary = (
+        has_any_sessions
+        & (next_anchor >= 0)
+        & (next_anchor != anchor)
+        & (next_session_count > 0)
+        & (next_abstract_count == next_session_count)
+    )
+    red_abstract_host_rank = jax.lax.cond(
+        promoted_abstract_primary,
+        lambda ranks: ranks.at[agent_id, next_idx].set(jnp.int32(0)),
+        lambda ranks: ranks,
+        state.red_abstract_host_rank,
+    )
+    return state.replace(
+        red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),
+        red_abstract_host_rank=red_abstract_host_rank,
+    )
 
 
 def select_scan_execution_source_host(

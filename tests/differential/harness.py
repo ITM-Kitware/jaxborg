@@ -27,8 +27,9 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.agents.fsm_red import (
+    fsm_red_apply_delayed_update,
     fsm_red_init_states,
-    fsm_red_post_step_update,
+    fsm_red_schedule_post_step_update,
     fsm_red_select_actions,
 )
 from jaxborg.constants import (
@@ -59,6 +60,8 @@ class StateSnapshot:
     red_privilege: dict = field(default_factory=dict)
     red_sessions: dict = field(default_factory=dict)
     host_services: dict = field(default_factory=dict)
+    host_service_reliability: dict = field(default_factory=dict)
+    host_has_malware: dict = field(default_factory=dict)
     host_decoys: dict = field(default_factory=dict)
     ot_service_stopped: dict = field(default_factory=dict)
     blocked_zones: set = field(default_factory=set)
@@ -153,10 +156,15 @@ def _jit_advance_and_clear(state, const):
 
 
 @jax.jit
-def _jit_fsm_red_post_step_update(
+def _jit_fsm_red_apply_delayed_update(state):
+    return fsm_red_apply_delayed_update(state)
+
+
+@jax.jit
+def _jit_fsm_red_schedule_post_step_update(
     state_before, state_after, const, target_hosts, target_subnets, fsm_actions, eligible_flags, executed_flags=None
 ):
-    return fsm_red_post_step_update(
+    return fsm_red_schedule_post_step_update(
         state_before,
         state_after,
         const,
@@ -553,6 +561,8 @@ class CC4DifferentialHarness:
 
         # --- Mirror step_env: advance phase + clear per-step fields ---
         self.jax_state = _jit_advance_and_clear(self.jax_state, self.jax_const)
+        if use_fsm:
+            self.jax_state = _jit_fsm_red_apply_delayed_update(self.jax_state)
 
         state_before = self.jax_state
 
@@ -716,7 +726,7 @@ class CC4DifferentialHarness:
                 [self.jax_state.red_pending_ticks[r] == 0 for r in range(NUM_RED_AGENTS)],
                 dtype=jnp.bool_,
             )
-            self.jax_state = _jit_fsm_red_post_step_update(
+            self.jax_state = _jit_fsm_red_schedule_post_step_update(
                 state_before,
                 self.jax_state,
                 self.jax_const,

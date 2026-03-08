@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
+from jaxborg.agents.fsm_red import FSM_R, FSM_RD, FSM_U, FSM_UD
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_PRIVILEGED,
@@ -153,6 +154,23 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     host_compromised = state.host_compromised
 
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
+    current_fsm = state.fsm_host_states
+    discovered_decoy = (current_fsm == FSM_UD) | (current_fsm == FSM_RD)
+    privileged_session = red_sessions & (red_privilege >= COMPROMISE_PRIVILEGED)
+    user_session = red_sessions & ~privileged_session
+    fsm_with_sessions = jnp.where(
+        privileged_session,
+        jnp.where(discovered_decoy, FSM_RD, FSM_R),
+        current_fsm,
+    )
+    uncompromised_state = (
+        (current_fsm != FSM_U) & (current_fsm != FSM_UD) & (current_fsm != FSM_R) & (current_fsm != FSM_RD)
+    )
+    fsm_with_sessions = jnp.where(
+        user_session & uncompromised_state,
+        jnp.where(discovered_decoy, FSM_UD, FSM_U),
+        fsm_with_sessions,
+    )
     red_scan_anchor_host = recompute_scan_anchor_hosts(
         state.red_scan_anchor_host,
         red_sessions,
@@ -187,6 +205,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
+        fsm_host_states=fsm_with_sessions,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_pending_source_host=state.red_pending_source_host,

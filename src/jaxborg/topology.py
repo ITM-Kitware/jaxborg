@@ -1,3 +1,5 @@
+from functools import lru_cache
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -262,9 +264,35 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
                     red_agent_subnets[red_idx, CYBORG_SUFFIX_TO_ID[cyborg_suffix]] = True
     red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
     red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
+    controller = cyborg_env.environment_controller
+    known_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
+    scanned_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
     for red_idx in range(NUM_RED_AGENTS):
+        iface = controller.agent_interfaces.get(f"red_agent_{red_idx}")
+        if iface is None:
+            continue
+        action_space = getattr(iface, "action_space", None)
+        if action_space is not None:
+            for ip, known in getattr(action_space, "ip_address", {}).items():
+                if not known:
+                    continue
+                hostname = state.ip_addresses.get(ip)
+                if hostname in hostname_to_idx:
+                    known_hosts_by_red[red_idx].add(hostname_to_idx[hostname])
+        for sess in state.sessions.get(f"red_agent_{red_idx}", {}).values():
+            for ip in getattr(sess, "ports", {}).keys():
+                hostname = state.ip_addresses.get(ip)
+                if hostname in hostname_to_idx:
+                    scanned_hosts_by_red[red_idx].add(hostname_to_idx[hostname])
+    for red_idx in range(NUM_RED_AGENTS):
+        if known_hosts_by_red[red_idx]:
+            red_start_hosts[red_idx] = min(known_hosts_by_red[red_idx])
         if _red_agent_initially_active[red_idx]:
             red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
+        for hidx in known_hosts_by_red[red_idx]:
+            red_initial_discovered_hosts[red_idx, hidx] = True
+        for hidx in scanned_hosts_by_red[red_idx]:
+            red_initial_scanned_hosts[red_idx, hidx] = True
     host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
     for src_hostname, host in state.hosts.items():
         if src_hostname not in hostname_to_idx:
@@ -325,6 +353,85 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         max_steps=500,
         num_hosts=jnp.int32(num_hosts),
     )
+
+
+@lru_cache(maxsize=None)
+def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+    """Build a bank of exact CybORG topologies for native JAX resets.
+
+    The differential harness already starts from CybORG-extracted topology, but
+    native training/eval resets previously used build_topology(), which is only
+    an approximation of CybORG's seeded scenario generator. A small stacked bank
+    of real CybORG topologies removes that step-0 reset/mask gap while keeping
+    JAX stepping and JIT-friendly reset selection.
+    """
+    from CybORG import CybORG
+    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    if bank_size <= 0:
+        raise ValueError(f"bank_size must be > 0, got {bank_size}")
+
+    consts = []
+    for seed in range(bank_size):
+        scenario = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=num_steps,
+        )
+        cyborg = CybORG(scenario_generator=scenario, seed=seed)
+        cyborg.reset()
+        consts.append(build_const_from_cyborg(cyborg))
+
+    return jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0), *consts)
+
+
+@lru_cache(maxsize=None)
+def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    """Build a bank of recorded CybORG green random tapes for native JAX resets.
+
+    This keeps native `cyborg_bank` episodes on the same stochastic green-agent
+    distribution as CybORG without copying state back from CybORG during rollout.
+    The tape is generated once per seed using Sleep blue actions and then replayed
+    by the native JAX environment as precomputed randomness.
+    """
+    from CybORG import CybORG
+    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+    from CybORG.Agents.Wrappers import BlueFlatWrapper
+    from CybORG.Simulator.Actions import Sleep
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    from jaxborg.cyborg_green_recorder import GreenRecorder
+    from jaxborg.translate import build_mappings_from_cyborg
+
+    if bank_size <= 0:
+        raise ValueError(f"bank_size must be > 0, got {bank_size}")
+
+    green_randoms = []
+    for seed in range(bank_size):
+        scenario = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=num_steps,
+        )
+        cyborg = CybORG(scenario_generator=scenario, seed=seed)
+        wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+        wrapper.reset()
+
+        mappings = build_mappings_from_cyborg(cyborg)
+        recorder = GreenRecorder()
+        recorder.install(cyborg, mappings)
+
+        sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+        for step_idx in range(num_steps):
+            wrapper.step(actions=sleep_actions)
+            recorder.extract_step(step_idx)
+
+        green_randoms.append(recorder.to_jax_array())
+
+    return jnp.stack(green_randoms, axis=0)
 
 
 def _fill_data_links_from_cyborg(links: np.ndarray, state, hostname_to_idx: dict) -> None:

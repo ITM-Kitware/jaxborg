@@ -10,7 +10,8 @@ from jaxmarl.environments.spaces import Box, Discrete
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.agents.fsm_red import (
-    fsm_red_post_step_update,
+    fsm_red_apply_delayed_update,
+    fsm_red_schedule_post_step_update,
     fsm_red_select_actions,
 )
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
@@ -24,8 +25,18 @@ class FsmRedCC4Env(MultiAgentEnv):
     and exposes only the 5 blue agents for training.
     """
 
-    def __init__(self, num_steps: int = 500):
-        self._env = CC4Env(num_steps=num_steps)
+    def __init__(
+        self,
+        num_steps: int = 500,
+        *,
+        topology_mode: str = "pure",
+        topology_bank_size: int = 0,
+    ):
+        self._env = CC4Env(
+            num_steps=num_steps,
+            topology_mode=topology_mode,
+            topology_bank_size=topology_bank_size,
+        )
         self.agents = list(self._env.blue_agents)
 
         super().__init__(num_agents=NUM_BLUE_AGENTS)
@@ -78,7 +89,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         key, key_red = jax.random.split(key)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
-        state_before = env_state.state
+        state_before = fsm_red_apply_delayed_update(env_state.state)
         (
             red_action_arr,
             target_hosts_arr,
@@ -95,12 +106,11 @@ class FsmRedCC4Env(MultiAgentEnv):
         env_state = CC4EnvState(state=state, const=env_state.const)
 
         all_actions = {**blue_actions, **red_actions}
-
         obs, env_state, rewards, dones, info = self._env.step_env(key, env_state, all_actions)
 
         executed_flags = [env_state.state.red_pending_ticks[r] == 0 for r in range(NUM_RED_AGENTS)]
 
-        new_state = fsm_red_post_step_update(
+        new_state = fsm_red_schedule_post_step_update(
             state_before,
             env_state.state,
             env_state.const,

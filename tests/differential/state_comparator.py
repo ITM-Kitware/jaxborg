@@ -1,4 +1,5 @@
 import numpy as np
+from CybORG.Shared.Enums import DecoyType
 
 from jaxborg.constants import (
     NUM_DECOY_TYPES,
@@ -40,10 +41,13 @@ def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
 
     host_compromised = {}
     host_services = {}
+    host_service_reliability = {}
+    host_has_malware = {}
     host_decoys = {}
     ot_service_stopped = {}
     for hostname in sorted_hosts:
         idx = mappings.hostname_to_idx[hostname]
+        host = state.hosts[hostname]
         max_level = 0
         for agent_name, sessions in state.sessions.items():
             if not agent_name.startswith("red_agent_"):
@@ -58,6 +62,37 @@ def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
                     else:
                         max_level = max(max_level, 1)
         host_compromised[idx] = max_level
+
+        services = [False] * NUM_SERVICES
+        service_reliability = [100] * NUM_SERVICES
+        decoys = [False] * NUM_DECOY_TYPES
+        ot_stopped = False
+        for svc_name, svc in host.services.items():
+            svc_str = str(svc_name).split(".")[-1] if "." in str(svc_name) else str(svc_name)
+            sid = SERVICE_IDS.get(svc_str)
+            if sid is not None:
+                services[sid] = bool(svc.active)
+                service_reliability[sid] = int(svc.get_service_reliability())
+                if svc_str == "OTSERVICE" and not bool(svc.active):
+                    ot_stopped = True
+
+            decoy_idx = _DECOY_SVC_TO_IDX.get(svc_str.lower())
+            if decoy_idx is None:
+                continue
+            pid = svc.process if hasattr(svc, "process") else svc.get("process")
+            if pid is None:
+                continue
+            proc = host.get_process(pid)
+            if proc is not None and proc.decoy_type & DecoyType.EXPLOIT:
+                decoys[decoy_idx] = True
+
+        host_services[idx] = tuple(services)
+        host_service_reliability[idx] = tuple(service_reliability)
+        host_has_malware[idx] = any(getattr(file_obj, "name", "") == "cmd.sh" for file_obj in host.files)
+        if any(decoys):
+            host_decoys[idx] = tuple(decoys)
+        if ot_stopped:
+            ot_service_stopped[idx] = True
 
     red_privilege = {}
     red_sessions = {}
@@ -96,6 +131,8 @@ def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
         red_privilege=red_privilege,
         red_sessions=red_sessions,
         host_services=host_services,
+        host_service_reliability=host_service_reliability,
+        host_has_malware=host_has_malware,
         host_decoys=host_decoys,
         ot_service_stopped=ot_service_stopped,
         blocked_zones=blocked,
@@ -105,8 +142,16 @@ def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
 def extract_jax_snapshot(state, const, mappings: CC4Mappings) -> StateSnapshot:
     n = mappings.num_hosts
     host_compromised = {}
+    host_services = {}
+    host_service_reliability = {}
+    host_has_malware = {}
     for h in range(n):
         host_compromised[h] = int(state.host_compromised[h])
+        host_services[h] = tuple(bool(v) for v in np.asarray(state.host_services[h, :NUM_SERVICES]).tolist())
+        host_service_reliability[h] = tuple(
+            int(v) for v in np.asarray(state.host_service_reliability[h, :NUM_SERVICES]).tolist()
+        )
+        host_has_malware[h] = bool(state.host_has_malware[h])
 
     red_privilege = {}
     red_sessions = {}
@@ -148,6 +193,9 @@ def extract_jax_snapshot(state, const, mappings: CC4Mappings) -> StateSnapshot:
         host_compromised=host_compromised,
         red_privilege=red_privilege,
         red_sessions=red_sessions,
+        host_services=host_services,
+        host_service_reliability=host_service_reliability,
+        host_has_malware=host_has_malware,
         host_decoys=host_decoys,
         ot_service_stopped=ot_service_stopped,
         blocked_zones=blocked,
@@ -180,6 +228,24 @@ def compare_snapshots(cyborg: StateSnapshot, jax: StateSnapshot) -> list[StateDi
             jv = jp.get(h, 0)
             if cv != jv:
                 diffs.append(StateDiff("red_privilege", cv, jv, f"red_{r}_host_{h}"))
+
+    for h in set(cyborg.host_services) | set(jax.host_services):
+        cs = cyborg.host_services.get(h)
+        js = jax.host_services.get(h)
+        if cs != js:
+            diffs.append(StateDiff("host_services", cs, js, f"host_{h}"))
+
+    for h in set(cyborg.host_service_reliability) | set(jax.host_service_reliability):
+        cs = cyborg.host_service_reliability.get(h)
+        js = jax.host_service_reliability.get(h)
+        if cs != js:
+            diffs.append(StateDiff("host_service_reliability", cs, js, f"host_{h}"))
+
+    for h in set(cyborg.host_has_malware) | set(jax.host_has_malware):
+        cv = cyborg.host_has_malware.get(h, False)
+        jv = jax.host_has_malware.get(h, False)
+        if cv != jv:
+            diffs.append(StateDiff("host_has_malware", cv, jv, f"host_{h}"))
 
     for h in set(cyborg.host_decoys) | set(jax.host_decoys):
         cd = cyborg.host_decoys.get(h)
@@ -338,8 +404,6 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
         diffs.append(StateDiff("host_has_malware", bool(cyborg_has_malware[h]), bool(jax_has_malware[h]), f"host_{h}"))
 
     cyborg_decoys = np.zeros((n, NUM_DECOY_TYPES), dtype=np.bool_)
-    from CybORG.Shared.Enums import DecoyType
-
     for hostname, host in cyborg_state.hosts.items():
         if hostname not in mappings.hostname_to_idx:
             continue

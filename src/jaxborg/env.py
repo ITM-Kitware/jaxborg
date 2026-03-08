@@ -24,9 +24,9 @@ from jaxborg.constants import (
 )
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
-from jaxborg.rewards import advance_mission_phase, compute_rewards
+from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.state import CC4Const, CC4State, create_initial_state
-from jaxborg.topology import build_topology
+from jaxborg.topology import build_topology, get_cyborg_green_random_bank, get_cyborg_topology_bank
 
 
 def apply_all_actions(
@@ -185,8 +185,23 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
 
 
 class CC4Env(MultiAgentEnv):
-    def __init__(self, num_steps: int = 500):
+    def __init__(
+        self,
+        num_steps: int = 500,
+        *,
+        topology_mode: str = "pure",
+        topology_bank_size: int = 0,
+    ):
         self.num_steps = num_steps
+        self.topology_mode = topology_mode
+        self.topology_bank_size = topology_bank_size
+        self._const_bank = None
+        self._green_random_bank = None
+        if topology_mode == "cyborg_bank":
+            self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
+            self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+        elif topology_mode != "pure":
+            raise ValueError(f"Unknown topology_mode={topology_mode!r}")
 
         self.blue_agents = [f"blue_{i}" for i in range(NUM_BLUE_AGENTS)]
         self.red_agents = [f"red_{i}" for i in range(NUM_RED_AGENTS)]
@@ -201,9 +216,28 @@ class CC4Env(MultiAgentEnv):
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
 
+    def _select_const(self, key: chex.PRNGKey) -> CC4Const:
+        if self._const_bank is None:
+            return build_topology(key, num_steps=self.num_steps)
+
+        bank_size = jnp.int32(self.topology_bank_size)
+        bank_idx = jnp.bitwise_xor(key[0], key[1]) % bank_size
+        return jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+
+    def _select_green_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
+        if self._green_random_bank is None:
+            return None
+
+        bank_size = jnp.int32(self.topology_bank_size)
+        bank_idx = jnp.bitwise_xor(key[0], key[1]) % bank_size
+        return self._green_random_bank[bank_idx]
+
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
-        const = build_topology(key, num_steps=self.num_steps)
+        const = self._select_const(key)
+        green_randoms = self._select_green_randoms(key)
         state = create_initial_state()
+        if green_randoms is not None:
+            state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         state = state.replace(host_services=jnp.array(const.initial_services))
         state = _init_red_state(const, state)
 
@@ -214,8 +248,11 @@ class CC4Env(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def _reset_state(self, env_state: CC4EnvState, key: chex.PRNGKey) -> CC4EnvState:
         """Reset with a new random topology (for auto-reset)."""
-        const = build_topology(key, num_steps=self.num_steps)
+        const = self._select_const(key)
+        green_randoms = self._select_green_randoms(key)
         state = create_initial_state()
+        if green_randoms is not None:
+            state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         state = state.replace(host_services=const.initial_services)
         state = _init_red_state(const, state)
         return CC4EnvState(state=state, const=const)
@@ -280,13 +317,14 @@ class CC4Env(MultiAgentEnv):
 
         state = apply_all_actions(state, const, blue_action_arr, red_action_arr, key_green, red_keys, no_forced)
 
-        reward = compute_rewards(
+        reward_breakdown = compute_reward_breakdown(
             state,
             const,
             state.red_impact_attempted,
             state.green_lwf_this_step,
             state.green_asf_this_step,
         )
+        reward = reward_breakdown.total
 
         state = state.replace(time=state.time + 1)
         done = state.time >= const.max_steps
@@ -305,7 +343,14 @@ class CC4Env(MultiAgentEnv):
         dones = {agent: done for agent in self.agents}
         dones["__all__"] = done
 
-        info = {}
+        info = {
+            "reward_ria": reward_breakdown.ria_reward,
+            "reward_lwf": reward_breakdown.lwf_reward,
+            "reward_asf": reward_breakdown.asf_reward,
+            "impact_count": reward_breakdown.ria_count,
+            "green_lwf_count": reward_breakdown.lwf_count,
+            "green_asf_count": reward_breakdown.asf_count,
+        }
 
         return obs, env_state, rewards, dones, info
 

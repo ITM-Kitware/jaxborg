@@ -10,6 +10,7 @@ from CybORG.Simulator.Actions import DiscoverRemoteSystems, ExploitRemoteService
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import (
+    BLUE_SLEEP,
     RED_EXPLOIT_HARAKA_START,
     RED_EXPLOIT_HTTP_START,
     RED_SLEEP,
@@ -38,9 +39,10 @@ from jaxborg.agents.fsm_red import (
     fsm_red_get_action,
     fsm_red_init_states,
     fsm_red_process_session_removal,
+    fsm_red_select_actions,
     fsm_red_update_state,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS, SERVICE_IDS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.state import create_initial_state
 
 
@@ -90,6 +92,66 @@ class TestTransitionMatrices:
             probs = PROBABILITY_MATRIX[state_idx][valid]
             total = float(jnp.sum(probs))
             assert abs(total - 1.0) < 1e-5, f"State {state_idx} probs sum to {total}"
+
+
+class TestAutonomousActionParity:
+    def test_initial_active_red_agent_is_not_forced_to_sleep(self):
+        """Initial autonomous red step should not be hard-forced to Sleep."""
+        from tests.differential.harness import CC4DifferentialHarness
+
+        harness = CC4DifferentialHarness(seed=0, max_steps=500)
+        harness.reset()
+
+        controller = harness.cyborg_env.environment_controller
+        cyborg_agent = controller.agent_interfaces["red_agent_0"].agent
+        cyborg_obs = harness.cyborg_env.get_observation("red_agent_0")
+        cyborg_action_space = controller.get_action_space("red_agent_0")
+        cyborg_agent.set_initial_values(cyborg_action_space, cyborg_obs)
+        cyborg_action = cyborg_agent.get_action(cyborg_obs, cyborg_action_space)
+
+        red_keys = jax.random.split(jax.random.PRNGKey(0), NUM_RED_AGENTS)
+        red_actions, _, _, _, _, _ = fsm_red_select_actions(harness.jax_state, harness.jax_const, red_keys)
+
+        assert type(cyborg_action).__name__ != "Sleep"
+        assert int(red_actions[0]) != RED_SLEEP
+
+    def test_fsm_hidden_state_applies_after_completion_step(self):
+        """FSM hidden state should update on the next decision step, not immediately on completion."""
+        from CybORG.Agents import EnterpriseGreenAgent
+        from CybORG.Agents.Wrappers import BlueFlatWrapper
+        from CybORG.Simulator.Actions import Sleep
+        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+
+        scenario = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=500,
+        )
+        cyborg_env = BlueFlatWrapper(env=CybORG(scenario, "sim", seed=0), pad_spaces=True)
+        cyborg_env.reset()
+        cyborg_agent = cyborg_env.env.environment_controller.agent_interfaces["red_agent_0"].agent
+
+        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
+        key = jax.random.PRNGKey(0)
+        _, env_state = jax_env.reset(key)
+        start_host = int(env_state.const.red_start_hosts[0])
+
+        for expected in (FSM_U, FSM_U, FSM_R):
+            _, _, _, _, _ = cyborg_env.step(actions={a: Sleep() for a in cyborg_env.agents})
+            key, step_key = jax.random.split(key)
+            _, env_state, _, _, _ = jax_env.step(
+                step_key,
+                env_state,
+                {f"blue_{i}": jnp.int32(BLUE_SLEEP) for i in range(NUM_BLUE_AGENTS)},
+            )
+
+            cyborg_states = [info["state"] for info in cyborg_agent.host_states.values() if info.get("hostname")]
+            expected_cyborg = {FSM_U: "U", FSM_R: "R"}[expected]
+            assert cyborg_states == [expected_cyborg]
+            assert int(env_state.state.fsm_host_states[0, start_host]) == expected
 
 
 class TestFsmUpdateState:

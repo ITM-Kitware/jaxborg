@@ -319,6 +319,18 @@ def fsm_red_select_actions(
     return red_actions, target_hosts, target_subnets, fsm_actions, eligible_flags, state
 
 
+def fsm_red_apply_delayed_update(state: CC4State) -> CC4State:
+    """Apply the previously scheduled FSM hidden-state update at decision time."""
+
+    def _apply(s):
+        return s.replace(
+            fsm_host_states=s.red_fsm_delayed_states,
+            red_fsm_delayed_pending=jnp.array(False),
+        )
+
+    return jax.lax.cond(state.red_fsm_delayed_pending, _apply, lambda s: s, state)
+
+
 def determine_fsm_success(
     state_before: CC4State,
     state_after: CC4State,
@@ -421,6 +433,29 @@ def fsm_red_post_step_update(
     eligible_flags: list,
     executed_flags: list | None = None,
 ) -> CC4State:
+    fsm_states = _compute_post_step_fsm_states(
+        state_before,
+        state_after,
+        const,
+        target_hosts,
+        target_subnets,
+        fsm_actions,
+        eligible_flags,
+        executed_flags,
+    )
+    return state_after.replace(fsm_host_states=fsm_states)
+
+
+def _compute_post_step_fsm_states(
+    state_before: CC4State,
+    state_after: CC4State,
+    const: CC4Const,
+    target_hosts: list,
+    target_subnets: list,
+    fsm_actions: list,
+    eligible_flags: list,
+    executed_flags: list | None = None,
+) -> jnp.ndarray:
     fsm_states = state_after.fsm_host_states
 
     for r in range(NUM_RED_AGENTS):
@@ -454,7 +489,40 @@ def fsm_red_post_step_update(
         lost_session = was_compromised & ~has_session
         fsm_states = fsm_states.at[r].set(jnp.where(lost_session, FSM_KD, agent_fsm))
 
-    return state_after.replace(fsm_host_states=fsm_states)
+    return fsm_states
+
+
+def fsm_red_schedule_post_step_update(
+    state_before: CC4State,
+    state_after: CC4State,
+    const: CC4Const,
+    target_hosts: list,
+    target_subnets: list,
+    fsm_actions: list,
+    eligible_flags: list,
+    executed_flags: list | None = None,
+) -> CC4State:
+    """Compute the next FSM hidden state and schedule it for the next decision step.
+
+    CybORG updates FiniteStateRedAgent host_states when the agent processes the
+    previous observation at the next action-selection point, not on the same
+    simulation step that a duration action finishes.
+    """
+
+    next_fsm_states = _compute_post_step_fsm_states(
+        state_before,
+        state_after,
+        const,
+        target_hosts,
+        target_subnets,
+        fsm_actions,
+        eligible_flags,
+        executed_flags,
+    )
+    return state_after.replace(
+        red_fsm_delayed_states=next_fsm_states,
+        red_fsm_delayed_pending=jnp.any(next_fsm_states != state_after.fsm_host_states),
+    )
 
 
 def fsm_red_process_session_removal(
