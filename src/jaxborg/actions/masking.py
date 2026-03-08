@@ -1,18 +1,36 @@
-import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
-from jaxborg.actions.encoding import (
-    BLUE_ALLOW_TRAFFIC_END,
-    BLUE_ALLOW_TRAFFIC_START,
-    BLUE_ANALYSE_START,
-    BLUE_BLOCK_TRAFFIC_START,
-    BLUE_DECOY_START,
-    BLUE_REMOVE_START,
-    BLUE_RESTORE_START,
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
+from jaxborg.constants import (
+    ACTION_HOST_SLOTS,
+    DECOY_IDS,
+    GLOBAL_MAX_HOSTS,
+    NUM_DECOY_TYPES,
+    NUM_SUBNETS,
+    SERVICE_IDS,
 )
-from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS
 from jaxborg.state import CC4Const, CC4State
+
+
+def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarray) -> jnp.ndarray:
+    """Compute per-decoy compatibility for all host slots at once.
+
+    Args:
+        flat_services: (ACTION_HOST_SLOTS, NUM_SERVICES) bool
+        flat_decoys: (ACTION_HOST_SLOTS, NUM_DECOY_TYPES) bool
+
+    Returns:
+        (NUM_DECOY_TYPES, ACTION_HOST_SLOTS) bool — decoy_type-major for concat
+    """
+    has_port_25 = flat_services[:, SERVICE_IDS["SMTP"]] | flat_decoys[:, DECOY_IDS["HarakaSMPT"]]
+    has_port_80 = (
+        flat_services[:, SERVICE_IDS["APACHE2"]]
+        | flat_decoys[:, DECOY_IDS["Apache"]]
+        | flat_decoys[:, DECOY_IDS["Vsftpd"]]
+    )
+    has_port_443 = flat_decoys[:, DECOY_IDS["Tomcat"]]
+
+    return jnp.stack([~has_port_25, ~has_port_80, ~has_port_443, jnp.ones(flat_services.shape[0], dtype=jnp.bool_)])
 
 
 def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | None = None) -> jnp.ndarray:
@@ -22,33 +40,9 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     When `state` is provided, decoy validity reflects live services/decoys.
     Otherwise it falls back to reset-time services from `const`.
     """
-    if state is not None:
-        busy = state.blue_pending_ticks[agent_id] > 0
-        pending_action = jnp.clip(state.blue_pending_action[agent_id], 0, BLUE_ALLOW_TRAFFIC_END - 1)
-        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[pending_action].set(True)
-    else:
-        busy = jnp.bool_(False)
-        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_)
-
-    # (NUM_SUBNETS, OBS_HOSTS_PER_SUBNET) — True where slot has a valid host
     obs_valid = const.obs_host_map < GLOBAL_MAX_HOSTS
-    # (NUM_SUBNETS,) — True where agent controls this subnet
     agent_subnets = const.blue_agent_subnets[agent_id]
-    # (NUM_SUBNETS, OBS_HOSTS_PER_SUBNET) — valid slots for this agent
-    slot_valid = obs_valid & agent_subnets[:, None]
-    # Flatten to (ACTION_HOST_SLOTS,) matching canonical encoding
-    slot_valid_flat = slot_valid.reshape(-1)
-
-    mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_)
-
-    # Sleep (0) and Monitor (1) always valid
-    mask = mask.at[0].set(True)
-    mask = mask.at[1].set(True)
-
-    # Analyse, Remove, Restore: same canonical slot mask
-    mask = mask.at[BLUE_ANALYSE_START : BLUE_ANALYSE_START + ACTION_HOST_SLOTS].set(slot_valid_flat)
-    mask = mask.at[BLUE_REMOVE_START : BLUE_REMOVE_START + ACTION_HOST_SLOTS].set(slot_valid_flat)
-    mask = mask.at[BLUE_RESTORE_START : BLUE_RESTORE_START + ACTION_HOST_SLOTS].set(slot_valid_flat)
+    slot_valid_flat = (obs_valid & agent_subnets[:, None]).reshape(-1)
 
     safe_host_idx = jnp.where(obs_valid, const.obs_host_map, 0)
     if state is None:
@@ -60,20 +54,32 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
 
     flat_services = host_services.reshape(ACTION_HOST_SLOTS, -1)
     flat_decoys = host_decoys.reshape(ACTION_HOST_SLOTS, -1)
-    flat_decoy_compat = jax.vmap(host_decoy_compatibility_mask)(flat_services, flat_decoys)
+    # (NUM_DECOY_TYPES, ACTION_HOST_SLOTS) — decoy-type major
+    decoy_compat = _decoy_compat_vectorized(flat_services, flat_decoys)
+    # Gate each decoy type by slot validity
+    decoy_mask = (decoy_compat & slot_valid_flat[None, :]).reshape(-1)
 
-    # Decoy: host slot validity further gated by decoy/service compatibility
-    for d in range(NUM_DECOY_TYPES):
-        offset = BLUE_DECOY_START + d * ACTION_HOST_SLOTS
-        mask = mask.at[offset : offset + ACTION_HOST_SLOTS].set(slot_valid_flat & flat_decoy_compat[:, d])
-
-    # Block/Allow Traffic: agent controls dst subnet, src != dst
+    # Traffic: agent controls dst subnet, src != dst
     src_idx = jnp.arange(NUM_SUBNETS)
-    dst_idx = jnp.arange(NUM_SUBNETS)
-    traffic_valid = agent_subnets[None, :] & (src_idx[:, None] != dst_idx[None, :])
-    traffic_flat = traffic_valid.reshape(-1)
+    traffic_flat = (agent_subnets[None, :] & (src_idx[:, None] != jnp.arange(NUM_SUBNETS)[None, :])).reshape(-1)
 
-    mask = mask.at[BLUE_BLOCK_TRAFFIC_START : BLUE_BLOCK_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS].set(traffic_flat)
-    mask = mask.at[BLUE_ALLOW_TRAFFIC_START : BLUE_ALLOW_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS].set(traffic_flat)
+    # Build mask as single concatenation: [sleep, monitor, analyse, remove, restore, decoys, block, allow]
+    mask = jnp.concatenate(
+        [
+            jnp.array([True, True]),  # sleep + monitor
+            slot_valid_flat,  # analyse
+            slot_valid_flat,  # remove
+            slot_valid_flat,  # restore
+            decoy_mask,  # decoys (4 types x 144 slots)
+            traffic_flat,  # block traffic
+            traffic_flat,  # allow traffic
+        ]
+    )
 
-    return jnp.where(busy, pending_mask, mask)
+    if state is not None:
+        busy = state.blue_pending_ticks[agent_id] > 0
+        pending_action = jnp.clip(state.blue_pending_action[agent_id], 0, BLUE_ALLOW_TRAFFIC_END - 1)
+        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[pending_action].set(True)
+        return jnp.where(busy, pending_mask, mask)
+
+    return mask
