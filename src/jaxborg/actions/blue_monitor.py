@@ -3,7 +3,6 @@ import jax.numpy as jnp
 
 from jaxborg.actions.pids import append_pid_to_row_allow_duplicates
 from jaxborg.constants import (
-    ACTIVITY_EXPLOIT,
     ACTIVITY_NONE,
     ACTIVITY_SCAN,
     MAX_TRACKED_SUSPICIOUS_PIDS,
@@ -21,11 +20,11 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     covers = const.blue_agent_hosts[agent_id]
     has_any_activity = state.red_activity_this_step != ACTIVITY_NONE
     has_scan_activity = state.red_activity_this_step == ACTIVITY_SCAN
-    has_exploit_activity = state.red_activity_this_step == ACTIVITY_EXPLOIT
     newly_detected = has_any_activity & covers
+    has_process_creation_events = jnp.any(state.host_process_creation_pids >= 0, axis=1)
     # CybORG: scans create network_connection events, exploits create process_creation events
     host_activity_detected = state.host_activity_detected | (has_scan_activity & covers)
-    host_exploit_detected = state.host_exploit_detected | (has_exploit_activity & covers)
+    host_exploit_detected = state.host_exploit_detected | (has_process_creation_events & covers)
     host_suspicious_process = state.host_suspicious_process | newly_detected
 
     def _ingest_host(h, blue_suspicious_pids):

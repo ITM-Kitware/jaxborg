@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
+from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
 from CybORG.Simulator.Actions.AbstractActions.Analyse import Analyse
+from CybORG.Simulator.Actions.AbstractActions.Monitor import Monitor
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
@@ -20,6 +22,7 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
 )
+from jaxborg.observations import get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
@@ -50,6 +53,22 @@ def _make_jax_state(const):
     start_host = int(const.red_start_hosts[0])
     red_sessions = state.red_sessions.at[0, start_host].set(True)
     return state.replace(red_sessions=red_sessions)
+
+
+def _clear_transient_obs(state, const):
+    any_covered = jnp.any(const.blue_agent_hosts, axis=0)
+    return state.replace(
+        red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
+        host_activity_detected=jnp.where(any_covered, False, state.host_activity_detected),
+        host_exploit_detected=jnp.where(any_covered, False, state.host_exploit_detected),
+    )
+
+
+def _assert_activity_unchanged(before_state, after_state):
+    np.testing.assert_array_equal(
+        np.array(after_state.host_activity_detected),
+        np.array(before_state.host_activity_detected),
+    )
 
 
 def _find_host_in_subnet(const, subnet_name, exclude_router=True):
@@ -105,14 +124,14 @@ class TestBlueAnalyseEncoding:
 
 
 class TestApplyBlueAnalyse:
-    def test_no_malware_no_detection(self, jax_const):
+    def test_no_malware_is_noop(self, jax_const):
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
         assert target is not None
         new_state = apply_blue_analyse(state, jax_const, 0, target)
-        assert not bool(new_state.host_activity_detected[target])
+        _assert_activity_unchanged(state, new_state)
 
-    def test_malware_on_covered_host_detected(self, jax_const):
+    def test_malware_on_covered_host_is_still_noop(self, jax_const):
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
         assert target is not None
@@ -127,9 +146,9 @@ class TestApplyBlueAnalyse:
         assert blue_idx is not None
 
         new_state = apply_blue_analyse(state, jax_const, blue_idx, target)
-        assert bool(new_state.host_activity_detected[target])
+        _assert_activity_unchanged(state, new_state)
 
-    def test_malware_on_uncovered_host_not_detected(self, jax_const):
+    def test_malware_on_uncovered_host_is_still_noop(self, jax_const):
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
         assert target is not None
@@ -144,9 +163,9 @@ class TestApplyBlueAnalyse:
         assert uncovering_blue is not None
 
         new_state = apply_blue_analyse(state, jax_const, uncovering_blue, target)
-        assert not bool(new_state.host_activity_detected[target])
+        _assert_activity_unchanged(state, new_state)
 
-    def test_detection_is_cumulative(self, jax_const):
+    def test_noop_preserves_existing_detections(self, jax_const):
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
         other = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
@@ -165,8 +184,7 @@ class TestApplyBlueAnalyse:
         assert blue_idx is not None
 
         new_state = apply_blue_analyse(state, jax_const, blue_idx, target)
-        assert bool(new_state.host_activity_detected[target])
-        assert bool(new_state.host_activity_detected[other])
+        _assert_activity_unchanged(state, new_state)
 
     def test_jit_compatible(self, jax_const):
         state = _make_jax_state(jax_const)
@@ -184,7 +202,7 @@ class TestApplyBlueAnalyse:
 
         jitted = jax.jit(apply_blue_analyse, static_argnums=(2, 3))
         new_state = jitted(state, jax_const, blue_idx, target)
-        assert bool(new_state.host_activity_detected[target])
+        _assert_activity_unchanged(state, new_state)
 
 
 class TestApplyBlueActionDispatch:
@@ -204,7 +222,7 @@ class TestApplyBlueActionDispatch:
 
         action_idx = encode_blue_action("Analyse", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
-        assert bool(new_state.host_activity_detected[target])
+        _assert_activity_unchanged(state, new_state)
 
     def test_sleep_still_noop(self, jax_const):
         state = _make_jax_state(jax_const)
@@ -228,6 +246,7 @@ class TestDifferentialWithCybORG:
 
     def test_analyse_clean_host_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
+        wrapper = BlueFlatWrapper(cyborg_env, pad_spaces=True)
         cyborg_state = cyborg_env.environment_controller.state
         sorted_hosts = sorted(cyborg_state.hosts.keys())
 
@@ -235,33 +254,27 @@ class TestDifferentialWithCybORG:
         assert target_h is not None
         target_hostname = sorted_hosts[target_h]
 
-        analyse = Analyse(session=0, agent="blue_agent_0", hostname=target_hostname)
-        cyborg_obs = analyse.execute(cyborg_state)
-
-        cyborg_found_malware = False
-        for key, val in cyborg_obs.data.items():
-            if key in ("success", "action"):
-                continue
-            if isinstance(val, dict) and "Files" in val:
-                for f in val["Files"]:
-                    density = f.get("Density", 0)
-                    if density and density > 0.8:
-                        cyborg_found_malware = True
-
         blue_idx = None
         for b in range(NUM_BLUE_AGENTS):
             if bool(const.blue_agent_hosts[b, target_h]):
                 blue_idx = b
                 break
         assert blue_idx is not None
+        agent_name = f"blue_agent_{blue_idx}"
+        cyborg_before = wrapper.observation_change(agent_name, cyborg_env.get_observation(agent_name))
+        Analyse(session=0, agent=agent_name, hostname=target_hostname).execute(cyborg_state)
+        cyborg_after = wrapper.observation_change(agent_name, cyborg_env.get_observation(agent_name))
 
         new_state = apply_blue_analyse(state, const, blue_idx, target_h)
-        jax_found_malware = bool(new_state.host_activity_detected[target_h])
+        jax_before = np.asarray(get_blue_obs(state, const, blue_idx))
+        jax_after = np.asarray(get_blue_obs(new_state, const, blue_idx))
 
-        assert cyborg_found_malware == jax_found_malware
+        np.testing.assert_array_equal(cyborg_after, cyborg_before)
+        np.testing.assert_array_equal(jax_after, jax_before)
 
-    def test_analyse_after_exploit_matches_cyborg(self, cyborg_and_jax):
+    def test_analyse_after_exploit_does_not_change_flat_obs_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
+        wrapper = BlueFlatWrapper(cyborg_env, pad_spaces=True)
         cyborg_state = cyborg_env.environment_controller.state
         sorted_hosts = sorted(cyborg_state.hosts.keys())
 
@@ -274,19 +287,8 @@ class TestDifferentialWithCybORG:
 
         exploit = SSHBruteForce(session=0, agent="red_agent_0", ip_address=target_ip)
         exploit.execute(cyborg_state)
-
-        analyse = Analyse(session=0, agent="blue_agent_0", hostname=target_hostname)
-        cyborg_obs = analyse.execute(cyborg_state)
-
-        cyborg_found_malware = False
-        for key, val in cyborg_obs.data.items():
-            if key in ("success", "action"):
-                continue
-            if isinstance(val, dict) and "Files" in val:
-                for f in val["Files"]:
-                    density = f.get("Density", 0)
-                    if density and density > 0.8:
-                        cyborg_found_malware = True
+        for b in range(NUM_BLUE_AGENTS):
+            Monitor(session=0, agent=f"blue_agent_{b}").execute(cyborg_state)
 
         target_subnet = int(const.host_subnet[target_h])
         discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
@@ -297,6 +299,7 @@ class TestDifferentialWithCybORG:
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SSHBruteForce", target_h, 0)
         state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
+        state = _clear_transient_obs(state, const)
 
         blue_idx = None
         for b in range(NUM_BLUE_AGENTS):
@@ -304,9 +307,14 @@ class TestDifferentialWithCybORG:
                 blue_idx = b
                 break
         assert blue_idx is not None
+        agent_name = f"blue_agent_{blue_idx}"
+        cyborg_before = wrapper.observation_change(agent_name, cyborg_env.get_observation(agent_name))
+        Analyse(session=0, agent=agent_name, hostname=target_hostname).execute(cyborg_state)
+        cyborg_after = wrapper.observation_change(agent_name, cyborg_env.get_observation(agent_name))
 
         new_state = apply_blue_analyse(state, const, blue_idx, target_h)
-        jax_found_malware = bool(new_state.host_activity_detected[target_h])
+        jax_before = np.asarray(get_blue_obs(state, const, blue_idx))
+        jax_after = np.asarray(get_blue_obs(new_state, const, blue_idx))
 
-        if cyborg_found_malware:
-            assert jax_found_malware, "CybORG found malware but JAX did not"
+        np.testing.assert_array_equal(cyborg_after, cyborg_before)
+        np.testing.assert_array_equal(jax_after, jax_before)

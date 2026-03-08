@@ -371,6 +371,81 @@ class TestDifferentialWithCybORG:
                 f"CybORG detected={cyborg_has_target}, JAX detected={jax_has_target}"
             )
 
+    def test_successful_sql_exploit_without_process_event_matches_cyborg(self, cyborg_and_jax):
+        """Successful SQL exploit with a missed process-event roll should not light malicious_processes."""
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        class _ScriptedRandom:
+            def __init__(self, base, random_values):
+                self._base = base
+                self._random_values = list(random_values)
+                self._idx = 0
+
+            def random(self, *args, **kwargs):
+                if self._idx < len(self._random_values):
+                    value = self._random_values[self._idx]
+                    self._idx += 1
+                    return value
+                return self._base.random(*args, **kwargs)
+
+            def integers(self, *args, **kwargs):
+                return self._base.integers(*args, **kwargs)
+
+            def choice(self, *args, **kwargs):
+                return self._base.choice(*args, **kwargs)
+
+        target_h = None
+        for h in range(int(const.num_hosts)):
+            if (
+                bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+                and bool(const.initial_services[h, SERVICE_IDS["MYSQLD"]])
+                and bool(const.initial_services[h, SERVICE_IDS["APACHE2"]])
+                and h != int(const.red_start_hosts[0])
+                and bool(jnp.any(const.blue_agent_hosts[:, h]))
+            ):
+                target_h = h
+                break
+        assert target_h is not None, "No monitored SQL target found"
+
+        target_hostname = sorted_hosts[target_h]
+        target_ip = next(ip for ip, hname in cyborg_state.ip_addresses.items() if hname == target_hostname)
+        from CybORG.Simulator.Actions.ConcreteActions.ExploitActions.SQLInjection import SQLInjection
+
+        cyborg_state.np_random = _ScriptedRandom(cyborg_state.np_random, [0.5, 0.01])
+        cy_obs = SQLInjection(session=0, agent="red_agent_0", ip_address=target_ip).execute(cyborg_state)
+        assert str(cy_obs.success).upper() == "TRUE"
+        assert len(cyborg_state.hosts[target_hostname].events.process_creation) == 0
+
+        cyborg_detected = _cyborg_monitor_detected_hosts(cyborg_env)
+        assert target_h not in cyborg_detected
+
+        target_subnet = int(const.host_subnet[target_h])
+        discover_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
+        state = _jit_apply_red(state, const, 0, discover_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+        scan_idx = encode_red_action("DiscoverNetworkServices", target_h, 0)
+        state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
+        state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
+
+        randoms = state.detection_randoms.at[0].set(0.5).at[1].set(0.01)
+        state = state.replace(
+            detection_randoms=randoms,
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
+        )
+        exploit_idx = encode_red_action("ExploitRemoteService_cc4SQLInjection", target_h, 0)
+        state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
+
+        assert bool(state.red_sessions[0, target_h])
+        assert int(state.detection_random_index) == 2
+        assert np.all(np.asarray(state.host_process_creation_pids[target_h]) == -1)
+
+        state = apply_blue_monitor(state, const)
+        assert not bool(state.host_exploit_detected[target_h])
+
     def test_blue_coverage_matches_cyborg(self, cyborg_and_jax):
         """Verify which hosts each blue agent covers matches CybORG."""
         cyborg_env, const, _ = cyborg_and_jax

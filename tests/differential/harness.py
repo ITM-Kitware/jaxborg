@@ -14,6 +14,8 @@ from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.encoding import (
     ACTION_TYPE_DISCOVER_DECEPTION,
+    ACTION_TYPE_EXPLOIT_HTTP,
+    ACTION_TYPE_EXPLOIT_SQL,
     ACTION_TYPE_EXPLOIT_SSH,
     ACTION_TYPE_PRIVESC,
     BLUE_DECOY_END,
@@ -813,7 +815,7 @@ class CC4DifferentialHarness:
                     f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
                 )
                 continue
-            if action_type == ACTION_TYPE_EXPLOIT_SSH:
+            if action_type in {ACTION_TYPE_EXPLOIT_SSH, ACTION_TYPE_EXPLOIT_HTTP, ACTION_TYPE_EXPLOIT_SQL}:
                 if usage.random_calls and not usage.choice_sizes and not usage.integer_ranges:
                     synced_randoms.extend(usage.random_calls)
                     continue

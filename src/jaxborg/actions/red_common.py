@@ -25,6 +25,7 @@ from jaxborg.constants import (
 from jaxborg.state import CC4Const, CC4State
 
 EXPLOIT_ROUTE_DETECTION_RATE = 0.95
+EXPLOIT_PROCESS_EVENT_DETECTION_RATE = 0.95
 
 
 def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
@@ -397,6 +398,49 @@ def apply_exploit_route_detection(
     return jax.lax.cond(enabled & (path_len > 0), _apply, lambda s: s, state)
 
 
+def sample_sim_exploit_success_roll(
+    state: CC4State,
+    enabled: chex.Array,
+    key: jax.Array,
+) -> tuple[chex.Array, CC4State]:
+    """Mirror ExploitAction.sim_exploit success-rate RNG consumption.
+
+    CC4 exploit success rates are effectively 1.0, but CybORG still consumes
+    one random draw when an exploit reaches the success-rate gate.
+    """
+
+    def _sample(state_in):
+        rand_val, next_state = sample_detection_random(state_in, key)
+        return rand_val > jnp.float32(0.0), next_state
+
+    return jax.lax.cond(
+        enabled,
+        _sample,
+        lambda state_in: (jnp.bool_(False), state_in),
+        state,
+    )
+
+
+def sample_exploit_process_event_roll(
+    state: CC4State,
+    enabled: chex.Array,
+    key: jax.Array,
+) -> tuple[chex.Array, CC4State]:
+    """Mirror ExploitAction process_creation event detection roll."""
+
+    def _sample(state_in):
+        rand_val, next_state = sample_detection_random(state_in, key)
+        detected = rand_val > jnp.float32(1.0 - EXPLOIT_PROCESS_EVENT_DETECTION_RATE)
+        return detected, next_state
+
+    return jax.lax.cond(
+        enabled,
+        _sample,
+        lambda state_in: (jnp.bool_(False), state_in),
+        state,
+    )
+
+
 def apply_exploit_success(
     state: CC4State,
     const: CC4Const,
@@ -404,6 +448,7 @@ def apply_exploit_success(
     target_host: chex.Array,
     success: chex.Array,
     key: jax.Array,
+    process_event_detected: chex.Array | None = None,
 ) -> CC4State:
     session_counts = effective_session_counts(state)
     had_count = session_counts[agent_id, target_host]
@@ -473,10 +518,11 @@ def apply_exploit_success(
         state.red_session_pids.at[agent_id, target_host].set(pid_row_updated),
         state.red_session_pids,
     )
+    emit_process_event = success if process_event_detected is None else (success & process_event_detected)
     event_row = state.host_process_creation_pids[target_host]
     updated_event_row = append_pid_to_row_allow_duplicates(event_row, new_pid)
     host_process_creation_pids = jnp.where(
-        success,
+        emit_process_event,
         state.host_process_creation_pids.at[target_host].set(updated_event_row),
         state.host_process_creation_pids,
     )
