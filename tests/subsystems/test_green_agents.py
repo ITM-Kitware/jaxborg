@@ -4,9 +4,11 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
+from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
 from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Actions import Remove
 from CybORG.Simulator.Actions.ConcreteActions.PhishingEmail import PhishingEmail
+from CybORG.Simulator.Actions.GreenActions.GreenAccessService import GreenAccessService
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action
@@ -14,6 +16,7 @@ from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.green import (
     FP_DETECTION_RATE,
+    GREEN_ACCESS_SERVICE,
     GREEN_LOCAL_WORK,
     PHISHING_ERROR_RATE,
     apply_green_agents,
@@ -28,6 +31,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     NUM_SUBNETS,
 )
+from jaxborg.rewards import ASF, compute_reward_breakdown
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg, build_topology
 from jaxborg.translate import build_mappings_from_cyborg
@@ -206,6 +210,121 @@ class TestDifferentialGreen:
 
     def test_fp_rate_matches_cyborg(self):
         assert FP_DETECTION_RATE == 0.01
+
+
+def test_green_access_service_reward_uses_source_subnet_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    source_host = None
+    dest_host = None
+    phase = 0
+    asf_weights = np.array(const.phase_rewards[phase, :, ASF])
+    for candidate_src in range(int(const.num_hosts)):
+        if not bool(const.green_agent_active[candidate_src]):
+            continue
+        src_subnet = int(const.host_subnet[candidate_src])
+        for candidate_dst in range(int(const.num_hosts)):
+            if candidate_dst == candidate_src:
+                continue
+            if not bool(const.host_active[candidate_dst]) or not bool(const.host_is_server[candidate_dst]):
+                continue
+            dst_subnet = int(const.host_subnet[candidate_dst])
+            if asf_weights[src_subnet] == asf_weights[dst_subnet]:
+                continue
+            source_host = candidate_src
+            dest_host = candidate_dst
+            break
+        if source_host is not None:
+            break
+
+    assert source_host is not None and dest_host is not None
+
+    source_subnet = int(const.host_subnet[source_host])
+    dest_subnet = int(const.host_subnet[dest_host])
+    expected_reward = float(const.phase_rewards[phase, source_subnet, ASF])
+    wrong_dest_reward = float(const.phase_rewards[phase, dest_subnet, ASF])
+    assert expected_reward != wrong_dest_reward
+
+    source_hostname = mappings.idx_to_hostname[source_host]
+    dest_hostname = mappings.idx_to_hostname[dest_host]
+    source_ip = mappings.hostname_to_ip[source_hostname]
+    dest_ip = mappings.hostname_to_ip[dest_hostname]
+    green_idx = int(const.green_agent_host[source_host])
+    green_name = f"green_agent_{green_idx}"
+    allowed_subnets = cy_state.scenario.agents[green_name].allowed_subnets
+
+    cy_state.blocks.setdefault(cy_state.hostname_subnet_map[source_hostname].value, []).append(
+        cy_state.hostname_subnet_map[dest_hostname].value
+    )
+    cy_state.blocks.setdefault(cy_state.hostname_subnet_map[dest_hostname].value, []).append(
+        cy_state.hostname_subnet_map[source_hostname].value
+    )
+    cy_action = GreenAccessService(
+        agent=green_name,
+        session_id=0,
+        src_ip=source_ip,
+        allowed_subnets=allowed_subnets,
+        fp_detection_rate=FP_DETECTION_RATE,
+    )
+    cy_action.random_reachable_ip = lambda state: dest_ip
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "FALSE"
+    assert cy_state.hosts[dest_hostname].events.network_connections
+
+    class _ObsWrapper:
+        def __init__(self, obs):
+            self.observations = [obs]
+
+    cy_reward = BlueRewardMachine("").calculate_reward(
+        current_state={},
+        action_dict={green_name: [cy_action]},
+        agent_observations={green_name: _ObsWrapper(cy_obs)},
+        done=False,
+        state=cy_state,
+    )
+    assert cy_reward == pytest.approx(expected_reward)
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    active_green = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
+    active_green[source_host] = True
+    blocked_zones = np.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
+    blocked_zones[source_subnet, dest_subnet] = True
+    blocked_zones[dest_subnet, source_subnet] = True
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, source_host, 0] = (GREEN_ACCESS_SERVICE + 0.5) / 3.0
+    green_randoms[0, source_host, 5] = float(dest_host)
+    green_randoms[0, source_host, 6] = 0.5
+    jax_state = jax_state.replace(
+        blocked_zones=jnp.array(blocked_zones),
+        green_randoms=jnp.array(green_randoms),
+        use_green_randoms=jnp.array(True),
+    )
+    const = const.replace(green_agent_active=jnp.array(active_green))
+
+    jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+    jax_reward = compute_reward_breakdown(
+        jax_after,
+        const,
+        jax_after.red_impact_attempted,
+        jax_after.green_lwf_this_step,
+        jax_after.green_asf_this_step,
+    )
+
+    assert bool(jax_after.green_asf_this_step[source_host])
+    assert not bool(jax_after.green_asf_this_step[dest_host])
+    assert bool(jax_after.host_activity_detected[dest_host])
+    assert not bool(jax_after.host_activity_detected[source_host])
+    assert float(jax_reward.total) == pytest.approx(cy_reward)
 
 
 class TestGreenStatisticalDifferential:

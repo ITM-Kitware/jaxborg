@@ -1,5 +1,6 @@
 import chex
 import jax.numpy as jnp
+from flax import struct
 
 from jaxborg.constants import MISSION_PHASES
 from jaxborg.state import CC4Const, CC4State
@@ -9,24 +10,35 @@ ASF = 1
 RIA = 2
 
 
-def compute_rewards(
+@struct.dataclass
+class RewardBreakdown:
+    total: chex.Array
+    ria_reward: chex.Array
+    lwf_reward: chex.Array
+    asf_reward: chex.Array
+    ria_count: chex.Array
+    lwf_count: chex.Array
+    asf_count: chex.Array
+
+
+def compute_reward_breakdown(
     state: CC4State,
     const: CC4Const,
     impact_hosts: chex.Array,
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
-) -> chex.Array:
+) -> RewardBreakdown:
     """Compute blue team shared reward for this step.
 
     Args:
         state: current CC4State (uses mission_phase, host_subnet)
         const: CC4Const (uses phase_rewards, host_active)
         impact_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where red Impact succeeded
-        green_lwf_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where GreenLocalWork failed
-        green_asf_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where GreenAccessService failed
+        green_lwf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenLocalWork failed
+        green_asf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenAccessService failed
 
     Returns:
-        scalar float reward
+        RewardBreakdown with total reward and per-term counts.
     """
     phase = state.mission_phase
     subnets = const.host_subnet
@@ -41,7 +53,32 @@ def compute_rewards(
     lwf_reward = jnp.sum(green_lwf_hosts.astype(jnp.float32) * lwf_weights * active)
     asf_reward = jnp.sum(green_asf_hosts.astype(jnp.float32) * asf_weights * active)
 
-    return ria_reward + lwf_reward + asf_reward
+    return RewardBreakdown(
+        total=ria_reward + lwf_reward + asf_reward,
+        ria_reward=ria_reward,
+        lwf_reward=lwf_reward,
+        asf_reward=asf_reward,
+        ria_count=jnp.sum(impact_hosts.astype(jnp.float32) * active),
+        lwf_count=jnp.sum(green_lwf_hosts.astype(jnp.float32) * active),
+        asf_count=jnp.sum(green_asf_hosts.astype(jnp.float32) * active),
+    )
+
+
+def compute_rewards(
+    state: CC4State,
+    const: CC4Const,
+    impact_hosts: chex.Array,
+    green_lwf_hosts: chex.Array,
+    green_asf_hosts: chex.Array,
+) -> chex.Array:
+    """Compute blue team shared reward for this step."""
+    return compute_reward_breakdown(
+        state,
+        const,
+        impact_hosts,
+        green_lwf_hosts,
+        green_asf_hosts,
+    ).total
 
 
 def advance_mission_phase(state: CC4State, const: CC4Const) -> CC4State:

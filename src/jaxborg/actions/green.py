@@ -243,9 +243,11 @@ def _apply_single_green(
     access_fp_roll = sample_green_random(state, t, host_idx, 6, k5)
     access_fp = do_access & ~is_blocked & (access_fp_roll < FP_DETECTION_RATE)
 
+    # CybORG rewards GreenAccessService failures against the source green host's
+    # subnet, even though the network event is recorded on the destination host.
     green_asf_this_step = jnp.where(
         access_blocked,
-        state.green_asf_this_step.at[dest_host].set(True),
+        state.green_asf_this_step.at[host_idx].set(True),
         state.green_asf_this_step,
     )
 
