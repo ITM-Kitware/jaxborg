@@ -9,6 +9,9 @@ from jaxborg.actions.encoding import (
     RED_DEGRADE_START,
     RED_DISCOVER_DECEPTION_START,
     RED_DISCOVER_START,
+    RED_EXPLOIT_HARAKA_START,
+    RED_EXPLOIT_HTTP_START,
+    RED_EXPLOIT_SQL_START,
     RED_EXPLOIT_SSH_START,
     RED_IMPACT_START,
     RED_PRIVESC_START,
@@ -26,6 +29,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
+    SERVICE_IDS,
 )
 from jaxborg.state import CC4Const, CC4State
 
@@ -101,8 +105,57 @@ PROBABILITY_MATRIX = jnp.array(
 
 ACTION_VALID_MASK = PROBABILITY_MATRIX >= 0.0
 
+SSH_SERVICE_IDX = SERVICE_IDS["SSHD"]
+APACHE_SERVICE_IDX = SERVICE_IDS["APACHE2"]
+MYSQL_SERVICE_IDX = SERVICE_IDS["MYSQLD"]
+SMTP_SERVICE_IDX = SERVICE_IDS["SMTP"]
 
-def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet):
+GENERIC_EXPLOIT_STARTS = jnp.array(
+    [
+        RED_EXPLOIT_HTTP_START,
+        RED_EXPLOIT_SSH_START,
+        RED_EXPLOIT_SQL_START,
+        RED_EXPLOIT_HARAKA_START,
+    ],
+    dtype=jnp.int32,
+)
+GENERIC_EXPLOIT_WEIGHTS = jnp.array([3.0, 0.1, 5.0, 6.0], dtype=jnp.float32)
+
+
+def _pick_exploit_action(state, target_host, key):
+    host_services = state.host_services[target_host]
+    candidates = jnp.array(
+        [
+            host_services[APACHE_SERVICE_IDX],
+            host_services[SSH_SERVICE_IDX],
+            host_services[APACHE_SERVICE_IDX] & host_services[MYSQL_SERVICE_IDX],
+            host_services[SMTP_SERVICE_IDX],
+        ],
+        dtype=jnp.bool_,
+    )
+    num_candidates = jnp.sum(candidates.astype(jnp.int32))
+    fallback = RED_EXPLOIT_SSH_START + target_host
+
+    def _choose_candidate(_):
+        weights = jnp.where(candidates, GENERIC_EXPLOIT_WEIGHTS, 0.0)
+        top_idx = jnp.argmax(weights)
+        reduced = candidates.at[top_idx].set(False)
+
+        def _single():
+            return jnp.argmax(candidates.astype(jnp.int32))
+
+        def _multi():
+            probs = reduced.astype(jnp.float32)
+            probs = probs / jnp.sum(probs)
+            return jax.random.choice(key, len(GENERIC_EXPLOIT_STARTS), p=probs)
+
+        choice_idx = jax.lax.cond(num_candidates > 1, _multi, _single)
+        return GENERIC_EXPLOIT_STARTS[choice_idx] + target_host
+
+    return jax.lax.cond(num_candidates > 0, _choose_candidate, lambda _: fallback, operand=None)
+
+
+def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet, exploit_action):
     return jax.lax.switch(
         fsm_action,
         [
@@ -110,7 +163,7 @@ def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet):
             lambda: RED_AGGRESSIVE_SCAN_START + target_host,
             lambda: RED_STEALTH_SCAN_START + target_host,
             lambda: RED_DISCOVER_DECEPTION_START + target_host,
-            lambda: RED_EXPLOIT_SSH_START + target_host,
+            lambda: exploit_action,
             lambda: RED_PRIVESC_START + target_host,
             lambda: RED_IMPACT_START + target_host,
             lambda: RED_DEGRADE_START + target_host,
@@ -120,13 +173,10 @@ def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet):
 
 
 def _pick_discover_subnet(state, const, agent_id, key):
-    # CybORG's action space only marks subnets valid after observation (initial
-    # session or green-phishing reassignment).  Match that by restricting to
-    # subnets where the agent currently holds a session.
-    session_hosts = state.red_sessions[agent_id] & const.host_active
-    subnet_one_hot = jax.nn.one_hot(const.host_subnet, NUM_SUBNETS, dtype=jnp.bool_)
-    session_subnets = jnp.any(session_hosts[:, None] & subnet_one_hot, axis=0)
-    probs = jnp.where(session_subnets, 1.0, 0.0)
+    # CybORG samples DiscoverRemoteSystems subnets from the controller action
+    # space, which is keyed by the red agent's allowed subnets, not by current
+    # session placement.
+    probs = jnp.where(const.red_agent_subnets[agent_id], 1.0, 0.0)
     probs = probs / jnp.maximum(jnp.sum(probs), 1e-8)
     return jax.random.choice(key, NUM_SUBNETS, p=probs)
 
@@ -143,7 +193,7 @@ def fsm_red_get_action_and_info(
 
     eligible = discovered & active & (fsm_states != FSM_F)
 
-    key1, key2, key3 = jax.random.split(key, 3)
+    key1, key2, key3, key4 = jax.random.split(key, 4)
 
     any_eligible = jnp.any(eligible)
 
@@ -163,13 +213,15 @@ def fsm_red_get_action_and_info(
     chosen_fsm_action = jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs)
 
     discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
+    exploit_action = _pick_exploit_action(state, chosen_host, key4)
     host_subnet = const.host_subnet[chosen_host]
     target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
-    jax_action = _fsm_action_to_jax_action(chosen_fsm_action, chosen_host, target_subnet)
+    jax_action = _fsm_action_to_jax_action(chosen_fsm_action, chosen_host, target_subnet, exploit_action)
 
     return (
         jnp.where(any_eligible, jax_action, RED_SLEEP),
         chosen_host,
+        target_subnet,
         chosen_fsm_action,
         any_eligible,
     )
@@ -181,7 +233,7 @@ def fsm_red_get_action(
     agent_id: int,
     key: jax.Array,
 ) -> int:
-    action, _, _, _ = fsm_red_get_action_and_info(state, const, agent_id, key)
+    action, _, _, _, _ = fsm_red_get_action_and_info(state, const, agent_id, key)
     return action
 
 
@@ -211,12 +263,13 @@ def _select_one_agent(state, const, r, key):
     """Select action for a single red agent, handling busy/inactive gating and scan source binding."""
     is_busy = state.red_pending_ticks[r] > 0
     is_active = state.red_agent_active[r]
-    action, host, fsm_act, eligible = jax.lax.cond(
+    action, host, target_subnet, fsm_act, eligible = jax.lax.cond(
         is_busy | ~is_active,
-        lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
+        lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
         lambda: fsm_red_get_action_and_info(state, const, r, key),
     )
     eff_host = jnp.where(is_busy, state.red_pending_target_host[r], host)
+    eff_subnet = jnp.where(is_busy, state.red_pending_target_subnet[r], target_subnet)
     eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r], fsm_act)
     eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
 
@@ -225,7 +278,7 @@ def _select_one_agent(state, const, r, key):
     source_kind = jnp.where(is_busy, state.red_pending_source_kind[r], new_source_kind)
     source_host = jnp.where(is_busy, state.red_pending_source_host[r], new_source_host)
 
-    return action, eff_host, eff_fsm_act, eff_eligible, source_kind, source_host
+    return action, eff_host, eff_subnet, eff_fsm_act, eff_eligible, source_kind, source_host
 
 
 def fsm_red_select_actions(
@@ -235,45 +288,52 @@ def fsm_red_select_actions(
 ) -> tuple:
     """Select FSM red actions for all agents. Shared by training env and differential harness.
 
-    Returns (red_actions, target_hosts, fsm_actions, eligible_flags, updated_state)
+    Returns (red_actions, target_hosts, target_subnets, fsm_actions, eligible_flags, updated_state)
     where red_actions is shape (NUM_RED_AGENTS,) int32 array, and the rest are
     (NUM_RED_AGENTS,) arrays. updated_state has pending fields written.
     """
     red_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
     target_hosts = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
+    target_subnets = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
     fsm_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
     eligible_flags = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
 
     for r in range(NUM_RED_AGENTS):
-        action, eff_host, eff_fsm_act, eff_eligible, source_kind, source_host = _select_one_agent(
+        action, eff_host, eff_subnet, eff_fsm_act, eff_eligible, source_kind, source_host = _select_one_agent(
             state, const, r, red_keys[r]
         )
         red_actions = red_actions.at[r].set(action)
         target_hosts = target_hosts.at[r].set(eff_host)
+        target_subnets = target_subnets.at[r].set(eff_subnet)
         fsm_actions = fsm_actions.at[r].set(eff_fsm_act)
         eligible_flags = eligible_flags.at[r].set(eff_eligible)
 
         state = state.replace(
             red_pending_fsm_action=state.red_pending_fsm_action.at[r].set(eff_fsm_act),
             red_pending_target_host=state.red_pending_target_host.at[r].set(eff_host),
+            red_pending_target_subnet=state.red_pending_target_subnet.at[r].set(eff_subnet),
             red_pending_source_kind=state.red_pending_source_kind.at[r].set(source_kind),
             red_pending_source_host=state.red_pending_source_host.at[r].set(source_host),
         )
 
-    return red_actions, target_hosts, fsm_actions, eligible_flags, state
+    return red_actions, target_hosts, target_subnets, fsm_actions, eligible_flags, state
 
 
 def determine_fsm_success(
     state_before: CC4State,
     state_after: CC4State,
+    const: CC4Const,
     agent_id: int,
     target_host: jnp.ndarray,
+    target_subnet: jnp.ndarray,
     fsm_action: int,
 ) -> jnp.ndarray:
     return jax.lax.switch(
         fsm_action,
         [
-            lambda: jnp.any(state_after.red_discovered_hosts[agent_id] & ~state_before.red_discovered_hosts[agent_id]),
+            lambda: jnp.any(
+                state_after.red_discovered_hosts[agent_id] & const.host_active & (const.host_subnet == target_subnet)
+            ),
             lambda: (
                 state_after.red_scanned_hosts[agent_id, target_host]
                 & ~state_before.red_scanned_hosts[agent_id, target_host]
@@ -283,15 +343,27 @@ def determine_fsm_success(
                 & ~state_before.red_scanned_hosts[agent_id, target_host]
             ),
             lambda: jnp.bool_(True),
-            lambda: state_after.red_sessions[agent_id, target_host] & ~state_before.red_sessions[agent_id, target_host],
+            lambda: (
+                state_after.red_session_count[agent_id, target_host]
+                > state_before.red_session_count[agent_id, target_host]
+            ),
             lambda: (
                 state_after.red_privilege[agent_id, target_host] > state_before.red_privilege[agent_id, target_host]
             ),
             lambda: state_after.ot_service_stopped[target_host] & ~state_before.ot_service_stopped[target_host],
-            lambda: jnp.any(
-                state_after.host_service_reliability[target_host] < state_before.host_service_reliability[target_host]
+            lambda: (
+                jnp.any(
+                    state_after.host_service_reliability[target_host]
+                    < state_before.host_service_reliability[target_host]
+                )
+                | jnp.any(
+                    state_after.host_decoy_reliability[target_host] < state_before.host_decoy_reliability[target_host]
+                )
             ),
-            lambda: ~state_after.red_sessions[agent_id, target_host] & state_before.red_sessions[agent_id, target_host],
+            lambda: (
+                state_after.red_session_count[agent_id, target_host]
+                < state_before.red_session_count[agent_id, target_host]
+            ),
         ],
     )
 
@@ -301,6 +373,8 @@ def fsm_red_update_state(
     const: CC4Const,
     agent_id: int,
     target_host: jnp.ndarray,
+    discovered_hosts: jnp.ndarray,
+    target_subnet: jnp.ndarray,
     fsm_action: int,
     success: jnp.ndarray,
 ) -> jnp.ndarray:
@@ -317,8 +391,24 @@ def fsm_red_update_state(
     host_subnet = const.host_subnet[target_host]
     in_allowed_subnets = const.red_agent_subnets[agent_id, host_subnet]
     new_state = jnp.where((new_state == FSM_U) & ~in_allowed_subnets, FSM_F, new_state)
+    discover_mask = discovered_hosts & const.host_active & (const.host_subnet == target_subnet)
 
-    return fsm_states.at[agent_id, target_host].set(new_state)
+    def _apply_discover(_):
+        cur_row = fsm_states[agent_id]
+        next_success_row = TRANSITION_SUCCESS[cur_row, fsm_action]
+        next_failure_row = TRANSITION_FAILURE[cur_row, fsm_action]
+        next_row = jnp.where(success, next_success_row, next_failure_row)
+        valid_row = next_row != _SENTINEL
+        new_row = jnp.where(valid_row, next_row, cur_row)
+        allowed_row = const.red_agent_subnets[agent_id, const.host_subnet]
+        new_row = jnp.where((new_row == FSM_U) & ~allowed_row, FSM_F, new_row)
+        updated_row = jnp.where(discover_mask, new_row, cur_row)
+        return fsm_states.at[agent_id].set(updated_row)
+
+    def _apply_single(_):
+        return fsm_states.at[agent_id, target_host].set(new_state)
+
+    return jax.lax.cond(fsm_action == FSM_ACT_DISCOVER, _apply_discover, _apply_single, operand=None)
 
 
 def fsm_red_post_step_update(
@@ -326,6 +416,7 @@ def fsm_red_post_step_update(
     state_after: CC4State,
     const: CC4Const,
     target_hosts: list,
+    target_subnets: list,
     fsm_actions: list,
     eligible_flags: list,
     executed_flags: list | None = None,
@@ -333,10 +424,27 @@ def fsm_red_post_step_update(
     fsm_states = state_after.fsm_host_states
 
     for r in range(NUM_RED_AGENTS):
-        success = determine_fsm_success(state_before, state_after, r, target_hosts[r], fsm_actions[r])
+        success = determine_fsm_success(
+            state_before,
+            state_after,
+            const,
+            r,
+            target_hosts[r],
+            target_subnets[r],
+            fsm_actions[r],
+        )
         exec_flag = jnp.bool_(True) if executed_flags is None else executed_flags[r]
         skip = ~eligible_flags[r] | ~exec_flag | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
-        updated = fsm_red_update_state(fsm_states, const, r, target_hosts[r], fsm_actions[r], success)
+        updated = fsm_red_update_state(
+            fsm_states,
+            const,
+            r,
+            target_hosts[r],
+            state_before.red_discovered_hosts[r],
+            target_subnets[r],
+            fsm_actions[r],
+            success,
+        )
         fsm_states = jnp.where(skip, fsm_states, updated)
 
     for r in range(NUM_RED_AGENTS):

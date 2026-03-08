@@ -1,11 +1,17 @@
+from ipaddress import ip_network
+from types import SimpleNamespace
+
 import jax
 import jax.numpy as jnp
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import FiniteStateRedAgent, SleepAgent
+from CybORG.Simulator.Actions import DiscoverRemoteSystems, ExploitRemoteService
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import (
+    RED_EXPLOIT_HARAKA_START,
+    RED_EXPLOIT_HTTP_START,
     RED_SLEEP,
 )
 from jaxborg.agents.fsm_red import (
@@ -22,15 +28,19 @@ from jaxborg.agents.fsm_red import (
     FSM_RD,
     FSM_S,
     FSM_U,
+    FSM_UD,
     PROBABILITY_MATRIX,
     TRANSITION_FAILURE,
     TRANSITION_SUCCESS,
+    _pick_discover_subnet,
+    _pick_exploit_action,
+    determine_fsm_success,
     fsm_red_get_action,
     fsm_red_init_states,
     fsm_red_process_session_removal,
     fsm_red_update_state,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.state import create_initial_state
 
 
@@ -85,29 +95,78 @@ class TestTransitionMatrices:
 class TestFsmUpdateState:
     def test_K_success_discover_transitions_to_KD(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
+        discovered_hosts = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_).at[5].set(True)
+        target_subnet = jax_const.host_subnet[5]
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(5),
+            discovered_hosts,
+            target_subnet,
+            FSM_ACT_DISCOVER,
+            jnp.bool_(True),
+        )
         assert int(new_fsm[0, 5]) == FSM_KD
 
     def test_S_failure_exploit_stays_S(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(10), FSM_ACT_EXPLOIT, jnp.bool_(False))
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(10),
+            jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            jnp.int32(0),
+            FSM_ACT_EXPLOIT,
+            jnp.bool_(False),
+        )
         assert int(new_fsm[0, 10]) == FSM_S
 
     def test_invalid_action_preserves_state(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(5),
+            jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            jnp.int32(0),
+            FSM_ACT_EXPLOIT,
+            jnp.bool_(True),
+        )
         assert int(new_fsm[0, 5]) == FSM_K
 
     def test_update_does_not_affect_other_hosts(self, jax_const):
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_K, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(5), FSM_ACT_DISCOVER, jnp.bool_(True))
+        discovered_hosts = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_).at[5].set(True)
+        target_subnet = jax_const.host_subnet[5]
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(5),
+            discovered_hosts,
+            target_subnet,
+            FSM_ACT_DISCOVER,
+            jnp.bool_(True),
+        )
         assert int(new_fsm[0, 5]) == FSM_KD
         assert int(new_fsm[0, 6]) == FSM_K
 
     def test_update_does_not_affect_other_agents(self, jax_const):
         h = int(jax_const.red_start_hosts[0])
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(h), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(h),
+            jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            jnp.int32(0),
+            FSM_ACT_EXPLOIT,
+            jnp.bool_(True),
+        )
         assert int(new_fsm[0, h]) == FSM_U
         assert int(new_fsm[1, h]) == FSM_S
 
@@ -122,11 +181,294 @@ class TestFsmUpdateState:
         if foreign_host is None:
             pytest.skip("No foreign host found")
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
-        new_fsm = fsm_red_update_state(fsm, jax_const, 0, jnp.int32(foreign_host), FSM_ACT_EXPLOIT, jnp.bool_(True))
+        new_fsm = fsm_red_update_state(
+            fsm,
+            jax_const,
+            0,
+            jnp.int32(foreign_host),
+            jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            jnp.int32(0),
+            FSM_ACT_EXPLOIT,
+            jnp.bool_(True),
+        )
         assert int(new_fsm[0, foreign_host]) == FSM_F
+
+    def test_discover_updates_all_known_hosts_in_target_subnet_like_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            )
+        )
+        controller = cyborg_env.environment_controller
+        agent = controller.agent_interfaces["red_agent_0"].agent
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        const = build_const_from_cyborg(cyborg_env)
+
+        known_ips = list(agent.host_states.keys())
+        subnet_to_ips = {}
+        for ip in known_ips:
+            subnet_to_ips.setdefault(str(ip).rsplit(".", 1)[0], []).append(ip)
+        selected_ips = None
+        for ips in subnet_to_ips.values():
+            if len(ips) >= 2:
+                selected_ips = ips[:2]
+                break
+        if selected_ips is None:
+            pytest.skip("Need two known hosts in one subnet")
+
+        for ip, state_name in zip(selected_ips, ["U", "K"], strict=True):
+            agent.host_states[ip]["state"] = state_name
+
+        subnet = ip_network(f"{str(selected_ips[0]).rsplit('.', 1)[0]}.0/24")
+        action = DiscoverRemoteSystems(subnet=subnet, session=0, agent="red_agent_0")
+        agent._host_state_transition(action, SimpleNamespace(name="TRUE", value=1))
+
+        cy_states = [agent.host_states[ip]["state"] for ip in selected_ips]
+        assert cy_states == ["UD", "KD"]
+
+        host_indices = [mappings.hostname_to_idx[agent.host_states[ip]["hostname"]] for ip in selected_ips]
+        discovered_hosts = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+        discovered_hosts = discovered_hosts.at[jnp.array(host_indices, dtype=jnp.int32)].set(True)
+        fsm = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32)
+        fsm = fsm.at[0, host_indices[0]].set(FSM_U)
+        fsm = fsm.at[0, host_indices[1]].set(FSM_K)
+
+        new_fsm = fsm_red_update_state(
+            fsm,
+            const,
+            0,
+            jnp.int32(host_indices[0]),
+            discovered_hosts,
+            const.host_subnet[host_indices[0]],
+            FSM_ACT_DISCOVER,
+            jnp.bool_(True),
+        )
+
+        assert int(new_fsm[0, host_indices[0]]) == FSM_UD
+        assert int(new_fsm[0, host_indices[1]]) == FSM_KD
+
+
+class TestFsmSuccessDetection:
+    def test_exploit_session_count_growth_counts_as_success_like_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            ),
+            seed=42,
+        )
+        controller = cyborg_env.environment_controller
+        agent = controller.agent_interfaces["red_agent_0"].agent
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        start_session = controller.state.sessions["red_agent_0"][0]
+        target_hostname = start_session.hostname
+        target_ip = next(ip for ip, hostname in controller.state.ip_addresses.items() if hostname == target_hostname)
+        target_ip_str = str(target_ip)
+        agent.host_states[target_ip_str] = {"hostname": target_hostname, "state": "S"}
+        action = ExploitRemoteService(ip_address=target_ip, session=0, agent="red_agent_0")
+        agent._host_state_transition(action, SimpleNamespace(name="TRUE", value=1))
+        assert agent.host_states[target_ip_str]["state"] == "U"
+
+        target_host = mappings.hostname_to_idx[target_hostname]
+        base = create_initial_state()
+        before = base.replace(
+            red_sessions=base.red_sessions.at[0, target_host].set(True),
+            red_session_count=base.red_session_count.at[0, target_host].set(1),
+        )
+        after = before.replace(
+            red_session_count=before.red_session_count.at[0, target_host].set(2),
+        )
+
+        assert bool(
+            determine_fsm_success(
+                before,
+                after,
+                const,
+                0,
+                jnp.int32(target_host),
+                const.host_subnet[target_host],
+                FSM_ACT_EXPLOIT,
+            )
+        )
+
+    def test_discover_reaffirming_known_hosts_counts_as_success_like_cyborg(self):
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            ),
+            seed=42,
+        )
+        controller = cyborg_env.environment_controller
+        agent = controller.agent_interfaces["red_agent_0"].agent
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+
+        session = controller.state.sessions["red_agent_0"][0]
+        start_hostname = session.hostname
+        start_ip = next(ip for ip, hostname in controller.state.ip_addresses.items() if hostname == start_hostname)
+        subnet_prefix = str(start_ip).rsplit(".", 1)[0]
+
+        target_entries = []
+        for ip, hostname in controller.state.ip_addresses.items():
+            if str(ip).rsplit(".", 1)[0] != subnet_prefix:
+                continue
+            host_idx = mappings.hostname_to_idx.get(hostname)
+            if host_idx is None or not const.host_active[host_idx]:
+                continue
+            target_entries.append((str(ip), hostname, host_idx))
+        if len(target_entries) < 2:
+            pytest.skip("Need two active hosts in one subnet")
+
+        for ip_str, hostname, _ in target_entries:
+            agent.host_states[ip_str] = {"hostname": hostname, "state": "K"}
+
+        subnet = ip_network(f"{subnet_prefix}.0/24")
+        action = DiscoverRemoteSystems(subnet=subnet, session=0, agent="red_agent_0")
+        agent._host_state_transition(action, SimpleNamespace(name="TRUE", value=1))
+        assert [agent.host_states[ip]["state"] for ip, _, _ in target_entries[:2]] == ["KD", "KD"]
+
+        host_indices = jnp.array([entry[2] for entry in target_entries[:2]], dtype=jnp.int32)
+        base = create_initial_state()
+        discovered = base.red_discovered_hosts.at[0, host_indices].set(True)
+        before = base.replace(red_discovered_hosts=discovered)
+        after = before
+
+        assert bool(
+            determine_fsm_success(
+                before,
+                after,
+                const,
+                0,
+                host_indices[0],
+                const.host_subnet[host_indices[0]],
+                FSM_ACT_DISCOVER,
+            )
+        )
 
 
 class TestFsmGetAction:
+    def test_discover_subnet_matches_cyborg_action_space_allowed_subnet(self):
+        from jaxborg.env import _init_red_state
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            ),
+            seed=0,
+        )
+        controller = cyborg_env.environment_controller
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        state = _init_red_state(const, create_initial_state())
+
+        valid_subnets = [
+            subnet for subnet, allowed in controller.get_action_space("red_agent_0")["subnet"].items() if allowed
+        ]
+        assert len(valid_subnets) == 1
+
+        chosen_subnet = int(_pick_discover_subnet(state, const, 0, jax.random.PRNGKey(0)))
+        expected_subnet = next(i for i, allowed in enumerate(const.red_agent_subnets[0]) if bool(allowed))
+        assert str(valid_subnets[0]) == str(mappings.subnet_cidrs[expected_subnet])
+        assert chosen_subnet == expected_subnet
+
+    def test_generic_exploit_selector_matches_cyborg_http_host(self):
+        from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
+
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            ),
+            seed=0,
+        )
+        controller = cyborg_env.environment_controller
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        target_host = int(const.red_start_hosts[0])
+        hostname = mappings.idx_to_hostname[target_host]
+        ip_address = mappings.hostname_to_ip[hostname]
+        controller.state.sessions["red_agent_0"][0].ports[ip_address] = [80]
+        host_services = jnp.zeros_like(const.initial_services)
+        host_services = host_services.at[target_host, SERVICE_IDS["APACHE2"]].set(True)
+        state = create_initial_state().replace(host_services=host_services)
+
+        cy_action = DefaultExploitActionSelector().get_exploit_action(
+            state=controller.state,
+            session=0,
+            agent="red_agent_0",
+            ip_address=ip_address,
+        )
+        assert type(cy_action).__name__ == "HTTPRFI"
+        assert int(_pick_exploit_action(state, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
+            RED_EXPLOIT_HTTP_START + target_host
+        )
+
+    def test_generic_exploit_selector_matches_cyborg_smtp_host(self):
+        from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
+
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        cyborg_env = CybORG(
+            scenario_generator=EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=SleepAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=500,
+            ),
+            seed=0,
+        )
+        controller = cyborg_env.environment_controller
+        const = build_const_from_cyborg(cyborg_env)
+        mappings = build_mappings_from_cyborg(cyborg_env)
+        target_host = int(const.red_start_hosts[0])
+        hostname = mappings.idx_to_hostname[target_host]
+        ip_address = mappings.hostname_to_ip[hostname]
+        controller.state.sessions["red_agent_0"][0].ports[ip_address] = [25]
+        host_services = jnp.zeros_like(const.initial_services)
+        host_services = host_services.at[target_host, SERVICE_IDS["SMTP"]].set(True)
+        state = create_initial_state().replace(host_services=host_services)
+
+        cy_action = DefaultExploitActionSelector().get_exploit_action(
+            state=controller.state,
+            session=0,
+            agent="red_agent_0",
+            ip_address=ip_address,
+        )
+        assert type(cy_action).__name__ == "HarakaRCE"
+        assert int(_pick_exploit_action(state, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
+            RED_EXPLOIT_HARAKA_START + target_host
+        )
+
     def test_returns_sleep_when_no_eligible_hosts(self, jax_const):
         state = create_initial_state()
         key = jax.random.PRNGKey(0)

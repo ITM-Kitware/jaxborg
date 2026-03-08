@@ -79,11 +79,17 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
         state_before = env_state.state
-        red_action_arr, target_hosts_arr, fsm_actions_arr, eligible_arr, state = fsm_red_select_actions(
-            state_before, env_state.const, red_keys
-        )
+        (
+            red_action_arr,
+            target_hosts_arr,
+            target_subnets_arr,
+            fsm_actions_arr,
+            eligible_arr,
+            state,
+        ) = fsm_red_select_actions(state_before, env_state.const, red_keys)
         red_actions = {f"red_{r}": red_action_arr[r] for r in range(NUM_RED_AGENTS)}
         target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
+        target_subnets = [target_subnets_arr[r] for r in range(NUM_RED_AGENTS)]
         fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
         eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
         env_state = CC4EnvState(state=state, const=env_state.const)
@@ -99,6 +105,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             env_state.state,
             env_state.const,
             target_hosts,
+            target_subnets,
             fsm_actions,
             eligible_flags,
             executed_flags,

@@ -154,13 +154,14 @@ def _jit_advance_and_clear(state, const):
 
 @jax.jit
 def _jit_fsm_red_post_step_update(
-    state_before, state_after, const, target_hosts, fsm_actions, eligible_flags, executed_flags=None
+    state_before, state_after, const, target_hosts, target_subnets, fsm_actions, eligible_flags, executed_flags=None
 ):
     return fsm_red_post_step_update(
         state_before,
         state_after,
         const,
         target_hosts,
+        target_subnets,
         fsm_actions,
         eligible_flags,
         executed_flags,
@@ -561,16 +562,18 @@ class CC4DifferentialHarness:
 
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
-            red_action_arr, target_hosts_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
+            red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
                 _jit_fsm_red_select_actions(self.jax_state, self.jax_const, red_keys)
             )
             red_actions = {r: int(red_action_arr[r]) for r in range(NUM_RED_AGENTS)}
             target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
+            target_subnets = [target_subnets_arr[r] for r in range(NUM_RED_AGENTS)]
             fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
             eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
         else:
             red_actions = {r: RED_SLEEP for r in range(NUM_RED_AGENTS)}
             target_hosts = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
+            target_subnets = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
             fsm_actions = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
             eligible_flags = [jnp.bool_(False) for _ in range(NUM_RED_AGENTS)]
 
@@ -718,6 +721,7 @@ class CC4DifferentialHarness:
                 self.jax_state,
                 self.jax_const,
                 jnp.asarray(target_hosts, dtype=jnp.int32),
+                jnp.asarray(target_subnets, dtype=jnp.int32),
                 jnp.asarray(fsm_actions, dtype=jnp.int32),
                 jnp.asarray(eligible_flags, dtype=jnp.bool_),
                 executed_flags,

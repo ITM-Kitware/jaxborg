@@ -128,6 +128,7 @@ class CC4State:
 
     red_pending_fsm_action: chex.Array  # (NUM_RED_AGENTS,) int32 — stored FSM action type for deferred actions
     red_pending_target_host: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target host for deferred actions
+    red_pending_target_subnet: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target subnet for deferred discover
 
     red_pid_deltas: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed Host.create_pid deltas
     use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
@@ -242,6 +243,7 @@ def create_initial_state() -> CC4State:
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_target_host=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_pending_target_subnet=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_agent_active=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
     )
