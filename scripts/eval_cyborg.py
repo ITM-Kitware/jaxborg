@@ -118,6 +118,8 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return []
 
     if cls_name == "DeployDecoy":
+        if action.hostname not in mappings.hostname_to_idx:
+            return []
         host = cyborg_state.hosts[action.hostname]
         host_idx = mappings.hostname_to_idx[action.hostname]
         return [
