@@ -35,7 +35,8 @@ def evaluate(seed, max_eps):
     episode_rewards = [run_episode(env) for _ in range(max_eps)]
     print(f"episodes:  {max_eps}")
     print(f"mean:      {mean(episode_rewards):.4f}")
-    print(f"stdev:     {stdev(episode_rewards):.4f}")
+    if len(episode_rewards) > 1:
+        print(f"stdev:     {stdev(episode_rewards):.4f}")
 
 
 if __name__ == "__main__":

@@ -334,7 +334,7 @@ def make_cyborg_env(seed=42):
 
 
 def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
-    env = FsmRedCC4Env(num_steps=500)
+    env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
     all_actions = []
     episode_rewards = []
     episode_results = []
@@ -806,7 +806,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
 
 def print_mask_summary():
     print("\n--- Action Mask Summary ---")
-    env = FsmRedCC4Env(num_steps=100)
+    env = FsmRedCC4Env(num_steps=100, topology_mode="cyborg_bank", topology_bank_size=32)
     key = jax.random.PRNGKey(42)
     _, env_state = env.reset(key)
 
