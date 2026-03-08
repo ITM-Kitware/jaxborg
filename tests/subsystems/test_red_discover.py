@@ -5,6 +5,7 @@ import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
 from CybORG.Simulator.Actions import DiscoverRemoteSystems
+from CybORG.Simulator.Actions.ConcreteActions.ControlTraffic import BlockTrafficZone
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_red_action
@@ -312,3 +313,56 @@ class TestDifferentialWithCybORG:
         before = set(np.where(np.array(jax_state.red_discovered_hosts[0]))[0].tolist())
         after = set(np.where(np.array(jax_after.red_discovered_hosts[0]))[0].tolist())
         assert after == before
+
+    def test_discover_ignores_blocked_subnet_matches_cyborg(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        start_host = int(const.red_start_hosts[0])
+        start_hostname = sorted_hosts[start_host]
+        start_subnet = int(const.host_subnet[start_host])
+        start_subnet_name = cyborg_state.hostname_subnet_map[start_hostname].value
+
+        target_subnet_name = None
+        target_subnet = None
+        for subnet_name, subnet_cidr in sorted(cyborg_state.subnet_name_to_cidr.items()):
+            sid = CYBORG_SUFFIX_TO_ID[subnet_name]
+            if sid == start_subnet or subnet_name.startswith("operational_zone_"):
+                continue
+            has_pingable_host = any(
+                bool(const.host_active[h])
+                and int(const.host_subnet[h]) == sid
+                and bool(const.host_respond_to_ping[h])
+                and not bool(const.host_is_router[h])
+                for h in range(int(const.num_hosts))
+            )
+            if has_pingable_host:
+                target_subnet_name = subnet_name
+                target_subnet = sid
+                target_cidr = subnet_cidr
+                break
+        if target_subnet_name is None or target_subnet is None:
+            pytest.skip("Need a non-operational target subnet with a pingable host")
+
+        block_obs = BlockTrafficZone(
+            session=0,
+            agent="blue_agent_0",
+            from_subnet=start_subnet_name,
+            to_subnet=target_subnet_name,
+        ).execute(cyborg_state)
+        assert str(block_obs.success).upper() == "TRUE"
+
+        cyborg_obs = DiscoverRemoteSystems(subnet=target_cidr, session=0, agent="red_agent_0").execute(cyborg_state)
+        assert str(cyborg_obs.success).upper() == "TRUE"
+
+        blocked = state.blocked_zones.at[target_subnet, start_subnet].set(True)
+        jax_state = state.replace(blocked_zones=blocked)
+
+        action_idx = encode_red_action("DiscoverRemoteSystems", target_subnet, 0)
+        jax_after = _jit_apply_red(jax_state, const, 0, action_idx, jax.random.PRNGKey(0))
+
+        discovered = np.array(jax_after.red_discovered_hosts[0])
+        assert np.any(
+            discovered & (np.array(const.host_subnet) == target_subnet) & np.array(const.host_respond_to_ping)
+        )

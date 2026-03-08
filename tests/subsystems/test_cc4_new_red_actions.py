@@ -5,7 +5,8 @@ import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
 from CybORG.Shared.Session import RedAbstractSession
-from CybORG.Simulator.Actions import DegradeServices
+from CybORG.Simulator.Actions import DegradeServices, DiscoverDeception
+from CybORG.Simulator.Actions.ConcreteActions.ControlTraffic import BlockTrafficZone
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import DecoyTomcat
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
@@ -241,14 +242,12 @@ class TestApplyDiscoverDeception:
         assert int(new_state.fsm_host_states[0, target]) == FSM_SD
 
     def test_failed_discover_deception_does_not_consume_detection_randoms(self, jax_const, jax_state_with_discovered):
-        state = jax_state_with_discovered
-        target = _first_discovered_non_router(jax_const, state)
+        state = create_initial_state()
+        target = _first_discovered_non_router(jax_const, jax_state_with_discovered)
         assert target is not None
 
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
-        blocked = jnp.ones((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
         state = state.replace(
-            blocked_zones=blocked,
             detection_randoms=randoms,
             detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
@@ -259,46 +258,72 @@ class TestApplyDiscoverDeception:
 
         assert int(new_state.detection_random_index) == 0
 
-    def test_discover_deception_uses_bound_source_route(self, jax_const):
-        state = create_initial_state()
-        start_host = int(jax_const.red_start_hosts[0])
-        state = setup_red_agent_session(state, 0, start_host)
+    def test_discover_deception_ignores_blocked_subnet_route_matches_cyborg(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=0)
+        cyborg_env.reset()
+        cyborg_state = cyborg_env.environment_controller.state
+        const = build_const_from_cyborg(cyborg_env)
+        sorted_hosts = sorted(cyborg_state.hosts.keys())
+
+        start_host = int(const.red_start_hosts[0])
+        start_hostname = sorted_hosts[start_host]
+        start_subnet = int(const.host_subnet[start_host])
 
         target = None
-        helper = None
-        start_subnet = int(jax_const.host_subnet[start_host])
-        for h in range(int(jax_const.num_hosts)):
-            if not bool(jax_const.host_active[h]) or bool(jax_const.host_is_router[h]):
+        target_hostname = None
+        blue_agent_id = None
+        for blue_agent in [f"blue_agent_{i}" for i in range(5)]:
+            hostname = cyborg_state.sessions[blue_agent][0].hostname
+            host_idx = sorted_hosts.index(hostname)
+            if int(const.host_subnet[host_idx]) == start_subnet:
                 continue
-            subnet = int(jax_const.host_subnet[h])
-            if target is None and subnet != start_subnet:
-                target = h
-                continue
-            if target is not None and subnet not in {start_subnet, int(jax_const.host_subnet[target])}:
-                helper = h
+            decoy_action = DecoyTomcat(agent=blue_agent, session=0, hostname=hostname)
+            if str(decoy_action.execute(cyborg_state).success).upper() == "TRUE":
+                target = host_idx
+                target_hostname = hostname
+                blue_agent_id = int(blue_agent.split("_")[-1])
                 break
-        if target is None or helper is None:
-            pytest.skip("Need target and helper hosts on distinct subnets")
+        if target is None or target_hostname is None or blue_agent_id is None:
+            pytest.skip("Need a cross-subnet blue host that accepts Tomcat decoy")
 
+        target_subnet_name = cyborg_state.hostname_subnet_map[target_hostname].value
+        start_subnet_name = cyborg_state.hostname_subnet_map[start_hostname].value
+        block_obs = BlockTrafficZone(
+            session=0,
+            agent="blue_agent_0",
+            from_subnet=start_subnet_name,
+            to_subnet=target_subnet_name,
+        ).execute(cyborg_state)
+        assert str(block_obs.success).upper() == "TRUE"
+
+        target_ip = next(ip for ip, hostname in cyborg_state.ip_addresses.items() if hostname == target_hostname)
+        cyborg_obs = DiscoverDeception(session=0, agent="red_agent_0", ip_address=target_ip).execute(cyborg_state)
+        assert str(cyborg_obs.success).upper() == "TRUE"
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = setup_red_agent_session(state, 0, start_host)
+        state = apply_blue_decoy(state, const, blue_agent_id, target, DECOY_IDS["Tomcat"])
         blocked = jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
-        blocked = blocked.at[start_subnet, int(jax_const.host_subnet[target])].set(True)
+        blocked = blocked.at[int(const.host_subnet[target]), start_subnet].set(True)
         state = state.replace(
-            red_sessions=state.red_sessions.at[0, helper].set(True),
-            red_session_count=state.red_session_count.at[0, start_host].set(1).at[0, helper].set(1),
-            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(start_host),
-            host_decoys=state.host_decoys.at[target, 0].set(True),
-            fsm_host_states=state.fsm_host_states.at[0, target].set(FSM_S),
             blocked_zones=blocked,
+            fsm_host_states=state.fsm_host_states.at[0, target].set(FSM_S),
             detection_randoms=jnp.full(MAX_DETECTION_RANDOMS, 0.1),
             detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
-        assert int(new_state.fsm_host_states[0, target]) == FSM_S
-        assert int(new_state.detection_random_index) == 0
+        assert int(new_state.fsm_host_states[0, target]) == FSM_SD
+        assert int(new_state.detection_random_index) == 2
 
     def test_jit_compatible(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered

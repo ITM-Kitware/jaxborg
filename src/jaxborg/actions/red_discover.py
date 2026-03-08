@@ -1,5 +1,4 @@
 import chex
-import jax.numpy as jnp
 
 from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.state import CC4Const, CC4State
@@ -12,10 +11,10 @@ def apply_discover(
     target_subnet: chex.Array,
 ) -> CC4State:
     source_host = select_bound_source_host(state, const, agent_id)
-    source_idx = jnp.clip(source_host, 0, const.host_subnet.shape[0] - 1)
-    source_subnet = const.host_subnet[source_idx]
     has_bound_source = source_host >= 0
-    can_reach = has_bound_source & (~state.blocked_zones[target_subnet, source_subnet])
+    # CybORG DiscoverRemoteSystems delegates to Pingsweep, which does not
+    # consult state.blocks / firewall rules when resolving routes.
+    can_reach = has_bound_source
 
     in_subnet = (const.host_subnet == target_subnet) & const.host_active
     pingable = in_subnet & const.host_respond_to_ping

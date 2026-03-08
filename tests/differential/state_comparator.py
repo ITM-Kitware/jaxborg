@@ -135,9 +135,9 @@ def extract_jax_snapshot(state, const, mappings: CC4Mappings) -> StateSnapshot:
 
     blocked = set()
     blocked_arr = np.array(state.blocked_zones)
-    for src in range(NUM_SUBNETS):
-        for dst in range(NUM_SUBNETS):
-            if blocked_arr[src, dst]:
+    for dst in range(NUM_SUBNETS):
+        for src in range(NUM_SUBNETS):
+            if blocked_arr[dst, src]:
                 src_name = mappings.subnet_names.get(src, str(src))
                 dst_name = mappings.subnet_names.get(dst, str(dst))
                 blocked.add((src_name, dst_name))
@@ -370,9 +370,9 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
         for from_subnet in from_list:
             cyborg_blocked.add((str(from_subnet), str(to_subnet)))
     jax_blocked_set = set()
-    for src in range(NUM_SUBNETS):
-        for dst in range(NUM_SUBNETS):
-            if jax_blocked[src, dst]:
+    for dst in range(NUM_SUBNETS):
+        for src in range(NUM_SUBNETS):
+            if jax_blocked[dst, src]:
                 src_name = mappings.subnet_names.get(src, str(src))
                 dst_name = mappings.subnet_names.get(dst, str(dst))
                 jax_blocked_set.add((src_name, dst_name))

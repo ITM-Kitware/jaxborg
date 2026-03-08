@@ -20,10 +20,10 @@ def apply_discover_deception(
     is_active = const.host_active[target_host]
     source_host = select_bound_source_host(state, const, agent_id)
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
-    target_subnet = const.host_subnet[target_host]
-    source_subnet = const.host_subnet[source_idx]
     has_bound_source = (source_host >= 0) & state.red_sessions[agent_id, source_idx] & const.host_active[source_idx]
-    can_reach = has_bound_source & (~state.blocked_zones[source_subnet, target_subnet])
+    # CybORG DiscoverDeception checks only that a route exists in the base link
+    # graph; it does not consult state.blocks / firewall rules.
+    can_reach = has_bound_source
 
     success = is_active & can_reach
     has_decoys = jnp.any(state.host_decoys[target_host])
