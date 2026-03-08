@@ -240,6 +240,7 @@ def make_train(config):
         hidden_dim=config.get("HIDDEN_DIM", 256),
         activation=config["ACTIVATION"],
     )
+    centralized_critic = bool(config.get("CENTRALIZED_CRITIC", True))
 
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
@@ -247,7 +248,10 @@ def make_train(config):
 
     def _init_train_state(rng):
         init_x = jnp.zeros(inner_env.observation_space(agents[0]).shape)
-        init_critic_x = jnp.zeros((num_agents * inner_env.observation_space(agents[0]).shape[0],), dtype=jnp.float32)
+        critic_dim = inner_env.observation_space(agents[0]).shape[0]
+        if centralized_critic:
+            critic_dim = num_agents * critic_dim
+        init_critic_x = jnp.zeros((critic_dim,), dtype=jnp.float32)
         network_params = network.init(rng, init_x, None, init_critic_x)
 
         if config["ANNEAL_LR"]:
@@ -276,10 +280,13 @@ def make_train(config):
             # obs/env_state have leading (num_envs,) dim
             # Stack agents: (num_envs, num_agents, obs_dim)
             obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
-            critic_obs_batch = jnp.broadcast_to(
-                obs_batch.reshape(num_envs, 1, -1),
-                (num_envs, num_agents, num_agents * obs_batch.shape[-1]),
-            )
+            if centralized_critic:
+                critic_obs_batch = jnp.broadcast_to(
+                    obs_batch.reshape(num_envs, 1, -1),
+                    (num_envs, num_agents, num_agents * obs_batch.shape[-1]),
+                )
+            else:
+                critic_obs_batch = obs_batch
             busy_batch = env_state.env_state.state.blue_pending_ticks > 0
             avail_batch = _mask_over_agents(
                 env_state.env_state.const,
@@ -328,10 +335,13 @@ def make_train(config):
         # --- GAE ---
         # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
         last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
-        last_critic_obs_batch = jnp.broadcast_to(
-            last_obs_batch.reshape(num_envs, 1, -1),
-            (num_envs, num_agents, num_agents * last_obs_batch.shape[-1]),
-        )
+        if centralized_critic:
+            last_critic_obs_batch = jnp.broadcast_to(
+                last_obs_batch.reshape(num_envs, 1, -1),
+                (num_envs, num_agents, num_agents * last_obs_batch.shape[-1]),
+            )
+        else:
+            last_critic_obs_batch = last_obs_batch
         flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
         flat_last_critic_obs = last_critic_obs_batch.reshape(-1, last_critic_obs_batch.shape[-1])
         _, last_val = network.apply(train_state.params, flat_last_obs, None, flat_last_critic_obs)
@@ -400,11 +410,13 @@ def make_train(config):
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                 total_loss, grads = grad_fn(train_state.params, traj_batch, policy_advantages, targets, policy_mask)
                 pre_clip_grad_norm = optax.global_norm(grads)
+                actor_clip_norm = config.get("ACTOR_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
+                critic_clip_norm = config.get("CRITIC_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
                 grads, actor_grad_norm, actor_grad_norm_clipped = _clip_named_subtree(
-                    grads, "actor_head", config["MAX_GRAD_NORM"]
+                    grads, "actor_head", actor_clip_norm
                 )
                 grads, critic_grad_norm, critic_grad_norm_clipped = _clip_named_subtree(
-                    grads, "critic_head", config["MAX_GRAD_NORM"]
+                    grads, "critic_head", critic_clip_norm
                 )
                 grad_norm = optax.global_norm(grads)
                 train_state = train_state.apply_gradients(grads=grads)
@@ -517,6 +529,8 @@ def main(cfg):
                 "ent_coef": config["ENT_COEF"],
                 "vf_coef": config["VF_COEF"],
                 "max_grad_norm": config["MAX_GRAD_NORM"],
+                "actor_max_grad_norm": config.get("ACTOR_MAX_GRAD_NORM", config["MAX_GRAD_NORM"]),
+                "critic_max_grad_norm": config.get("CRITIC_MAX_GRAD_NORM", config["MAX_GRAD_NORM"]),
                 "hidden_dim": config.get("HIDDEN_DIM", 256),
                 "activation": config["ACTIVATION"],
                 "anneal_lr": config["ANNEAL_LR"],

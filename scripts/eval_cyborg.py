@@ -219,13 +219,19 @@ def build_arg_parser():
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--stochastic", action="store_true")
     return parser
 
 
 def main(argv=None):
     parser = build_arg_parser()
     args = parser.parse_args(argv)
-    evaluate(args.checkpoint, args.episodes, args.seed, args.deterministic)
+    if args.deterministic and args.stochastic:
+        raise ValueError("Choose at most one of --deterministic or --stochastic")
+    deterministic = not args.stochastic
+    if args.deterministic:
+        deterministic = True
+    evaluate(args.checkpoint, args.episodes, args.seed, deterministic)
 
 
 if __name__ == "__main__":
