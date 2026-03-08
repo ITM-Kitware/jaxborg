@@ -1,17 +1,31 @@
 """Evaluate JAXborg-trained policy: JAXborg rollout, CybORG transfer, baselines, diagnostics."""
 
+# ruff: noqa: E402
+
 import argparse
 import json
 import pickle
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from statistics import mean, stdev
 
+import distrax
+import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
+from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
+from flax.linen.initializers import constant, orthogonal
 from train_ippo_cc4 import ActorCritic
+
+ROOT = Path(__file__).resolve().parent.parent
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -23,24 +37,30 @@ from jaxborg.actions.encoding import (
     BLUE_REMOVE_START,
     BLUE_RESTORE_START,
     BLUE_SLEEP,
+    encode_blue_action,
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
+    ACTION_HOST_SLOTS,
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
+    OBS_HOSTS_PER_SUBNET,
 )
 from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.observations import get_blue_obs
 from jaxborg.topology import build_const_from_cyborg
 from jaxborg.translate import (
     build_mappings_from_cyborg,
+    cyborg_blue_to_jax,
     describe_blue_action,
     jax_blue_to_cyborg,
 )
+from tests.differential.harness import CC4DifferentialHarness
 
-EXP_DIR = Path(__file__).resolve().parent.parent / "jaxborg-exp"
+EXP_DIR = ROOT / "jaxborg-exp"
 
 ACTION_TYPE_NAMES = [
     "Sleep",
@@ -56,13 +76,40 @@ ACTION_TYPE_NAMES = [
 ACTION_TYPE_RANGES = [
     (BLUE_SLEEP, BLUE_SLEEP + 1),
     (BLUE_MONITOR, BLUE_MONITOR + 1),
-    (BLUE_ANALYSE_START, BLUE_ANALYSE_START + GLOBAL_MAX_HOSTS),
-    (BLUE_REMOVE_START, BLUE_REMOVE_START + GLOBAL_MAX_HOSTS),
-    (BLUE_RESTORE_START, BLUE_RESTORE_START + GLOBAL_MAX_HOSTS),
+    (BLUE_ANALYSE_START, BLUE_ANALYSE_START + ACTION_HOST_SLOTS),
+    (BLUE_REMOVE_START, BLUE_REMOVE_START + ACTION_HOST_SLOTS),
+    (BLUE_RESTORE_START, BLUE_RESTORE_START + ACTION_HOST_SLOTS),
     (BLUE_DECOY_START, BLUE_BLOCK_TRAFFIC_START),
     (BLUE_BLOCK_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_START),
     (BLUE_ALLOW_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_END),
 ]
+DECOY_FACTORY_ACTIONS = (
+    (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
+    (ApacheDecoyFactory(), "DeployDecoy_Apache"),
+    (TomcatDecoyFactory(), "DeployDecoy_Tomcat"),
+    (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
+)
+
+
+class LegacyActor(nn.Module):
+    action_dim: int
+    hidden_dim: int = 256
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, x, avail_actions=None):
+        activation = nn.relu if self.activation == "relu" else nn.tanh
+
+        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        actor_mean = activation(actor_mean)
+        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_mean)
+        actor_mean = activation(actor_mean)
+        action_logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
+
+        if avail_actions is not None:
+            action_logits = action_logits - ((1 - avail_actions) * 1e10)
+
+        return distrax.Categorical(logits=action_logits)
 
 
 def classify_action(action_idx: int) -> int:
@@ -149,12 +196,122 @@ def print_trajectory_summary(trajectory, label="JAXborg ep"):
 def load_checkpoint(path):
     with open(path, "rb") as f:
         ckpt = pickle.load(f)
-    network = ActorCritic(
-        action_dim=ckpt["action_dim"],
-        hidden_dim=ckpt["hidden_dim"],
-        activation=ckpt["activation"],
-    )
-    return network, ckpt["params"]
+    nested_params = ckpt["params"].get("params", {})
+
+    if "actor_head" in nested_params:
+        policy = ActorCritic(
+            action_dim=ckpt["action_dim"],
+            hidden_dim=ckpt["hidden_dim"],
+            activation=ckpt["activation"],
+        )
+        return policy, ckpt["params"], "current"
+
+    if "Dense_0" in nested_params:
+        if ckpt["action_dim"] != BLUE_ALLOW_TRAFFIC_END:
+            raise ValueError(
+                f"Legacy checkpoint action_dim={ckpt['action_dim']} is incompatible with current action space "
+                f"{BLUE_ALLOW_TRAFFIC_END}"
+            )
+        policy = LegacyActor(
+            action_dim=ckpt["action_dim"],
+            hidden_dim=ckpt["hidden_dim"],
+            activation=ckpt["activation"],
+        )
+        return policy, ckpt["params"], "legacy"
+
+    raise ValueError(f"Unrecognized checkpoint format: nested params keys={sorted(nested_params.keys())}")
+
+
+def policy_dist(policy, params, policy_kind, obs_jax, mask):
+    if policy_kind == "current":
+        return policy.apply(params, obs_jax, mask, method=ActorCritic.actor)
+    return policy.apply(params, obs_jax, mask)
+
+
+def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
+    """Translate a CybORG blue action into the JAX canonical action space."""
+    cls_name = type(action).__name__
+    agent_id = int(agent_name.split("_")[-1])
+
+    if label.startswith("[Padding]"):
+        return []
+
+    if cls_name == "Sleep" and not label.startswith("[Invalid]"):
+        return [BLUE_SLEEP]
+
+    if cls_name == "Sleep" and label.startswith("[Invalid]"):
+        return []
+
+    if cls_name == "DeployDecoy":
+        host = cyborg_state.hosts[action.hostname]
+        host_idx = mappings.hostname_to_idx[action.hostname]
+        return [
+            encode_blue_action(action_name, host_idx, agent_id, const=const)
+            for factory, action_name in DECOY_FACTORY_ACTIONS
+            if factory.is_host_compatible(host)
+        ]
+
+    try:
+        return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
+    except (KeyError, ValueError):
+        return []
+
+
+def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
+    """Project CybORG's live action mask into JAX canonical indices."""
+    controller = env.env.environment_controller
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is not None and pending["remaining_ticks"] > 0:
+        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+        label = f"[Pending] {type(pending['action']).__name__}"
+        for jax_idx in _cyborg_action_to_jax_indices(
+            pending["action"], label, agent_name, mappings, const, controller.state
+        ):
+            jax_mask[jax_idx] = True
+        return jnp.array(jax_mask)
+
+    jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+    cyborg_mask = info[agent_name]["action_mask"]
+    cyborg_actions = env.actions(agent_name)
+    cyborg_labels = env.action_labels(agent_name)
+    cyborg_state = controller.state
+
+    for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
+        if not valid:
+            continue
+        for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
+            jax_mask[jax_idx] = True
+
+    return jnp.array(jax_mask)
+
+
+def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
+    """Project BlueFlatWrapper's live action mask into JAX canonical indices."""
+    controller = wrapper.env.environment_controller
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is not None and pending["remaining_ticks"] > 0:
+        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+        label = f"[Pending] {type(pending['action']).__name__}"
+        for jax_idx in _cyborg_action_to_jax_indices(
+            pending["action"], label, agent_name, mappings, const, controller.state
+        ):
+            jax_mask[jax_idx] = True
+        return jnp.array(jax_mask)
+
+    jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+    action_space = wrapper.get_action_space(agent_name)
+    cyborg_mask = action_space["mask"]
+    cyborg_actions = wrapper.actions(agent_name)
+    cyborg_labels = wrapper.action_labels(agent_name)
+    cyborg_state = controller.state
+
+    for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
+        if not valid:
+            continue
+        for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
+            jax_mask[jax_idx] = True
+
+    return jnp.array(jax_mask)
 
 
 def make_cyborg_env(seed=42):
@@ -176,7 +333,7 @@ def make_cyborg_env(seed=42):
 # --- Core rollout functions ---
 
 
-def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
+def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
     env = FsmRedCC4Env(num_steps=500)
     all_actions = []
     episode_rewards = []
@@ -184,7 +341,7 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        key = jax.random.PRNGKey(ep * 100)
+        key = jax.random.PRNGKey(seed + ep * 100)
         obs, env_state = env.reset(key)
 
         ep_reward = np.zeros(NUM_BLUE_AGENTS)
@@ -201,7 +358,7 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
             for agent_idx in range(NUM_BLUE_AGENTS):
                 agent = f"blue_{agent_idx}"
                 avail = compute_blue_action_mask(env_state.const, agent_idx, env_state.state)
-                pi, _ = network.apply(params, obs[agent], avail)
+                pi = policy_dist(policy, params, policy_kind, obs[agent], avail)
 
                 if deterministic:
                     action = jnp.argmax(pi.logits)
@@ -256,7 +413,7 @@ def rollout_jaxborg(network, params, num_episodes=3, deterministic=False):
     return np.array(all_actions), np.array(episode_rewards), episode_results
 
 
-def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0):
+def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
     all_actions = []
     episode_rewards = []
     all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
@@ -264,7 +421,7 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
     for ep in range(num_episodes):
         t0 = time.perf_counter()
         env = make_cyborg_env(seed=seed + ep * 100)
-        observations, _ = env.reset()
+        observations, info = env.reset()
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)
@@ -277,8 +434,8 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
             actions = {}
             for agent_idx, agent_name in enumerate(env.agents):
                 obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
-                mask = compute_blue_action_mask(const, agent_idx)
-                pi, _ = network.apply(params, obs_jax, mask)
+                mask = _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const)
+                pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
 
                 if deterministic:
                     action_idx = int(jnp.argmax(pi.logits))
@@ -291,7 +448,7 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
                 ep_actions.append(action_idx)
                 all_actions_by_agent[agent_idx].append(action_idx)
 
-            observations, rewards, _, _, _ = env.step(actions=actions)
+            observations, rewards, _, _, info = env.step(actions=actions)
             total += mean(rewards.values())
 
         elapsed = time.perf_counter() - t0
@@ -300,6 +457,117 @@ def rollout_cyborg(network, params, num_episodes=3, deterministic=False, seed=0)
         episode_rewards.append(total)
 
     return np.array(all_actions), np.array(episode_rewards), all_actions_by_agent
+
+
+def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+    """Compare policy outputs on matched JAX/CybORG states.
+
+    JAX-selected actions drive the synced rollout so the underlying episode stays
+    matched. CybORG-selected actions are recorded from the same synced states for
+    transfer diagnostics, not applied.
+    """
+
+    all_jax_actions = []
+    all_cyborg_actions = []
+    episode_rewards = []
+    episode_results = []
+    all_cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+
+    for ep in range(num_episodes):
+        t0 = time.perf_counter()
+        harness = CC4DifferentialHarness(seed=seed + ep * 100, check_obs=True, sync_green_rng=True)
+        harness.reset()
+
+        ep_jax_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_step_rewards = []
+        ep_trajectory = []
+        cum_reward = 0.0
+
+        for _ in range(500):
+            jax_actions = {}
+            for agent_idx in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{agent_idx}"
+
+                jax_obs = get_blue_obs(harness.jax_state, harness.jax_const, agent_idx)
+                jax_mask = compute_blue_action_mask(harness.jax_const, agent_idx, harness.jax_state)
+                jax_pi = policy_dist(policy, params, policy_kind, jax_obs, jax_mask)
+
+                cyborg_obs_dict = harness.cyborg_env.get_observation(agent_name)
+                cyborg_obs = jnp.array(
+                    harness._blue_wrapper.observation_change(agent_name, cyborg_obs_dict),
+                    dtype=jnp.float32,
+                )
+                cyborg_mask = _live_blue_wrapper_mask_in_jax_space(
+                    harness._blue_wrapper,
+                    agent_name,
+                    harness.mappings,
+                    harness.jax_const,
+                )
+                cyborg_pi = policy_dist(policy, params, policy_kind, cyborg_obs, cyborg_mask)
+
+                if deterministic:
+                    jax_action = int(jnp.argmax(jax_pi.logits))
+                    cyborg_action = int(jnp.argmax(cyborg_pi.logits))
+                else:
+                    raise ValueError("Matched transfer mode currently requires deterministic evaluation")
+
+                jax_actions[agent_idx] = jax_action
+                ep_jax_actions_by_agent[agent_idx].append(jax_action)
+                ep_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
+                all_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
+
+            result = harness.full_step(blue_actions=jax_actions)
+            if result.diffs:
+                details = ", ".join(f"{d.field_name}:{d.host_or_agent}" for d in result.diffs[:5])
+                raise RuntimeError(f"Matched transfer replay diverged at step {result.step}: {details}")
+
+            step_reward = float(
+                harness.cyborg_env.environment_controller.reward.get("Blue", {}).get("BlueRewardMachine", 0.0)
+            )
+            cum_reward += step_reward
+            ep_step_rewards.append(step_reward)
+
+            st = harness.jax_state
+            active = np.array(harness.jax_const.host_active, dtype=bool)
+            compromised = np.array(st.host_compromised)
+            ep_trajectory.append(
+                StepSnapshot(
+                    reward=step_reward,
+                    cumulative_reward=cum_reward,
+                    hosts_compromised_user=int(np.sum((compromised == COMPROMISE_USER) & active)),
+                    hosts_compromised_priv=int(np.sum((compromised == COMPROMISE_PRIVILEGED) & active)),
+                    red_sessions_total=int(np.sum(np.array(st.red_sessions)[:NUM_RED_AGENTS])),
+                    mission_phase=int(st.mission_phase),
+                )
+            )
+
+        elapsed = time.perf_counter() - t0
+        print(f"  Matched ep {ep + 1}: reward={cum_reward:.1f} ({elapsed:.1f}s)")
+
+        flat_jax_actions = [a for step_actions in zip(*ep_jax_actions_by_agent) for a in step_actions]
+        flat_cyborg_actions = [a for step_actions in zip(*ep_cyborg_actions_by_agent) for a in step_actions]
+        all_jax_actions.extend(flat_jax_actions)
+        all_cyborg_actions.extend(flat_cyborg_actions)
+        episode_rewards.append(cum_reward)
+        episode_results.append(
+            EpisodeResult(
+                actions_by_agent=ep_jax_actions_by_agent,
+                rewards=ep_step_rewards,
+                cumulative_reward=cum_reward,
+                trajectory=ep_trajectory,
+            )
+        )
+
+    rewards = np.array(episode_rewards)
+    return (
+        np.array(all_jax_actions),
+        rewards,
+        episode_results,
+        np.array(all_cyborg_actions),
+        rewards.copy(),
+        all_cyborg_actions_by_agent,
+    )
 
 
 # --- Report / plotting ---
@@ -443,7 +711,7 @@ def run_random_baseline(episodes=5, seed=42):
     totals = []
     for ep in range(episodes):
         env = make_cyborg_env(seed=seed + ep)
-        env.reset()
+        _, info = env.reset()
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)
@@ -451,19 +719,19 @@ def run_random_baseline(episodes=5, seed=42):
         for _ in range(500):
             actions = {}
             for agent_idx, agent_name in enumerate(env.agents):
-                mask = np.array(compute_blue_action_mask(const, agent_idx), dtype=bool)
+                mask = np.array(_live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const), dtype=bool)
                 valid = np.where(mask)[0]
                 action_idx = int(rng.choice(valid))
                 actions[agent_name] = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
-            _, rewards, _, _, _ = env.step(actions=actions)
+            _, rewards, _, _, info = env.step(actions=actions)
             total += mean(rewards.values())
         totals.append(total)
     return mean(totals)
 
 
-def run_verbose_trace(network, params, steps=20, seed=42):
+def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
     env = make_cyborg_env(seed=seed)
-    observations, _ = env.reset()
+    observations, info = env.reset()
     inner = env.env
     const = build_const_from_cyborg(inner)
     mappings = build_mappings_from_cyborg(inner)
@@ -473,16 +741,21 @@ def run_verbose_trace(network, params, steps=20, seed=42):
 
     print("\nMASK VALIDATION (step 0):")
     for agent_idx, agent_name in enumerate(env.agents):
-        mask = np.array(compute_blue_action_mask(const, agent_idx), dtype=bool)
+        mask = np.array(_live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const), dtype=bool)
         valid_indices = np.where(mask)[0]
         agent_subnets = BLUE_AGENT_SUBNETS[agent_idx]
         agent_subnet_ids = [SUBNET_IDS[s] for s in agent_subnets]
 
         valid_analyse = valid_indices[(valid_indices >= BLUE_ANALYSE_START) & (valid_indices < BLUE_ANALYSE_END)]
-        valid_host_indices = valid_analyse - BLUE_ANALYSE_START
+        valid_slots = valid_analyse - BLUE_ANALYSE_START
 
         wrong_subnet_hosts = []
-        for hidx in valid_host_indices:
+        for slot in valid_slots:
+            subnet_id = int(slot // OBS_HOSTS_PER_SUBNET)
+            slot_within = int(slot % OBS_HOSTS_PER_SUBNET)
+            hidx = int(const.obs_host_map[subnet_id, slot_within])
+            if hidx >= GLOBAL_MAX_HOSTS:
+                continue
             h_subnet = int(const.host_subnet[hidx])
             if h_subnet not in agent_subnet_ids:
                 hostname = mappings.idx_to_hostname.get(int(hidx), f"host_{hidx}")
@@ -503,10 +776,10 @@ def run_verbose_trace(network, params, steps=20, seed=42):
         step_actions_desc = []
         for agent_idx, agent_name in enumerate(env.agents):
             obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
-            mask = compute_blue_action_mask(const, agent_idx)
+            mask = _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const)
             mask_np = np.array(mask, dtype=bool)
 
-            pi, _value = network.apply(params, obs_jax, mask)
+            pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
             action_idx = int(jnp.argmax(pi.logits))
             is_valid = bool(mask_np[action_idx])
             cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
@@ -519,7 +792,7 @@ def run_verbose_trace(network, params, steps=20, seed=42):
                 f"  {agent_name}: idx={action_idx:4d} [{valid_str:7s}] -> {desc:45s} -> CybORG:{cyborg_cls}"
             )
 
-        observations, rewards, _, _, _ = env.step(actions=actions)
+        observations, rewards, _, _, info = env.step(actions=actions)
         step_reward = mean(rewards.values())
         total += step_reward
 
@@ -556,6 +829,11 @@ def main():
     parser.add_argument("--checkpoint", required=True, help="Path to checkpoint_final.pkl")
     parser.add_argument("--episodes", type=int, default=3, help="Rollout episodes (default 3)")
     parser.add_argument("--stochastic", action="store_true", help="Sample from policy instead of argmax")
+    parser.add_argument(
+        "--independent-rollouts",
+        action="store_true",
+        help="Run independent JAX/CybORG episodes instead of matched-state transfer diagnostics",
+    )
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (default 0)")
     parser.add_argument("--baselines", action="store_true", help="Run sleep + random baselines")
     parser.add_argument("--verbose", type=int, default=0, help="Step-by-step CybORG trace for N steps")
@@ -566,33 +844,66 @@ def main():
     deterministic = not args.stochastic
 
     print(f"Loading checkpoint: {args.checkpoint}")
-    network, params = load_checkpoint(args.checkpoint)
+    policy, params, policy_kind = load_checkpoint(args.checkpoint)
 
     if args.mask_summary:
         print_mask_summary()
 
-    # JAXborg rollout
-    print("\n" + "=" * 70)
-    print("JAXBORG ROLLOUT")
-    print("=" * 70)
-    jax_actions, jax_rewards, jax_results = rollout_jaxborg(network, params, args.episodes, deterministic)
+    if args.independent_rollouts:
+        print("\n" + "=" * 70)
+        print("JAXBORG ROLLOUT")
+        print("=" * 70)
+        jax_actions, jax_rewards, jax_results = rollout_jaxborg(
+            policy,
+            params,
+            policy_kind,
+            args.episodes,
+            deterministic,
+            seed=args.seed,
+        )
 
-    # Per-agent action dist (all episodes pooled)
-    jax_pooled_by_agent = [[a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)]
-    print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+        jax_pooled_by_agent = [
+            [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
+        ]
+        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+        print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
 
-    # Trajectory summary for last episode
-    print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
-
-    # CybORG rollout
-    print("\n" + "=" * 70)
-    print("CYBORG ROLLOUT")
-    print("=" * 70)
-    cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
-        network, params, args.episodes, deterministic, seed=args.seed
-    )
-
-    print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
+        print("\n" + "=" * 70)
+        print("CYBORG ROLLOUT")
+        print("=" * 70)
+        cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
+            policy, params, policy_kind, args.episodes, deterministic, seed=args.seed
+        )
+        print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
+    else:
+        if not deterministic:
+            raise ValueError("Matched transfer diagnostics require deterministic evaluation")
+        print("\n" + "=" * 70)
+        print("MATCHED TRANSFER ROLLOUT")
+        print("=" * 70)
+        print("Stepping synced episodes with JAX-selected actions.")
+        print("CybORG actions below are the policy outputs on matched CybORG observations, not applied actions.")
+        (
+            jax_actions,
+            jax_rewards,
+            jax_results,
+            cyborg_actions,
+            cyborg_rewards,
+            cyborg_actions_by_agent,
+        ) = rollout_matched_transfer(
+            policy,
+            params,
+            policy_kind,
+            args.episodes,
+            deterministic,
+            seed=args.seed,
+        )
+        jax_pooled_by_agent = [
+            [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
+        ]
+        print_per_agent_action_dist(jax_pooled_by_agent, label="JAX Policy on JAX Obs")
+        print_per_agent_action_dist(cyborg_actions_by_agent, label="JAX Policy on CybORG Obs")
+        print_trajectory_summary(jax_results[-1].trajectory, label=f"Matched ep {len(jax_results)}")
 
     # Comparison report
     print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
@@ -616,7 +927,7 @@ def main():
         print("\n" + "=" * 70)
         print(f"VERBOSE CYBORG TRACE ({args.verbose} steps, deterministic)")
         print("=" * 70)
-        run_verbose_trace(network, params, steps=args.verbose, seed=args.seed)
+        run_verbose_trace(policy, params, policy_kind, steps=args.verbose, seed=args.seed)
 
     # Optional: plots
     if args.plot:
