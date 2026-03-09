@@ -1,4 +1,5 @@
 import jax
+import jax.numpy as jnp
 
 from jaxborg.actions.blue_analyse import apply_blue_analyse
 from jaxborg.actions.blue_decoys import apply_blue_decoy
@@ -7,29 +8,34 @@ from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.blue_traffic import apply_allow_traffic, apply_block_traffic
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_EXPLOIT_SSH,
+    ACTION_TYPE_STEALTH_SCAN,
     decode_blue_action,
     decode_red_action,
 )
-from jaxborg.actions.red_aggressive_scan import apply_aggressive_scan
 from jaxborg.actions.red_degrade import apply_degrade
 from jaxborg.actions.red_discover import apply_discover
 from jaxborg.actions.red_discover_deception import apply_discover_deception
-from jaxborg.actions.red_exploit import (
-    apply_exploit_bluekeep,
-    apply_exploit_eternalblue,
-    apply_exploit_ftp,
-    apply_exploit_haraka,
-    apply_exploit_http,
-    apply_exploit_https,
-    apply_exploit_sql,
-    apply_exploit_ssh,
-)
+from jaxborg.actions.red_exploit_unified import apply_exploit_unified
 from jaxborg.actions.red_impact import apply_impact
 from jaxborg.actions.red_privesc import apply_privesc
-from jaxborg.actions.red_scan import apply_scan
-from jaxborg.actions.red_stealth_scan import apply_stealth_scan
+from jaxborg.actions.red_scan_unified import apply_scan_unified
 from jaxborg.actions.red_withdraw import apply_withdraw
 from jaxborg.state import CC4Const, CC4State
+
+# Map original 18 action_types to 9 consolidated branch indices:
+# 0=Sleep, 1=Discover, 2=Scan(unified), 3=Exploit(unified),
+# 4=Privesc, 5=Impact, 6=DiscoverDeception, 7=Degrade, 8=Withdraw
+_RED_BRANCH_MAP = jnp.array(
+    #  Slp  Disc Scan SSH  FTP  HTTP HTPS Hara SQL  EBlu BKep PEsc Imp  AggS StlS DcDc Degr With
+    [   0,   1,   2,   3,   3,   3,   3,   3,   3,   3,   3,   4,   5,   2,   2,   6,   7,   8],
+    dtype=jnp.int32,
+)
+
+# Scan detection rates: Scan=1.0(always), AggressiveScan=0.75, StealthScan=0.25
+# has_detection_roll: basic scan=False, aggressive/stealth=True
+_SCAN_DETECTION_RATE = jnp.array([1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.75, 0.25, 0.0, 0.0, 0.0])
+_SCAN_HAS_ROLL = jnp.array([False, False, False, False, False, False, False, False, False, False, False, False, False, True, True, False, False, False])
 
 
 def apply_red_action(
@@ -43,29 +49,32 @@ def apply_red_action(
     k_agg, k_stealth, k_deception = jax.random.split(key, 3)
     k_exploit = jax.random.fold_in(key, 0xCC4)
     k_privesc = jax.random.fold_in(key, 0xC4E5)
+    # Select the correct scan key to preserve RNG parity
+    k_scan = jnp.where(
+        action_type == ACTION_TYPE_STEALTH_SCAN,
+        k_stealth,
+        k_agg,
+    )
+
+    exploit_subtype = jnp.clip(action_type - ACTION_TYPE_EXPLOIT_SSH, 0, 7)
+    scan_detection_rate = _SCAN_DETECTION_RATE[action_type]
+    scan_has_roll = _SCAN_HAS_ROLL[action_type]
+
+    branch_idx = _RED_BRANCH_MAP[action_type]
 
     branches = [
         lambda s: s,  # 0: Sleep
-        lambda s: apply_discover(s, const, agent_id, target_subnet),
-        lambda s: apply_scan(s, const, agent_id, target_host),
-        lambda s: apply_exploit_ssh(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_ftp(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_http(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_https(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_haraka(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_sql(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_eternalblue(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_exploit_bluekeep(s, const, agent_id, target_host, k_exploit),
-        lambda s: apply_privesc(s, const, agent_id, target_host, k_privesc),
-        lambda s: apply_impact(s, const, agent_id, target_host),
-        lambda s: apply_aggressive_scan(s, const, agent_id, target_host, k_agg),
-        lambda s: apply_stealth_scan(s, const, agent_id, target_host, k_stealth),
-        lambda s: apply_discover_deception(s, const, agent_id, target_host, k_deception),
-        lambda s: apply_degrade(s, const, agent_id, target_host),
-        lambda s: apply_withdraw(s, const, agent_id, target_host),
+        lambda s: apply_discover(s, const, agent_id, target_subnet),  # 1: Discover
+        lambda s: apply_scan_unified(s, const, agent_id, target_host, k_scan, scan_has_roll, scan_detection_rate),  # 2: Scan (all variants)
+        lambda s: apply_exploit_unified(s, const, agent_id, target_host, k_exploit, exploit_subtype),  # 3: Exploit (all variants)
+        lambda s: apply_privesc(s, const, agent_id, target_host, k_privesc),  # 4: Privesc
+        lambda s: apply_impact(s, const, agent_id, target_host),  # 5: Impact
+        lambda s: apply_discover_deception(s, const, agent_id, target_host, k_deception),  # 6: DiscoverDeception
+        lambda s: apply_degrade(s, const, agent_id, target_host),  # 7: Degrade
+        lambda s: apply_withdraw(s, const, agent_id, target_host),  # 8: Withdraw
     ]
 
-    return jax.lax.switch(action_type, branches, state)
+    return jax.lax.switch(branch_idx, branches, state)
 
 
 def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int) -> CC4State:
