@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.actions.rng import sample_detection_random
+from jaxborg.agents.fsm_red import FSM_K, FSM_KD, FSM_R, FSM_RD, FSM_S, FSM_SD, FSM_U, FSM_UD
 from jaxborg.state import CC4Const, CC4State
 
 DECEPTION_TP_RATE = 0.5
@@ -45,8 +46,6 @@ def apply_discover_deception(
 
 
 def _apply_decoy_detection(fsm_host_states, agent_id, target_host):
-    from jaxborg.agents.fsm_red import FSM_K, FSM_KD, FSM_R, FSM_RD, FSM_S, FSM_SD, FSM_U, FSM_UD
-
     cur = fsm_host_states[agent_id, target_host]
     new_state = cur
     new_state = jnp.where(cur == FSM_K, FSM_KD, new_state)
