@@ -93,6 +93,82 @@ def _correct_pending_generic_red_exploits(jax_env_state, cyborg, mappings):
     return jax_env_state.replace(state=jax_env_state.state.replace(red_pending_action=red_pending_action))
 
 
+def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
+
+    from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
+    from jaxborg.translate import cyborg_blue_to_jax
+
+    decoy_factory_actions = (
+        (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
+        (ApacheDecoyFactory(), "DeployDecoy_Apache"),
+        (TomcatDecoyFactory(), "DeployDecoy_Tomcat"),
+        (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
+    )
+
+    cls_name = type(action).__name__
+    agent_id = int(agent_name.split("_")[-1])
+
+    if label.startswith("[Padding]"):
+        return []
+    if cls_name == "Sleep" and not label.startswith("[Invalid]"):
+        return [BLUE_SLEEP]
+    if cls_name == "Sleep" and label.startswith("[Invalid]"):
+        return []
+    if cls_name == "DeployDecoy":
+        if action.hostname not in mappings.hostname_to_idx:
+            return []
+        host = cyborg_state.hosts[action.hostname]
+        host_idx = mappings.hostname_to_idx[action.hostname]
+        return [
+            encode_blue_action(action_name, host_idx, agent_id, const=const)
+            for factory, action_name in decoy_factory_actions
+            if factory.is_host_compatible(host)
+        ]
+    try:
+        return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
+    except (KeyError, ValueError):
+        return []
+
+
+def _live_cyborg_mask_in_jax_space(wrapper, agent_name, mappings, const):
+    from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
+
+    controller = wrapper.env.environment_controller
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is not None and pending["remaining_ticks"] > 0:
+        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+        label = f"[Pending] {type(pending['action']).__name__}"
+        for jax_idx in _cyborg_action_to_jax_indices(
+            pending["action"], label, agent_name, mappings, const, controller.state
+        ):
+            jax_mask[jax_idx] = True
+        return jax_mask
+
+    jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
+    action_space = wrapper.get_action_space(agent_name)
+    cyborg_actions = wrapper.actions(agent_name)
+    cyborg_labels = wrapper.action_labels(agent_name)
+    for action, valid, label in zip(cyborg_actions, action_space["mask"], cyborg_labels):
+        if not valid:
+            continue
+        for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, controller.state):
+            jax_mask[jax_idx] = True
+    return jax_mask
+
+
+def _sample_random_blue_actions_from_live_mask(harness, rng):
+    blue_actions = {}
+    for agent_idx in range(5):
+        agent_name = f"blue_agent_{agent_idx}"
+        mask = _live_cyborg_mask_in_jax_space(harness._blue_wrapper, agent_name, harness.mappings, harness.jax_const)
+        blue_actions[agent_idx] = int(rng.choice(np.flatnonzero(mask)))
+    return blue_actions
+
+
 class TestFsmRedEnvDifferential:
     def test_native_reset_with_cyborg_bank_matches_cyborg_seed_zero(self):
         """Native JAX reset should match CybORG reset when sourced from the same topology seed."""
@@ -720,3 +796,45 @@ class TestFsmRedEnvDifferential:
             ep_return += float(rewards["blue_0"])
 
         assert np.isfinite(ep_return), "JAX random baseline should produce finite returns"
+
+    def test_native_generic_exploit_respects_blocked_scan_source_route_matches_cyborg(self):
+        """A blocked scan-owning abstract session must not exploit via another agent session's route."""
+        from tests.differential.harness import CC4DifferentialHarness
+
+        harness = CC4DifferentialHarness(
+            seed=0,
+            max_steps=500,
+            check_obs=True,
+            sync_green_rng=True,
+            strict_random_sync=True,
+        )
+        harness.reset()
+
+        rng = np.random.default_rng(0)
+        target_step = 35
+        step_result = None
+        for step in range(target_step + 1):
+            blue_actions = _sample_random_blue_actions_from_live_mask(harness, rng)
+            step_result = harness.full_step(blue_actions)
+
+        assert step_result is not None
+
+        action = harness.cyborg_env.environment_controller.action["red_agent_5"][0]
+        session = harness.cyborg_env.environment_controller.state.sessions["red_agent_5"][action.session]
+        target_hostname = harness.mappings.ip_to_hostname[action.ip_address]
+        target_host = harness.mappings.hostname_to_idx[target_hostname]
+        target_subnet = harness.cyborg_env.environment_controller.state.hostname_subnet_map[target_hostname]
+        source_subnet = harness.cyborg_env.environment_controller.state.hostname_subnet_map[session.hostname]
+
+        assert type(action).__name__ == "ExploitRemoteService"
+        assert session.hostname == "public_access_zone_subnet_user_host_2"
+        assert target_hostname == "office_network_subnet_user_host_1"
+        assert source_subnet in harness.cyborg_env.environment_controller.state.blocks[target_subnet]
+
+        target_diffs = [
+            diff
+            for diff in step_result.diffs
+            if diff.field_name in {"host_compromised", "red_sessions", "red_privilege", "host_has_malware"}
+            and diff.host_or_agent in {f"host_{target_host}", f"red_5_host_{target_host}", "red_agent_5"}
+        ]
+        assert target_diffs == []

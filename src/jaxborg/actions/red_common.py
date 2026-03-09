@@ -88,6 +88,18 @@ def can_reach_subnet(
     return has_session & can_route
 
 
+def can_reach_subnet_from_source_host(
+    state: CC4State,
+    const: CC4Const,
+    source_host: chex.Array,
+    target_subnet: chex.Array,
+) -> chex.Array:
+    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
+    source_subnet = const.host_subnet[source_idx]
+    source_active = (source_host >= 0) & const.host_active[source_idx]
+    return source_active & ~state.blocked_zones[target_subnet, source_subnet]
+
+
 def scan_sources(state: CC4State) -> chex.Array:
     """Return scan-memory ownership matrix.
 
@@ -137,7 +149,7 @@ def exploit_common_preconditions(
     source_matrix = scan_sources(state)
     owns_target_scan = (source_host >= 0) & source_matrix[agent_id, target_idx, source_idx]
     target_subnet = const.host_subnet[target_host]
-    can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
+    can_reach = can_reach_subnet_from_source_host(state, const, source_host, target_subnet)
     is_abstract = source_host >= 0
     return is_active & owns_target_scan & can_reach & is_abstract
 

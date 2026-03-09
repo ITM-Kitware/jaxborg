@@ -2,7 +2,7 @@ import chex
 import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
-    can_reach_subnet,
+    can_reach_subnet_from_source_host,
     scan_sources,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
@@ -20,9 +20,8 @@ def apply_scan(
     is_active = const.host_active[target_host]
     is_discovered = state.red_discovered_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]
-    can_reach = can_reach_subnet(state, const, agent_id, target_subnet)
-
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
+    can_reach = can_reach_subnet_from_source_host(state, const, source_host, target_subnet)
     has_abstract_source = source_host >= 0
     success = is_active & is_discovered & can_reach & has_abstract_source
 
