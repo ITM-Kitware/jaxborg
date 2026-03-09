@@ -32,6 +32,11 @@ jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 dev = [
     "ruff",
 ]
+cuda = [
+    "jax-cuda12-pjrt==0.4.38",
+    "jax-cuda12-plugin==0.4.38",
+    "nvidia-cudnn-cu13>=9.19",
+]
 sb3 = [
     "sb3-contrib>=2.0",
     "pettingzoo>=1.24.0",

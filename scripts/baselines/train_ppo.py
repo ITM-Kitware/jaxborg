@@ -1,8 +1,10 @@
 import os
+import time
 import warnings
 from pathlib import Path
 
 import hydra
+import mlflow
 import pettingzoo
 import torch
 from CybORG import CybORG
@@ -16,8 +18,46 @@ from pettingzoo.utils import parallel_to_aec
 from sb3_contrib import MaskablePPO
 from sb3_contrib.common.maskable.policies import MaskableActorCriticPolicy
 from sb3_contrib.common.wrappers import ActionMasker
+from stable_baselines3.common.callbacks import BaseCallback
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+
+class MLflowCallback(BaseCallback):
+    def __init__(self, log_every_n_steps=500):
+        super().__init__()
+        self.log_every = log_every_n_steps
+        self.start_time = None
+        self.episode_rewards = []
+
+    def _on_training_start(self):
+        self.start_time = time.perf_counter()
+
+    def _on_step(self) -> bool:
+        infos = self.locals.get("infos", [])
+        for info in infos:
+            if "episode" in info:
+                self.episode_rewards.append(info["episode"]["r"])
+
+        if self.num_timesteps % self.log_every == 0:
+            elapsed = time.perf_counter() - self.start_time
+            metrics = {
+                "steps": self.num_timesteps,
+                "wall_time_sec": elapsed,
+                "steps_per_second": self.num_timesteps / elapsed,
+            }
+            if self.episode_rewards:
+                metrics["episode_reward_mean"] = sum(self.episode_rewards[-20:]) / len(self.episode_rewards[-20:])
+            mlflow.log_metrics(metrics, step=self.num_timesteps)
+        return True
+
+    def _on_training_end(self):
+        elapsed = time.perf_counter() - self.start_time
+        mlflow.log_metrics({
+            "wall_time_sec": elapsed,
+            "steps_per_second": self.num_timesteps / elapsed,
+            "total_timesteps": self.num_timesteps,
+        })
 
 
 class CybORGPzShim(ParallelEnv):
@@ -98,6 +138,19 @@ def make_env(pad_spaces=True):
 
 
 def train(total_timesteps, learning_rate, n_steps, batch_size, seed, model_save_path):
+    mlflow_db = EXP_DIR / "mlflow.db"
+    mlflow.set_tracking_uri(f"sqlite:///{mlflow_db}")
+    mlflow.set_experiment("sb3-ppo-baseline")
+    mlflow.start_run(run_name="maskable-ppo-vs-fsm-red")
+    mlflow.log_params({
+        "algorithm": "MaskablePPO-SB3",
+        "seed": seed,
+        "total_timesteps": total_timesteps,
+        "learning_rate": learning_rate,
+        "n_steps": n_steps,
+        "batch_size": batch_size,
+    })
+
     env = make_env()
     env = SB3ActionMaskWrapper(env)
     env.reset(seed=seed)
@@ -110,13 +163,15 @@ def train(total_timesteps, learning_rate, n_steps, batch_size, seed, model_save_
         learning_rate=learning_rate,
         n_steps=n_steps,
         batch_size=batch_size,
-        tensorboard_log="logs/ppo",
     )
     model.set_random_seed(seed)
-    model.learn(total_timesteps=total_timesteps)
+    callback = MLflowCallback(log_every_n_steps=500)
+    model.learn(total_timesteps=total_timesteps, callback=callback)
 
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     model.save(model_save_path)
+    mlflow.log_artifact(model_save_path)
+    mlflow.end_run()
     env.close()
 
 

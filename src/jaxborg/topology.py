@@ -1,4 +1,7 @@
+import hashlib
+import pickle
 from functools import lru_cache
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -355,22 +358,19 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     )
 
 
-@lru_cache(maxsize=None)
-def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
-    """Build a bank of exact CybORG topologies for native JAX resets.
+_BANK_CACHE_DIR = Path(__file__).resolve().parents[2] / ".bank_cache"
 
-    The differential harness already starts from CybORG-extracted topology, but
-    native training/eval resets previously used build_topology(), which is only
-    an approximation of CybORG's seeded scenario generator. A small stacked bank
-    of real CybORG topologies removes that step-0 reset/mask gap while keeping
-    JAX stepping and JIT-friendly reset selection.
-    """
+
+def _bank_cache_key(num_steps: int, bank_size: int) -> str:
+    src_path = Path(__file__).resolve()
+    src_hash = hashlib.md5(src_path.read_bytes()).hexdigest()[:12]
+    return f"steps{num_steps}_bank{bank_size}_{src_hash}"
+
+
+def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    if bank_size <= 0:
-        raise ValueError(f"bank_size must be > 0, got {bank_size}")
 
     consts = []
     for seed in range(bank_size):
@@ -387,15 +387,7 @@ def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
     return jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0), *consts)
 
 
-@lru_cache(maxsize=None)
-def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
-    """Build a bank of recorded CybORG green random tapes for native JAX resets.
-
-    This keeps native `cyborg_bank` episodes on the same stochastic green-agent
-    distribution as CybORG without copying state back from CybORG during rollout.
-    The tape is generated once per seed using Sleep blue actions and then replayed
-    by the native JAX environment as precomputed randomness.
-    """
+def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
@@ -404,9 +396,6 @@ def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
 
     from jaxborg.cyborg_green_recorder import GreenRecorder
     from jaxborg.translate import build_mappings_from_cyborg
-
-    if bank_size <= 0:
-        raise ValueError(f"bank_size must be > 0, got {bank_size}")
 
     green_randoms = []
     for seed in range(bank_size):
@@ -432,6 +421,59 @@ def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
         green_randoms.append(recorder.to_jax_array())
 
     return jnp.stack(green_randoms, axis=0)
+
+
+@lru_cache(maxsize=None)
+def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+    """Build (or load cached) bank of CybORG topologies for JAX resets."""
+    if bank_size <= 0:
+        raise ValueError(f"bank_size must be > 0, got {bank_size}")
+
+    cache_dir = _BANK_CACHE_DIR
+    key = _bank_cache_key(num_steps, bank_size)
+    cache_path = cache_dir / f"topo_{key}.pkl"
+
+    if cache_path.exists():
+        print(f"Loading cached topology bank from {cache_path}", flush=True)
+        with open(cache_path, "rb") as f:
+            np_tree = pickle.load(f)
+        return jax.tree.map(jnp.asarray, np_tree)
+
+    print(f"Building topology bank ({bank_size} seeds)...", flush=True)
+    bank = _build_topology_bank(num_steps, bank_size)
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    np_tree = jax.tree.map(np.asarray, bank)
+    with open(cache_path, "wb") as f:
+        pickle.dump(np_tree, f)
+    print(f"Cached topology bank to {cache_path}", flush=True)
+    return bank
+
+
+@lru_cache(maxsize=None)
+def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    """Build (or load cached) bank of CybORG green random tapes for JAX resets."""
+    if bank_size <= 0:
+        raise ValueError(f"bank_size must be > 0, got {bank_size}")
+
+    cache_dir = _BANK_CACHE_DIR
+    key = _bank_cache_key(num_steps, bank_size)
+    cache_path = cache_dir / f"green_{key}.pkl"
+
+    if cache_path.exists():
+        print(f"Loading cached green random bank from {cache_path}", flush=True)
+        with open(cache_path, "rb") as f:
+            arr = pickle.load(f)
+        return jnp.asarray(arr)
+
+    print(f"Building green random bank ({bank_size} seeds)...", flush=True)
+    bank = _build_green_random_bank(num_steps, bank_size)
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(np.asarray(bank), f)
+    print(f"Cached green random bank to {cache_path}", flush=True)
+    return bank
 
 
 def _fill_data_links_from_cyborg(links: np.ndarray, state, hostname_to_idx: dict) -> None:

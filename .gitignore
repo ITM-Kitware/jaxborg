@@ -8,3 +8,4 @@ build/
 .pytest_cache/
 .cache/
 jaxborg-exp/
+.bank_cache/
