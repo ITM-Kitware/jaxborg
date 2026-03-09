@@ -313,6 +313,70 @@ class TestFsmRedEnvDifferential:
             cyborg_red4_hosts,
         )
 
+    def test_native_cyborg_bank_matches_red4_known_hosts_after_first_green_phish(self):
+        """After activation, native JAX red_4 should know only the same hosts as CybORG's FSM agent."""
+        import types
+
+        from CybORG import CybORG
+        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+        from CybORG.Agents.Wrappers import BlueFlatWrapper
+        from CybORG.Simulator.Actions import Sleep
+        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+        from jaxborg.actions.encoding import BLUE_SLEEP
+        from jaxborg.agents.fsm_red import fsm_red_apply_delayed_update
+        from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        seed = 0
+        scenario = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=500,
+        )
+        cyborg = CybORG(scenario_generator=scenario, seed=seed)
+        cyborg_env = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+        cyborg_env.reset()
+        mappings = build_mappings_from_cyborg(cyborg)
+
+        captured_known_hosts = None
+        interface = cyborg.environment_controller.agent_interfaces["red_agent_4"]
+        agent = interface.agent
+        original_get_action = agent.get_action
+
+        def _wrapped(self, observation, action_space):
+            nonlocal captured_known_hosts
+            action = original_get_action(observation, action_space)
+            captured_known_hosts = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
+            for ip, info in self.host_states.items():
+                hostname = info.get("hostname")
+                if hostname in mappings.hostname_to_idx:
+                    captured_known_hosts[mappings.hostname_to_idx[hostname]] = True
+            return action
+
+        agent.get_action = types.MethodType(_wrapped, agent)
+
+        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
+        loop_key = jax.random.PRNGKey(seed)
+        _, jax_state = jax_env.reset(loop_key)
+        blue_actions = {f"blue_{i}": jnp.int32(BLUE_SLEEP) for i in range(NUM_BLUE_AGENTS)}
+
+        loop_key, step_key = jax.random.split(loop_key)
+        _, jax_state, _, _, _ = jax_env.step(step_key, jax_state, blue_actions)
+        _, _, _, _, _ = cyborg_env.step(actions={a: Sleep() for a in cyborg_env.agents})
+
+        loop_key, step_key = jax.random.split(loop_key)
+        state_before = fsm_red_apply_delayed_update(jax_state.state)
+        _, _, _, _, _ = cyborg_env.step(actions={a: Sleep() for a in cyborg_env.agents})
+
+        assert captured_known_hosts is not None, "Expected wrapped CybORG red_4 action to capture known hosts"
+        np.testing.assert_array_equal(
+            np.array(state_before.red_discovered_hosts[4], dtype=bool),
+            captured_known_hosts,
+        )
+
     def test_native_cyborg_bank_matches_second_step_red4_action_after_green_phish(self):
         """After the seed-0 phishing foothold, JAX and CybORG should pick the same red_4 follow-up action."""
         from CybORG import CybORG

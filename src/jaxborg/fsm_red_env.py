@@ -47,8 +47,27 @@ class FsmRedCC4Env(MultiAgentEnv):
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
         obs, env_state = self._env.reset(key)
+        env_state = self._strip_inactive_red_reset_knowledge(env_state)
         blue_obs = {a: obs[a] for a in self.agents}
         return blue_obs, env_state
+
+    def _strip_inactive_red_reset_knowledge(self, env_state: CC4EnvState) -> CC4EnvState:
+        """Match native FiniteStateRedAgent reset knowledge.
+
+        CybORG's controller action spaces may know additional hosts for inactive red
+        agents at reset, but the FiniteStateRedAgent.host_states used by native
+        action selection does not. Keep the richer reset knowledge in CC4Env for
+        translated-action differential replay, but clear it in the native FSM env.
+        """
+        state = env_state.state
+        inactive = ~state.red_agent_active
+        state = state.replace(
+            red_discovered_hosts=jnp.where(inactive[:, None], False, state.red_discovered_hosts),
+            red_scanned_hosts=jnp.where(inactive[:, None], False, state.red_scanned_hosts),
+            red_scanned_source_hosts=jnp.where(inactive[:, None, None], False, state.red_scanned_source_hosts),
+            red_scan_anchor_host=jnp.where(inactive, jnp.int32(-1), state.red_scan_anchor_host),
+        )
+        return CC4EnvState(state=state, const=env_state.const)
 
     @partial(jax.jit, static_argnums=[0])
     def step(
@@ -65,6 +84,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             states_re = reset_state
         else:
             states_re = self._env._reset_state(states_st, key_reset)
+        states_re = self._strip_inactive_red_reset_knowledge(states_re)
         obs_re = self._get_blue_obs(states_re)
 
         states = jax.tree.map(
