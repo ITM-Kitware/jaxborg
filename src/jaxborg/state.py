@@ -15,6 +15,7 @@ from jaxborg.constants import (
     NUM_DECOY_TYPES,
     NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
+    NUM_RED_POLICY_RANDOM_FIELDS,
     NUM_SERVICES,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
@@ -118,6 +119,8 @@ class CC4State:
 
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    red_policy_randoms: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS, 3) float — precomputed FSM choice tokens encoded in [0,1)
+    use_red_policy_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
 
     red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
     red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
@@ -234,6 +237,12 @@ def create_initial_state() -> CC4State:
         use_detection_randoms=jnp.array(False),
         green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
+        red_policy_randoms=jnp.full(
+            (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
+            0.5,
+            dtype=jnp.float32,
+        ),
+        use_red_policy_randoms=jnp.array(False),
         red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_pid_deltas=jnp.array(False),
         blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),

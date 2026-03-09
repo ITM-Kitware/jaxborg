@@ -26,7 +26,13 @@ from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.state import CC4Const, CC4State, create_initial_state
-from jaxborg.topology import build_topology, get_cyborg_green_random_bank, get_cyborg_topology_bank
+from jaxborg.topology import (
+    build_topology,
+    cyborg_bank_index_from_key,
+    get_cyborg_green_random_bank,
+    get_cyborg_red_policy_random_bank,
+    get_cyborg_topology_bank,
+)
 
 
 def apply_all_actions(
@@ -191,15 +197,20 @@ class CC4Env(MultiAgentEnv):
         *,
         topology_mode: str = "pure",
         topology_bank_size: int = 0,
+        sync_red_policy_bank: bool = False,
     ):
         self.num_steps = num_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
+        self.sync_red_policy_bank = sync_red_policy_bank
         self._const_bank = None
         self._green_random_bank = None
+        self._red_policy_random_bank = None
         if topology_mode == "cyborg_bank":
             self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
             self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+            if sync_red_policy_bank:
+                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
         elif topology_mode != "pure":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
 
@@ -220,24 +231,32 @@ class CC4Env(MultiAgentEnv):
         if self._const_bank is None:
             return build_topology(key, num_steps=self.num_steps)
 
-        bank_size = jnp.int32(self.topology_bank_size)
-        bank_idx = jnp.bitwise_xor(key[0], key[1]) % bank_size
+        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return jax.tree.map(lambda x: x[bank_idx], self._const_bank)
 
     def _select_green_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
         if self._green_random_bank is None:
             return None
 
-        bank_size = jnp.int32(self.topology_bank_size)
-        bank_idx = jnp.bitwise_xor(key[0], key[1]) % bank_size
+        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return self._green_random_bank[bank_idx]
+
+    def _select_red_policy_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
+        if self._red_policy_random_bank is None:
+            return None
+
+        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
+        return self._red_policy_random_bank[bank_idx]
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
+        red_policy_randoms = self._select_red_policy_randoms(key)
         state = create_initial_state()
         if green_randoms is not None:
             state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
+        if red_policy_randoms is not None:
+            state = state.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = state.replace(host_services=jnp.array(const.initial_services))
         state = _init_red_state(const, state)
 
@@ -250,9 +269,12 @@ class CC4Env(MultiAgentEnv):
         """Reset with a new random topology (for auto-reset)."""
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
+        red_policy_randoms = self._select_red_policy_randoms(key)
         state = create_initial_state()
         if green_randoms is not None:
             state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
+        if red_policy_randoms is not None:
+            state = state.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = state.replace(host_services=const.initial_services)
         state = _init_red_state(const, state)
         return CC4EnvState(state=state, const=const)

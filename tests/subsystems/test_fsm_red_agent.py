@@ -134,7 +134,12 @@ class TestAutonomousActionParity:
         cyborg_env.reset()
         cyborg_agent = cyborg_env.env.environment_controller.agent_interfaces["red_agent_0"].agent
 
-        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
+        jax_env = FsmRedCC4Env(
+            num_steps=500,
+            topology_mode="cyborg_bank",
+            topology_bank_size=1,
+            sync_red_policy_bank=True,
+        )
         key = jax.random.PRNGKey(0)
         _, env_state = jax_env.reset(key)
         start_host = int(env_state.const.red_start_hosts[0])

@@ -31,11 +31,13 @@ class FsmRedCC4Env(MultiAgentEnv):
         *,
         topology_mode: str = "pure",
         topology_bank_size: int = 0,
+        sync_red_policy_bank: bool = False,
     ):
         self._env = CC4Env(
             num_steps=num_steps,
             topology_mode=topology_mode,
             topology_bank_size=topology_bank_size,
+            sync_red_policy_bank=sync_red_policy_bank,
         )
         self.agents = list(self._env.blue_agents)
 

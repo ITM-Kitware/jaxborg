@@ -39,6 +39,18 @@ CYBORG_SUBNET_SUFFIX = {
 CYBORG_SUFFIX_TO_ID = {v: SUBNET_IDS[k] for k, v in CYBORG_SUBNET_SUFFIX.items()}
 
 
+def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
+    """Map a JAX reset key onto a cached CybORG bank entry."""
+    bank_size = jnp.int32(bank_size)
+    return jnp.bitwise_xor(key[0], key[1]) % bank_size
+
+
+def cyborg_bank_seed_from_seed(seed: int, bank_size: int) -> int:
+    """Return the cached CybORG topology seed corresponding to a JAX episode seed."""
+    key = jax.random.PRNGKey(seed)
+    return int(cyborg_bank_index_from_key(key, bank_size))
+
+
 def _subnet_nacl_adjacency() -> np.ndarray:
     """Build the default NACL-based subnet adjacency matrix.
 
@@ -361,10 +373,27 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
 _BANK_CACHE_DIR = Path(__file__).resolve().parents[2] / ".bank_cache"
 
 
-def _bank_cache_key(num_steps: int, bank_size: int) -> str:
-    src_path = Path(__file__).resolve()
-    src_hash = hashlib.md5(src_path.read_bytes()).hexdigest()[:12]
-    return f"steps{num_steps}_bank{bank_size}_{src_hash}"
+def _hash_paths(*relative_paths: str) -> str:
+    digest = hashlib.md5()
+    root = Path(__file__).resolve().parent
+    for rel in relative_paths:
+        digest.update((root / rel).read_bytes())
+    return digest.hexdigest()[:12]
+
+
+def _topology_cache_key(num_steps: int, bank_size: int) -> str:
+    return f"steps{num_steps}_bank{bank_size}_{_hash_paths('topology.py')}"
+
+
+def _green_cache_key(num_steps: int, bank_size: int) -> str:
+    return f"steps{num_steps}_bank{bank_size}_{_hash_paths('topology.py', 'cyborg_green_recorder.py')}"
+
+
+def _red_policy_cache_key(num_steps: int, bank_size: int) -> str:
+    return (
+        f"steps{num_steps}_bank{bank_size}_"
+        f"{_hash_paths('topology.py', 'cyborg_red_policy_recorder.py', 'agents/fsm_red.py')}"
+    )
 
 
 def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
@@ -423,6 +452,40 @@ def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     return jnp.stack(green_randoms, axis=0)
 
 
+def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    from CybORG import CybORG
+    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+    from CybORG.Agents.Wrappers import BlueFlatWrapper
+    from CybORG.Simulator.Actions import Sleep
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
+    from jaxborg.translate import build_mappings_from_cyborg
+
+    tapes = []
+    for seed in range(bank_size):
+        scenario = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=EnterpriseGreenAgent,
+            red_agent_class=FiniteStateRedAgent,
+            steps=num_steps,
+        )
+        cyborg = CybORG(scenario_generator=scenario, seed=seed)
+        wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+        wrapper.reset()
+
+        recorder = RedPolicyRecorder()
+        recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
+
+        sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+        for _step in range(num_steps):
+            wrapper.step(actions=sleep_actions)
+
+        tapes.append(recorder.to_jax_array())
+
+    return jnp.stack(tapes, axis=0)
+
+
 @lru_cache(maxsize=None)
 def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
     """Build (or load cached) bank of CybORG topologies for JAX resets."""
@@ -430,7 +493,7 @@ def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
         raise ValueError(f"bank_size must be > 0, got {bank_size}")
 
     cache_dir = _BANK_CACHE_DIR
-    key = _bank_cache_key(num_steps, bank_size)
+    key = _topology_cache_key(num_steps, bank_size)
     cache_path = cache_dir / f"topo_{key}.pkl"
 
     if cache_path.exists():
@@ -457,7 +520,7 @@ def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
         raise ValueError(f"bank_size must be > 0, got {bank_size}")
 
     cache_dir = _BANK_CACHE_DIR
-    key = _bank_cache_key(num_steps, bank_size)
+    key = _green_cache_key(num_steps, bank_size)
     cache_path = cache_dir / f"green_{key}.pkl"
 
     if cache_path.exists():
@@ -473,6 +536,32 @@ def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     with open(cache_path, "wb") as f:
         pickle.dump(np.asarray(bank), f)
     print(f"Cached green random bank to {cache_path}", flush=True)
+    return bank
+
+
+@lru_cache(maxsize=None)
+def get_cyborg_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    """Build (or load cached) bank of CybORG native red-policy choice tapes."""
+    if bank_size <= 0:
+        raise ValueError(f"bank_size must be > 0, got {bank_size}")
+
+    cache_dir = _BANK_CACHE_DIR
+    key = _red_policy_cache_key(num_steps, bank_size)
+    cache_path = cache_dir / f"red_policy_{key}.pkl"
+
+    if cache_path.exists():
+        print(f"Loading cached red policy random bank from {cache_path}", flush=True)
+        with open(cache_path, "rb") as f:
+            arr = pickle.load(f)
+        return jnp.asarray(arr)
+
+    print(f"Building red policy random bank ({bank_size} seeds)...", flush=True)
+    bank = _build_red_policy_random_bank(num_steps, bank_size)
+
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_path, "wb") as f:
+        pickle.dump(np.asarray(bank), f)
+    print(f"Cached red policy random bank to {cache_path}", flush=True)
     return bank
 
 

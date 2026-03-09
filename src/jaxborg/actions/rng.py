@@ -47,6 +47,18 @@ def sample_green_random(state: CC4State, time, host_idx, field_idx, key, *, int_
     return jax.lax.cond(state.use_green_randoms, from_precomputed, from_rng, None)
 
 
+def sample_red_policy_random(state: CC4State, time, agent_id, field_idx, key):
+    """Return a precomputed red-policy choice token encoded in [0, 1), else JAX uniform."""
+
+    def from_precomputed(_):
+        return state.red_policy_randoms[time, agent_id, field_idx]
+
+    def from_rng(_):
+        return jax.random.uniform(key)
+
+    return jax.lax.cond(state.use_red_policy_randoms, from_precomputed, from_rng, None)
+
+
 def sample_red_pid_delta(state: CC4State, time, agent_id, key):
     """Return Host.create_pid delta in [1, 9] for exploit session creation."""
 

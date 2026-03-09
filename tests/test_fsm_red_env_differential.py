@@ -316,6 +316,197 @@ class TestFsmRedEnvDifferential:
             assert jax_known == cy_known
             assert jax_scanned == cy_scanned
 
+    def test_independent_rollout_bank_seed_mapping_matches_reset_seed_3(self):
+        """Independent transfer must use the same cached CybORG bank member as the JAX reset key."""
+        from jaxborg.actions.masking import compute_blue_action_mask
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg
+        from scripts.eval_transfer import make_cyborg_env
+
+        seed = 3
+        bank_size = 2
+
+        jax_env = FsmRedCC4Env(
+            num_steps=500,
+            topology_mode="cyborg_bank",
+            topology_bank_size=bank_size,
+            sync_red_policy_bank=True,
+        )
+        jax_obs, jax_state = jax_env.reset(jax.random.PRNGKey(seed))
+
+        cyborg_env = make_cyborg_env(seed=seed, bank_match_size=bank_size)
+        cyborg_obs, _ = cyborg_env.reset()
+        cyborg_const = build_const_from_cyborg(cyborg_env.env)
+        mappings = build_mappings_from_cyborg(cyborg_env.env)
+
+        np.testing.assert_array_equal(np.array(jax_state.const.host_active), np.array(cyborg_const.host_active))
+        np.testing.assert_array_equal(np.array(jax_state.const.host_subnet), np.array(cyborg_const.host_subnet))
+        np.testing.assert_array_equal(np.array(jax_state.const.red_start_hosts), np.array(cyborg_const.red_start_hosts))
+
+        for agent_idx in range(5):
+            np.testing.assert_allclose(
+                np.array(jax_obs[f"blue_{agent_idx}"], dtype=np.float32),
+                np.array(cyborg_obs[f"blue_agent_{agent_idx}"], dtype=np.float32),
+            )
+            np.testing.assert_array_equal(
+                np.array(compute_blue_action_mask(jax_state.const, agent_idx, jax_state.state), dtype=bool),
+                _live_cyborg_mask_in_jax_space(
+                    cyborg_env,
+                    f"blue_agent_{agent_idx}",
+                    mappings,
+                    jax_state.const,
+                ),
+            )
+
+    def test_native_cyborg_bank_matches_first_step_red0_action_seed_4_bank_2(self):
+        """Native bank-backed red policy should match CybORG's first red_0 action."""
+        from CybORG.Simulator.Actions import Sleep
+
+        from jaxborg.agents.fsm_red import fsm_red_apply_delayed_update, fsm_red_select_actions
+        from jaxborg.constants import NUM_RED_AGENTS
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+        from scripts.eval_transfer import make_cyborg_env
+
+        seed = 4
+        bank_size = 2
+
+        cyborg_env = make_cyborg_env(seed=seed, bank_match_size=bank_size)
+        cyborg_env.reset()
+        mappings = build_mappings_from_cyborg(cyborg_env.env)
+
+        logged_actions = {}
+        for agent_name, interface in cyborg_env.env.environment_controller.agent_interfaces.items():
+            if agent_name != "red_agent_0":
+                continue
+            agent = interface.agent
+            original_get_action = agent.get_action
+
+            def _wrapped(self, observation, action_space):
+                action = original_get_action(observation, action_space)
+                logged_actions["red_agent_0"] = action
+                return action
+
+            agent.get_action = types.MethodType(_wrapped, agent)
+
+        jax_env = FsmRedCC4Env(
+            num_steps=500,
+            topology_mode="cyborg_bank",
+            topology_bank_size=bank_size,
+            sync_red_policy_bank=True,
+        )
+        loop_key = jax.random.PRNGKey(seed)
+        _, jax_state = jax_env.reset(loop_key)
+
+        loop_key, step_key = jax.random.split(loop_key)
+        key_for_step_env, _key_reset = jax.random.split(step_key)
+        _key_unused, key_red = jax.random.split(key_for_step_env)
+        red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
+        state_before = fsm_red_apply_delayed_update(jax_state.state)
+        jax_red_actions = fsm_red_select_actions(state_before, jax_state.const, red_keys)[0]
+        jax_red0 = jax_red_to_cyborg(int(jax_red_actions[0]), 0, mappings)
+
+        sleep_actions = {a: Sleep() for a in cyborg_env.agents}
+        cyborg_env.step(actions=sleep_actions)
+        cyborg_red0 = logged_actions["red_agent_0"]
+
+        def _target(action):
+            return getattr(action, "hostname", getattr(action, "subnet", getattr(action, "ip_address", None)))
+
+        assert type(jax_red0).__name__ == type(cyborg_red0).__name__
+        assert _target(jax_red0) == _target(cyborg_red0)
+
+    def test_cyborg_bank_runtime_does_not_preload_sleep_red_policy_tape_by_default(self):
+        """cyborg_bank runtime should not inject a Sleep-rollout red-policy tape by default."""
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+
+        seed = 4
+        bank_size = 5
+
+        jax_env = FsmRedCC4Env(
+            num_steps=500,
+            topology_mode="cyborg_bank",
+            topology_bank_size=bank_size,
+        )
+        _, env_state = jax_env.reset(jax.random.PRNGKey(seed))
+        assert not bool(env_state.state.use_red_policy_randoms)
+
+    def test_raw_cyborg_step_executes_concrete_decoy_with_skip_valid_check(self):
+        """Independent rollout eval must step raw CybORG actions for concrete blue decoys."""
+        from CybORG.Simulator.Actions import Sleep
+        from CybORG.Simulator.Actions.Action import InvalidAction
+
+        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+        from scripts.eval_transfer import make_cyborg_env
+
+        seed = 4
+        bank_size = 2
+        action_idx = 772  # DeployDecoy_Tomcat(operational_zone_b_subnet_server_host_2)
+
+        cyborg_env = make_cyborg_env(seed=seed, bank_match_size=bank_size)
+        cyborg_env.reset()
+        const = build_const_from_cyborg(cyborg_env.env)
+        mappings = build_mappings_from_cyborg(cyborg_env.env)
+
+        actions = {agent_name: Sleep() for agent_name in cyborg_env.agents}
+        actions["blue_agent_3"] = jax_blue_to_cyborg(action_idx, 3, mappings, const=const)
+        assert type(actions["blue_agent_3"]).__name__ == "DecoyTomcat"
+
+        cyborg_env.env.parallel_step(actions, skip_valid_action_check=True)
+        executed = cyborg_env.env.environment_controller.action.get("blue_agent_3", [])
+        assert not any(isinstance(action, InvalidAction) for action in executed), executed
+        assert [type(action).__name__ for action in executed] == ["DecoyTomcat"]
+        assert cyborg_env.env.environment_controller.actions_in_progress.get("blue_agent_3") is None
+
+    def test_live_red_choice_sync_keeps_native_sleep_rollout_aligned_seed_4_bank_5(self):
+        """Live CybORG red-choice sync should keep native sleep rollout aligned step-by-step."""
+        from CybORG.Simulator.Actions import Sleep
+
+        from jaxborg.actions.encoding import BLUE_SLEEP
+        from jaxborg.constants import NUM_BLUE_AGENTS
+        from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
+        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.translate import build_mappings_from_cyborg
+        from scripts.eval_transfer import make_cyborg_env
+        from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
+
+        seed = 4
+        bank_size = 5
+        steps = 20
+
+        cyborg_env = make_cyborg_env(seed=seed, bank_match_size=bank_size)
+        cyborg_env.reset()
+        mappings = build_mappings_from_cyborg(cyborg_env.env)
+        recorder = RedPolicyRecorder()
+        recorder.install(cyborg_env.env, mappings)
+
+        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=bank_size)
+        key = jax.random.PRNGKey(seed)
+        _, env_state = jax_env.reset(key)
+        blue_actions = {f"blue_{i}": jnp.int32(BLUE_SLEEP) for i in range(NUM_BLUE_AGENTS)}
+
+        for _ in range(steps):
+            _, _, _, _, _ = cyborg_env.step(actions={agent: Sleep() for agent in cyborg_env.agents})
+            step_idx = int(env_state.state.time)
+            env_state = env_state.replace(
+                state=env_state.state.replace(
+                    red_policy_randoms=env_state.state.red_policy_randoms.at[step_idx].set(
+                        jnp.asarray(recorder.extract_step(step_idx), dtype=jnp.float32)
+                    ),
+                    use_red_policy_randoms=jnp.array(True),
+                )
+            )
+            key, step_key = jax.random.split(key)
+            _, env_state, _, _, _ = jax_env.step(step_key, env_state, blue_actions)
+
+            diffs = compare_snapshots(
+                extract_cyborg_snapshot(cyborg_env.env, mappings),
+                extract_jax_snapshot(env_state.state, env_state.const, mappings),
+            )
+            assert diffs == []
+
     def test_sleep_blue_cumulative_reward_same_sign(self, cyborg_sleep_env, jax_env_from_cyborg):
         """Sleep blue, FSM red: both should produce negative cumulative reward."""
         from statistics import mean

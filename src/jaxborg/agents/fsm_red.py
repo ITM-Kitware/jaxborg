@@ -25,6 +25,7 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
 from jaxborg.actions.red_common import select_bound_source_host
+from jaxborg.actions.rng import sample_red_policy_random
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
@@ -122,6 +123,25 @@ GENERIC_EXPLOIT_STARTS = jnp.array(
 GENERIC_EXPLOIT_WEIGHTS = jnp.array([3.0, 0.1, 5.0, 6.0], dtype=jnp.float32)
 
 
+def _uniform_choice_from_mask(mask, u):
+    count = jnp.sum(mask.astype(jnp.int32))
+    safe_count = jnp.maximum(count, 1)
+    rank = jnp.minimum(jnp.floor(u * safe_count).astype(jnp.int32), safe_count - 1)
+    ranks = jnp.cumsum(mask.astype(jnp.int32)) - 1
+    chosen = jnp.argmax(jnp.where(mask & (ranks == rank), 1, 0))
+    return jnp.where(count > 0, chosen, jnp.int32(0))
+
+
+def _weighted_choice_from_probs(probs, u):
+    cdf = jnp.cumsum(probs)
+    return jnp.argmax(u < cdf)
+
+
+def _decode_choice_token(u, total_count):
+    total = jnp.maximum(jnp.int32(total_count), jnp.int32(1))
+    return jnp.minimum(jnp.floor(u * total).astype(jnp.int32), total - 1)
+
+
 def _pick_exploit_action(state, target_host, key):
     host_services = state.host_services[target_host]
     candidates = jnp.array(
@@ -194,13 +214,21 @@ def fsm_red_get_action_and_info(
     eligible = discovered & active & (fsm_states != FSM_F)
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
+    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(state.red_policy_randoms.shape[0] - 1))
 
     any_eligible = jnp.any(eligible)
 
-    host_probs = jnp.where(eligible, 1.0, 0.0)
+    host_probs = jnp.where(eligible, 1.0, 0.0).astype(jnp.float32)
     host_total = jnp.sum(host_probs)
     host_probs = host_probs / jnp.maximum(host_total, 1e-8)
-    chosen_host = jax.random.choice(key1, GLOBAL_MAX_HOSTS, p=host_probs)
+    host_u = sample_red_policy_random(state, time_idx, agent_id, 0, key1)
+    recorded_host = _decode_choice_token(host_u, GLOBAL_MAX_HOSTS)
+    chosen_host = jax.lax.cond(
+        state.use_red_policy_randoms,
+        lambda _: jnp.where(eligible[recorded_host], recorded_host, _uniform_choice_from_mask(eligible, host_u)),
+        lambda _: jax.random.choice(key1, GLOBAL_MAX_HOSTS, p=host_probs),
+        operand=None,
+    )
 
     host_state = fsm_states[chosen_host]
     host_state_clamped = jnp.clip(host_state, 0, NUM_FSM_STATES - 2)
@@ -210,9 +238,31 @@ def fsm_red_get_action_and_info(
     action_probs = jnp.where(valid_mask, jnp.maximum(action_probs_raw, 0.0), 0.0)
     action_total = jnp.sum(action_probs)
     action_probs = action_probs / jnp.maximum(action_total, 1e-8)
-    chosen_fsm_action = jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs)
+    action_u = sample_red_policy_random(state, time_idx, agent_id, 1, key2)
+    recorded_action = _decode_choice_token(action_u, NUM_FSM_ACTIONS)
+    chosen_fsm_action = jax.lax.cond(
+        state.use_red_policy_randoms,
+        lambda _: jnp.where(
+            valid_mask[recorded_action],
+            recorded_action,
+            _weighted_choice_from_probs(action_probs, action_u),
+        ),
+        lambda _: jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs),
+        operand=None,
+    )
 
-    discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
+    discover_u = sample_red_policy_random(state, time_idx, agent_id, 2, key3)
+    recorded_subnet = _decode_choice_token(discover_u, NUM_SUBNETS)
+    discover_subnet = jax.lax.cond(
+        state.use_red_policy_randoms,
+        lambda _: jnp.where(
+            const.red_agent_subnets[agent_id, recorded_subnet],
+            recorded_subnet,
+            _uniform_choice_from_mask(const.red_agent_subnets[agent_id], discover_u),
+        ),
+        lambda _: _pick_discover_subnet(state, const, agent_id, key3),
+        operand=None,
+    )
     exploit_action = _pick_exploit_action(state, chosen_host, key4)
     host_subnet = const.host_subnet[chosen_host]
     target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
