@@ -38,7 +38,13 @@ def apply_aggressive_scan(
         source_matrix,
     )
 
-    rand_val, state = sample_detection_random(state, key)
+    def with_roll(s: CC4State):
+        return sample_detection_random(s, key)
+
+    def without_roll(s: CC4State):
+        return jnp.float32(1.0), s
+
+    rand_val, state = jax.lax.cond(success, with_roll, without_roll, state)
     detected = success & (rand_val < AGGRESSIVE_DETECTION_RATE)
 
     activity = jnp.where(

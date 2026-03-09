@@ -38,14 +38,16 @@ def apply_scan_unified(
         source_matrix,
     )
 
+    should_roll = has_detection_roll & success
+
     def with_roll(s: CC4State):
         rand_val, next_state = sample_detection_random(s, key)
-        return success & (rand_val < detection_rate), next_state
+        return rand_val < detection_rate, next_state
 
     def without_roll(s: CC4State):
         return success, s
 
-    detected, state = jax.lax.cond(has_detection_roll, with_roll, without_roll, state)
+    detected, state = jax.lax.cond(should_roll, with_roll, without_roll, state)
 
     activity = jnp.where(
         detected,
