@@ -42,6 +42,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_session_abstract_pids = state.red_session_abstract_pids
     red_session_privileged_pids = state.red_session_privileged_pids
     red_discovered = state.red_discovered_hosts
+    reassigned_hosts = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
 
     for src in range(NUM_RED_AGENTS):
         src_mask = needs_reassign[src]
@@ -80,6 +81,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             )
             red_privilege = red_privilege.at[dst].set(jnp.maximum(red_privilege[dst], moved_privilege))
             red_discovered = red_discovered.at[dst].set(jnp.where(dst_mask, True, red_discovered[dst]))
+            reassigned_hosts = reassigned_hosts.at[dst].set(reassigned_hosts[dst] | dst_mask)
             red_session_is_abstract = red_session_is_abstract.at[dst].set(red_session_is_abstract[dst] | dst_mask)
             moved_ranks = jnp.where(dst_mask, src_abstract_rank, jnp.int32(ABSTRACT_RANK_NONE))
             merged_ranks = jnp.minimum(red_abstract_host_rank[dst], moved_ranks)
@@ -156,8 +158,8 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
     current_fsm = state.fsm_host_states
     discovered_decoy = (current_fsm == FSM_UD) | (current_fsm == FSM_RD)
-    privileged_session = red_sessions & (red_privilege >= COMPROMISE_PRIVILEGED)
-    user_session = red_sessions & ~privileged_session
+    privileged_session = reassigned_hosts & (red_privilege >= COMPROMISE_PRIVILEGED)
+    user_session = reassigned_hosts & ~privileged_session
     fsm_with_sessions = jnp.where(
         privileged_session,
         jnp.where(discovered_decoy, FSM_RD, FSM_R),
