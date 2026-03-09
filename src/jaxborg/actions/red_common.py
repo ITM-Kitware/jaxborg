@@ -13,6 +13,8 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
     count_valid_pids,
+    first_valid_pid,
+    pid_row_contains,
 )
 from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
@@ -64,10 +66,22 @@ def bound_source_is_abstract(
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
     source_has_abstract = state.red_session_is_abstract[agent_id, source_idx]
     source_abstract_rank = state.red_abstract_host_rank[agent_id, source_idx]
-    # CybORG PrivilegeEscalate(session=0) requires the bound primary session to
-    # be abstract. Host-level "has any abstract session" is insufficient.
-    source_primary_is_abstract = source_has_abstract & (
+    source_pid_row = state.red_session_pids[agent_id, source_idx]
+    source_abstract_pid_row = state.red_session_abstract_pids[agent_id, source_idx]
+    source_primary_pid = first_valid_pid(source_pid_row)
+    has_pid_identity = source_primary_pid >= 0
+    has_abstract_pid_tracking = jnp.any(source_abstract_pid_row >= 0)
+    source_primary_is_abstract_by_pid = pid_row_contains(source_abstract_pid_row, source_primary_pid)
+    # When PID identity is unavailable, fall back to the older rank-based
+    # approximation. Rank alone is not sufficient once session 0 can migrate to
+    # a later-created abstract session host via CybORG reassignment.
+    source_primary_is_abstract_by_rank = source_has_abstract & (
         (source_abstract_rank == jnp.int32(0)) | (source_abstract_rank == jnp.int32(ABSTRACT_RANK_NONE))
+    )
+    source_primary_is_abstract = jnp.where(
+        has_pid_identity & has_abstract_pid_tracking,
+        source_primary_is_abstract_by_pid,
+        source_primary_is_abstract_by_rank,
     )
     return (source_host >= 0) & source_primary_is_abstract
 
@@ -187,10 +201,11 @@ def recompute_scan_anchor_hosts(
     red_session_is_abstract: chex.Array,
     host_active: chex.Array,
 ) -> chex.Array:
-    """Invalidate anchors that no longer reference a live session host.
+    """Recompute scan anchor hosts after session reassignment.
 
-    CybORG's `RedSessionCheck` promotes a new session 0 using RNG. Anchor
-    promotion is therefore handled in red turn processing, not here.
+    Keeps valid anchors, invalidates stale ones, and promotes a new anchor
+    for agents that gained sessions (e.g. via green phishing reassignment)
+    but have no valid anchor yet.
     """
     del red_session_is_abstract
     anchor_idx = jnp.clip(prior_anchor_hosts, 0, red_sessions.shape[1] - 1)
@@ -199,8 +214,16 @@ def recompute_scan_anchor_hosts(
         & red_sessions[jnp.arange(prior_anchor_hosts.shape[0]), anchor_idx]
         & host_active[anchor_idx]
     )
-    has_any_sessions = jnp.any(red_sessions & host_active[None, :], axis=1)
-    return jnp.where(has_any_sessions & anchor_valid, prior_anchor_hosts, -1)
+    active_sessions = red_sessions & host_active[None, :]
+    has_any_sessions = jnp.any(active_sessions, axis=1)
+    # Pick the first active session host as fallback anchor for newly activated agents
+    fallback_hosts = jnp.argmax(active_sessions.astype(jnp.int32), axis=1).astype(jnp.int32)
+    needs_promotion = has_any_sessions & ~anchor_valid
+    return jnp.where(
+        anchor_valid,
+        prior_anchor_hosts,
+        jnp.where(needs_promotion, fallback_hosts, jnp.int32(-1)),
+    )
 
 
 def select_new_primary_session_host(

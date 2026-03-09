@@ -746,6 +746,76 @@ class TestDifferentialWithCybORG:
         assert cy_success
         assert jax_success == cy_success
 
+    def test_privesc_succeeds_when_tracked_primary_pid_is_abstract_even_with_nonzero_rank(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        source_host = int(const.red_start_hosts[0])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and h != source_host
+            and cy_state.hosts[sorted_hosts[h]].os_type.name == "LINUX"
+        )
+        target_hostname = sorted_hosts[target_host]
+        cy_state.hosts[target_hostname].processes.append(Process(process_name="cmd.sh", pid=6001, username="user"))
+
+        red_name = "red_agent_0"
+        cy_state.add_session(
+            Session(
+                ident=None,
+                hostname=target_hostname,
+                username="user",
+                agent=red_name,
+                parent=0,
+                session_type="shell",
+                pid=6001,
+            )
+        )
+
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent=red_name)
+        cy_action.duration = 1
+        cy_result = cy_action.execute(cy_state)
+        cy_success = str(cy_result.success).upper() == "TRUE"
+        assert cy_success
+
+        source_pid_row = jnp.full(MAX_TRACKED_SESSION_PIDS, -1, dtype=jnp.int32).at[0].set(5001)
+        target_pid_row = jnp.full(MAX_TRACKED_SESSION_PIDS, -1, dtype=jnp.int32).at[0].set(6001)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, source_host].set(True).at[0, target_host].set(True),
+            red_session_count=state.red_session_count.at[0, source_host].set(1).at[0, target_host].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host]
+            .set(True)
+            .at[0, target_host]
+            .set(False),
+            red_abstract_host_rank=state.red_abstract_host_rank.at[0, source_host].set(1),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
+            red_privilege=state.red_privilege.at[0, source_host]
+            .set(COMPROMISE_USER)
+            .at[0, target_host]
+            .set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[source_host]
+            .set(COMPROMISE_USER)
+            .at[target_host]
+            .set(COMPROMISE_USER),
+            red_session_pids=state.red_session_pids.at[0, source_host]
+            .set(source_pid_row)
+            .at[0, target_host]
+            .set(target_pid_row),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[0, source_host].set(source_pid_row),
+            red_session_sandboxed=state.red_session_sandboxed.at[0, target_host].set(False),
+        )
+
+        privesc_idx = encode_red_action("PrivilegeEscalate", target_host, 0)
+        new_state = _jit_apply_red(state, const, 0, privesc_idx, jax.random.PRNGKey(0))
+        jax_success = int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+        assert jax_success == cy_success
+        assert int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
     def test_privesc_random_target_session_choice_matches_cyborg_for_mixed_sessions(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
         cy_state = cyborg_env.environment_controller.state
