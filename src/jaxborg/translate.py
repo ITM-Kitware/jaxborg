@@ -420,6 +420,27 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
     raise ValueError(f"Unknown JAX blue action index: {action_idx}")
 
 
+def jax_blue_to_cyborg_wrapper_action(action_idx: int, agent_id: int, mappings: CC4Mappings, const=None):
+    """Translate a JAX blue action into the BlueFlatWrapper-compatible action space.
+
+    BlueFlatWrapper exposes generic DeployDecoy actions, not the concrete decoy
+    subclasses in the JAX canonical action space. For wrapper-based eval, map all
+    concrete decoy choices back to generic DeployDecoy on the same hostname.
+    """
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
+
+    if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
+        agent_name = f"blue_agent_{agent_id}"
+        session = 0
+        offset = action_idx - BLUE_DECOY_START
+        flat_slot = offset % ACTION_HOST_SLOTS
+        host_idx = _slot_to_global(flat_slot, const)
+        hostname = mappings.idx_to_hostname[host_idx]
+        return DeployDecoy(session=session, agent=agent_name, hostname=hostname)
+
+    return jax_blue_to_cyborg(action_idx, agent_id, mappings, const=const)
+
+
 def describe_red_action(action_idx: int, mappings: CC4Mappings) -> str:
     if action_idx == RED_SLEEP:
         return "Sleep"

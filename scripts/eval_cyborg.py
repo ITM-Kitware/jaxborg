@@ -23,7 +23,11 @@ from train_ippo_cc4 import ActorCritic
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.topology import build_const_from_cyborg
-from jaxborg.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
+from jaxborg.translate import (
+    build_mappings_from_cyborg,
+    cyborg_blue_to_jax,
+    jax_blue_to_cyborg,
+)
 
 EPISODE_LENGTH = 500
 DECOY_FACTORY_ACTIONS = (
@@ -134,7 +138,7 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return []
 
 
-def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
+def _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const):
     controller = env.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
@@ -147,7 +151,7 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
         return jnp.array(jax_mask)
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-    cyborg_mask = info[agent_name]["action_mask"]
+    cyborg_mask = env.get_action_space(agent_name)["mask"]
     cyborg_actions = env.actions(agent_name)
     cyborg_labels = env.action_labels(agent_name)
     cyborg_state = controller.state
@@ -161,8 +165,40 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
     return jnp.array(jax_mask)
 
 
+def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
+    """Step underlying CybORG with raw actions, then flatten blue observations via the wrapper."""
+    obs, rews, dones, info = wrapper.env.parallel_step(
+        actions,
+        messages=messages,
+        skip_valid_action_check=True,
+    )
+
+    observations = {
+        agent: wrapper.observation_change(agent, obs[agent])
+        for agent in wrapper.possible_agents
+        if agent in obs
+    }
+    rewards = {
+        agent: sum(rews[agent].values())
+        for agent in wrapper.possible_agents
+        if agent in rews
+    }
+    terminated = {
+        agent: bool(dones[agent])
+        for agent in wrapper.possible_agents
+        if agent in dones
+    }
+    truncated = terminated.copy()
+    info = {
+        agent: {"action_mask": wrapper.get_action_space(agent)["mask"]}
+        for agent in wrapper.possible_agents
+    }
+    wrapper.agents = [agent for agent in wrapper.possible_agents if not terminated.get(agent, False)]
+    return observations, rewards, terminated, truncated, info
+
+
 def run_episode(env, policy, params, policy_kind, deterministic, rng):
-    observations, info = env.reset()
+    observations, _ = env.reset()
     inner_cyborg = env.env
     const = build_const_from_cyborg(inner_cyborg)
     mappings = build_mappings_from_cyborg(inner_cyborg)
@@ -174,7 +210,7 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
             obs_vec = observations[agent_name]
             obs_jax = jnp.array(obs_vec, dtype=jnp.float32)
 
-            mask = _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const)
+            mask = _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const)
 
             pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
 
@@ -187,7 +223,7 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
             cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             actions[agent_name] = cyborg_action
 
-        observations, rewards, terminations, truncations, info = env.step(actions=actions)
+        observations, rewards, terminations, truncations, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
         total += mean(rewards.values())
         if terminations.get("__all__", False) or truncations.get("__all__", False):
             break

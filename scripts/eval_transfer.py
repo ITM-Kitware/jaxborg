@@ -21,11 +21,15 @@ from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT impor
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
 from flax.linen.initializers import constant, orthogonal
-from train_ippo_cc4 import ActorCritic
 
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
+SCRIPTS_DIR = Path(__file__).resolve().parent
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.append(str(SCRIPTS_DIR))
+
+from train_ippo_cc4 import ActorCritic
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -49,9 +53,10 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     OBS_HOSTS_PER_SUBNET,
 )
+from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
-from jaxborg.topology import build_const_from_cyborg
+from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
 from jaxborg.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
@@ -59,6 +64,7 @@ from jaxborg.translate import (
     jax_blue_to_cyborg,
 )
 from tests.differential.harness import CC4DifferentialHarness
+from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
 EXP_DIR = ROOT / "jaxborg-exp"
 
@@ -316,20 +322,65 @@ def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
     return jnp.array(jax_mask)
 
 
-def make_cyborg_env(seed=42):
+def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
+    """Step underlying CybORG with raw actions, then flatten blue observations via the wrapper."""
+    obs, rews, dones, info = wrapper.env.parallel_step(
+        actions,
+        messages=messages,
+        skip_valid_action_check=True,
+    )
+
+    observations = {
+        agent: wrapper.observation_change(agent, obs[agent])
+        for agent in wrapper.possible_agents
+        if agent in obs
+    }
+    rewards = {
+        agent: sum(rews[agent].values())
+        for agent in wrapper.possible_agents
+        if agent in rews
+    }
+    terminated = {
+        agent: bool(dones[agent])
+        for agent in wrapper.possible_agents
+        if agent in dones
+    }
+    truncated = terminated.copy()
+    info = {
+        agent: {"action_mask": wrapper.get_action_space(agent)["mask"]}
+        for agent in wrapper.possible_agents
+    }
+    wrapper.agents = [agent for agent in wrapper.possible_agents if not terminated.get(agent, False)]
+    return observations, rewards, terminated, truncated, info
+
+
+def make_cyborg_env(seed=42, bank_match_size=None):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
+    actual_seed = cyborg_bank_seed_from_seed(seed, bank_match_size) if bank_match_size is not None else seed
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
         red_agent_class=FiniteStateRedAgent,
         steps=500,
     )
-    cyborg = CybORG(sg, "sim", seed=seed)
+    cyborg = CybORG(sg, "sim", seed=actual_seed)
     return BlueFlatWrapper(env=cyborg, pad_spaces=True)
+
+
+def _inject_live_red_policy_step(env_state, recorder):
+    """Inject CybORG-recorded red choice tokens for the current JAX step."""
+    step_idx = int(env_state.state.time)
+    step_tokens = jnp.asarray(recorder.extract_step(step_idx), dtype=jnp.float32)
+    return env_state.replace(
+        state=env_state.state.replace(
+            red_policy_randoms=env_state.state.red_policy_randoms.at[step_idx].set(step_tokens),
+            use_red_policy_randoms=jnp.array(True),
+        )
+    )
 
 
 # --- Core rollout functions ---
@@ -422,8 +473,8 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        env = make_cyborg_env(seed=seed + ep * 100)
-        observations, info = env.reset()
+        env = make_cyborg_env(seed=seed + ep * 100, bank_match_size=32)
+        observations, _ = env.reset()
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)
@@ -436,7 +487,7 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
             actions = {}
             for agent_idx, agent_name in enumerate(env.agents):
                 obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
-                mask = _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const)
+                mask = _live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const)
                 pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
 
                 if deterministic:
@@ -450,7 +501,7 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
                 ep_actions.append(action_idx)
                 all_actions_by_agent[agent_idx].append(action_idx)
 
-            observations, rewards, _, _, info = env.step(actions=actions)
+            observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
             total += mean(rewards.values())
 
         elapsed = time.perf_counter() - t0
@@ -459,6 +510,167 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
         episode_rewards.append(total)
 
     return np.array(all_actions), np.array(episode_rewards), all_actions_by_agent
+
+
+def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+    """Run paired independent episodes with live CybORG red-choice sync into JAX.
+
+    Blue actions are still chosen independently from each environment's own
+    observations. Red stochastic choices are synced from CybORG step-by-step so
+    any remaining drift is due to simulator state/observation differences rather
+    than different RNG engines.
+    """
+
+    all_jax_actions = []
+    all_cyborg_actions = []
+    jax_rewards = []
+    cyborg_rewards = []
+    jax_results = []
+    cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+
+    for ep in range(num_episodes):
+        t0 = time.perf_counter()
+        ep_seed = seed + ep * 100
+
+        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
+        key = jax.random.PRNGKey(ep_seed)
+        jax_obs, jax_state = jax_env.reset(key)
+
+        cyborg_env = make_cyborg_env(seed=ep_seed, bank_match_size=32)
+        cyborg_obs, _ = cyborg_env.reset()
+        inner = cyborg_env.env
+        const = build_const_from_cyborg(inner)
+        mappings = build_mappings_from_cyborg(inner)
+        red_recorder = RedPolicyRecorder()
+        red_recorder.install(inner, mappings)
+
+        ep_jax_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_step_rewards = []
+        ep_trajectory = []
+        jax_total = 0.0
+        cyborg_total = 0.0
+        first_action_diff = None
+        first_state_diff = None
+
+        for step in range(500):
+            key, step_key = jax.random.split(key)
+            act_keys = jax.random.split(key, NUM_BLUE_AGENTS + 1)
+
+            jax_blue_actions = {}
+            cyborg_blue_actions = {}
+            cyborg_actions = {}
+
+            for agent_idx in range(NUM_BLUE_AGENTS):
+                jax_agent = f"blue_{agent_idx}"
+                cyborg_agent = f"blue_agent_{agent_idx}"
+
+                jax_mask = compute_blue_action_mask(jax_state.const, agent_idx, jax_state.state)
+                jax_pi = policy_dist(policy, params, policy_kind, jax_obs[jax_agent], jax_mask)
+                if deterministic:
+                    jax_action = int(jnp.argmax(jax_pi.logits))
+                else:
+                    jax_action = int(jax_pi.sample(seed=act_keys[agent_idx]))
+
+                cyborg_mask = _live_blue_wrapper_mask_in_jax_space(cyborg_env, cyborg_agent, mappings, const)
+                cyborg_pi = policy_dist(
+                    policy,
+                    params,
+                    policy_kind,
+                    jnp.array(cyborg_obs[cyborg_agent], dtype=jnp.float32),
+                    cyborg_mask,
+                )
+                if deterministic:
+                    cyborg_action = int(jnp.argmax(cyborg_pi.logits))
+                else:
+                    cyborg_action = int(cyborg_pi.sample(seed=act_keys[agent_idx]))
+
+                jax_blue_actions[jax_agent] = jnp.int32(jax_action)
+                cyborg_blue_actions[agent_idx] = cyborg_action
+                cyborg_actions[cyborg_agent] = jax_blue_to_cyborg(cyborg_action, agent_idx, mappings, const=const)
+
+                ep_jax_actions_by_agent[agent_idx].append(jax_action)
+                ep_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
+                cyborg_actions_by_agent[agent_idx].append(cyborg_action)
+
+            if first_action_diff is None:
+                action_vec_jax = [int(jax_blue_actions[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]
+                action_vec_cy = [int(cyborg_blue_actions[i]) for i in range(NUM_BLUE_AGENTS)]
+                if action_vec_jax != action_vec_cy:
+                    first_action_diff = (step, action_vec_jax, action_vec_cy)
+
+            cyborg_obs, cyborg_step_rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(cyborg_env, actions=cyborg_actions)
+            cyborg_step_reward = float(mean(cyborg_step_rewards.values()))
+            cyborg_total += cyborg_step_reward
+
+            jax_state = _inject_live_red_policy_step(jax_state, red_recorder)
+            jax_obs, jax_state, jax_step_rewards, _, _ = jax_env.step(step_key, jax_state, jax_blue_actions)
+            jax_step_reward = float(np.mean([float(jax_step_rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
+            jax_total += jax_step_reward
+
+            if first_state_diff is None:
+                diffs = compare_snapshots(
+                    extract_cyborg_snapshot(inner, mappings),
+                    extract_jax_snapshot(jax_state.state, jax_state.const, mappings),
+                )
+                if diffs:
+                    first_state_diff = (step, diffs[0])
+
+            ep_step_rewards.append(jax_step_reward)
+            st = jax_state.state
+            active = np.array(jax_state.const.host_active, dtype=bool)
+            compromised = np.array(st.host_compromised)
+            ep_trajectory.append(
+                StepSnapshot(
+                    reward=jax_step_reward,
+                    cumulative_reward=jax_total,
+                    hosts_compromised_user=int(np.sum((compromised == COMPROMISE_USER) & active)),
+                    hosts_compromised_priv=int(np.sum((compromised == COMPROMISE_PRIVILEGED) & active)),
+                    red_sessions_total=int(np.sum(np.array(st.red_sessions)[:NUM_RED_AGENTS])),
+                    mission_phase=int(st.mission_phase),
+                )
+            )
+
+        elapsed = time.perf_counter() - t0
+        print(f"  Independent ep {ep + 1}: JAX={jax_total:.1f} CybORG={cyborg_total:.1f} ({elapsed:.1f}s)")
+        if first_action_diff is None:
+            print("    first blue action diff: none")
+        else:
+            step_idx, jv, cv = first_action_diff
+            print(f"    first blue action diff: step {step_idx} jax={jv} cyborg={cv}")
+        if first_state_diff is None:
+            print("    first state diff: none")
+        else:
+            step_idx, diff = first_state_diff
+            print(
+                "    first state diff: "
+                f"step {step_idx} {diff.field_name} {diff.host_or_agent} "
+                f"cyborg={diff.cyborg_value} jax={diff.jax_value}"
+            )
+
+        flat_jax_actions = [a for step_actions in zip(*ep_jax_actions_by_agent) for a in step_actions]
+        flat_cyborg_actions = [a for step_actions in zip(*ep_cyborg_actions_by_agent) for a in step_actions]
+        all_jax_actions.extend(flat_jax_actions)
+        all_cyborg_actions.extend(flat_cyborg_actions)
+        jax_rewards.append(jax_total)
+        cyborg_rewards.append(cyborg_total)
+        jax_results.append(
+            EpisodeResult(
+                actions_by_agent=ep_jax_actions_by_agent,
+                rewards=ep_step_rewards,
+                cumulative_reward=jax_total,
+                trajectory=ep_trajectory,
+            )
+        )
+
+    return (
+        np.array(all_jax_actions),
+        np.array(jax_rewards),
+        jax_results,
+        np.array(all_cyborg_actions),
+        np.array(cyborg_rewards),
+        cyborg_actions_by_agent,
+    )
 
 
 def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
@@ -713,7 +925,7 @@ def run_random_baseline(episodes=5, seed=42):
     totals = []
     for ep in range(episodes):
         env = make_cyborg_env(seed=seed + ep)
-        _, info = env.reset()
+        _, _ = env.reset()
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)
@@ -721,11 +933,11 @@ def run_random_baseline(episodes=5, seed=42):
         for _ in range(500):
             actions = {}
             for agent_idx, agent_name in enumerate(env.agents):
-                mask = np.array(_live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const), dtype=bool)
+                mask = np.array(_live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const), dtype=bool)
                 valid = np.where(mask)[0]
                 action_idx = int(rng.choice(valid))
                 actions[agent_name] = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
-            _, rewards, _, _, info = env.step(actions=actions)
+            _, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
             total += mean(rewards.values())
         totals.append(total)
     return mean(totals)
@@ -733,7 +945,7 @@ def run_random_baseline(episodes=5, seed=42):
 
 def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
     env = make_cyborg_env(seed=seed)
-    observations, info = env.reset()
+    observations, _ = env.reset()
     inner = env.env
     const = build_const_from_cyborg(inner)
     mappings = build_mappings_from_cyborg(inner)
@@ -743,7 +955,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
 
     print("\nMASK VALIDATION (step 0):")
     for agent_idx, agent_name in enumerate(env.agents):
-        mask = np.array(_live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const), dtype=bool)
+        mask = np.array(_live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const), dtype=bool)
         valid_indices = np.where(mask)[0]
         agent_subnets = BLUE_AGENT_SUBNETS[agent_idx]
         agent_subnet_ids = [SUBNET_IDS[s] for s in agent_subnets]
@@ -778,7 +990,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
         step_actions_desc = []
         for agent_idx, agent_name in enumerate(env.agents):
             obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
-            mask = _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const)
+            mask = _live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const)
             mask_np = np.array(mask, dtype=bool)
 
             pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
@@ -794,7 +1006,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
                 f"  {agent_name}: idx={action_idx:4d} [{valid_str:7s}] -> {desc:45s} -> CybORG:{cyborg_cls}"
             )
 
-        observations, rewards, _, _, info = env.step(actions=actions)
+        observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
         step_reward = mean(rewards.values())
         total += step_reward
 
@@ -853,9 +1065,18 @@ def main():
 
     if args.independent_rollouts:
         print("\n" + "=" * 70)
-        print("JAXBORG ROLLOUT")
+        print("INDEPENDENT ROLLOUTS")
         print("=" * 70)
-        jax_actions, jax_rewards, jax_results = rollout_jaxborg(
+        print("Blue actions are chosen independently in each env.")
+        print("Red stochastic choices are synced live from CybORG into JAX.")
+        (
+            jax_actions,
+            jax_rewards,
+            jax_results,
+            cyborg_actions,
+            cyborg_rewards,
+            cyborg_actions_by_agent,
+        ) = rollout_independent_transfer_synced_red(
             policy,
             params,
             policy_kind,
@@ -869,13 +1090,6 @@ def main():
         ]
         print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
-
-        print("\n" + "=" * 70)
-        print("CYBORG ROLLOUT")
-        print("=" * 70)
-        cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
-            policy, params, policy_kind, args.episodes, deterministic, seed=args.seed
-        )
         print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
     else:
         if not deterministic:
