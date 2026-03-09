@@ -882,17 +882,28 @@ class CC4DifferentialHarness:
         if usage.choice_sizes or usage.integer_ranges or not usage.random_calls:
             return None
 
+        controller = self.cyborg_env.environment_controller
+        observations = controller.observation.get(f"red_agent_{usage.agent_idx}")
+        detected = False
+        if observations is not None:
+            for obs in observations.observations:
+                for host_data in obs.data.values():
+                    if not isinstance(host_data, dict):
+                        continue
+                    for process in host_data.get("Processes", []):
+                        properties = process.get("Properties", [])
+                        if "decoy" in properties:
+                            detected = True
+                            break
+                    if detected:
+                        break
+                if detected:
+                    break
+
         _, _, target_host = decode_red_action(action_idx, usage.agent_idx, self.jax_const)
         target_host = int(target_host)
         hostname = self.mappings.idx_to_hostname.get(target_host)
         if hostname is None:
-            return None
-        target = self.cyborg_env.environment_controller.state.hosts.get(hostname)
-        if target is None:
-            return None
-
-        detected = self._cyborg_discover_deception_detected(target.processes, usage.random_calls)
-        if detected is None:
             return None
 
         has_decoys = bool(np.any(np.asarray(self.jax_state.host_decoys[target_host])))

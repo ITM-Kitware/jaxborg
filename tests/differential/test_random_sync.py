@@ -102,3 +102,16 @@ def test_detection_random_sync_handles_failed_scan_trace_with_random_blue_action
     )
 
     assert report is None
+
+
+def test_detection_random_sync_handles_long_discover_deception_trace():
+    report = run_differential_fuzz(
+        seeds=[5],
+        max_steps_per_seed=274,
+        verbose=False,
+        strict_random_sync=True,
+        blue_agent="random",
+        blue_action_source="cyborg_policy",
+    )
+
+    assert report is None
