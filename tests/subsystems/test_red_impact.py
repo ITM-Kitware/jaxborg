@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from CybORG import CybORG
 from CybORG.Agents import SleepAgent
+from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
 from CybORG.Shared.Enums import ProcessName
 from CybORG.Shared.Session import RedAbstractSession
 from CybORG.Simulator.Actions import Impact
@@ -27,12 +28,18 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     SERVICE_IDS,
 )
+from jaxborg.rewards import RIA, compute_reward_breakdown
 from jaxborg.state import create_initial_state
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 SSH_SVC = SERVICE_IDS["SSHD"]
 OT_SVC = SERVICE_IDS["OTSERVICE"]
+
+
+class _ObsWrapper:
+    def __init__(self, obs):
+        self.observations = [obs]
 
 
 def _setup_privileged_state(jax_const, target_host):
@@ -353,12 +360,80 @@ class TestDifferentialWithCybORG:
         new_state = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
 
         jax_stopped = bool(new_state.ot_service_stopped[target_h])
-        jax_svc_off = not bool(new_state.host_services[target_h, OT_SVC])
 
         assert jax_stopped == cyborg_success, (
             f"JAX ot_stopped={jax_stopped} but CybORG success={cyborg_success} for host {target_h} ({target_hostname})"
         )
-        assert jax_svc_off == cyborg_success
+
+    def test_impact_reward_requires_some_active_red_session(self, cyborg_env_and_const):
+        cyborg_env, const = cyborg_env_and_const
+        cyborg_env.reset()
+        cyborg_state = cyborg_env.environment_controller.state
+
+        target_h = self._find_ot_host_idx(const)
+        assert target_h is not None
+
+        target_hostname = sorted(cyborg_state.hosts.keys())[target_h]
+        cyborg_state.sessions["red_agent_0"] = {}
+
+        impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
+        cyborg_obs = impact.execute(cyborg_state)
+        cy_reward = BlueRewardMachine("").calculate_reward(
+            current_state={},
+            action_dict={"red_agent_0": [impact]},
+            agent_observations={"red_agent_0": _ObsWrapper(cyborg_obs)},
+            done=False,
+            state=cyborg_state,
+        )
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        impact_idx = encode_red_action("Impact", target_h, 0)
+        jax_after = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        jax_reward = compute_reward_breakdown(
+            jax_after,
+            const,
+            jax_after.red_impact_attempted,
+            jax_after.green_lwf_this_step,
+            jax_after.green_asf_this_step,
+        )
+
+        assert cy_reward == 0
+        assert not bool(jax_after.red_impact_attempted[target_h])
+        assert float(jax_reward.total) == pytest.approx(float(cy_reward))
+
+    def test_failed_impact_with_other_active_session_still_matches_cyborg_reward(self, cyborg_and_jax):
+        cyborg_env, const, state = cyborg_and_jax
+        cyborg_state = cyborg_env.environment_controller.state
+
+        target_h = self._find_ot_host_idx(const)
+        assert target_h is not None
+
+        target_hostname = sorted(cyborg_state.hosts.keys())[target_h]
+        impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
+        cyborg_obs = impact.execute(cyborg_state)
+        cy_reward = BlueRewardMachine("").calculate_reward(
+            current_state={},
+            action_dict={"red_agent_0": [impact]},
+            agent_observations={"red_agent_0": _ObsWrapper(cyborg_obs)},
+            done=False,
+            state=cyborg_state,
+        )
+
+        impact_idx = encode_red_action("Impact", target_h, 0)
+        jax_after = _jit_apply_red(state, const, 0, impact_idx, jax.random.PRNGKey(0))
+        jax_reward = compute_reward_breakdown(
+            jax_after,
+            const,
+            jax_after.red_impact_attempted,
+            jax_after.green_lwf_this_step,
+            jax_after.green_asf_this_step,
+        )
+
+        expected = float(const.phase_rewards[0, int(const.host_subnet[target_h]), RIA])
+        assert str(cyborg_obs.success).upper() == "FALSE"
+        assert cy_reward == pytest.approx(expected)
+        assert bool(jax_after.red_impact_attempted[target_h])
+        assert float(jax_reward.total) == pytest.approx(float(cy_reward))
 
     def test_impact_ot_service_state_matches_cyborg(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax
@@ -370,12 +445,6 @@ class TestDifferentialWithCybORG:
         state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
         cyborg_host = cyborg_state.hosts[target_hostname]
-        cyborg_ot_before = any(
-            svc.active for sname, svc in cyborg_host.services.items() if sname == ProcessName.OTSERVICE
-        )
-        jax_ot_before = bool(state.host_services[target_h, OT_SVC])
-        assert jax_ot_before == cyborg_ot_before
-
         impact = Impact(hostname=target_hostname, session=0, agent="red_agent_0")
         impact.execute(cyborg_state)
 

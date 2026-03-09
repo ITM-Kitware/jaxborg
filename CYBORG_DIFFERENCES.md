@@ -26,12 +26,13 @@ exploit types, so this has no effect on FSM-driven training via `FsmRedCC4Env`.
 These are CybORG behaviors that look like bugs but are intentionally replicated in
 JAXborg for parity. Do not "fix" them in JAXborg without also verifying CybORG changed.
 
-### Impact rewards penalize all attempts, not just successes
+### Impact rewards penalize failed attempts only while the red agent still has a session
 
 `BlueRewardMachine` line 118: `elif 'red' in agent_name and success and isinstance(action, Impact)`.
 `success` is a `TernaryEnum` where `bool(TernaryEnum.FALSE)` is `True`, so ALL Impact
-actions that reach execution get penalized regardless of outcome. JAXborg matches via
-`red_impact_attempted` flag set unconditionally in `apply_impact`.
+actions with at least one active red session still get penalized regardless of outcome.
+If the red agent has no active sessions, `BlueRewardMachine` skips the reward entirely.
+JAXborg matches via `red_impact_attempted` only when the red agent still has a session.
 
 - CybORG: `Shared/BlueRewardMachine.py:118`
 - JAXborg: `src/jaxborg/actions/red_impact.py`, `src/jaxborg/env.py`

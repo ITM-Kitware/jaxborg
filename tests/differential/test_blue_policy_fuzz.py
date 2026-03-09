@@ -186,6 +186,18 @@ def test_reward_parity_when_green_local_work_selects_decoy_service():
     assert report is None
 
 
+def test_reward_parity_handles_sessionless_impact_trace():
+    report = run_differential_fuzz(
+        seeds=[0],
+        max_steps_per_seed=355,
+        blue_agent="random",
+        blue_action_source="cyborg_policy",
+        strict_random_sync=True,
+        verbose=False,
+    )
+    assert report is None
+
+
 def test_generic_deploy_decoy_reusing_service_name_matches_jax():
     target_hostname = "operational_zone_a_subnet_server_host_0"
     blue_cls = _make_scripted_blue_agent(

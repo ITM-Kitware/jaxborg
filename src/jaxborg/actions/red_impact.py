@@ -15,16 +15,18 @@ def apply_impact(
     target_host: chex.Array,
 ) -> CC4State:
     is_active = const.host_active[target_host]
+    agent_has_session = jnp.any(state.red_sessions[agent_id] & const.host_active)
     has_session = state.red_sessions[agent_id, target_host]
     is_privileged = state.red_privilege[agent_id, target_host] >= COMPROMISE_PRIVILEGED
     has_ot = state.host_services[target_host, OTSERVICE_IDX]
     has_bound_source = select_bound_source_host(state, const, agent_id) >= 0
     success = is_active & has_session & is_privileged & has_ot & has_bound_source
 
-    # CybORG BlueRewardMachine penalizes ALL Impact attempts, not just successes,
-    # because bool(TernaryEnum.FALSE) is True. See CYBORG_DIFFERENCES.md.
+    # CybORG BlueRewardMachine penalizes failed Impact actions when the red
+    # agent still has an active session, because bool(TernaryEnum.FALSE) is
+    # True. Sessionless pending Impacts are not penalized.
     red_impact_attempted = jnp.where(
-        is_active,
+        is_active & agent_has_session,
         state.red_impact_attempted.at[target_host].set(True),
         state.red_impact_attempted,
     )
