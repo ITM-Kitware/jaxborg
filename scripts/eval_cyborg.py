@@ -138,7 +138,20 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return []
 
 
-def _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const):
+def _build_action_lookup(env, agent_name, mappings, const):
+    """Precompute cyborg_action_idx -> list[jax_idx] for one agent. Call once per episode."""
+    controller = env.env.environment_controller
+    cyborg_actions = env.actions(agent_name)
+    cyborg_labels = env.action_labels(agent_name)
+    cyborg_state = controller.state
+    lookup = []
+    for action, label in zip(cyborg_actions, cyborg_labels):
+        jax_indices = _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state)
+        lookup.append(jax_indices)
+    return lookup
+
+
+def _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const, lookup=None):
     controller = env.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
@@ -152,15 +165,21 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const):
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
     cyborg_mask = env.get_action_space(agent_name)["mask"]
-    cyborg_actions = env.actions(agent_name)
-    cyborg_labels = env.action_labels(agent_name)
-    cyborg_state = controller.state
 
-    for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
-        if not valid:
-            continue
-        for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
-            jax_mask[jax_idx] = True
+    if lookup is not None:
+        for cyborg_idx, valid in enumerate(cyborg_mask):
+            if valid:
+                for jax_idx in lookup[cyborg_idx]:
+                    jax_mask[jax_idx] = True
+    else:
+        cyborg_actions = env.actions(agent_name)
+        cyborg_labels = env.action_labels(agent_name)
+        cyborg_state = controller.state
+        for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
+            if not valid:
+                continue
+            for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
+                jax_mask[jax_idx] = True
 
     return jnp.array(jax_mask)
 
@@ -174,25 +193,12 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     )
 
     observations = {
-        agent: wrapper.observation_change(agent, obs[agent])
-        for agent in wrapper.possible_agents
-        if agent in obs
+        agent: wrapper.observation_change(agent, obs[agent]) for agent in wrapper.possible_agents if agent in obs
     }
-    rewards = {
-        agent: sum(rews[agent].values())
-        for agent in wrapper.possible_agents
-        if agent in rews
-    }
-    terminated = {
-        agent: bool(dones[agent])
-        for agent in wrapper.possible_agents
-        if agent in dones
-    }
+    rewards = {agent: sum(rews[agent].values()) for agent in wrapper.possible_agents if agent in rews}
+    terminated = {agent: bool(dones[agent]) for agent in wrapper.possible_agents if agent in dones}
     truncated = terminated.copy()
-    info = {
-        agent: {"action_mask": wrapper.get_action_space(agent)["mask"]}
-        for agent in wrapper.possible_agents
-    }
+    info = {agent: {"action_mask": wrapper.get_action_space(agent)["mask"]} for agent in wrapper.possible_agents}
     wrapper.agents = [agent for agent in wrapper.possible_agents if not terminated.get(agent, False)]
     return observations, rewards, terminated, truncated, info
 
@@ -203,6 +209,9 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
     const = build_const_from_cyborg(inner_cyborg)
     mappings = build_mappings_from_cyborg(inner_cyborg)
 
+    # Precompute action translation tables (once per episode, ~600x faster per step)
+    action_lookups = {agent_name: _build_action_lookup(env, agent_name, mappings, const) for agent_name in env.agents}
+
     total = 0.0
     for _ in range(EPISODE_LENGTH):
         actions = {}
@@ -210,7 +219,7 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
             obs_vec = observations[agent_name]
             obs_jax = jnp.array(obs_vec, dtype=jnp.float32)
 
-            mask = _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const)
+            mask = _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const, lookup=action_lookups[agent_name])
 
             pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
 

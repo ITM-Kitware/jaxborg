@@ -504,7 +504,8 @@ def main(cfg):
     config = OmegaConf.to_container(cfg)
     mlflow_enabled = bool(config.get("MLFLOW_ENABLED", True))
 
-    save_dir = EXP_DIR / "ippo_cc4"
+    timestamp = time.strftime("%Y%m%d_%H%M")
+    save_dir = EXP_DIR / f"ippo_cc4_{timestamp}"
     save_dir.mkdir(parents=True, exist_ok=True)
 
     if mlflow_enabled:
