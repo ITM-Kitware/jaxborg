@@ -16,14 +16,12 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_NONE,
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
-from jaxborg.actions.pids import first_valid_pid, pid_row_contains
 from jaxborg.actions.red_common import (
     apply_red_session_check,
     scan_sources,
     select_bound_source_host,
     select_scan_execution_source_host,
 )
-from jaxborg.constants import ABSTRACT_RANK_NONE
 from jaxborg.state import CC4Const, CC4State
 
 
@@ -103,43 +101,25 @@ def process_red_with_duration(
     queued_source_binding_host = jnp.where(
         source_is_bound & (pending_source_kind == PENDING_SOURCE_KIND_HOST),
         pending_source_host,
-        jnp.where(queued_source_kind == PENDING_SOURCE_KIND_HOST, queued_source_host, jnp.int32(-1)),
+        jnp.where(
+            (queued_source_kind == PENDING_SOURCE_KIND_HOST)
+            | (queued_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING),
+            queued_source_host,
+            jnp.int32(-1),
+        ),
     )
     effective_source_kind = jnp.where(is_busy, pending_source_kind, queued_source_kind)
     effective_source_binding_host = jnp.where(is_busy, pending_source_host, queued_source_binding_host)
     anchor_source_host = bound_source_host
     effective_source_host = jnp.where(
-        is_scan_action
-        & (
-            (effective_source_kind == PENDING_SOURCE_KIND_NONE)
-            | (effective_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING)
-        )
-        & (anchor_source_host >= 0),
+        is_scan_action & (effective_source_binding_host < 0) & (anchor_source_host >= 0),
         anchor_source_host,
         effective_source_binding_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
-    source_is_abstract_host = state.red_session_is_abstract[agent_id, source_idx]
-    source_abstract_rank = state.red_abstract_host_rank[agent_id, source_idx]
-    source_pid_row = state.red_session_pids[agent_id, source_idx]
-    source_abstract_pid_row = state.red_session_abstract_pids[agent_id, source_idx]
-    source_primary_pid = first_valid_pid(source_pid_row)
-    has_pid_identity = source_primary_pid >= 0
-    has_abstract_pid_tracking = jnp.any(source_abstract_pid_row >= 0)
-    primary_is_abstract_by_pid = pid_row_contains(source_abstract_pid_row, source_primary_pid)
-    primary_is_abstract_by_rank = source_is_abstract_host & (
-        (source_abstract_rank == jnp.int32(0)) | (source_abstract_rank == jnp.int32(ABSTRACT_RANK_NONE))
-    )
-    source_is_bound_session_abstract = jnp.where(
-        has_pid_identity & has_abstract_pid_tracking,
-        primary_is_abstract_by_pid,
-        primary_is_abstract_by_rank,
-    )
-    source_is_abstract = jnp.where(
-        effective_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING,
-        source_is_bound_session_abstract,
-        source_is_abstract_host,
-    )
+    # CybORG's session 0 is always RedAbstractSession in CC4 FSM gameplay.
+    # The per-host abstract flag is sufficient for scan source validation.
+    source_is_abstract = state.red_session_is_abstract[agent_id, source_idx]
     source_valid = (
         (effective_source_host >= 0)
         & state.red_sessions[agent_id, source_idx]

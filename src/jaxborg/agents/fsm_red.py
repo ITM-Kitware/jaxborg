@@ -305,7 +305,11 @@ def _compute_scan_source_binding(state, const, agent_id, action):
         ),
         PENDING_SOURCE_KIND_NONE,
     )
-    source_host = jnp.int32(-1)
+    source_host = jnp.where(
+        is_scan_action & (bound_anchor_source >= 0),
+        bound_anchor_source,
+        jnp.int32(-1),
+    )
     return source_kind, source_host
 
 
