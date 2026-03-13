@@ -4,6 +4,7 @@
 
 import argparse
 import json
+import os
 import pickle
 import sys
 import time
@@ -66,7 +67,7 @@ from jaxborg.translate import (
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
-EXP_DIR = ROOT / "jaxborg-exp"
+EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 ACTION_TYPE_NAMES = [
     "Sleep",

@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -72,7 +73,7 @@ def plot(jax_path, sb3_log_dir, output, num_agents=5):
 
 
 if __name__ == "__main__":
-    exp_dir = Path(__file__).resolve().parents[2].parent / "jaxborg-exp"
+    exp_dir = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
     parser = argparse.ArgumentParser(description="Plot reward curve comparison")
     parser.add_argument("--jax-metrics", type=Path, default=exp_dir / "ippo_cc4" / "metrics.jsonl")

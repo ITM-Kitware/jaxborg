@@ -6,6 +6,7 @@ Fully JIT'd: rollout collection via jax.lax.scan + PPO update in one compiled fn
 """
 
 import json
+import os
 import pickle
 import time
 from pathlib import Path
@@ -496,7 +497,7 @@ def make_train(config):
     return env, network, init_obs, init_env_state, _init_train_state, _collect_and_update
 
 
-EXP_DIR = Path(__file__).resolve().parent.parent.parent / "jaxborg-exp"
+EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
 @hydra.main(config_path="configs", config_name="ippo_cc4", version_base=None)

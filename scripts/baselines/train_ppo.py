@@ -175,7 +175,7 @@ def train(total_timesteps, learning_rate, n_steps, batch_size, seed, model_save_
     env.close()
 
 
-EXP_DIR = Path(__file__).resolve().parents[2].parent / "jaxborg-exp"
+EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
 @hydra.main(config_path="../configs", config_name="ppo_baseline", version_base=None)

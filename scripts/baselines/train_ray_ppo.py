@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import time
 import warnings
 from pathlib import Path
@@ -20,7 +21,7 @@ from ray.tune import register_env
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-EXP_DIR = Path(__file__).resolve().parents[2].parent / "jaxborg-exp"
+EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 POLICY_MAP = {agent_id: f"Agent{i}" for i, agent_id in enumerate(AGENT_IDS)}

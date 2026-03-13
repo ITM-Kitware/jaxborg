@@ -38,7 +38,7 @@ uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
 uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
 ```
 
-Training output goes to `../jaxborg-exp/`.
+Training output goes to `$JAXBORG_EXP_DIR` (defaults to `./jaxborg-exp` relative to cwd). Set this in your shell profile.
 
 **Do NOT use pytest-xdist (`-n auto`, `-n 4`, etc.).** Each worker loads JAX + CybORG into a separate process, which exhausts WSL memory and crashes the system. Always run tests serially.
 
