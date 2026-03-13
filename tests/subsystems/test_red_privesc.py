@@ -504,6 +504,7 @@ class TestDifferentialWithCybORG:
             .at[0, abstract_host]
             .set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[0].set(False),
             red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
         )
@@ -750,6 +751,151 @@ class TestDifferentialWithCybORG:
 
         assert jax_success == cy_success
         assert int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+    def test_privesc_fails_when_primary_session_is_nonabstract_despite_abstract_sessions_on_anchor(
+        self, cyborg_and_jax
+    ):
+        """Gap 2 regression: CybORG PrivilegeEscalate checks isinstance(session_0, RedAbstractSession).
+
+        When RedSessionCheck promotes a non-abstract Session to session 0,
+        CybORG's privesc fails even though the anchor host has other abstract
+        sessions.  JAX must track whether the primary session is abstract
+        separately from whether the host has abstract sessions.
+
+        Scenario (seed=7, step=98):
+          red_agent_1 anchor = host X (restricted_zone_a_subnet_server_host_0)
+          session 0 on host X is type=Session (non-abstract, promoted by RedSessionCheck)
+          other sessions on host X ARE RedAbstractSession
+          privesc on host Y should FAIL because session 0 is not abstract
+        """
+        cyborg_env, const, state = cyborg_and_jax
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        red_name = "red_agent_0"
+        source_host = int(const.red_start_hosts[0])
+        target_host = next(
+            h
+            for h in range(int(const.num_hosts))
+            if bool(const.host_active[h])
+            and not bool(const.host_is_router[h])
+            and h != source_host
+            and cy_state.hosts[sorted_hosts[h]].os_type.name == "LINUX"
+        )
+        source_hostname = sorted_hosts[source_host]
+        target_hostname = sorted_hosts[target_host]
+
+        # CybORG setup: session 0 is RedAbstractSession on source_host (default).
+        # Add a regular Session to source_host, then promote it to session 0
+        # mimicking RedSessionCheck._choose_new_primary_session behavior.
+        cy_state.hosts[source_hostname].processes.append(
+            Process(process_name="cmd.sh", pid=7001, username="user")
+        )
+        non_abstract = Session(
+            ident=None,
+            hostname=source_hostname,
+            username="user",
+            agent=red_name,
+            parent=0,
+            session_type="shell",
+            pid=7001,
+        )
+        cy_state.add_session(non_abstract)
+        non_abstract_sid = non_abstract.ident
+
+        # Also add another abstract session on source_host
+        cy_state.hosts[source_hostname].processes.append(
+            Process(process_name="cmd.sh", pid=7002, username="user")
+        )
+        abstract_sess = RedAbstractSession(
+            ident=None,
+            hostname=source_hostname,
+            username="user",
+            agent=red_name,
+            parent=0,
+            session_type="shell",
+            pid=7002,
+        )
+        cy_state.add_session(abstract_sess)
+
+        # Add a session on target_host so privesc has something to escalate
+        target_sess = Session(
+            ident=None,
+            hostname=target_hostname,
+            username="user",
+            agent=red_name,
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+        cy_state.add_session(target_sess)
+
+        # Promote non-abstract session to id 0 (RedSessionCheck behavior):
+        # 1. Remove old session 0
+        old_session_0 = cy_state.sessions[red_name].pop(0)
+        old_host_obj = cy_state.hosts[old_session_0.hostname]
+        if 0 in old_host_obj.sessions[red_name]:
+            old_host_obj.sessions[red_name].remove(0)
+
+        # 2. Give old session 0 a new id and re-add
+        new_id_for_old = non_abstract_sid + 100
+        old_session_0.ident = new_id_for_old
+        old_session_0.parent = 0
+        cy_state.sessions[red_name][new_id_for_old] = old_session_0
+        old_host_obj.sessions[red_name].append(new_id_for_old)
+
+        # 3. Remove non-abstract session from its old id and promote to 0
+        promoted = cy_state.sessions[red_name].pop(non_abstract_sid)
+        if non_abstract_sid in cy_state.hosts[source_hostname].sessions[red_name]:
+            cy_state.hosts[source_hostname].sessions[red_name].remove(non_abstract_sid)
+        promoted.ident = 0
+        promoted.parent = None
+        cy_state.sessions[red_name][0] = promoted
+        cy_state.hosts[source_hostname].sessions[red_name].insert(0, 0)
+
+        # Verify CybORG session 0 is NOT abstract
+        session_0 = cy_state.sessions[red_name][0]
+        assert not isinstance(session_0, RedAbstractSession), (
+            f"Session 0 should be non-abstract Session, got {type(session_0).__name__}"
+        )
+
+        # CybORG privesc should fail because session 0 is not RedAbstractSession
+        cy_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent=red_name)
+        cy_action.duration = 1
+        cy_result = cy_action.execute(cy_state)
+        cy_success = str(cy_result.success).upper() == "TRUE"
+        assert not cy_success, "CybORG privesc should fail when session 0 is non-abstract"
+
+        # JAX setup: anchor host has abstract sessions but primary is non-abstract
+        # The host-level red_session_is_abstract is True (host has abstract sessions)
+        # but the primary session is NOT abstract
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, source_host]
+            .set(True)
+            .at[0, target_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[0, source_host]
+            .set(3)  # 1 original abstract + 1 non-abstract + 1 abstract = 3
+            .at[0, target_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host]
+            .set(True),  # host HAS abstract sessions
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[0].set(False),  # primary is non-abstract
+            red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+
+        jax_action = encode_red_action("PrivilegeEscalate", target_host, 0)
+        new_state = _jit_apply_red(state, const, 0, jax_action, jax.random.PRNGKey(0))
+        jax_success = int(new_state.red_privilege[0, target_host]) == COMPROMISE_PRIVILEGED
+
+        # JAX should match CybORG: privesc should FAIL
+        assert jax_success == cy_success, (
+            f"JAX privesc success={jax_success} but CybORG={cy_success}. "
+            f"JAX should fail when primary session is non-abstract, even if anchor host "
+            f"has abstract sessions."
+        )
 
     def test_privesc_random_target_session_choice_matches_cyborg_for_mixed_sessions(self, cyborg_and_jax):
         cyborg_env, const, state = cyborg_and_jax

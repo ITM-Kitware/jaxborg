@@ -716,8 +716,10 @@ class CC4DifferentialHarness:
                 )
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
+        primary_abstract_flags = _extract_primary_is_abstract(cy_state)
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
+            red_primary_is_abstract=primary_abstract_flags,
         )
 
         # --- FSM state updates (shared with FsmRedCC4Env) ---
@@ -1231,3 +1233,20 @@ def _extract_primary_hosts(state, mappings) -> jax.Array:
         if primary is not None and primary.hostname in mappings.hostname_to_idx:
             primary_hosts = primary_hosts.at[r].set(mappings.hostname_to_idx[primary.hostname])
     return primary_hosts
+
+
+def _extract_primary_is_abstract(state) -> jax.Array:
+    """Return per-agent bool: True when CybORG session 0 is RedAbstractSession."""
+    from CybORG.Shared.Session import RedAbstractSession
+
+    flags = jnp.ones((NUM_RED_AGENTS,), dtype=jnp.bool_)
+    for r in range(NUM_RED_AGENTS):
+        sessions = state.sessions.get(f"red_agent_{r}", {})
+        primary = sessions.get(0)
+        if primary is not None:
+            flags = flags.at[r].set(isinstance(primary, RedAbstractSession))
+        else:
+            # No session 0 -> no valid primary; keep True as default (benign;
+            # privesc will fail on other checks when there's no session).
+            pass
+    return flags

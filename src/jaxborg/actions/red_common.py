@@ -61,11 +61,11 @@ def bound_source_is_abstract(
     agent_id: int,
 ) -> chex.Array:
     source_host = select_bound_source_host(state, const, agent_id)
-    source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
-    source_has_abstract = state.red_session_is_abstract[agent_id, source_idx]
-    # CybORG's session 0 is always RedAbstractSession in CC4 FSM gameplay.
-    # Checking the per-host abstract flag is sufficient.
-    return (source_host >= 0) & source_has_abstract
+    # CybORG's PrivilegeEscalate checks isinstance(session_0, RedAbstractSession).
+    # When RedSessionCheck promotes a non-abstract session to session 0, the
+    # host may still have abstract sessions but the primary is not abstract.
+    # Use the per-agent primary-is-abstract flag for this check.
+    return (source_host >= 0) & state.red_primary_is_abstract[agent_id]
 
 
 def can_reach_subnet(
@@ -275,9 +275,22 @@ def apply_red_session_check(
         lambda ranks: ranks,
         state.red_abstract_host_rank,
     )
+    # Track whether the primary session (session 0 equivalent) is abstract.
+    # CybORG's _choose_new_primary_session randomly picks ANY session;
+    # if the host has mixed abstract/non-abstract sessions, the picked one
+    # might not be abstract.  When all sessions are abstract, the primary
+    # is guaranteed abstract; otherwise it may not be.
+    anchor_changed = has_any_sessions & (next_anchor >= 0) & (next_anchor != anchor)
+    new_primary_is_abstract = jnp.where(
+        anchor_changed,
+        # Only guaranteed abstract when every session on the host is abstract
+        next_abstract_count == next_session_count,
+        state.red_primary_is_abstract[agent_id],
+    )
     return state.replace(
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),
         red_abstract_host_rank=red_abstract_host_rank,
+        red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(new_primary_is_abstract),
     )
 
 
