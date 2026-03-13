@@ -430,11 +430,13 @@ class TestDifferentialWithCybORG:
         state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
-        randoms = state.detection_randoms.at[0].set(0.5).at[1].set(0.01)
-        state = state.replace(
+        randoms = const.detection_randoms.at[0].set(0.5).at[1].set(0.01)
+        const = const.replace(
             detection_randoms=randoms,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
+        )
+        state = state.replace(
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SQLInjection", target_h, 0)
         state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))

@@ -455,7 +455,7 @@ class CC4DifferentialHarness:
 
             self.green_recorder = GreenRecorder()
             self.green_recorder.install(self.cyborg_env, self.mappings)
-            self.jax_state = self.jax_state.replace(
+            self.jax_const = self.jax_const.replace(
                 use_green_randoms=jnp.array(True),
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
@@ -648,15 +648,15 @@ class CC4DifferentialHarness:
             self._sync_red_action_randoms(random_sync_report, red_actions)
             self._validate_blue_action_randoms(random_sync_report, controller)
             self.last_random_sync_report = random_sync_report
-            green_randoms = self.jax_state.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
-            red_pid_delta_row = self.jax_state.red_pid_deltas.at[self.jax_state.time].set(
+            green_randoms = self.jax_const.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
+            red_pid_delta_row = self.jax_const.red_pid_deltas.at[self.jax_state.time].set(
                 jnp.array(red_pid_deltas, dtype=jnp.int32)
             )
-            blue_decoy_pid_delta_row = self.jax_state.blue_decoy_pid_deltas.at[self.jax_state.time].set(
+            blue_decoy_pid_delta_row = self.jax_const.blue_decoy_pid_deltas.at[self.jax_state.time].set(
                 jnp.array(blue_decoy_pid_deltas, dtype=jnp.int32)
             )
             detection_count = len(random_sync_report.detection_randoms)
-            detection_randoms = self.jax_state.detection_randoms
+            detection_randoms = self.jax_const.detection_randoms
             # Detection replay is step-local. Reusing the same buffer each step
             # avoids leaking stale prior-step consumption into current-step sync.
             if detection_count:
@@ -670,13 +670,15 @@ class CC4DifferentialHarness:
                     jnp.array(random_sync_report.detection_randoms, dtype=jnp.float32)
                 )
             using_detection_sync = bool(detection_count) and random_sync_report.detection_sync_supported
-            self.jax_state = self.jax_state.replace(
+            self.jax_const = self.jax_const.replace(
                 green_randoms=green_randoms,
                 red_pid_deltas=red_pid_delta_row,
                 blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
                 detection_randoms=detection_randoms,
-                detection_random_index=jnp.array(0, dtype=jnp.int32),
                 use_detection_randoms=jnp.array(using_detection_sync),
+            )
+            self.jax_state = self.jax_state.replace(
+                detection_random_index=jnp.array(0, dtype=jnp.int32),
             )
             if self.strict_random_sync and random_sync_report.has_issues:
                 raise AssertionError(random_sync_report.format(int(self.jax_state.time)))

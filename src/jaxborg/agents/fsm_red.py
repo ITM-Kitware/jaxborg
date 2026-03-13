@@ -214,17 +214,17 @@ def fsm_red_get_action_and_info(
     eligible = discovered & active & (fsm_states != FSM_F)
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
-    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(state.red_policy_randoms.shape[0] - 1))
+    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_policy_randoms.shape[0] - 1))
 
     any_eligible = jnp.any(eligible)
 
     host_probs = jnp.where(eligible, 1.0, 0.0).astype(jnp.float32)
     host_total = jnp.sum(host_probs)
     host_probs = host_probs / jnp.maximum(host_total, 1e-8)
-    host_u = sample_red_policy_random(state, time_idx, agent_id, 0, key1)
+    host_u = sample_red_policy_random(const, time_idx, agent_id, 0, key1)
     recorded_host = _decode_choice_token(host_u, GLOBAL_MAX_HOSTS)
     chosen_host = jax.lax.cond(
-        state.use_red_policy_randoms,
+        const.use_red_policy_randoms,
         lambda _: jnp.where(eligible[recorded_host], recorded_host, _uniform_choice_from_mask(eligible, host_u)),
         lambda _: jax.random.choice(key1, GLOBAL_MAX_HOSTS, p=host_probs),
         operand=None,
@@ -238,10 +238,10 @@ def fsm_red_get_action_and_info(
     action_probs = jnp.where(valid_mask, jnp.maximum(action_probs_raw, 0.0), 0.0)
     action_total = jnp.sum(action_probs)
     action_probs = action_probs / jnp.maximum(action_total, 1e-8)
-    action_u = sample_red_policy_random(state, time_idx, agent_id, 1, key2)
+    action_u = sample_red_policy_random(const, time_idx, agent_id, 1, key2)
     recorded_action = _decode_choice_token(action_u, NUM_FSM_ACTIONS)
     chosen_fsm_action = jax.lax.cond(
-        state.use_red_policy_randoms,
+        const.use_red_policy_randoms,
         lambda _: jnp.where(
             valid_mask[recorded_action],
             recorded_action,
@@ -251,10 +251,10 @@ def fsm_red_get_action_and_info(
         operand=None,
     )
 
-    discover_u = sample_red_policy_random(state, time_idx, agent_id, 2, key3)
+    discover_u = sample_red_policy_random(const, time_idx, agent_id, 2, key3)
     recorded_subnet = _decode_choice_token(discover_u, NUM_SUBNETS)
     discover_subnet = jax.lax.cond(
-        state.use_red_policy_randoms,
+        const.use_red_policy_randoms,
         lambda _: jnp.where(
             const.red_agent_subnets[agent_id, recorded_subnet],
             recorded_subnet,

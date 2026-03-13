@@ -788,9 +788,7 @@ class TestDifferentialWithCybORG:
         # CybORG setup: session 0 is RedAbstractSession on source_host (default).
         # Add a regular Session to source_host, then promote it to session 0
         # mimicking RedSessionCheck._choose_new_primary_session behavior.
-        cy_state.hosts[source_hostname].processes.append(
-            Process(process_name="cmd.sh", pid=7001, username="user")
-        )
+        cy_state.hosts[source_hostname].processes.append(Process(process_name="cmd.sh", pid=7001, username="user"))
         non_abstract = Session(
             ident=None,
             hostname=source_hostname,
@@ -804,9 +802,7 @@ class TestDifferentialWithCybORG:
         non_abstract_sid = non_abstract.ident
 
         # Also add another abstract session on source_host
-        cy_state.hosts[source_hostname].processes.append(
-            Process(process_name="cmd.sh", pid=7002, username="user")
-        )
+        cy_state.hosts[source_hostname].processes.append(Process(process_name="cmd.sh", pid=7002, username="user"))
         abstract_sess = RedAbstractSession(
             ident=None,
             hostname=source_hostname,
@@ -870,16 +866,14 @@ class TestDifferentialWithCybORG:
         # The host-level red_session_is_abstract is True (host has abstract sessions)
         # but the primary session is NOT abstract
         state = state.replace(
-            red_sessions=state.red_sessions.at[0, source_host]
-            .set(True)
-            .at[0, target_host]
-            .set(True),
+            red_sessions=state.red_sessions.at[0, source_host].set(True).at[0, target_host].set(True),
             red_session_count=state.red_session_count.at[0, source_host]
             .set(3)  # 1 original abstract + 1 non-abstract + 1 abstract = 3
             .at[0, target_host]
             .set(1),
-            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host]
-            .set(True),  # host HAS abstract sessions
+            red_session_is_abstract=state.red_session_is_abstract.at[0, source_host].set(
+                True
+            ),  # host HAS abstract sessions
             red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(source_host),
             red_primary_is_abstract=state.red_primary_is_abstract.at[0].set(False),  # primary is non-abstract
             red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),

@@ -64,7 +64,7 @@ def _apply_single_green(
     k1, k2, k3, k4, k5, k_svc, k_rel, k_phish_src, k_pid = jax.random.split(key, 9)
     t = state.time
 
-    action = sample_green_random(state, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
+    action = sample_green_random(const, t, host_idx, 0, k1, int_range=NUM_GREEN_ACTIONS)
 
     active_services = state.host_services[host_idx]
     active_decoys = state.host_decoys[host_idx]
@@ -77,10 +77,10 @@ def _apply_single_green(
     available_tokens = jnp.concatenate([service_tokens, decoy_tokens], axis=0)
     num_available = jnp.sum(active_services.astype(jnp.int32)) + jnp.sum(active_decoys.astype(jnp.int32))
     sorted_tokens = jnp.sort(available_tokens)
-    chosen_token_precomputed = jnp.int32(state.green_randoms[t, host_idx, 1])
-    chosen_token_rng = sorted_tokens[sample_green_random(state, t, host_idx, 1, k_svc, int_range=num_available)]
+    chosen_token_precomputed = jnp.int32(const.green_randoms[t, host_idx, 1])
+    chosen_token_rng = sorted_tokens[sample_green_random(const, t, host_idx, 1, k_svc, int_range=num_available)]
     chosen_token = jax.lax.cond(
-        state.use_green_randoms,
+        const.use_green_randoms,
         lambda _: chosen_token_precomputed,
         lambda _: chosen_token_rng,
         None,
@@ -100,7 +100,7 @@ def _apply_single_green(
         state.host_decoy_reliability[host_idx, chosen_decoy],
         state.host_service_reliability[host_idx, chosen_service],
     )
-    rel_roll = sample_green_random(state, t, host_idx, 2, k_rel, int_range=100)
+    rel_roll = sample_green_random(const, t, host_idx, 2, k_rel, int_range=100)
     work_succeeds = has_service & chosen_valid & (rel_roll < svc_reliability)
 
     # -- GreenLocalWork --
@@ -111,11 +111,11 @@ def _apply_single_green(
         state.green_lwf_this_step,
     )
 
-    fp_roll = sample_green_random(state, t, host_idx, 3, k2)
+    fp_roll = sample_green_random(const, t, host_idx, 3, k2)
     fp_triggered = fp_roll < FP_DETECTION_RATE
     local_fp = (action == GREEN_LOCAL_WORK) & work_succeeds & fp_triggered
 
-    phish_roll = sample_green_random(state, t, host_idx, 4, k3)
+    phish_roll = sample_green_random(const, t, host_idx, 4, k3)
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
@@ -159,7 +159,7 @@ def _apply_single_green(
         state.red_next_abstract_rank.at[red_agent_idx].set(next_abstract_rank + 1),
         state.red_next_abstract_rank,
     )
-    pid_delta = sample_green_random(state, t, host_idx, 7, k_pid, int_range=9) + 1
+    pid_delta = sample_green_random(const, t, host_idx, 7, k_pid, int_range=9) + 1
     new_pid = allocate_host_pid_from_delta(state, const, host_idx, pid_delta)
     red_next_pid = jnp.where(
         phish_creates_session,
@@ -219,11 +219,11 @@ def _apply_single_green(
 
     # In precomputed mode, field 5 stores the actual JAX host index directly
     # (to match CybORG's server ordering). In RNG mode, pick randomly from sorted list.
-    dest_host_precomputed = jnp.int32(state.green_randoms[t, host_idx, 5])
+    dest_host_precomputed = jnp.int32(const.green_randoms[t, host_idx, 5])
     rand_idx_rng = jax.random.randint(k4, (), 0, jnp.maximum(num_reachable, 1))
     dest_host_rng = sorted_servers[rand_idx_rng]
     dest_host = jax.lax.cond(
-        state.use_green_randoms,
+        const.use_green_randoms,
         lambda _: dest_host_precomputed,
         lambda _: dest_host_rng,
         None,
@@ -240,7 +240,7 @@ def _apply_single_green(
     # CybORG only fails GreenAccessService on blocked traffic — the dest service
     # availability check is dead code (method ref not called). See CYBORG_DIFFERENCES.md.
     access_blocked = do_access & is_blocked
-    access_fp_roll = sample_green_random(state, t, host_idx, 6, k5)
+    access_fp_roll = sample_green_random(const, t, host_idx, 6, k5)
     access_fp = do_access & ~is_blocked & (access_fp_roll < FP_DETECTION_RATE)
 
     # CybORG rewards GreenAccessService failures against the source green host's

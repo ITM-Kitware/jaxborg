@@ -332,25 +332,12 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     )
 
     observations = {
-        agent: wrapper.observation_change(agent, obs[agent])
-        for agent in wrapper.possible_agents
-        if agent in obs
+        agent: wrapper.observation_change(agent, obs[agent]) for agent in wrapper.possible_agents if agent in obs
     }
-    rewards = {
-        agent: sum(rews[agent].values())
-        for agent in wrapper.possible_agents
-        if agent in rews
-    }
-    terminated = {
-        agent: bool(dones[agent])
-        for agent in wrapper.possible_agents
-        if agent in dones
-    }
+    rewards = {agent: sum(rews[agent].values()) for agent in wrapper.possible_agents if agent in rews}
+    terminated = {agent: bool(dones[agent]) for agent in wrapper.possible_agents if agent in dones}
     truncated = terminated.copy()
-    info = {
-        agent: {"action_mask": wrapper.get_action_space(agent)["mask"]}
-        for agent in wrapper.possible_agents
-    }
+    info = {agent: {"action_mask": wrapper.get_action_space(agent)["mask"]} for agent in wrapper.possible_agents}
     wrapper.agents = [agent for agent in wrapper.possible_agents if not terminated.get(agent, False)]
     return observations, rewards, terminated, truncated, info
 
@@ -377,8 +364,8 @@ def _inject_live_red_policy_step(env_state, recorder):
     step_idx = int(env_state.state.time)
     step_tokens = jnp.asarray(recorder.extract_step(step_idx), dtype=jnp.float32)
     return env_state.replace(
-        state=env_state.state.replace(
-            red_policy_randoms=env_state.state.red_policy_randoms.at[step_idx].set(step_tokens),
+        const=env_state.const.replace(
+            red_policy_randoms=env_state.const.red_policy_randoms.at[step_idx].set(step_tokens),
             use_red_policy_randoms=jnp.array(True),
         )
     )
@@ -600,7 +587,9 @@ def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_epi
                 if action_vec_jax != action_vec_cy:
                     first_action_diff = (step, action_vec_jax, action_vec_cy)
 
-            cyborg_obs, cyborg_step_rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(cyborg_env, actions=cyborg_actions)
+            cyborg_obs, cyborg_step_rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(
+                cyborg_env, actions=cyborg_actions
+            )
             cyborg_step_reward = float(mean(cyborg_step_rewards.values()))
             cyborg_total += cyborg_step_reward
 

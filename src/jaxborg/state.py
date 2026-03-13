@@ -61,6 +61,18 @@ class CC4Const:
     max_steps: int
     num_hosts: chex.Array  # scalar int32
 
+    # --- Precomputed RNG arrays (read-only during stepping, set at reset) ---
+    green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) float — precomputed green agent randoms
+    use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    red_policy_randoms: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS, 3) float — precomputed FSM choice tokens
+    use_red_policy_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    detection_randoms: chex.Array  # (MAX_DETECTION_RANDOMS,) float — precomputed sequence
+    use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
+    red_pid_deltas: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed Host.create_pid deltas
+    use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed blue decoy pid deltas
+    use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
+
 
 @struct.dataclass
 class CC4State:
@@ -101,9 +113,7 @@ class CC4State:
     green_lwf_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — green LocalWork failed on that source host
     green_asf_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — green AccessService failed from that source host
 
-    detection_randoms: chex.Array  # (MAX_DETECTION_RANDOMS,) float — precomputed sequence
     detection_random_index: chex.Array  # scalar int — next index to consume
-    use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
 
     red_session_sandboxed: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — sandboxed exploit sessions
     red_session_is_abstract: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — True for exploit-created sessions
@@ -118,11 +128,6 @@ class CC4State:
     # pending monitor events
     host_decoy_process_pids: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) int32 — live decoy process pids
 
-    green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) float — precomputed green agent randoms
-    use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    red_policy_randoms: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS, 3) float — precomputed FSM choice tokens encoded in [0,1)
-    use_red_policy_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-
     red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
     red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
     red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
@@ -135,11 +140,6 @@ class CC4State:
     red_pending_fsm_action: chex.Array  # (NUM_RED_AGENTS,) int32 — stored FSM action type for deferred actions
     red_pending_target_host: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target host for deferred actions
     red_pending_target_subnet: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target subnet for deferred discover
-
-    red_pid_deltas: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed Host.create_pid deltas
-    use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed blue decoy pid deltas
-    use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
 
     red_impact_attempted: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — any red Impact reached execution this step
 
@@ -178,6 +178,20 @@ def create_initial_const() -> CC4Const:
         comms_policy=jnp.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         max_steps=MAX_STEPS,
         num_hosts=jnp.int32(0),
+        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        use_green_randoms=jnp.array(False),
+        red_policy_randoms=jnp.full(
+            (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
+            0.5,
+            dtype=jnp.float32,
+        ),
+        use_red_policy_randoms=jnp.array(False),
+        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
+        use_detection_randoms=jnp.array(False),
+        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_pid_deltas=jnp.array(False),
+        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        use_blue_decoy_pid_deltas=jnp.array(False),
     )
 
 
@@ -234,21 +248,7 @@ def create_initial_state() -> CC4State:
         host_decoy_process_pids=jnp.full((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), -1, dtype=jnp.int32),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
         detection_random_index=jnp.array(0, dtype=jnp.int32),
-        use_detection_randoms=jnp.array(False),
-        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
-        use_green_randoms=jnp.array(False),
-        red_policy_randoms=jnp.full(
-            (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
-            0.5,
-            dtype=jnp.float32,
-        ),
-        use_red_policy_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
-        use_blue_decoy_pid_deltas=jnp.array(False),
         red_pending_ticks=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),

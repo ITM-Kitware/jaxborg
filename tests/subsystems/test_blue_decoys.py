@@ -253,8 +253,8 @@ class TestDifferentialWithCybORG:
         decoy_type = service_to_decoy[added_service]
 
         state = _make_jax_state(const)
-        state = state.replace(
-            blue_decoy_pid_deltas=state.blue_decoy_pid_deltas.at[0, blue_idx].set(decoy_delta),
+        const = const.replace(
+            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx].set(decoy_delta),
             use_blue_decoy_pid_deltas=jnp.array(True),
         )
         new_state = apply_blue_decoy(state, const, blue_idx, target, decoy_type)

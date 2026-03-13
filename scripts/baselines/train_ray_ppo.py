@@ -13,7 +13,7 @@ from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import EnterpriseMAE
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-from gymnasium.spaces import Box, Dict, Discrete
+from gymnasium.spaces import Box, Dict
 from ray.rllib.algorithms.ppo import PPOConfig
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
 from ray.rllib.policy.policy import PolicySpec
@@ -45,10 +45,12 @@ class ActionMaskMAE(MultiAgentEnv):
         for agent in AGENT_IDS:
             obs_space = self._env.observation_space(agent)
             act_space = self._env.action_space(agent)
-            self._obs_spaces[agent] = Dict({
-                "obs": obs_space,
-                "action_mask": Box(0.0, 1.0, shape=(act_space.n,), dtype=np.float32),
-            })
+            self._obs_spaces[agent] = Dict(
+                {
+                    "obs": obs_space,
+                    "action_mask": Box(0.0, 1.0, shape=(act_space.n,), dtype=np.float32),
+                }
+            )
             self._act_spaces[agent] = act_space
 
         super().__init__()
@@ -83,8 +85,18 @@ def policy_mapper(agent_id, episode, worker, **kwargs):
     return POLICY_MAP[agent_id]
 
 
-def train(total_timesteps, learning_rate, train_batch_size, minibatch_size,
-          num_epochs, gamma, gae_lambda, clip_param, entropy_coeff, seed):
+def train(
+    total_timesteps,
+    learning_rate,
+    train_batch_size,
+    minibatch_size,
+    num_epochs,
+    gamma,
+    gae_lambda,
+    clip_param,
+    entropy_coeff,
+    seed,
+):
     register_env("CC4_masked", lambda config: ActionMaskMAE(config))
 
     # Build a temp env to get spaces
@@ -132,19 +144,21 @@ def train(total_timesteps, learning_rate, train_batch_size, minibatch_size,
     mlflow.set_tracking_uri(f"sqlite:///{mlflow_db}")
     mlflow.set_experiment("ray-ppo-baseline")
     mlflow.start_run(run_name="ray-ppo-masked")
-    mlflow.log_params({
-        "algorithm": "RayPPO-MultiAgent-Masked",
-        "seed": seed,
-        "total_timesteps": total_timesteps,
-        "learning_rate": learning_rate,
-        "train_batch_size": train_batch_size,
-        "minibatch_size": minibatch_size,
-        "num_epochs": num_epochs,
-        "gamma": gamma,
-        "gae_lambda": gae_lambda,
-        "clip_param": clip_param,
-        "entropy_coeff": entropy_coeff,
-    })
+    mlflow.log_params(
+        {
+            "algorithm": "RayPPO-MultiAgent-Masked",
+            "seed": seed,
+            "total_timesteps": total_timesteps,
+            "learning_rate": learning_rate,
+            "train_batch_size": train_batch_size,
+            "minibatch_size": minibatch_size,
+            "num_epochs": num_epochs,
+            "gamma": gamma,
+            "gae_lambda": gae_lambda,
+            "clip_param": clip_param,
+            "entropy_coeff": entropy_coeff,
+        }
+    )
 
     save_dir = EXP_DIR / "ray_ppo"
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -161,8 +175,7 @@ def train(total_timesteps, learning_rate, train_batch_size, minibatch_size,
     while total_steps < total_timesteps:
         result = algo.train()
         iteration += 1
-        total_steps = result.get("num_env_steps_sampled_lifetime",
-                                 result.get("timesteps_total", 0))
+        total_steps = result.get("num_env_steps_sampled_lifetime", result.get("timesteps_total", 0))
         elapsed = time.perf_counter() - start_time
 
         # Extract metrics from Ray 2.38 result structure
@@ -212,12 +225,16 @@ def train(total_timesteps, learning_rate, train_batch_size, minibatch_size,
         metrics_file.write(json.dumps(record) + "\n")
         metrics_file.flush()
 
-        mlflow_metrics = {k: float(v) for k, v in record.items()
-                         if isinstance(v, (int, float)) and k not in ("iteration",)}
+        mlflow_metrics = {
+            k: float(v) for k, v in record.items() if isinstance(v, (int, float)) and k not in ("iteration",)
+        }
         mlflow.log_metrics(mlflow_metrics, step=total_steps)
 
-        print(f"  iter {iteration:3d} | steps {total_steps:>9,} | reward {ep_reward_mean:>8.1f} | "
-              f"entropy {entropy:.3f} | expl_var {vf_explained_var:.4f} | {sps:.0f} sps", flush=True)
+        print(
+            f"  iter {iteration:3d} | steps {total_steps:>9,} | reward {ep_reward_mean:>8.1f} | "
+            f"entropy {entropy:.3f} | expl_var {vf_explained_var:.4f} | {sps:.0f} sps",
+            flush=True,
+        )
 
     elapsed = time.perf_counter() - start_time
     sps = total_steps / elapsed
@@ -225,11 +242,13 @@ def train(total_timesteps, learning_rate, train_batch_size, minibatch_size,
     checkpoint_path = algo.save(str(save_dir / "checkpoint"))
     print(f"Saved checkpoint: {checkpoint_path}")
 
-    mlflow.log_metrics({
-        "final_wall_time_sec": elapsed,
-        "final_steps_per_second": sps,
-        "final_episode_reward_mean": ep_reward_mean,
-    })
+    mlflow.log_metrics(
+        {
+            "final_wall_time_sec": elapsed,
+            "final_steps_per_second": sps,
+            "final_episode_reward_mean": ep_reward_mean,
+        }
+    )
     mlflow.log_artifact(str(metrics_path))
     mlflow.end_run()
     metrics_file.close()

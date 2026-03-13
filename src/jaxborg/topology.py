@@ -9,11 +9,15 @@ import numpy as np
 
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
+    MAX_DETECTION_RANDOMS,
     MAX_SERVER_HOSTS,
+    MAX_STEPS,
     MAX_USER_HOSTS,
     MISSION_PHASES,
     NUM_BLUE_AGENTS,
+    NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
+    NUM_RED_POLICY_RANDOM_FIELDS,
     NUM_SERVICES,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
@@ -367,6 +371,17 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         comms_policy=jnp.array(_build_comms_policy()),
         max_steps=500,
         num_hosts=jnp.int32(num_hosts),
+        # Precomputed RNG arrays (defaults: disabled / zeros)
+        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        use_green_randoms=jnp.array(False),
+        red_policy_randoms=jnp.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
+        use_red_policy_randoms=jnp.array(False),
+        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
+        use_detection_randoms=jnp.array(False),
+        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_pid_deltas=jnp.array(False),
+        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        use_blue_decoy_pid_deltas=jnp.array(False),
     )
 
 
@@ -772,6 +787,17 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         comms_policy=_COMMS_POLICY,
         max_steps=num_steps,
         num_hosts=num_hosts,
+        # Precomputed RNG arrays (defaults: disabled / zeros)
+        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        use_green_randoms=jnp.array(False),
+        red_policy_randoms=jnp.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
+        use_red_policy_randoms=jnp.array(False),
+        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
+        use_detection_randoms=jnp.array(False),
+        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_pid_deltas=jnp.array(False),
+        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        use_blue_decoy_pid_deltas=jnp.array(False),
     )
 
 

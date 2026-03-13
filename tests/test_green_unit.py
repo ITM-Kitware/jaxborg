@@ -29,14 +29,14 @@ def _first_active_green_host(const):
     raise RuntimeError("No active green hosts")
 
 
-def _make_precomputed_state(state, const, overrides=None):
-    """Create a state with precomputed green randoms, optionally overriding specific fields."""
+def _make_precomputed_const(state, const, overrides=None):
+    """Create a const with precomputed green randoms, optionally overriding specific fields."""
     randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
     randoms[:, :, 0] = 0.5
     if overrides:
         for (t, h, f), val in overrides.items():
             randoms[t, h, f] = val
-    return state.replace(
+    return const.replace(
         green_randoms=jnp.array(randoms),
         use_green_randoms=jnp.array(True),
     )
@@ -64,8 +64,8 @@ class TestPrecomputedFP:
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.skip("Host has no services")
-        state = _make_precomputed_state(jax_state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(jax_state, jax_const, overrides)
+        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         # GreenLocalWork FP creates process_creation events (host_exploit_detected)
         assert result.host_exploit_detected[h]
 
@@ -80,8 +80,8 @@ class TestPrecomputedFP:
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.skip("Host has no services")
-        state = _make_precomputed_state(jax_state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(jax_state, jax_const, overrides)
+        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         assert not result.host_activity_detected[h]
 
 
@@ -101,8 +101,8 @@ class TestPrecomputedPhishing:
         has_service = bool(jnp.any(state.host_services[h]))
         if not has_service:
             pytest.skip("Host has no services")
-        state = _make_precomputed_state(state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(state, jax_const, overrides)
+        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
         new_sessions = np.array(result.red_sessions) & ~np.array(jax_state.red_sessions)
         if np.any(new_sessions[:, h]):
             assert True
@@ -117,8 +117,8 @@ class TestPrecomputedPhishing:
             (0, h, 3): 0.5,
             (0, h, 4): 0.5,  # phishing roll above threshold
         }
-        state = _make_precomputed_state(jax_state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(jax_state, jax_const, overrides)
+        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         np.testing.assert_array_equal(np.array(result.red_sessions), np.array(jax_state.red_sessions))
 
 
@@ -134,23 +134,23 @@ class TestPrecomputedReliability:
             (0, h, 0): (GREEN_LOCAL_WORK + 0.5) / NUM_GREEN_ACTIONS,
             (0, h, 2): 0.99,  # floor(0.99 * 100) = 99 >= 50, so fails
         }
-        state = _make_precomputed_state(state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(state, jax_const, overrides)
+        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
         assert result.green_lwf_this_step[h]
 
     def test_work_succeeds_when_roll_below_reliability(self, jax_const, jax_state):
         h = _first_active_green_host(jax_const)
         overrides = {
             (0, h, 0): (GREEN_LOCAL_WORK + 0.5) / NUM_GREEN_ACTIONS,
-            (0, h, 2): 0.01,  # low roll → passes reliability
+            (0, h, 2): 0.01,  # low roll -> passes reliability
             (0, h, 3): 0.5,
             (0, h, 4): 0.5,
         }
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.skip("Host has no services")
-        state = _make_precomputed_state(jax_state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(jax_state, jax_const, overrides)
+        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         assert not result.green_lwf_this_step[h]
 
 
@@ -165,23 +165,23 @@ class TestPrecomputedAccessServiceBlocked:
             (0, h, 0): (GREEN_ACCESS_SERVICE + 0.5) / NUM_GREEN_ACTIONS,
             (0, h, 5): 0.5,  # some dest host
         }
-        state = _make_precomputed_state(state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(state, jax_const, overrides)
+        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
         assert jnp.any(result.green_asf_this_step) or jnp.any(result.host_activity_detected)
 
 
 class TestJITCompatibility:
     def test_precomputed_mode_jit_compatible(self, jax_const, jax_state):
-        state = _make_precomputed_state(jax_state, jax_const)
+        const = _make_precomputed_const(jax_state, jax_const)
         jitted = jax.jit(apply_green_agents)
-        result = jitted(state, jax_const, jax.random.PRNGKey(0))
+        result = jitted(jax_state, const, jax.random.PRNGKey(0))
         assert result.host_activity_detected.shape == (GLOBAL_MAX_HOSTS,)
 
     def test_precomputed_deterministic(self, jax_const, jax_state):
-        state = _make_precomputed_state(jax_state, jax_const)
+        const = _make_precomputed_const(jax_state, jax_const)
         jitted = jax.jit(apply_green_agents)
-        r1 = jitted(state, jax_const, jax.random.PRNGKey(0))
-        r2 = jitted(state, jax_const, jax.random.PRNGKey(999))
+        r1 = jitted(jax_state, const, jax.random.PRNGKey(0))
+        r2 = jitted(jax_state, const, jax.random.PRNGKey(999))
         np.testing.assert_array_equal(
             np.array(r1.host_activity_detected),
             np.array(r2.host_activity_detected),
@@ -194,7 +194,7 @@ class TestJITCompatibility:
         for hh in range(GLOBAL_MAX_HOSTS):
             if jax_const.green_agent_active[hh]:
                 overrides[(0, hh, 0)] = 0.1  # force all to SLEEP
-        state = _make_precomputed_state(jax_state, jax_const, overrides)
-        result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
+        const = _make_precomputed_const(jax_state, jax_const, overrides)
+        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         assert not jnp.any(result.green_lwf_this_step)
         assert not jnp.any(result.green_asf_this_step)

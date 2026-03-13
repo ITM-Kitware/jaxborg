@@ -306,10 +306,12 @@ def test_green_access_service_reward_uses_source_subnet_matches_cyborg():
     green_randoms[0, source_host, 6] = 0.5
     jax_state = jax_state.replace(
         blocked_zones=jnp.array(blocked_zones),
+    )
+    const = const.replace(
+        green_agent_active=jnp.array(active_green),
         green_randoms=jnp.array(green_randoms),
         use_green_randoms=jnp.array(True),
     )
-    const = const.replace(green_agent_active=jnp.array(active_green))
 
     jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
     jax_reward = compute_reward_breakdown(
@@ -458,7 +460,7 @@ def test_phishing_prefers_same_subnet_source_agent_matches_cyborg():
     green_randoms[0, target_host, 2] = 0.0
     green_randoms[0, target_host, 3] = 0.5
     green_randoms[0, target_host, 4] = 0.0
-    jax_state = jax_state.replace(
+    const = const.replace(
         green_randoms=jnp.array(green_randoms),
         use_green_randoms=jnp.array(True),
     )
@@ -541,7 +543,7 @@ def test_phishing_creates_abstract_session_matches_cyborg():
     green_randoms[0, target_host, 2] = 0.0
     green_randoms[0, target_host, 3] = 0.5
     green_randoms[0, target_host, 4] = 0.0
-    jax_state = jax_state.replace(green_randoms=jnp.array(green_randoms), use_green_randoms=jnp.array(True))
+    const = const.replace(green_randoms=jnp.array(green_randoms), use_green_randoms=jnp.array(True))
     jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
 
     jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after.red_sessions[r, target_host]))
@@ -627,7 +629,7 @@ def test_phishing_does_not_reuse_stale_blue_suspicious_pid_matches_cyborg():
     green_randoms[0, target_host, 2] = 0.0
     green_randoms[0, target_host, 3] = 0.5
     green_randoms[0, target_host, 4] = 0.0
-    jax_state = jax_state.replace(
+    const = const.replace(
         green_randoms=jnp.array(green_randoms),
         use_green_randoms=jnp.array(True),
     )
@@ -736,7 +738,7 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
     green_randoms[0, target_host, 2] = 0.0
     green_randoms[0, target_host, 3] = 0.5
     green_randoms[0, target_host, 4] = 0.0
-    jax_state = jax_state.replace(
+    const = const.replace(
         green_randoms=jnp.array(green_randoms),
         use_green_randoms=jnp.array(True),
     )
