@@ -150,10 +150,14 @@ def process_red_with_duration(
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
     final_source_kind = jnp.where(should_execute, PENDING_SOURCE_KIND_NONE, effective_source_kind)
+    preserve_source = ~should_execute & (
+        (final_source_kind == PENDING_SOURCE_KIND_HOST)
+        | (final_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING)
+    )
     final_source_host = jnp.where(
-        should_execute | (final_source_kind != PENDING_SOURCE_KIND_HOST),
-        jnp.int32(-1),
+        preserve_source,
         effective_source_binding_host,
+        jnp.int32(-1),
     )
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),

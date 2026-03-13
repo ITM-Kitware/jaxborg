@@ -1887,3 +1887,134 @@ class TestScanSourceBinding(TestDifferentialWithCybORG):
 
         source_kind, _ = _compute_scan_source_binding(state, jax_const, red_agent_id, jnp.int32(scan_action))
         assert int(source_kind) == int(PENDING_SOURCE_KIND_SESSION_BINDING)
+
+
+class TestPendingStealthScanSourceLostOnRestore:
+    """When a pending stealth scan's source session is killed by blue Restore,
+    JAX must invalidate the scan (no detection random consumed), matching CybORG.
+
+    Regression for: seed=7 step=88 detection RNG sync mismatch (expected 4, consumed 5).
+    Root cause: process_red_with_duration lost the pending source host for
+    SESSION_BINDING kind actions, so the scan fell back to the current anchor
+    host (which may be the target itself) instead of failing.
+    """
+
+    @pytest.fixture
+    def cyborg_env(self):
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        return CybORG(scenario_generator=sg, seed=42)
+
+    @pytest.fixture
+    def setup(self, cyborg_env):
+        from jaxborg.topology import build_const_from_cyborg
+
+        const = build_const_from_cyborg(cyborg_env)
+        state = create_initial_state()
+
+        # Set up red_agent_0 with two abstract sessions:
+        #   host A (source/anchor) and host B (target)
+        # Then queue a stealth scan targeting B with source on A.
+        red_agent_id = 0
+        start_host = int(const.red_start_hosts[red_agent_id])
+        start_subnet = int(const.host_subnet[start_host])
+
+        # Pick two hosts in the same subnet
+        host_a = start_host  # source/anchor
+        host_b = -1  # target
+        for h in range(int(const.num_hosts)):
+            if (
+                int(const.host_subnet[h]) == start_subnet
+                and h != host_a
+                and bool(const.host_active[h])
+                and not bool(const.host_is_router[h])
+            ):
+                host_b = h
+                break
+        assert host_b >= 0, "Need at least two non-router hosts in start subnet"
+
+        # Set up sessions on both hosts, anchor on host_a
+        state = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, host_a].set(True).at[red_agent_id, host_b].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, host_a]
+            .set(True)
+            .at[red_agent_id, host_b]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(host_a),
+            red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, host_a]
+            .set(True)
+            .at[red_agent_id, host_b]
+            .set(True),
+        )
+
+        # Queue a stealth scan on host_b with SESSION_BINDING source (bound to anchor = host_a)
+        stealth_action = encode_red_action("StealthServiceDiscovery", host_b, red_agent_id)
+        # Duration = 3 for stealth scan; start with ticks=2 so next call decrements to 1 (still pending)
+        key = jax.random.PRNGKey(99)
+        state = state.replace(
+            red_pending_ticks=state.red_pending_ticks.at[red_agent_id].set(2),
+            red_pending_action=state.red_pending_action.at[red_agent_id].set(stealth_action),
+            red_pending_key=state.red_pending_key.at[red_agent_id].set(jnp.asarray(key, dtype=jnp.uint32)),
+            red_pending_source_kind=state.red_pending_source_kind.at[red_agent_id].set(
+                PENDING_SOURCE_KIND_SESSION_BINDING
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(host_a),
+        )
+
+        return state, const, red_agent_id, host_a, host_b, stealth_action
+
+    def test_pending_source_preserved_for_session_binding(self, setup):
+        """After one tick of pending, SESSION_BINDING source host must be preserved (not reset to -1)."""
+        state, const, red_agent_id, host_a, host_b, stealth_action = setup
+
+        # Process one tick (ticks goes from 2 -> 1, action still pending)
+        key = jax.random.PRNGKey(99)
+        new_state = process_red_with_duration(state, const, red_agent_id, stealth_action, key)
+
+        # Source host should still be host_a (not lost to -1)
+        assert int(new_state.red_pending_ticks[red_agent_id]) == 1
+        assert int(new_state.red_pending_source_host[red_agent_id]) == host_a, (
+            f"SESSION_BINDING source host lost: expected {host_a}, "
+            f"got {int(new_state.red_pending_source_host[red_agent_id])}"
+        )
+
+    def test_stealth_scan_fails_after_source_restored(self, setup):
+        """When blue Restore clears the source session, a pending stealth scan must not execute."""
+        state, const, red_agent_id, host_a, host_b, stealth_action = setup
+
+        # Simulate the effect of a blue Restore clearing host_a sessions.
+        # Directly clear the session state as Restore would, since the
+        # specific blue agent assignment is not important for this test.
+        state_restored = state.replace(
+            red_sessions=state.red_sessions.at[red_agent_id, host_a].set(False),
+            red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, host_a].set(False),
+        )
+
+        # Verify host_a sessions are cleared
+        assert not bool(state_restored.red_sessions[red_agent_id, host_a])
+
+        # Now set pending_ticks=1 so action will try to execute this tick
+        state_restored = state_restored.replace(
+            red_pending_ticks=state_restored.red_pending_ticks.at[red_agent_id].set(1),
+        )
+
+        # Set up detection randoms to track consumption
+        state_restored = state_restored.replace(
+            detection_randoms=state_restored.detection_randoms.at[0].set(0.5),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+            use_detection_randoms=jnp.array(True),
+        )
+
+        key = jax.random.PRNGKey(99)
+        new_state = process_red_with_duration(state_restored, const, red_agent_id, stealth_action, key)
+
+        # Stealth scan should NOT have executed (source was destroyed by Restore)
+        detection_consumed = int(new_state.detection_random_index)
+        assert detection_consumed == 0, (
+            f"Stealth scan consumed {detection_consumed} detection random(s) "
+            f"but should have failed because source session on host_a={host_a} was restored"
+        )
