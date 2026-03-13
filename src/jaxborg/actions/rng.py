@@ -71,6 +71,20 @@ def sample_red_pid_delta(state: CC4State, time, agent_id, key):
     return jax.lax.cond(state.use_red_pid_deltas, from_precomputed, from_rng, None)
 
 
+def sample_red_privesc_choice(state: CC4State, time, agent_id, key, num_sessions):
+    """Return privesc session choice index in [0, num_sessions).
+
+    Uses precomputed CybORG choice if available, else JAX RNG."""
+
+    def from_precomputed(_):
+        return jnp.clip(state.red_privesc_choices[time, agent_id], 0, jnp.maximum(num_sessions - 1, 0))
+
+    def from_rng(_):
+        return jax.random.randint(key, (), minval=0, maxval=jnp.maximum(num_sessions, 1), dtype=jnp.int32)
+
+    return jax.lax.cond(state.use_red_privesc_choices, from_precomputed, from_rng, None)
+
+
 def sample_blue_decoy_pid_delta(state: CC4State, time, agent_id):
     """Return Host.create_pid delta in [1, 9] for blue decoy process creation."""
 

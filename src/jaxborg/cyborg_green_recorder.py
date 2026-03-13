@@ -47,6 +47,7 @@ class RedActionRngUsage:
     action_type: str
     random_calls: list[float] = field(default_factory=list)
     choice_sizes: list[int] = field(default_factory=list)
+    choice_indices: list[int] = field(default_factory=list)
     integer_ranges: list[tuple[int, int]] = field(default_factory=list)
 
     def summary(self) -> str:
@@ -74,6 +75,7 @@ class StepRandomSyncReport:
     unsupported_random_actions: list[str] = field(default_factory=list)
     red_pid_collisions: list[str] = field(default_factory=list)
     blue_decoy_pid_collisions: list[str] = field(default_factory=list)
+    red_privesc_choices: dict[int, int] = field(default_factory=dict)
 
     @property
     def detection_sync_supported(self) -> bool:
@@ -250,6 +252,7 @@ def _extract_create_pid_delta(calls):
 def _record_non_green_random_usage(report: StepRandomSyncReport, agent_name: str, action_type: str, calls):
     random_calls = [float(call[1]) for call in calls if call[0] == "random"]
     choice_sizes = [int(call[2]) for call in calls if call[0] == "choice" and int(call[2]) > 1]
+    choice_indices = [int(call[1]) for call in calls if call[0] == "choice" and int(call[2]) > 1]
     integer_ranges = [
         (int(call[2]), int(call[3]))
         for call in calls
@@ -264,6 +267,7 @@ def _record_non_green_random_usage(report: StepRandomSyncReport, agent_name: str
                     action_type=action_type,
                     random_calls=random_calls,
                     choice_sizes=choice_sizes,
+                    choice_indices=choice_indices,
                     integer_ranges=integer_ranges,
                 )
             )

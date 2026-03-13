@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.pids import append_pid_to_row, count_valid_pids, first_valid_pid, nth_valid_pid
 from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
+from jaxborg.actions.rng import sample_red_privesc_choice
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
 from jaxborg.state import CC4Const, CC4State
@@ -26,7 +27,9 @@ def apply_privesc(
     target_pid_row = state.red_session_pids[agent_id, target_host]
     tracked_pid_count = count_valid_pids(target_pid_row)
     total_safe = jnp.maximum(target_count, jnp.int32(1))
-    chosen_slot = jax.random.randint(key, (), minval=0, maxval=total_safe, dtype=jnp.int32)
+    # CybORG: np_random.choice(sessions) picks a random session on the host.
+    # Sync via precomputed choices when available to match CybORG's selection.
+    chosen_slot = sample_red_privesc_choice(state, state.time, agent_id, key, total_safe)
 
     # CybORG samples one concrete target session object on the host. The older
     # host-level sandbox flag is only safe to apply when a single session exists.

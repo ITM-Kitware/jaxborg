@@ -215,23 +215,27 @@ class TestApplyBlueRemove:
         assert bool(new_state.host_has_malware[target])
 
     def test_remove_does_not_clear_privileged_session(self, jax_const):
+        """CybORG StopProcess skips PIDs whose process user is root/SYSTEM.
+        JAX tracks this via red_session_privileged_pids."""
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
         assert target is not None
 
+        test_pid = 6002
         state = state.replace(
             red_sessions=state.red_sessions.at[0, target].set(True),
             red_session_count=state.red_session_count.at[0, target].set(1),
             red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_PRIVILEGED),
             host_compromised=state.host_compromised.at[target].set(COMPROMISE_PRIVILEGED),
             host_has_malware=state.host_has_malware.at[target].set(True),
+            # PID is tracked in both session pids and privileged pids (mirrors privesc)
+            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
+            red_session_privileged_pids=state.red_session_privileged_pids.at[0, target, 0].set(test_pid),
         )
 
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
-        test_pid = 6002
         state = state.replace(
-            red_session_pids=state.red_session_pids.at[0, target, 0].set(test_pid).at[1, target, 0].set(7001),
             blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0].set(test_pid),
         )
 
