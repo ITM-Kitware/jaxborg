@@ -2053,3 +2053,63 @@ class TestDifferentialWithCybORG:
         assert int(new_state.red_session_count[3, target]) == 0
         assert int(new_state.red_privilege[3, target]) == COMPROMISE_NONE
         assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
+
+
+class TestSessionCheckClearsScanMemoryOnAnchorChange:
+    """CybORG scan memory (ports dict) lives on session 0 specifically.
+
+    When session 0 is destroyed and RedSessionCheck promotes a new primary
+    on a different host, the old session's ports dict is permanently lost.
+    apply_red_session_check must clear scan memory when the anchor host changes.
+    """
+
+    def test_session_check_clears_scan_memory_when_anchor_moves_to_new_host(self, jax_const):
+        """When RedSessionCheck promotes a primary on a different host,
+        scan memory must be cleared — CybORG session 0's ports are lost."""
+        from jaxborg.actions.red_common import apply_red_session_check
+
+        state = _make_jax_state(jax_const)
+        anchor_host = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert anchor_host is not None
+        scan_target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_B")
+        assert scan_target is not None
+
+        # Find a second host in a different subnet for the new primary
+        new_primary_host = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        assert new_primary_host is not None
+        assert new_primary_host != anchor_host
+
+        # Red_agent_0 has session on anchor_host (abstract) + second host
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, anchor_host].set(True).at[0, new_primary_host].set(True),
+            red_session_count=state.red_session_count.at[0, anchor_host].set(1).at[0, new_primary_host].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[0, anchor_host]
+            .set(True)
+            .at[0, new_primary_host]
+            .set(False),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[0].set(anchor_host),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[0].set(True),
+            # Scan memory sourced from anchor_host
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[0, scan_target, anchor_host].set(True),
+            red_scanned_hosts=state.red_scanned_hosts.at[0, scan_target].set(True),
+        )
+
+        # Simulate session 0 destruction: CybORG promotes new_primary_host.
+        # Use forced_primary_host to move the anchor (as the harness does).
+        new_state = apply_red_session_check(
+            state,
+            jax_const,
+            agent_id=0,
+            key=jax.random.PRNGKey(42),
+            forced_primary_host=jnp.int32(new_primary_host),
+        )
+
+        # Anchor moved
+        assert int(new_state.red_scan_anchor_host[0]) == new_primary_host
+
+        # Scan memory must be cleared
+        assert not bool(new_state.red_scanned_hosts[0, scan_target]), (
+            "red_scanned_hosts should be cleared when anchor moves to a "
+            "different host — CybORG session 0's ports dict is lost"
+        )
+        assert not bool(new_state.red_scanned_source_hosts[0, scan_target, anchor_host])

@@ -459,6 +459,8 @@ class CC4DifferentialHarness:
                 use_green_randoms=jnp.array(True),
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
+            )
+            self.jax_state = self.jax_state.replace(
                 use_red_privesc_choices=jnp.array(True),
             )
 
@@ -602,6 +604,13 @@ class CC4DifferentialHarness:
         forced_primary_hosts_pre = _extract_primary_hosts(cy_state, self.mappings)
         pre_service_map = _capture_service_process_map(cy_state)
 
+        # Capture session 0 object references before the step so we can
+        # detect identity changes (same host, different session object).
+        self._pre_step_session0 = {}
+        for r in range(NUM_RED_AGENTS):
+            s0 = cy_state.sessions.get(f"red_agent_{r}", {}).get(0)
+            self._pre_step_session0[r] = s0
+
         controller.step(cyborg_actions)
 
         # Sync CybORG end-turn RedSessionCheck primary-session host choices for next-step anchor parity.
@@ -728,9 +737,27 @@ class CC4DifferentialHarness:
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
         primary_abstract_flags = _extract_primary_is_abstract(cy_state)
+        # CybORG scan memory (ports) lives on session 0.  When session 0
+        # is destroyed and replaced (even on the same host), its ports are
+        # permanently lost.  Detect session 0 replacement by comparing its
+        # PID before and after the step.
+        red_scanned_source_hosts = self.jax_state.red_scanned_source_hosts
+        red_scanned_hosts = self.jax_state.red_scanned_hosts
+        for r in range(NUM_RED_AGENTS):
+            agent_name = f"red_agent_{r}"
+            post_s0 = cy_state.sessions.get(agent_name, {}).get(0)
+            post_s0_ports = getattr(post_s0, "ports", {}) if post_s0 else {}
+            pre_s0 = self._pre_step_session0.get(r)
+            # Session 0 identity changed if PID changed or session 0 was lost
+            s0_replaced = (pre_s0 is not None) and (post_s0 is None or post_s0 is not pre_s0)
+            if s0_replaced and not post_s0_ports:
+                red_scanned_source_hosts = red_scanned_source_hosts.at[r].set(False)
+                red_scanned_hosts = red_scanned_hosts.at[r].set(False)
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
             red_primary_is_abstract=primary_abstract_flags,
+            red_scanned_source_hosts=red_scanned_source_hosts,
+            red_scanned_hosts=red_scanned_hosts,
         )
 
         # --- FSM state updates (shared with FsmRedCC4Env) ---

@@ -199,6 +199,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_session_is_abstract,
         const.host_active,
     )
+
     scan_synced = sync_scan_memory_fields(
         state.replace(
             red_sessions=new_sessions,

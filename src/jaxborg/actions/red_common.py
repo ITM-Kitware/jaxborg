@@ -292,10 +292,29 @@ def apply_red_session_check(
         next_abstract_count == next_session_count,
         state.red_primary_is_abstract[agent_id],
     )
+
+    # CybORG scan memory (ports dict) lives on session 0.  When session 0 is
+    # destroyed and RedSessionCheck promotes a new primary on a different host,
+    # the old session's ports are permanently lost.  Clear all scan memory for
+    # the agent when the anchor moves to a different host.
+    anchor_changed_host = anchor_changed & (anchor >= 0)
+    red_scanned_source_hosts = jnp.where(
+        anchor_changed_host,
+        state.red_scanned_source_hosts.at[agent_id].set(False),
+        state.red_scanned_source_hosts,
+    )
+    red_scanned_hosts = jnp.where(
+        anchor_changed_host,
+        state.red_scanned_hosts.at[agent_id].set(False),
+        state.red_scanned_hosts,
+    )
+
     return state.replace(
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),
         red_abstract_host_rank=red_abstract_host_rank,
         red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(new_primary_is_abstract),
+        red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_hosts=red_scanned_hosts,
     )
 
 
