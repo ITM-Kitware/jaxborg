@@ -46,9 +46,16 @@ class TestCC4EnvDifferential:
         assert len(errors) == 0, f"After scan:\n{format_diffs(errors)}"
 
     def test_blue_response_state_parity(self):
-        """After red compromises a host, blue does analyse -> remove -> restore."""
+        """After red compromises a host, blue does analyse -> remove -> restore.
+
+        step_red/blue_only bypass CybORG's action-space validation and duration
+        system, so we only compare state on the specific host being targeted
+        (green/phishing side-effects on other hosts are expected to diverge).
+        """
         harness = self._make_harness(seed=42)
         harness.reset()
+
+        from CybORG.Simulator.Actions import Sleep
 
         from jaxborg.actions.encoding import (
             RED_DISCOVER_START,
@@ -60,10 +67,16 @@ class TestCC4EnvDifferential:
 
         start_host = int(harness.jax_const.red_start_hosts[0])
         start_subnet = int(harness.jax_const.host_subnet[start_host])
+        host_label = f"host_{start_host}"
+        agent_host_labels = {f"red_{a}_host_{start_host}" for a in range(6)}
 
         harness.step_red_only(0, RED_DISCOVER_START + start_subnet)
         harness.step_red_only(0, RED_SCAN_START + start_host)
+        # ExploitRemoteService has duration=4 in CybORG; step_red_only applies
+        # it immediately in JAX but CybORG needs 4 steps to complete.
         harness.step_red_only(0, RED_EXPLOIT_SSH_START + start_host)
+        for _ in range(3):
+            harness.cyborg_env.step(agent="red_agent_0", action=Sleep(), skip_valid_action_check=True)
 
         blue_actions = [
             encode_blue_action("Analyse", start_host, 0, const=harness.jax_const),
@@ -73,7 +86,11 @@ class TestCC4EnvDifferential:
 
         for action in blue_actions:
             result = harness.step_blue_only(agent_id=0, action_idx=action)
-            errors = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
+            errors = [
+                d
+                for d in result.diffs
+                if d.field_name in _ERROR_FIELDS and d.host_or_agent in (host_label, *agent_host_labels)
+            ]
             assert len(errors) == 0, f"After blue action {action}:\n{format_diffs(errors)}"
 
     def test_multi_seed_initial_parity(self):

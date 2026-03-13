@@ -13,8 +13,6 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
     count_valid_pids,
-    first_valid_pid,
-    pid_row_contains,
 )
 from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
@@ -65,25 +63,9 @@ def bound_source_is_abstract(
     source_host = select_bound_source_host(state, const, agent_id)
     source_idx = jnp.clip(source_host, 0, state.red_sessions.shape[1] - 1)
     source_has_abstract = state.red_session_is_abstract[agent_id, source_idx]
-    source_abstract_rank = state.red_abstract_host_rank[agent_id, source_idx]
-    source_pid_row = state.red_session_pids[agent_id, source_idx]
-    source_abstract_pid_row = state.red_session_abstract_pids[agent_id, source_idx]
-    source_primary_pid = first_valid_pid(source_pid_row)
-    has_pid_identity = source_primary_pid >= 0
-    has_abstract_pid_tracking = jnp.any(source_abstract_pid_row >= 0)
-    source_primary_is_abstract_by_pid = pid_row_contains(source_abstract_pid_row, source_primary_pid)
-    # When PID identity is unavailable, fall back to the older rank-based
-    # approximation. Rank alone is not sufficient once session 0 can migrate to
-    # a later-created abstract session host via CybORG reassignment.
-    source_primary_is_abstract_by_rank = source_has_abstract & (
-        (source_abstract_rank == jnp.int32(0)) | (source_abstract_rank == jnp.int32(ABSTRACT_RANK_NONE))
-    )
-    source_primary_is_abstract = jnp.where(
-        has_pid_identity & has_abstract_pid_tracking,
-        source_primary_is_abstract_by_pid,
-        source_primary_is_abstract_by_rank,
-    )
-    return (source_host >= 0) & source_primary_is_abstract
+    # CybORG's session 0 is always RedAbstractSession in CC4 FSM gameplay.
+    # Checking the per-host abstract flag is sufficient.
+    return (source_host >= 0) & source_has_abstract
 
 
 def can_reach_subnet(

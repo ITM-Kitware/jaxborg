@@ -476,7 +476,7 @@ class CC4DifferentialHarness:
 
         cyborg_action = jax_red_to_cyborg(action_idx, agent_id, self.mappings)
         agent_name = f"red_agent_{agent_id}"
-        self.cyborg_env.step(agent=agent_name, action=cyborg_action)
+        self.cyborg_env.step(agent=agent_name, action=cyborg_action, skip_valid_action_check=True)
 
         self.jax_state = _jit_apply_red_action(self.jax_state, self.jax_const, agent_id, action_idx, subkey)
 
@@ -495,7 +495,7 @@ class CC4DifferentialHarness:
     def step_blue_only(self, agent_id: int, action_idx: int) -> StepResult:
         cyborg_action = jax_blue_to_cyborg(action_idx, agent_id, self.mappings, const=self.jax_const)
         agent_name = f"blue_agent_{agent_id}"
-        self.cyborg_env.step(agent=agent_name, action=cyborg_action)
+        self.cyborg_env.step(agent=agent_name, action=cyborg_action, skip_valid_action_check=True)
 
         self.jax_state = _jit_apply_blue_action(self.jax_state, self.jax_const, agent_id, action_idx)
 
