@@ -359,6 +359,195 @@ class TestSessionBindingFollowsUpdatedAnchor:
         )
 
 
+class TestDiscoverDeceptionFailsAfterSessionDestroyed:
+    """Regression: DiscoverDeception must fail when session 0 is destroyed by
+    blue restore between queuing and execution.
+
+    CybORG's DiscoverDeception.execute() checks ``self.session not in
+    state.sessions[self.agent]`` (line 70).  When blue restore clears all red
+    sessions on the host where session 0 lived, the action returns
+    Observation(False) without consuming any detection randoms.
+
+    JAX previously let DiscoverDeception succeed because
+    ``select_bound_source_host`` returned the recomputed anchor (a different
+    valid host promoted by ``recompute_scan_anchor_hosts`` inside blue
+    restore).  The fix checks session 0 validity via ``forced_primary_host``.
+    """
+
+    def test_deception_blocked_when_session0_destroyed(self, env_and_state):
+        """Queue DiscoverDeception, destroy session 0 via blue restore before
+        execution, verify no detection randoms are consumed (action blocked).
+
+        Setup:
+        - Red agent has session on host_a (anchor / session 0)
+        - Also has session on host_b (fallback; so recompute_scan_anchor_hosts
+          will promote host_b after blue restore clears host_a)
+        - Queue DiscoverDeception targeting host_c (duration=2)
+        - Simulate blue restore: clear sessions on host_a, recompute anchor
+        - Execute with forced_primary_host=host_a (CybORG's pre-step session 0)
+        - Since red_sessions[agent, host_a] is False, forced_source_valid=False
+        - deception_source_host = forced_primary_host = host_a
+        - deception_source_valid = False -> can_execute = False
+        - detection_random_index stays at 0 (no randoms consumed)
+        """
+        from jaxborg.actions.encoding import RED_DISCOVER_DECEPTION_START
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        key = jax.random.PRNGKey(99)
+
+        start_host = int(const.red_start_hosts[agent_id])
+        host_a = start_host  # session 0 host
+        target_subnet = int(const.host_subnet[host_a])
+
+        # Find host_b: fallback session in same subnet
+        host_b = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != host_a:
+                host_b = h
+                break
+        if host_b < 0:
+            pytest.skip("Need at least 2 hosts in subnet")
+
+        # Find host_c: target for DiscoverDeception
+        host_c = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and h != host_a and h != host_b:
+                host_c = h
+                break
+        if host_c < 0:
+            pytest.skip("Need a third host for deception target")
+
+        # Set up: agent has sessions on host_a (anchor) and host_b (fallback)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, host_a].set(True).at[agent_id, host_b].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host_a]
+            .set(True)
+            .at[agent_id, host_b]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_a)),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, host_c].set(True),
+        )
+
+        deception_action = RED_DISCOVER_DECEPTION_START + host_c
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+
+        # Queue DiscoverDeception (duration=2): ticks go from 2 to 1
+        s1 = process_jit(state, const, agent_id, deception_action, key)
+        assert int(s1.red_pending_ticks[agent_id]) == 1  # 2 - 1 = 1
+
+        # Simulate blue restore destroying session on host_a
+        # This mimics what apply_blue_restore does: clear sessions, recompute anchor
+        s1 = s1.replace(
+            red_sessions=s1.red_sessions.at[agent_id, host_a].set(False),
+            red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_a].set(False),
+            # Anchor moves to host_b (recompute_scan_anchor_hosts promotes fallback)
+            red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
+        )
+
+        # Enable detection random tracking
+        s1 = s1.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=s1.detection_randoms.at[0].set(jnp.float32(0.99)).at[1].set(jnp.float32(0.99)),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+
+        # Execute: forced_primary_host=host_a tells JAX that CybORG's session 0
+        # was on host_a before this step.  Since red_sessions[agent, host_a] is
+        # now False, forced_source_valid=False.  The fix gates DiscoverDeception
+        # on forced_primary_host validity, so the action should be blocked.
+        s2 = process_jit(s1, const, agent_id, RED_SLEEP, key, forced_primary_host=jnp.int32(host_a))
+        assert int(s2.red_pending_ticks[agent_id]) == 0  # timer expired
+
+        # No detection randoms consumed => action was blocked
+        assert int(s2.detection_random_index) == 0, (
+            f"DiscoverDeception consumed {int(s2.detection_random_index)} detection randoms "
+            f"but should have been blocked because session 0 on host {host_a} was destroyed"
+        )
+
+
+class TestScanFailsWhenSession0NotAbstract:
+    """Regression: scans must fail when session 0 is a regular Session (not
+    RedAbstractSession).
+
+    CybORG's DiscoverNetworkServices.execute() checks
+    ``isinstance(session_0, RedAbstractSession)`` (line 67).  When
+    RedSessionCheck promotes a non-abstract session into slot 0, the host
+    may still have abstract sessions, but session 0 itself is not abstract
+    and scans must fail.
+
+    JAX previously used the per-host ``red_session_is_abstract`` flag which
+    is True if ANY session on the host is abstract, masking a non-abstract
+    session 0.  The fix uses the per-agent ``red_primary_is_abstract`` flag
+    which tracks session 0's type exactly.
+    """
+
+    def test_scan_blocked_when_primary_not_abstract(self, env_and_state):
+        """Scan should fail when red_primary_is_abstract=False, even if the
+        host has abstract sessions.
+
+        Setup:
+        - Red agent has both abstract and non-abstract sessions on host_a
+        - red_primary_is_abstract[agent] = False (session 0 is concrete)
+        - red_session_is_abstract[agent, host_a] = True (host has abstracts)
+        - Submit immediate AggressiveServiceDiscovery (duration=1)
+        - Scan should be blocked -> detection_random_index stays at 0
+        """
+        from jaxborg.actions.encoding import RED_AGGRESSIVE_SCAN_START
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        key = jax.random.PRNGKey(88)
+
+        start_host = int(const.red_start_hosts[agent_id])
+        host_a = start_host
+        target_subnet = int(const.host_subnet[host_a])
+
+        # Find a target host in the same subnet
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != host_a:
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("No scan target in same subnet")
+
+        # Set up: host_a has sessions, abstract flag True, but primary is NOT abstract
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, host_a].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host_a].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_a)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(False),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+        )
+
+        # Enable detection random tracking
+        state = state.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=state.detection_randoms.at[0].set(jnp.float32(0.99)),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+
+        scan_action = RED_AGGRESSIVE_SCAN_START + target_host
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+
+        # AggressiveServiceDiscovery has duration=1, executes immediately
+        s1 = process_jit(state, const, agent_id, scan_action, key, forced_primary_host=jnp.int32(host_a))
+        assert int(s1.red_pending_ticks[agent_id]) == 0  # executed (or blocked) immediately
+
+        # Scan must NOT consume detection randoms because session 0 is not abstract
+        assert int(s1.detection_random_index) == 0, (
+            f"AggressiveServiceDiscovery consumed {int(s1.detection_random_index)} detection random(s) "
+            f"but should have been blocked because session 0 is not abstract"
+        )
+
+
 class TestDurationDifferential:
     """Differential tests verifying JAX duration tracking matches CybORG.
 
