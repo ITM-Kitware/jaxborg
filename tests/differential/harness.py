@@ -459,6 +459,7 @@ class CC4DifferentialHarness:
                 use_green_randoms=jnp.array(True),
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
+                use_red_privesc_choices=jnp.array(True),
             )
 
         from tests.differential.state_comparator import (
@@ -670,6 +671,13 @@ class CC4DifferentialHarness:
                     jnp.array(random_sync_report.detection_randoms, dtype=jnp.float32)
                 )
             using_detection_sync = bool(detection_count) and random_sync_report.detection_sync_supported
+            # Sync privesc session choice indices from CybORG
+            privesc_row = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
+            for ridx, choice_idx in random_sync_report.red_privesc_choices.items():
+                privesc_row[ridx] = choice_idx
+            red_privesc_choice_row = self.jax_state.red_privesc_choices.at[self.jax_state.time].set(
+                jnp.array(privesc_row, dtype=jnp.int32)
+            )
             self.jax_const = self.jax_const.replace(
                 green_randoms=green_randoms,
                 red_pid_deltas=red_pid_delta_row,
@@ -678,6 +686,7 @@ class CC4DifferentialHarness:
                 use_detection_randoms=jnp.array(using_detection_sync),
             )
             self.jax_state = self.jax_state.replace(
+                red_privesc_choices=red_privesc_choice_row,
                 detection_random_index=jnp.array(0, dtype=jnp.int32),
             )
             if self.strict_random_sync and random_sync_report.has_issues:
@@ -773,8 +782,6 @@ class CC4DifferentialHarness:
 
         # --- Observation comparison ---
         if self.check_obs and self._blue_wrapper is not None:
-            import numpy as np
-
             from jaxborg.observations import get_blue_obs
 
             for b in range(NUM_BLUE_AGENTS):
@@ -843,6 +850,9 @@ class CC4DifferentialHarness:
                 continue
             if action_type == ACTION_TYPE_PRIVESC:
                 if not usage.random_calls and not usage.integer_ranges and len(usage.choice_sizes) == 1:
+                    # Sync the privesc session choice index so JAX picks the same session
+                    if usage.choice_indices:
+                        random_sync_report.red_privesc_choices[usage.agent_idx] = usage.choice_indices[0]
                     continue
                 random_sync_report.unsupported_random_actions.append(
                     f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"

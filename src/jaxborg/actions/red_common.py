@@ -117,14 +117,19 @@ def sync_scan_memory_fields(
     const: CC4Const,
     source_matrix: chex.Array | None = None,
 ) -> CC4State:
-    """Project scan-memory ownership onto active source sessions.
+    """Project scan-memory ownership onto active abstract source sessions.
 
-    CybORG derives scanned-host memory from session `ports` maps. That logic is
-    not gated on JAX-specific abstract-session bookkeeping, so scan-memory
-    validity should depend on live source sessions and active hosts only.
+    CybORG derives scanned-host memory from RedAbstractSession `ports` maps.
+    Only abstract sessions can own scan memory; non-abstract sessions (plain
+    Session objects) do not have ports dicts and cannot own scan results.
     """
     sources = source_matrix if source_matrix is not None else scan_sources(state)
-    valid_sources = sources & state.red_sessions[:, None, :] & const.host_active[None, None, :]
+    valid_sources = (
+        sources
+        & state.red_sessions[:, None, :]
+        & state.red_session_is_abstract[:, None, :]
+        & const.host_active[None, None, :]
+    )
     red_scanned_hosts = recompute_scanned_hosts_from_sources(valid_sources)
     return state.replace(
         red_scanned_source_hosts=valid_sources,

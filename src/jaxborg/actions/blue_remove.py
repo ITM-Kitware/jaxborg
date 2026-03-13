@@ -40,14 +40,12 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
         has_sessions = new_session_count[:, target_host] > 0
         has_live_pid = jax.vmap(pid_row_contains, in_axes=(0, None))(new_session_pids[:, target_host, :], sus_pid)
+        # CybORG StopProcess checks proc.user in ('root', 'SYSTEM') per-PID.
+        # Only PIDs explicitly tracked as privileged (via privesc) are protected.
         has_privileged_pid = jax.vmap(pid_row_contains, in_axes=(0, None))(
             new_session_privileged_pids[:, target_host, :], sus_pid
         )
-        has_any_tracked_privileged = jnp.any(new_session_privileged_pids[:, target_host, :] >= 0, axis=1)
-        privileged_without_pid_model = (
-            new_privilege[:, target_host] == COMPROMISE_PRIVILEGED
-        ) & ~has_any_tracked_privileged
-        pid_is_privileged = has_privileged_pid | privileged_without_pid_model
+        pid_is_privileged = has_privileged_pid
         match_by_red = covers_host & has_pid & has_sessions & has_live_pid & ~pid_is_privileged
 
         any_match = jnp.any(match_by_red)
