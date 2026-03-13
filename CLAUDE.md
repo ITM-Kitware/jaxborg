@@ -64,125 +64,14 @@ Each action module (e.g., `red_exploit.py`, `blue_monitor.py`) exports an `apply
 
 Builds the static `CC4Const` from seed. Hardcoded subnet adjacency (NACLs), router backbone, host generation with per-subnet counts. Two entry points: `build_topology(seeds, num_steps)` for pure JAX, `build_const_from_cyborg(env)` for extracting from a live CybORG instance.
 
-## Development Workflow
-
-Implementation is driven by a 22-subsystem catalog (`tests/catalog.py`) with dependency ordering. `scripts/ralph_wiggum.sh` automates the loop: get next subsystem, implement JAX code + differential tests, validate, commit.
-
-Check progress: `tests/catalog_status.json` tracks which subsystems are passing.
-
-### Differential Testing
-
-Every test must compare JAX output against CybORG. Pattern:
-1. Create CybORG env via `cyborg_env` fixture (conftest.py): SleepAgent blue, EnterpriseGreenAgent green, FiniteStateRedAgent red, seed=42, 500 steps
-2. Build JAX const: `build_const_from_cyborg(cyborg_env)`
-3. Create JAX state: `create_initial_state()`
-4. Execute identical action sequences in both environments
-5. Compare relevant state fields (host_compromised, red_sessions, red_privilege, etc.)
-
-Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator).
-
-Differential harness replay is strict-only: do not add CybORG->JAX state synchronization/patching to hide parity gaps.
-
-**Tests must exercise the training code path.** Differential tests should call the same functions used during training (`FsmRedCC4Env.step_env`, `apply_red_action`, `apply_green_agents`, `fsm_red_post_step_update`, etc.) rather than reimplementing logic in test code. Shared functions like `fsm_red_post_step_update` are extracted so both the training env and the differential harness use the same code. If a test needs custom orchestration (e.g. action duration tracking for CybORG parity), the JAX-side logic should still call into production functions.
-
-### TDD + Differential Test Quality (Required)
-
-For every fuzzer-found parity bug, follow strict red-green-refactor:
-1. **Red**: add a failing regression test first.
-2. **Green**: implement the smallest JAX fix that makes that exact test pass.
-3. **Refactor**: clean up only after parity is restored and tests stay green.
-
-Primary regression tests for parity bugs must be **explicit differential tests**:
-- Run both CybORG and JAX in the same test (typically via `CC4DifferentialHarness`).
-- Pin the exact reproduction context (seed, step, agent/action, hostnames/indices, field).
-- Assert concrete before/after state on both sides, then assert no diff for the target field.
-- Do not rely only on generic assertions like "no diffs at step N" without explicit context checks.
-
-Unit tests are allowed as secondary guardrails, but they do **not** replace the required differential regression for parity bugs.
-
-Hard rule for parity regressions:
-- Seed/step replay is triage only; do not commit replay-only regressions.
-- Do not commit tests that call `run_differential_fuzz(...)` as the main assertion.
-- Committed regression must be mechanism-explicit:
-  - set concrete preconditions that trigger the bug
-  - run matching CybORG and JAX actions
-  - assert the exact divergent field/value parity
-- If CybORG has a concrete mechanic/model that JAXborg lacks (e.g., PID/session identity, action lifecycle state), implement that model in `src/jaxborg/` rather than adding heuristic workaround logic.
-
-#### Good 4-step TDD loop (example)
-
-Example gap: `seed=0 step=130 host_compromised [host_80] cyborg=1 jax=0` caused by Blue `Remove`.
-
-1. **Reproduce and isolate context**
-   - Re-run the failing seed/step and inspect the exact CybORG action and state preconditions.
-   - In this example: `Remove` was called with `sus_pids` present, but PID was stale (no live process), so CybORG did not clear the red session.
-2. **Write one explicit failing differential test**
-   - Add a subsystem differential test that sets up only the required state and compares CybORG and JAX for that mechanic.
-   - In this example: create a stale suspicious PID case for `Remove` and assert both sides keep the user session.
-3. **Apply minimal production fix**
-   - Change only `src/jaxborg/` logic needed for parity; do not rewrite broad behavior.
-   - In this example: gate JAX `Remove` clearing on stronger, CybORG-consistent preconditions.
-4. **Verify and iterate**
-   - Run the new regression first, then nearby subsystem tests, then rerun fuzzing to get the next first mismatch.
-   - Keep one-gap-at-a-time discipline: reproduce -> test -> fix -> rerun.
-
-### Precomputed Randoms for Deterministic Testing
-
-CybORG and JAX use independent RNG streams, making direct comparison of random-dependent behavior (green agents, detection rolls) impossible without synchronization. The solution is precomputed random arrays stored in `CC4State`:
-
-- **Green agents**: `green_randoms` `(MAX_STEPS, GLOBAL_MAX_HOSTS, 7)` float array + `use_green_randoms` bool. The 7 fields encode action choice, service selection, reliability roll, FP roll, phishing roll, dest host, and access FP roll as `[0,1)` uniforms. `sample_green_random()` in `actions/rng.py` uses `jax.lax.cond` to read from the array or fall back to JAX RNG. `tests/differential/green_recorder.py` wraps CybORG's `np_random` to capture values, then the harness injects them into JAX state via `sync_green_rng=True`.
-- **Detection**: `detection_randoms` flat sequence + `detection_random_index` counter. `sample_detection_random()` in `actions/rng.py`.
-
-To run green parity tests: `uv run pytest tests/test_green_parity.py -v` (requires CybORG).
-To run green unit tests (no CybORG): `uv run pytest tests/test_green_unit.py -v`.
-
-## Fixing Differential Gaps
-
-The differential fuzzer (`tests/differential/fuzzer.py`) systematically finds CybORG/JAX state divergences by running full episodes across many seeds. Run it:
+## Testing
 
 ```bash
-uv run python -m tests.differential.fuzzer          # 20 seeds × 100 steps
+uv run pytest tests/ -v          # all tests (~9 min)
+uv run pytest tests/ -v -x       # stop on first failure
 ```
 
-It returns a `MismatchReport` on the first error: seed, step, field name, CybORG vs JAX values.
-
-### Investigation workflow
-
-1. **Reproduce (TDD red)**: write a failing **explicit differential regression** that runs CybORG and JAX to the failing seed/step and asserts the exact mismatch context.
-   - Prefer the relevant subsystem file and explicit state setup; avoid seed/step replay-only tests.
-   - Keep tests differential (pure CybORG + JAX in the same test), not JAX-only.
-   - One gap at a time: stop on first mismatch, add test, fix, rerun.
-2. Place the test in the appropriate file:
-   - Red action bugs → `tests/subsystems/test_red_*.py` (exploit, discover, privesc, etc.)
-   - Blue action bugs → `tests/subsystems/test_blue_*.py`
-   - Green/phishing bugs → `tests/test_green_parity.py`
-   - Session/topology bugs → `tests/subsystems/test_dynamic_topology.py`
-   - FSM state machine bugs → `tests/subsystems/test_fsm_red_agent.py`
-   - Reward/phase bugs → `tests/subsystems/test_rewards.py` or `tests/subsystems/test_phase_transitions.py`
-   - Cross-cutting or unclear → place in the closest subsystem differential test file and make the context explicit in the test name/body
-3. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand the mechanic causing the divergence
-4. **Fix the JAX code** in `src/jaxborg/` to match CybORG's behavior
-5. **Verify targeted tests first** (new regression + closest subsystem tests), then run:
-   - `uv run pytest tests/ -v -x`
-   - rerun differential fuzzing to find the next gap
-6. **Lint**: `uv run ruff check --fix . && uv run ruff format .`
-7. **Commit** with a message describing the gap and fix
-
-### Common root causes
-
-- JAX doesn't model a CybORG mechanic (action duration, session reassignment, observation-based tracking)
-- JAX success conditions differ from CybORG (missing service check, wrong subnet logic, no decoy handling)
-- Translator creates wrong CybORG action type or missing parameters (e.g. ExploitRemoteService needs a FixedExploitSelector)
-- Timing: CybORG multi-tick actions (duration > 1) need deferred JAX execution via `_red_pending_jax` in the harness
-
-### Key CybORG entry points for investigation
-
-- `SimulationController.step()` — action submission, `actions_in_progress` duration tracking
-- `ActionSpace.update()` — observation-based validity tracking (subnets, IPs)
-- `replace_action_if_invalid()` — action type/parameter validation
-- `ExploitRemoteService.execute()` — delegates to concrete exploit via selector
-- `FiniteStateRedAgent` — CybORG's FSM, uses `ExploitRemoteService` (duration=4)
-- `different_subnet_agent_reassignment()` — green phishing session transfers
+Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator) for CybORG↔JAX comparison. CybORG source is at `.venv/lib/python3.11/site-packages/CybORG/`.
 
 ## Linting
 
