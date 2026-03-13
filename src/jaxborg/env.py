@@ -252,11 +252,11 @@ class CC4Env(MultiAgentEnv):
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
         red_policy_randoms = self._select_red_policy_randoms(key)
-        state = create_initial_state()
         if green_randoms is not None:
-            state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
+            const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         if red_policy_randoms is not None:
-            state = state.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
+            const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
+        state = create_initial_state()
         state = state.replace(host_services=jnp.array(const.initial_services))
         state = _init_red_state(const, state)
 
@@ -270,11 +270,11 @@ class CC4Env(MultiAgentEnv):
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
         red_policy_randoms = self._select_red_policy_randoms(key)
-        state = create_initial_state()
         if green_randoms is not None:
-            state = state.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
+            const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         if red_policy_randoms is not None:
-            state = state.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
+            const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
+        state = create_initial_state()
         state = state.replace(host_services=const.initial_services)
         state = _init_red_state(const, state)
         return CC4EnvState(state=state, const=const)

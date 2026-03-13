@@ -41,7 +41,7 @@ def apply_scan_unified(
     should_roll = has_detection_roll & success
 
     def with_roll(s: CC4State):
-        rand_val, next_state = sample_detection_random(s, key)
+        rand_val, next_state = sample_detection_random(s, const, key)
         return rand_val < detection_rate, next_state
 
     def without_roll(s: CC4State):

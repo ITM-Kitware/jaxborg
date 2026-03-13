@@ -87,14 +87,16 @@ class TestApplyAggressiveScan:
         assert target is not None
 
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
-        state = state.replace(
+        const = jax_const.replace(
             detection_randoms=randoms,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
+        )
+        state = state.replace(
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_SCAN
@@ -142,14 +144,16 @@ class TestApplyStealthScan:
         assert target is not None
 
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
-        state = state.replace(
+        const = jax_const.replace(
             detection_randoms=randoms,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
+        )
+        state = state.replace(
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
         action_idx = encode_red_action("StealthServiceDiscovery", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == 0
@@ -185,17 +189,19 @@ class TestApplyDiscoverDeception:
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
+        const = jax_const.replace(
+            detection_randoms=randoms,
+            use_detection_randoms=jnp.array(True),
+        )
         state = state.replace(
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_randoms=randoms,
             detection_random_index=jnp.array(0, dtype=jnp.int32),
-            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_SD
 
@@ -207,16 +213,18 @@ class TestApplyDiscoverDeception:
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
+        const = jax_const.replace(
+            detection_randoms=randoms,
+            use_detection_randoms=jnp.array(True),
+        )
         state = state.replace(
             red_scanned_hosts=scanned,
             fsm_host_states=fsm,
-            detection_randoms=randoms,
             detection_random_index=jnp.array(0, dtype=jnp.int32),
-            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -228,16 +236,18 @@ class TestApplyDiscoverDeception:
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
+        const = jax_const.replace(
+            detection_randoms=randoms,
+            use_detection_randoms=jnp.array(True),
+        )
         state = state.replace(
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_randoms=randoms,
             detection_random_index=jnp.array(0, dtype=jnp.int32),
-            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_SD
 
@@ -247,14 +257,16 @@ class TestApplyDiscoverDeception:
         assert target is not None
 
         randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
-        state = state.replace(
+        const = jax_const.replace(
             detection_randoms=randoms,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
             use_detection_randoms=jnp.array(True),
+        )
+        state = state.replace(
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.detection_random_index) == 0
 
@@ -311,12 +323,14 @@ class TestApplyDiscoverDeception:
         state = apply_blue_decoy(state, const, blue_agent_id, target, DECOY_IDS["Tomcat"])
         blocked = jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
         blocked = blocked.at[int(const.host_subnet[target]), start_subnet].set(True)
+        const = const.replace(
+            detection_randoms=jnp.full(MAX_DETECTION_RANDOMS, 0.1),
+            use_detection_randoms=jnp.array(True),
+        )
         state = state.replace(
             blocked_zones=blocked,
             fsm_host_states=state.fsm_host_states.at[0, target].set(FSM_S),
-            detection_randoms=jnp.full(MAX_DETECTION_RANDOMS, 0.1),
             detection_random_index=jnp.array(0, dtype=jnp.int32),
-            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
@@ -334,18 +348,20 @@ class TestApplyDiscoverDeception:
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_K)
+        const = jax_const.replace(
+            detection_randoms=randoms,
+            use_detection_randoms=jnp.array(True),
+        )
         state = state.replace(
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_randoms=randoms,
             detection_random_index=jnp.array(0, dtype=jnp.int32),
-            use_detection_randoms=jnp.array(True),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = jitted(state, const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.fsm_host_states[0, target]) == FSM_KD
 
 

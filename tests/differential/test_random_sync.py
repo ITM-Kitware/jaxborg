@@ -24,7 +24,7 @@ def test_detection_random_sync_advances_jax_index_for_cyborg_scan_trace():
     assert not report.has_issues
     assert int(harness.jax_state.detection_random_index) == 1
     np.testing.assert_allclose(
-        np.asarray(harness.jax_state.detection_randoms[:1]),
+        np.asarray(harness.jax_const.detection_randoms[:1]),
         np.asarray(report.detection_randoms, dtype=np.float32),
         atol=1e-7,
     )

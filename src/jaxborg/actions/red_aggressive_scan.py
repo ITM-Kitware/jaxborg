@@ -39,7 +39,7 @@ def apply_aggressive_scan(
     )
 
     def with_roll(s: CC4State):
-        return sample_detection_random(s, key)
+        return sample_detection_random(s, const, key)
 
     def without_roll(s: CC4State):
         return jnp.float32(1.0), s

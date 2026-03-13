@@ -430,7 +430,7 @@ class TestFsmRedEnvDifferential:
             topology_bank_size=bank_size,
         )
         _, env_state = jax_env.reset(jax.random.PRNGKey(seed))
-        assert not bool(env_state.state.use_red_policy_randoms)
+        assert not bool(env_state.const.use_red_policy_randoms)
 
     def test_raw_cyborg_step_executes_concrete_decoy_with_skip_valid_check(self):
         """Independent rollout eval must step raw CybORG actions for concrete blue decoys."""
@@ -491,8 +491,8 @@ class TestFsmRedEnvDifferential:
             _, _, _, _, _ = cyborg_env.step(actions={agent: Sleep() for agent in cyborg_env.agents})
             step_idx = int(env_state.state.time)
             env_state = env_state.replace(
-                state=env_state.state.replace(
-                    red_policy_randoms=env_state.state.red_policy_randoms.at[step_idx].set(
+                const=env_state.const.replace(
+                    red_policy_randoms=env_state.const.red_policy_randoms.at[step_idx].set(
                         jnp.asarray(recorder.extract_step(step_idx), dtype=jnp.float32)
                     ),
                     use_red_policy_randoms=jnp.array(True),

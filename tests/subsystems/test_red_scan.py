@@ -2003,10 +2003,12 @@ class TestPendingStealthScanSourceLostOnRestore:
         )
 
         # Set up detection randoms to track consumption
-        state_restored = state_restored.replace(
-            detection_randoms=state_restored.detection_randoms.at[0].set(0.5),
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        const = const.replace(
+            detection_randoms=const.detection_randoms.at[0].set(0.5),
             use_detection_randoms=jnp.array(True),
+        )
+        state_restored = state_restored.replace(
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
         key = jax.random.PRNGKey(99)

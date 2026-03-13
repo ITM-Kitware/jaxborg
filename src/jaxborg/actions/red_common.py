@@ -442,7 +442,7 @@ def apply_exploit_route_detection(
         def _body(i, current_state):
             host_idx = path_nodes[i]
             draw_key = jax.random.fold_in(key, i)
-            rand_val, current_state = sample_detection_random(current_state, draw_key)
+            rand_val, current_state = sample_detection_random(current_state, const, draw_key)
             detected = rand_val > jnp.float32(1.0 - EXPLOIT_ROUTE_DETECTION_RATE)
             host_activity_detected = jnp.where(
                 detected,
@@ -458,6 +458,7 @@ def apply_exploit_route_detection(
 
 def sample_sim_exploit_success_roll(
     state: CC4State,
+    const: CC4Const,
     enabled: chex.Array,
     key: jax.Array,
 ) -> tuple[chex.Array, CC4State]:
@@ -468,7 +469,7 @@ def sample_sim_exploit_success_roll(
     """
 
     def _sample(state_in):
-        rand_val, next_state = sample_detection_random(state_in, key)
+        rand_val, next_state = sample_detection_random(state_in, const, key)
         return rand_val > jnp.float32(0.0), next_state
 
     return jax.lax.cond(
@@ -481,13 +482,14 @@ def sample_sim_exploit_success_roll(
 
 def sample_exploit_process_event_roll(
     state: CC4State,
+    const: CC4Const,
     enabled: chex.Array,
     key: jax.Array,
 ) -> tuple[chex.Array, CC4State]:
     """Mirror ExploitAction process_creation event detection roll."""
 
     def _sample(state_in):
-        rand_val, next_state = sample_detection_random(state_in, key)
+        rand_val, next_state = sample_detection_random(state_in, const, key)
         detected = rand_val > jnp.float32(1.0 - EXPLOIT_PROCESS_EVENT_DETECTION_RATE)
         return detected, next_state
 
@@ -566,7 +568,7 @@ def apply_exploit_success(
         state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
         state.red_activity_this_step,
     )
-    pid_delta = sample_red_pid_delta(state, state.time, agent_id, key)
+    pid_delta = sample_red_pid_delta(const, state.time, agent_id, key)
     new_pid = allocate_host_pid_from_delta(state, const, target_host, pid_delta)
     red_next_pid = jnp.where(success, jnp.maximum(state.red_next_pid, new_pid + 1), state.red_next_pid)
     session_pid_row = state.red_session_pids[agent_id, target_host]

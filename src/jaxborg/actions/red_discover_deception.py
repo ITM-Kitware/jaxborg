@@ -31,8 +31,8 @@ def apply_discover_deception(
 
     def _on_success(state_in: CC4State) -> CC4State:
         k1, k2 = jax.random.split(key)
-        r1, next_state = sample_detection_random(state_in, k1)
-        r2, next_state = sample_detection_random(next_state, k2)
+        r1, next_state = sample_detection_random(state_in, const, k1)
+        r2, next_state = sample_detection_random(next_state, const, k2)
         detected = (has_decoys & (r1 < DECEPTION_TP_RATE)) | (~has_decoys & (r2 < DECEPTION_FP_RATE))
         return next_state.replace(
             fsm_host_states=jnp.where(

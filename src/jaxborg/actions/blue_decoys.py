@@ -34,7 +34,7 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
     compatible = compatibility[decoy_type]
 
     can_deploy = covers_host & compatible
-    pid_delta = sample_blue_decoy_pid_delta(state, state.time, agent_id)
+    pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id)
     new_pid = allocate_host_pid_from_delta(state, const, target_host, pid_delta)
     host_decoys = jnp.where(
         can_deploy,

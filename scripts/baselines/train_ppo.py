@@ -53,11 +53,13 @@ class MLflowCallback(BaseCallback):
 
     def _on_training_end(self):
         elapsed = time.perf_counter() - self.start_time
-        mlflow.log_metrics({
-            "wall_time_sec": elapsed,
-            "steps_per_second": self.num_timesteps / elapsed,
-            "total_timesteps": self.num_timesteps,
-        })
+        mlflow.log_metrics(
+            {
+                "wall_time_sec": elapsed,
+                "steps_per_second": self.num_timesteps / elapsed,
+                "total_timesteps": self.num_timesteps,
+            }
+        )
 
 
 class CybORGPzShim(ParallelEnv):
@@ -142,14 +144,16 @@ def train(total_timesteps, learning_rate, n_steps, batch_size, seed, model_save_
     mlflow.set_tracking_uri(f"sqlite:///{mlflow_db}")
     mlflow.set_experiment("sb3-ppo-baseline")
     mlflow.start_run(run_name="maskable-ppo-vs-fsm-red")
-    mlflow.log_params({
-        "algorithm": "MaskablePPO-SB3",
-        "seed": seed,
-        "total_timesteps": total_timesteps,
-        "learning_rate": learning_rate,
-        "n_steps": n_steps,
-        "batch_size": batch_size,
-    })
+    mlflow.log_params(
+        {
+            "algorithm": "MaskablePPO-SB3",
+            "seed": seed,
+            "total_timesteps": total_timesteps,
+            "learning_rate": learning_rate,
+            "n_steps": n_steps,
+            "batch_size": batch_size,
+        }
+    )
 
     env = make_env()
     env = SB3ActionMaskWrapper(env)
