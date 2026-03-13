@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
+from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
 from jaxborg.state import CC4Const, CC4State
@@ -66,11 +66,14 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
     full_clear = cleared_all_sessions[:, None]
-    red_scan_anchor_host = recompute_scan_anchor_hosts(
+    # Restore kills all sessions on target_host.  Invalidate anchor rather
+    # than promoting a fallback — RedSessionCheck handles promotion later.
+    anchor_on_target = state.red_scan_anchor_host == target_host
+    lost_all_on_target = covers_host & (session_counts[:, target_host] > 0) & ~red_sessions[:, target_host]
+    red_scan_anchor_host = jnp.where(
+        anchor_on_target & lost_all_on_target,
+        jnp.int32(-1),
         state.red_scan_anchor_host,
-        red_sessions,
-        red_session_is_abstract,
-        const.host_active,
     )
     scan_synced = sync_scan_memory_fields(
         state.replace(

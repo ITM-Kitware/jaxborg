@@ -2,7 +2,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
-from jaxborg.actions.red_common import recompute_scan_anchor_hosts, sync_scan_memory_fields
+from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -193,11 +193,17 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_suspicious_process.at[target_host].set(any_suspicious_after),
         state.host_suspicious_process,
     )
-    red_scan_anchor_host = recompute_scan_anchor_hosts(
+    # When Remove destroys all sessions on the anchor host, invalidate the
+    # anchor (set to -1) rather than promoting a fallback.  In CybORG,
+    # session 0 is simply gone until RedSessionCheck promotes a new primary.
+    # Premature fallback promotion can fool privesc checks that rely on the
+    # stale red_primary_is_abstract flag.
+    anchor_on_target = state.red_scan_anchor_host == target_host
+    lost_all_on_target = covers_host & (session_count_before[:, target_host] > 0) & ~new_sessions[:, target_host]
+    red_scan_anchor_host = jnp.where(
+        anchor_on_target & lost_all_on_target,
+        jnp.int32(-1),
         state.red_scan_anchor_host,
-        new_sessions,
-        red_session_is_abstract,
-        const.host_active,
     )
 
     scan_synced = sync_scan_memory_fields(
