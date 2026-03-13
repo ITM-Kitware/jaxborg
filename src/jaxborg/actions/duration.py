@@ -4,6 +4,7 @@ import jax.numpy as jnp
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
     ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_DISCOVER_DECEPTION,
     ACTION_TYPE_SCAN,
     ACTION_TYPE_STEALTH_SCAN,
     BLUE_ACTION_DURATIONS,
@@ -128,9 +129,13 @@ def process_red_with_duration(
         execution_source_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
-    # CybORG's session 0 is always RedAbstractSession in CC4 FSM gameplay.
-    # The per-host abstract flag is sufficient for scan source validation.
-    source_is_abstract = state.red_session_is_abstract[agent_id, source_idx]
+    # CybORG's DiscoverNetworkServices.execute() checks
+    # isinstance(session_0, RedAbstractSession) (line 67).  Session 0 can be
+    # a regular Session when RedSessionCheck promotes a non-abstract session.
+    # The per-agent red_primary_is_abstract flag tracks this exactly, whereas
+    # the per-host red_session_is_abstract flag would be True if *any* session
+    # on the host is abstract (masking a non-abstract session 0).
+    source_is_abstract = state.red_primary_is_abstract[agent_id]
     source_valid = (
         (effective_source_host >= 0)
         & state.red_sessions[agent_id, source_idx]
@@ -140,8 +145,28 @@ def process_red_with_duration(
 
     new_ticks = current_ticks - 1
     should_execute = new_ticks <= 0
-    requires_bound_source = is_scan_action
-    can_execute = should_execute & ((~requires_bound_source) | source_valid)
+    is_discover_deception = action_type == ACTION_TYPE_DISCOVER_DECEPTION
+    # CybORG's DiscoverDeception.execute() checks that session 0 exists (line 70).
+    # After blue restore clears the session 0 host, the action must fail.
+    # DiscoverDeception always executes as a pending action (duration=2), so
+    # forced_source_valid (which checks the live JAX state at forced_primary_host)
+    # tells us whether blue restore destroyed session 0 during this step.
+    # When forced_primary_host is unavailable (-1, production mode), fall back to
+    # bound_source_host which uses the current anchor.
+    deception_source_host = jnp.where(
+        is_discover_deception & (forced_primary_host >= 0),
+        forced_primary_host,
+        jnp.where(is_discover_deception, bound_source_host, jnp.int32(-1)),
+    )
+    deception_source_idx = jnp.clip(deception_source_host, 0, state.red_sessions.shape[1] - 1)
+    deception_source_valid = (
+        (deception_source_host >= 0)
+        & state.red_sessions[agent_id, deception_source_idx]
+        & const.host_active[deception_source_idx]
+    )
+    requires_bound_source = is_scan_action | is_discover_deception
+    source_ok = jnp.where(is_discover_deception, deception_source_valid, source_valid)
+    can_execute = should_execute & ((~requires_bound_source) | source_ok)
     execution_pending_kind = jnp.where(
         is_scan_action & (effective_source_host >= 0),
         PENDING_SOURCE_KIND_HOST,
