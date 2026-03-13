@@ -111,10 +111,21 @@ def process_red_with_duration(
     effective_source_kind = jnp.where(is_busy, pending_source_kind, queued_source_kind)
     effective_source_binding_host = jnp.where(is_busy, pending_source_host, queued_source_binding_host)
     anchor_source_host = bound_source_host
-    effective_source_host = jnp.where(
-        is_scan_action & (effective_source_binding_host < 0) & (anchor_source_host >= 0),
-        anchor_source_host,
+    # CybORG binds scan actions to session 0 (a session ID), not a fixed host.
+    # When RedSessionCheck promotes a new session to slot 0 between queuing and
+    # execution, CybORG follows the updated session.  We only re-evaluate when
+    # the forced_primary_host (CybORG's actual session 0) is still valid -- this
+    # distinguishes RedSessionCheck promotion (session 0 moved) from blue
+    # restore (session 0 destroyed, action fails).
+    execution_source_host = jnp.where(
+        is_busy & (pending_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING) & forced_source_valid,
+        forced_primary_host,
         effective_source_binding_host,
+    )
+    effective_source_host = jnp.where(
+        is_scan_action & (execution_source_host < 0) & (anchor_source_host >= 0),
+        anchor_source_host,
+        execution_source_host,
     )
     source_idx = jnp.clip(effective_source_host, 0, state.red_sessions.shape[1] - 1)
     # CybORG's session 0 is always RedAbstractSession in CC4 FSM gameplay.
@@ -151,8 +162,7 @@ def process_red_with_duration(
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
     final_source_kind = jnp.where(should_execute, PENDING_SOURCE_KIND_NONE, effective_source_kind)
     preserve_source = ~should_execute & (
-        (final_source_kind == PENDING_SOURCE_KIND_HOST)
-        | (final_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING)
+        (final_source_kind == PENDING_SOURCE_KIND_HOST) | (final_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING)
     )
     final_source_host = jnp.where(
         preserve_source,

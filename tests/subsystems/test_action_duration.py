@@ -236,6 +236,129 @@ class TestFsmRedEnvDurationTicks:
         assert found_busy, "No busy red agent observed in 30 steps"
 
 
+class TestSessionBindingFollowsUpdatedAnchor:
+    """Regression: scan actions with SESSION_BINDING source must re-evaluate
+    the source host from the current anchor, not the stale host recorded at
+    queue time.
+
+    CybORG binds abstract scan actions to session 0 (a session ID). When
+    RedSessionCheck promotes a new session into slot 0, the scan follows the
+    updated session. JAX must mirror this by re-evaluating the bound source
+    from the current red_scan_anchor_host at execution time.
+    """
+
+    def test_session_binding_follows_anchor_change(self, env_and_state):
+        """When session 0 moves to a new host between queuing and execution,
+        the scan should execute using the NEW session 0 host, not the stale
+        one recorded at queue time.
+
+        This mirrors CybORG's behavior where abstract scan actions are bound
+        to session 0 by ID, and RedSessionCheck can promote a new session
+        into slot 0 between steps.  The forced_primary_host parameter
+        communicates CybORG's actual session 0 host to JAX.
+
+        Setup:
+        - Queue a stealth scan with SESSION_BINDING source on host_a
+        - Simulate session 0 moving to host_b (RedSessionCheck promotion)
+        - Remove the session from host_a
+        - Pass forced_primary_host=host_b to simulate CybORG session 0
+        - The scan should execute using host_b as source
+
+        Asserted field: detection_random_index (proves scan executed and
+        consumed the detection random).
+        """
+        from jaxborg.actions.encoding import RED_STEALTH_SCAN_START
+        from jaxborg.actions.pending_source import PENDING_SOURCE_KIND_SESSION_BINDING
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        key = jax.random.PRNGKey(77)
+
+        start_host = int(const.red_start_hosts[agent_id])
+        host_a = start_host  # initial anchor
+        target_subnet = int(const.host_subnet[host_a])
+
+        # Find host_b: a different active host in the same subnet
+        host_b = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != host_a:
+                host_b = h
+                break
+        if host_b < 0:
+            pytest.skip("Need at least 2 hosts in subnet for this test")
+
+        # Find target to scan in the same subnet
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if (
+                bool(const.host_active[h])
+                and int(const.host_subnet[h]) == target_subnet
+                and h != host_a
+                and h != host_b
+            ):
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("No scan target in same subnet")
+
+        # Set up initial state with host_a as the abstract anchor session
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, host_a].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host_a].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_a)),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+        )
+
+        scan_action = RED_STEALTH_SCAN_START + target_host
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+
+        # Queue the stealth scan (duration=3). Source should bind to host_a.
+        s1 = process_jit(state, const, agent_id, scan_action, key)
+        assert int(s1.red_pending_ticks[agent_id]) == 2  # 3 - 1 = 2
+        assert int(s1.red_pending_source_kind[agent_id]) in (
+            int(PENDING_SOURCE_KIND_SESSION_BINDING),
+            1,  # PENDING_SOURCE_KIND_HOST is also acceptable
+        )
+
+        # Simulate anchor changing to host_b (as RedSessionCheck would do)
+        s1 = s1.replace(
+            red_sessions=s1.red_sessions.at[agent_id, host_b].set(True),
+            red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_b].set(True),
+            red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
+        )
+        # Remove session from host_a so the stale binding would fail
+        s1 = s1.replace(
+            red_sessions=s1.red_sessions.at[agent_id, host_a].set(False),
+            red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_a].set(False),
+        )
+
+        # Enable detection random sync so we can verify consumption
+        s1 = s1.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=s1.detection_randoms.at[0].set(jnp.float32(0.99)),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+
+        # Tick down: 2 -> 1 (forced_primary_host=host_b simulates CybORG session 0)
+        s2 = process_jit(s1, const, agent_id, RED_SLEEP, key, forced_primary_host=jnp.int32(host_b))
+        assert int(s2.red_pending_ticks[agent_id]) == 1
+
+        # Tick down: 1 -> 0 (should execute using host_b via forced_primary_host)
+        s3 = process_jit(s2, const, agent_id, RED_SLEEP, key, forced_primary_host=jnp.int32(host_b))
+        assert int(s3.red_pending_ticks[agent_id]) == 0
+
+        # The scan must have consumed one detection random (stealth scan
+        # always rolls for detection when it succeeds). If the source was
+        # the stale host_a (no session), the scan would skip entirely and
+        # detection_random_index would remain 0.
+        assert int(s3.detection_random_index) == 1, (
+            "Stealth scan did not consume a detection random — the scan failed to use the updated session 0 host"
+        )
+
+
 class TestDurationDifferential:
     """Differential tests verifying JAX duration tracking matches CybORG.
 
