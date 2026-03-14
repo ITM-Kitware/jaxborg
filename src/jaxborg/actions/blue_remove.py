@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
+from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
@@ -205,6 +205,21 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         jnp.int32(-1),
         state.red_scan_anchor_host,
     )
+    # Session 0's PID corresponds to the first abstract PID on the anchor
+    # host (slot 0 of the abstract PID array — insertion order is preserved
+    # since remove_pid_from_row only sets entries to -1).  When Remove kills
+    # that specific PID, session 0 is gone and primary-is-abstract must be
+    # cleared so scans and privesc correctly fail.
+    old_first_abstract = jax.vmap(first_valid_pid)(state.red_session_abstract_pids[:, target_host, :])
+    new_first_abstract = jax.vmap(first_valid_pid)(new_session_abstract_pids[:, target_host, :])
+    primary_pid_killed = (
+        covers_host & anchor_on_target & (old_first_abstract >= 0) & (old_first_abstract != new_first_abstract)
+    )
+    red_primary_is_abstract = jnp.where(
+        primary_pid_killed,
+        False,
+        state.red_primary_is_abstract,
+    )
 
     scan_synced = sync_scan_memory_fields(
         state.replace(
@@ -231,4 +246,5 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         host_suspicious_process=new_suspicious_process,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
+        red_primary_is_abstract=red_primary_is_abstract,
     )
