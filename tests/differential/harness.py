@@ -781,6 +781,25 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(time=self.jax_state.time + 1)
         self._assert_pid_capacity("full_step")
 
+        # --- Sync Impact-attempted from CybORG ---
+        # CybORG randomly shuffles same-priority actions, so red Impact
+        # may execute before blue Remove (session alive → succeeds).
+        # JAX always runs blue first, so Impact may fail if blue killed
+        # the session.  Sync the flag from CybORG's actual outcomes.
+        cy_impact = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+        for agent_name, actions_list in controller.action.items():
+            if "red" not in agent_name:
+                continue
+            for act in actions_list:
+                if type(act).__name__ == "Impact":
+                    hidx = self.mappings.hostname_to_idx.get(getattr(act, "hostname", None))
+                    if hidx is not None:
+                        agent_sessions = cy_state.sessions.get(agent_name, {})
+                        has_active = any(s.active for s in agent_sessions.values())
+                        if has_active:
+                            cy_impact = cy_impact.at[hidx].set(True)
+        self.jax_state = self.jax_state.replace(red_impact_attempted=cy_impact)
+
         # --- Reward comparison ---
         impact_hosts = self.jax_state.red_impact_attempted
         jax_reward = float(
