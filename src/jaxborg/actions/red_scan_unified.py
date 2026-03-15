@@ -40,9 +40,12 @@ def apply_scan_unified(
 
     should_roll = has_detection_roll & success
 
+    # CybORG Portscan: decoy processes always trigger detection regardless of random
+    has_decoy = jnp.any(state.host_decoys[target_host])
+
     def with_roll(s: CC4State):
         rand_val, next_state = sample_detection_random(s, const, key)
-        return rand_val < detection_rate, next_state
+        return (rand_val < detection_rate) | has_decoy, next_state
 
     def without_roll(s: CC4State):
         return success, s

@@ -45,7 +45,9 @@ def apply_stealth_scan(
         return jnp.float32(1.0), s
 
     rand_val, state = jax.lax.cond(success, with_roll, without_roll, state)
-    detected = success & (rand_val < STEALTH_DETECTION_RATE)
+    # CybORG Portscan: decoy processes always trigger detection regardless of random
+    has_decoy = jnp.any(state.host_decoys[target_host])
+    detected = success & ((rand_val < STEALTH_DETECTION_RATE) | has_decoy)
 
     activity = jnp.where(
         detected,
