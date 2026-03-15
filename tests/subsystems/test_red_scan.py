@@ -549,7 +549,7 @@ class TestDifferentialWithCybORG:
 
         pre_ids = set(cy_state.sessions[red_agent_name].keys())
         cy_state.add_session(
-            Session(
+            RedAbstractSession(
                 ident=None,
                 hostname=mappings.idx_to_hostname[target_host],
                 username="user",
@@ -565,9 +565,7 @@ class TestDifferentialWithCybORG:
         source_sess = cy_state.sessions[red_agent_name][source_sid]
         target_sess = cy_state.sessions[red_agent_name][target_sid]
         source_sess.addport(target_ip, 22)
-        target_ports = dict(getattr(target_sess, "ports", {}))
-        target_ports[target_ip] = 22
-        target_sess.ports = target_ports
+        target_sess.addport(target_ip, 22)
 
         iface = controller.agent_interfaces[red_agent_name]
         iface.action_space.client_session[source_sid] = True
@@ -621,7 +619,7 @@ class TestDifferentialWithCybORG:
             red_session_is_abstract=state.red_session_is_abstract.at[red_agent_id, source_host]
             .set(True)
             .at[red_agent_id, target_host]
-            .set(False),
+            .set(True),
         )
 
         scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)
@@ -1788,6 +1786,7 @@ class TestDeferredScanSessionBinding:
             .set(stale_sid),
             red_discovered_hosts=state.red_discovered_hosts.at[red_agent_id, target_host].set(True),
             red_scan_anchor_host=state.red_scan_anchor_host.at[red_agent_id].set(stale_anchor_host),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[red_agent_id].set(True),
         )
 
         scan_idx = encode_red_action("AggressiveServiceDiscovery", target_host, red_agent_id)

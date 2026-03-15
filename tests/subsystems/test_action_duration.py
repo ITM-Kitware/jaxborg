@@ -450,10 +450,12 @@ class TestDiscoverDeceptionFailsAfterSessionDestroyed:
             red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
         )
 
-        # Enable detection random tracking
-        s1 = s1.replace(
+        # Enable detection random tracking (detection_randoms lives on CC4Const)
+        const = const.replace(
             use_detection_randoms=jnp.array(True),
-            detection_randoms=s1.detection_randoms.at[0].set(jnp.float32(0.99)).at[1].set(jnp.float32(0.99)),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)).at[1].set(jnp.float32(0.99)),
+        )
+        s1 = s1.replace(
             detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
@@ -529,10 +531,12 @@ class TestScanFailsWhenSession0NotAbstract:
             red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
         )
 
-        # Enable detection random tracking
-        state = state.replace(
+        # Enable detection random tracking (detection_randoms lives on CC4Const)
+        const = const.replace(
             use_detection_randoms=jnp.array(True),
-            detection_randoms=state.detection_randoms.at[0].set(jnp.float32(0.99)),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)),
+        )
+        state = state.replace(
             detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 

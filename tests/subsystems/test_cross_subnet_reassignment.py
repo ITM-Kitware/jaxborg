@@ -267,6 +267,14 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
         .set(True)
         .at[source_agent, target_idx]
         .set(True),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[source_agent, keep_host_idx]
+        .set(True)
+        .at[source_agent, target_idx]
+        .set(True),
+        red_session_abstract_pids=jax_state.red_session_abstract_pids.at[source_agent, keep_host_idx, 0]
+        .set(100)
+        .at[source_agent, target_idx, 0]
+        .set(101),
         red_session_count=jax_state.red_session_count.at[source_agent, keep_host_idx]
         .set(1)
         .at[source_agent, target_idx]
@@ -333,6 +341,14 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
         .set(True)
         .at[source_agent, target_idx]
         .set(True),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[source_agent, keep_host_idx]
+        .set(True)
+        .at[source_agent, target_idx]
+        .set(True),
+        red_session_abstract_pids=jax_state.red_session_abstract_pids.at[source_agent, keep_host_idx, 0]
+        .set(100)
+        .at[source_agent, target_idx, 0]
+        .set(101),
         red_session_count=jax_state.red_session_count.at[source_agent, keep_host_idx]
         .set(1)
         .at[source_agent, target_idx]

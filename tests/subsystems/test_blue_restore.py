@@ -541,6 +541,7 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[1, target].set(True).at[1, keep].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[1, target].set(True).at[1, keep].set(True),
             red_privilege=state.red_privilege.at[1, target].set(COMPROMISE_USER).at[1, keep].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[1, target].set(True).at[1, remote].set(True),
             red_scanned_source_hosts=state.red_scanned_source_hosts.at[1, target, keep]
@@ -628,6 +629,7 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[2, target].set(True).at[2, keep].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[2, target].set(True).at[2, keep].set(True),
             red_privilege=state.red_privilege.at[2, target].set(COMPROMISE_USER).at[2, keep].set(COMPROMISE_USER),
             red_scanned_hosts=state.red_scanned_hosts.at[2, keep].set(True).at[2, remote].set(True),
             red_scanned_source_hosts=state.red_scanned_source_hosts.at[2, keep, keep]
@@ -1150,6 +1152,7 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[3, anchor].set(True).at[3, target].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[3, anchor].set(True).at[3, target].set(True),
             red_session_count=state.red_session_count.at[3, anchor].set(2).at[3, target].set(1),
             red_privilege=state.red_privilege.at[3, anchor].set(COMPROMISE_USER).at[3, target].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[anchor].set(COMPROMISE_USER).at[target].set(COMPROMISE_USER),
@@ -1229,6 +1232,12 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[1, anchor]
+            .set(True)
+            .at[1, target]
+            .set(True)
+            .at[1, nonstale_host]
+            .set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[1, anchor]
             .set(True)
             .at[1, target]
             .set(True)
@@ -1331,6 +1340,12 @@ class TestDifferentialWithCybORG:
 
         state = state.replace(
             red_sessions=state.red_sessions.at[2, anchor].set(True).at[2, target].set(True).at[2, keep].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[2, anchor]
+            .set(True)
+            .at[2, target]
+            .set(True)
+            .at[2, keep]
+            .set(True),
             red_privilege=state.red_privilege.at[2, anchor]
             .set(COMPROMISE_USER)
             .at[2, target]
