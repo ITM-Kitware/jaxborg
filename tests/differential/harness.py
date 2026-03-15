@@ -144,14 +144,11 @@ def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf):
 @jax.jit
 def _jit_advance_and_clear(state, const):
     state = advance_mission_phase(state, const)
-    any_covered = jnp.any(const.blue_agent_hosts, axis=0)
     return state.replace(
         red_activity_this_step=_ZERO_INT_HOSTS,
         green_lwf_this_step=_ZERO_BOOL_HOSTS,
         green_asf_this_step=_ZERO_BOOL_HOSTS,
         red_impact_attempted=_ZERO_BOOL_HOSTS,
-        host_activity_detected=jnp.where(any_covered, False, state.host_activity_detected),
-        host_exploit_detected=jnp.where(any_covered, False, state.host_exploit_detected),
     )
 
 

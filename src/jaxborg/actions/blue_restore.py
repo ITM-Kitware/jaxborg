@@ -126,6 +126,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.host_activity_detected.at[target_host].set(False),
         state.host_activity_detected,
     )
+    old_host_activity_detected = jnp.where(
+        covers_host,
+        state.old_host_activity_detected.at[target_host].set(False),
+        state.old_host_activity_detected,
+    )
     host_suspicious_process = jnp.where(
         covers_host,
         state.host_suspicious_process.at[target_host].set(False),
@@ -161,6 +166,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_decoy_reliability=host_decoy_reliability,
         host_decoy_process_pids=host_decoy_process_pids,
         host_activity_detected=host_activity_detected,
+        old_host_activity_detected=old_host_activity_detected,
         host_suspicious_process=host_suspicious_process,
         ot_service_stopped=ot_service_stopped,
         host_service_reliability=host_service_reliability,

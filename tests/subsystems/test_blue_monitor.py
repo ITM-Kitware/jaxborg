@@ -164,7 +164,8 @@ class TestApplyBlueMonitor:
         assert int(state.red_activity_this_step[target]) == ACTIVITY_SCAN
 
         new_state = apply_blue_monitor(state, jax_const)
-        assert bool(new_state.host_activity_detected[target])
+        # Monitor ages current→old and clears current; check old
+        assert bool(new_state.old_host_activity_detected[target])
 
     def test_activity_on_unmonitored_host_not_detected(self, jax_const):
         target = _find_host_in_subnet(jax_const, "CONTRACTOR_NETWORK")
@@ -175,7 +176,7 @@ class TestApplyBlueMonitor:
         state = state.replace(red_activity_this_step=activity)
 
         new_state = apply_blue_monitor(state, jax_const)
-        assert not bool(new_state.host_activity_detected[target])
+        assert not bool(new_state.old_host_activity_detected[target])
 
     def test_detection_is_cumulative(self, jax_const):
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
@@ -187,7 +188,8 @@ class TestApplyBlueMonitor:
             red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         )
         new_state = apply_blue_monitor(state, jax_const)
-        assert bool(new_state.host_activity_detected[target])
+        # Pre-existing activity is aged to old by Monitor
+        assert bool(new_state.old_host_activity_detected[target])
 
     def test_jit_compatible(self, jax_const):
         state = _make_jax_state(jax_const)
@@ -197,7 +199,8 @@ class TestApplyBlueMonitor:
         jitted = jax.jit(apply_blue_monitor)
         new_state = jitted(state, jax_const)
         expected_detected = bool(jnp.any(jax_const.blue_agent_hosts[:, 0]))
-        assert bool(new_state.host_activity_detected[0]) == expected_detected
+        # Monitor ages current→old
+        assert bool(new_state.old_host_activity_detected[0]) == expected_detected
 
 
 class TestDifferentialWithCybORG:
@@ -233,7 +236,7 @@ class TestDifferentialWithCybORG:
         state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = apply_blue_monitor(state, const)
 
-        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.host_activity_detected[h])}
+        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.old_host_activity_detected[h])}
 
         cyborg_has_target = target_h in cyborg_detected
         jax_has_target = target_h in jax_detected
@@ -246,7 +249,7 @@ class TestDifferentialWithCybORG:
         cyborg_detected = _cyborg_monitor_detected_hosts(cyborg_env)
 
         state = apply_blue_monitor(state, const)
-        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.host_activity_detected[h])}
+        jax_detected = {int(h) for h in range(int(const.num_hosts)) if bool(state.old_host_activity_detected[h])}
 
         assert len(cyborg_detected) == 0, f"CybORG detected: {cyborg_detected}"
         assert len(jax_detected) == 0, f"JAX detected: {jax_detected}"
@@ -268,7 +271,7 @@ class TestDifferentialWithCybORG:
         state = state.replace(red_activity_this_step=activity)
         state = apply_blue_monitor(state, const)
 
-        jax_detected_on_target = bool(state.host_activity_detected[target_h])
+        jax_detected_on_target = bool(state.old_host_activity_detected[target_h])
         cyborg_detected_on_target = target_h in cyborg_detected
 
         assert not cyborg_detected_on_target and not jax_detected_on_target, (
@@ -314,7 +317,7 @@ class TestDifferentialWithCybORG:
 
         for subnet, h in targets.items():
             cyborg_has = h in cyborg_detected
-            jax_has = bool(state.host_activity_detected[h])
+            jax_has = bool(state.old_host_activity_detected[h])
             assert cyborg_has == jax_has, f"Subnet {subnet} host {h}: CybORG={cyborg_has}, JAX={jax_has}"
 
     def test_exploit_activity_detection_matches_cyborg(self, cyborg_and_jax):
@@ -363,8 +366,10 @@ class TestDifferentialWithCybORG:
         int(state.red_activity_this_step[target_h]) != ACTIVITY_NONE
 
         state = apply_blue_monitor(state, const)
-        # Exploit activity goes to host_exploit_detected (process_creation events)
-        jax_has_target = bool(state.host_activity_detected[target_h]) or bool(state.host_exploit_detected[target_h])
+        # After Monitor: exploit activity aged to old fields
+        jax_has_target = bool(state.old_host_activity_detected[target_h]) or bool(
+            state.old_host_exploit_detected[target_h]
+        )
 
         if cyborg_has_events:
             assert cyborg_has_target == jax_has_target, (

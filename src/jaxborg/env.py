@@ -323,14 +323,11 @@ class CC4Env(MultiAgentEnv):
 
         state = advance_mission_phase(state, const)
 
-        any_covered = jnp.any(const.blue_agent_hosts, axis=0)
         state = state.replace(
             red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
             green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
             green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
             red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-            host_activity_detected=jnp.where(any_covered, False, state.host_activity_detected),
-            host_exploit_detected=jnp.where(any_covered, False, state.host_exploit_detected),
         )
 
         blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(NUM_BLUE_AGENTS)], dtype=jnp.int32)

@@ -25,6 +25,12 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     # CybORG: scans create network_connection events, exploits create process_creation events
     host_activity_detected = state.host_activity_detected | (has_scan_activity & covers)
     host_exploit_detected = state.host_exploit_detected | (has_process_creation_events & covers)
+    # CybORG Monitor ages events: old = current, then clear current for covered hosts.
+    # Observations read old | current, giving events 2-cycle persistence.
+    old_host_activity_detected = jnp.where(covers, host_activity_detected, state.old_host_activity_detected)
+    aged_host_activity_detected = jnp.where(covers, False, host_activity_detected)
+    old_host_exploit_detected = jnp.where(covers, host_exploit_detected, state.old_host_exploit_detected)
+    aged_host_exploit_detected = jnp.where(covers, False, host_exploit_detected)
     host_suspicious_process = state.host_suspicious_process | newly_detected
 
     def _ingest_host(h, blue_suspicious_pids):
@@ -48,8 +54,10 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
 
     cleared_events = jnp.where(covers[:, None], -1, state.host_process_creation_pids)
     return state.replace(
-        host_activity_detected=host_activity_detected,
-        host_exploit_detected=host_exploit_detected,
+        host_activity_detected=aged_host_activity_detected,
+        old_host_activity_detected=old_host_activity_detected,
+        host_exploit_detected=aged_host_exploit_detected,
+        old_host_exploit_detected=old_host_exploit_detected,
         host_suspicious_process=host_suspicious_process,
         blue_suspicious_pids=blue_suspicious_pids,
         host_process_creation_pids=cleared_events,

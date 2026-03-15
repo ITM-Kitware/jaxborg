@@ -40,10 +40,11 @@ def _subnet_block(
     is_active = host_indices < GLOBAL_MAX_HOSTS
 
     safe_indices = jnp.where(is_active, host_indices, 0)
-    raw_exploit = state.host_exploit_detected[safe_indices]
+    # CybORG observations read old + current events (2-cycle persistence via Monitor aging)
+    raw_exploit = state.host_exploit_detected[safe_indices] | state.old_host_exploit_detected[safe_indices]
     malicious_processes = jnp.where(is_active, raw_exploit, False).astype(jnp.float32)
 
-    raw_detected = state.host_activity_detected[safe_indices]
+    raw_detected = state.host_activity_detected[safe_indices] | state.old_host_activity_detected[safe_indices]
     network_connections = jnp.where(is_active, raw_detected, False).astype(jnp.float32)
 
     return jnp.concatenate(
