@@ -57,6 +57,14 @@ def apply_scan_unified(
         state.red_activity_this_step.at[target_host].set(ACTIVITY_SCAN),
         state.red_activity_this_step,
     )
+    # CybORG Portscan creates network_connections events independently of exploit
+    # events. Set host_activity_detected directly so a later exploit overwriting
+    # red_activity_this_step doesn't erase the scan detection.
+    scan_detected = jnp.where(
+        detected,
+        state.host_activity_detected.at[target_host].set(True),
+        state.host_activity_detected,
+    )
     red_scan_anchor_host = jnp.where(
         success & (state.red_scan_anchor_host[agent_id] < 0),
         state.red_scan_anchor_host.at[agent_id].set(source_host),
@@ -66,5 +74,6 @@ def apply_scan_unified(
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
         red_activity_this_step=activity,
+        host_activity_detected=scan_detected,
     )
     return sync_scan_memory_fields(next_state, const, source_matrix=source_matrix)
