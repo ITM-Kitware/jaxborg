@@ -13,9 +13,11 @@ class Subsystem:
     depends_on: list[int] = field(default_factory=list)
     cyborg_source_paths: list[str] = field(default_factory=list)
     jax_target_files: list[str] = field(default_factory=list)
+    verification_level: str = "L1"  # L1=property, L2=interaction, L3=rollout, L4=transfer
 
 
 SUBSYSTEMS: list[Subsystem] = [
+    # --- L1: Property tests (individual component parity) ---
     Subsystem(
         id=1,
         name="static_topology",
@@ -26,6 +28,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/State.py",
         ],
         jax_target_files=["src/jaxborg/topology.py", "src/jaxborg/state.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=2,
@@ -36,6 +39,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/DiscoverRemoteSystems.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=3,
@@ -46,6 +50,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/DiscoverNetworkServices.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=4,
@@ -56,6 +61,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/ExploitActions/SSHBruteForce.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=5,
@@ -66,6 +72,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/ExploitActions/",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=6,
@@ -76,6 +83,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/EscalateActions/",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=7,
@@ -86,6 +94,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/Impact.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=8,
@@ -96,6 +105,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/Monitor.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=9,
@@ -106,6 +116,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/Analyse.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=10,
@@ -116,6 +127,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/Remove.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=11,
@@ -126,6 +138,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/Restore.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=12,
@@ -136,6 +149,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/DecoyActions/",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=13,
@@ -146,6 +160,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Shared/BlueRewardMachine.py",
         ],
         jax_target_files=["src/jaxborg/rewards.py"],
+        verification_level="L1",
     ),
     Subsystem(
         id=14,
@@ -157,7 +172,9 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Agents/Wrappers/EnterpriseMAE.py",
         ],
         jax_target_files=["src/jaxborg/observations.py"],
+        verification_level="L1",
     ),
+    # --- L2: Interaction tests (cross-module state dependencies) ---
     Subsystem(
         id=15,
         name="phase_transitions",
@@ -168,6 +185,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Shared/BlueRewardMachine.py",
         ],
         jax_target_files=["src/jaxborg/state.py", "src/jaxborg/rewards.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=16,
@@ -178,6 +196,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Agents/SimpleAgents/EnterpriseGreenAgent.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=17,
@@ -188,6 +207,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/ControlTraffic.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=18,
@@ -198,6 +218,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Agents/Wrappers/EnterpriseMAE.py",
         ],
         jax_target_files=["src/jaxborg/observations.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=19,
@@ -208,6 +229,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Scenarios/EnterpriseScenarioGenerator.py",
         ],
         jax_target_files=["src/jaxborg/topology.py", "src/jaxborg/state.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=20,
@@ -218,6 +240,7 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Agents/SimpleAgents/FiniteStateRedAgent.py",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L2",
     ),
     Subsystem(
         id=21,
@@ -228,7 +251,9 @@ SUBSYSTEMS: list[Subsystem] = [
             "CybORG/Simulator/Actions/ConcreteActions/",
         ],
         jax_target_files=["src/jaxborg/actions.py"],
+        verification_level="L2",
     ),
+    # --- L3: Rollout comparison (full episodes, matched seeds) ---
     Subsystem(
         id=22,
         name="full_episode_fuzzing",
@@ -236,6 +261,7 @@ SUBSYSTEMS: list[Subsystem] = [
         depends_on=list(range(1, 22)),
         cyborg_source_paths=[],
         jax_target_files=[],
+        verification_level="L3",
     ),
 ]
 
@@ -272,3 +298,86 @@ def mark_passing(subsystem_id: int) -> None:
 def is_all_done() -> bool:
     status = _load_status()
     return all(status.get(s.id) == "passing" for s in SUBSYSTEMS)
+
+
+def coverage_summary() -> dict:
+    """Return verification coverage summary by level (L1/L2/L3/L4).
+
+    Counts passing/total subsystems at each verification level and loads
+    L3/L4 results from catalog_status.json if present.
+    """
+    status = _load_status()
+    by_level: dict[str, dict] = {}
+    for level in ("L1", "L2", "L3", "L4"):
+        subs = [s for s in SUBSYSTEMS if s.verification_level == level]
+        passing = sum(1 for s in subs if status.get(s.id) == "passing")
+        by_level[level] = {
+            "total": len(subs),
+            "passing": passing,
+            "subsystems": [s.name for s in subs],
+        }
+
+    # L3 rollout coverage from status file
+    l3_coverage = status.get("l3_coverage")
+    if l3_coverage:
+        by_level["L3"]["rollout_coverage"] = l3_coverage
+
+    # L4 transfer result from status file
+    l4_result = status.get("l4_tost")
+    if l4_result:
+        by_level["L4"]["tost_result"] = l4_result
+
+    return by_level
+
+
+def update_l3_coverage(seeds: int, steps: int, clean: bool) -> None:
+    """Record L3 rollout coverage in catalog status."""
+    status = _load_status()
+    status["l3_coverage"] = {"seeds": seeds, "steps": steps, "clean": clean}
+    _save_status(status)
+
+
+def update_l4_tost(equivalent: bool, margin: float, mean_diff: float, episodes: int) -> None:
+    """Record L4 TOST equivalence result in catalog status."""
+    status = _load_status()
+    status["l4_tost"] = {
+        "equivalent": equivalent,
+        "margin": margin,
+        "mean_diff": mean_diff,
+        "episodes": episodes,
+    }
+    _save_status(status)
+
+
+def print_coverage_summary() -> None:
+    """Print hierarchical verification coverage summary."""
+    summary = coverage_summary()
+    print("\n" + "=" * 60)
+    print("HIERARCHICAL VERIFICATION COVERAGE")
+    print("=" * 60)
+    for level, data in summary.items():
+        total = data["total"]
+        passing = data["passing"]
+
+        if level == "L3":
+            if "rollout_coverage" in data:
+                rc = data["rollout_coverage"]
+                clean_str = "CLEAN" if rc["clean"] else "FAILING"
+                print(f"  L3: {rc['seeds']} seeds x {rc['steps']} steps = {clean_str}")
+            else:
+                pct = (passing / total * 100) if total > 0 else 0
+                print(f"  L3: {passing}/{total} ({pct:.0f}%) — no rollout data yet")
+
+        elif level == "L4":
+            if "tost_result" in data:
+                tr = data["tost_result"]
+                eq_str = "EQUIVALENT" if tr["equivalent"] else "NOT EQUIVALENT"
+                print(f"  L4: TOST {eq_str} (margin={tr['margin']}, diff={tr['mean_diff']:+.2f}, n={tr['episodes']})")
+            else:
+                print("  L4: no transfer evaluation yet")
+
+        else:
+            pct = (passing / total * 100) if total > 0 else 0
+            print(f"  {level}: {passing}/{total} ({pct:.0f}%)")
+
+    print("=" * 60)

@@ -51,6 +51,7 @@ def run_differential_fuzz(
     blue_agent: str = "sleep",
     blue_action_source: str = "sleep",
     strict_random_sync: bool = False,
+    check_obs: bool = True,
 ) -> MismatchReport | None:
     if mismatch_mode not in {"error", "all"}:
         raise ValueError("mismatch_mode must be one of: error, all")
@@ -77,6 +78,7 @@ def run_differential_fuzz(
             sync_green_rng=True,
             strict_random_sync=strict_random_sync,
             use_cyborg_blue_policy=use_cyborg_blue_policy,
+            check_obs=check_obs,
         )
         harness.reset()
 

@@ -891,6 +891,110 @@ def plot_training_curves(metrics_path, output_path):
     print(f"Saved {output_path}")
 
 
+# --- TOST equivalence test (L4 verification, per Karten et al. 2026) ---
+
+
+def tost_equivalence(
+    perf_rewards: np.ndarray,
+    ref_rewards: np.ndarray,
+    margin: float,
+    alpha: float = 0.05,
+) -> dict:
+    """Two One-Sided Tests for equivalence of mean episode rewards.
+
+    Tests H0_1: mu_perf - mu_ref >= margin  and  H0_2: mu_ref - mu_perf >= margin.
+    If both reject at level alpha, the two backends are equivalent within +-margin.
+
+    Args:
+        perf_rewards: Per-episode mean rewards from the performance backend (JAXborg).
+        ref_rewards: Per-episode mean rewards from the reference backend (CybORG).
+        margin: Environment-specific equivalence margin (Delta).
+        alpha: Significance level (default 0.05).
+
+    Returns:
+        Dict with keys: equivalent, p_upper, p_lower, mean_diff, margin, ci_lower, ci_upper.
+    """
+    from scipy import stats
+
+    n_perf, n_ref = len(perf_rewards), len(ref_rewards)
+    mean_diff = float(np.mean(perf_rewards) - np.mean(ref_rewards))
+
+    # Pooled standard error (Welch's t-test style)
+    se = float(np.sqrt(np.var(perf_rewards, ddof=1) / n_perf + np.var(ref_rewards, ddof=1) / n_ref))
+
+    if se < 1e-12:
+        # Identical distributions
+        return {
+            "equivalent": True,
+            "p_upper": 0.0,
+            "p_lower": 0.0,
+            "mean_diff": mean_diff,
+            "margin": margin,
+            "ci_lower": mean_diff,
+            "ci_upper": mean_diff,
+        }
+
+    # Welch-Satterthwaite degrees of freedom
+    s1, s2 = np.var(perf_rewards, ddof=1), np.var(ref_rewards, ddof=1)
+    nu_num = (s1 / n_perf + s2 / n_ref) ** 2
+    nu_den = (s1 / n_perf) ** 2 / (n_perf - 1) + (s2 / n_ref) ** 2 / (n_ref - 1)
+    df = nu_num / nu_den if nu_den > 0 else min(n_perf, n_ref) - 1
+
+    # Upper test: H0 says diff >= margin, reject if diff is sufficiently below margin
+    t_upper = (mean_diff - margin) / se
+    p_upper = float(stats.t.cdf(t_upper, df))
+
+    # Lower test: H0 says diff <= -margin, reject if diff is sufficiently above -margin
+    t_lower = (mean_diff + margin) / se
+    p_lower = float(1.0 - stats.t.cdf(t_lower, df))
+
+    # Confidence interval for the difference
+    t_crit = float(stats.t.ppf(1 - alpha, df))
+    ci_lower = mean_diff - t_crit * se
+    ci_upper = mean_diff + t_crit * se
+
+    equivalent = p_upper < alpha and p_lower < alpha
+
+    return {
+        "equivalent": equivalent,
+        "p_upper": p_upper,
+        "p_lower": p_lower,
+        "mean_diff": mean_diff,
+        "margin": margin,
+        "ci_lower": ci_lower,
+        "ci_upper": ci_upper,
+    }
+
+
+def print_tost_report(
+    jax_rewards: np.ndarray,
+    cyborg_rewards: np.ndarray,
+    margin: float = 5.0,
+    alpha: float = 0.05,
+):
+    """Print TOST equivalence report for cross-backend transfer validation."""
+    result = tost_equivalence(jax_rewards, cyborg_rewards, margin, alpha)
+
+    print("\n" + "=" * 70)
+    print("L4 CROSS-BACKEND EQUIVALENCE (TOST)")
+    print("=" * 70)
+    print(f"  Margin (Delta):       +/-{result['margin']:.1f}")
+    print(f"  Significance level:   alpha={alpha}")
+    print(f"  JAXborg episodes:     {len(jax_rewards)}")
+    print(f"  CybORG episodes:      {len(cyborg_rewards)}")
+    print(f"  Mean diff (perf-ref): {result['mean_diff']:+.2f}")
+    print(f"  {int((1 - alpha) * 100)}% CI for diff:      [{result['ci_lower']:+.2f}, {result['ci_upper']:+.2f}]")
+    print(f"  p_upper (diff < +D):  {result['p_upper']:.4f}")
+    print(f"  p_lower (diff > -D):  {result['p_lower']:.4f}")
+    verdict = "EQUIVALENT" if result["equivalent"] else "NOT EQUIVALENT"
+    print(f"  Verdict:              {verdict}")
+    if not result["equivalent"]:
+        print("  -> Sim-to-sim gap detected. Investigate with force-synced rollouts,")
+        print("     then add targeted L1/L2 tests for the divergent subsystem.")
+    print("=" * 70)
+    return result
+
+
 # --- Baseline / diagnostic functions ---
 
 
@@ -1113,6 +1217,29 @@ def main():
 
     # Comparison report
     print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
+
+    # L4 TOST equivalence test (always run with >= 2 episodes)
+    if len(jax_rewards) >= 2 and len(cyborg_rewards) >= 2:
+        tost_result = print_tost_report(jax_rewards, cyborg_rewards)
+        # Save TOST result alongside other outputs
+        tost_path = EXP_DIR / "tost_result.json"
+        tost_path.parent.mkdir(parents=True, exist_ok=True)
+        tost_result["jax_rewards"] = jax_rewards.tolist()
+        tost_result["cyborg_rewards"] = cyborg_rewards.tolist()
+        tost_path.write_text(json.dumps(tost_result, indent=2) + "\n")
+        print(f"Saved TOST result: {tost_path}")
+        # Record L4 result in catalog
+        try:
+            from tests.catalog import update_l4_tost
+
+            update_l4_tost(
+                equivalent=tost_result["equivalent"],
+                margin=tost_result["margin"],
+                mean_diff=tost_result["mean_diff"],
+                episodes=len(jax_rewards),
+            )
+        except Exception as e:
+            print(f"WARNING: Failed to update catalog with L4 TOST result: {e}")
 
     # Optional: baselines
     if args.baselines:

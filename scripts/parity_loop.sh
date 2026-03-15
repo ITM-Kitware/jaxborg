@@ -11,6 +11,7 @@
 #   FUZZ_MISMATCH_MODE      - "error" (default) or "all"
 #   FUZZ_BLUE_AGENT         - "random" (default), "sleep", or "monitor"
 #   FUZZ_BLUE_ACTION_SOURCE - "cyborg_policy" (default) or "sleep"
+#   FUZZ_CHECK_OBS          - check observations (default: 1)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -22,6 +23,7 @@ FUZZ_MISMATCH_MODE="${FUZZ_MISMATCH_MODE:-error}"
 FUZZ_BLUE_AGENT="${FUZZ_BLUE_AGENT:-random}"
 FUZZ_BLUE_ACTION_SOURCE="${FUZZ_BLUE_ACTION_SOURCE:-cyborg_policy}"
 FUZZ_STRICT_RANDOM_SYNC=1
+FUZZ_CHECK_OBS="${FUZZ_CHECK_OBS:-1}"
 
 # Persist JAX compilations between loop iterations so repeated uv/python
 # processes avoid recompilation costs.
@@ -47,6 +49,7 @@ r = run_differential_fuzz(
     blue_agent='$FUZZ_BLUE_AGENT',
     blue_action_source='$FUZZ_BLUE_ACTION_SOURCE',
     strict_random_sync=bool(int($FUZZ_STRICT_RANDOM_SYNC)),
+    check_obs=bool(int($FUZZ_CHECK_OBS)),
 )
 if r:
     print(f'MISMATCH|{r.seed}|{r.step}|{r.field_name}|{r.host_or_agent}|{r.cyborg_value}|{r.jax_value}')
@@ -59,6 +62,13 @@ else:
         echo ""
         echo "No monitored mismatches found across $FUZZ_SEEDS seeds x $FUZZ_STEPS steps (mode=$FUZZ_MISMATCH_MODE)."
         echo "Current monitored parity target reached after $i iterations."
+        # Record L3 coverage in catalog
+        uv run python -c "
+from tests.catalog import update_l3_coverage, print_coverage_summary
+update_l3_coverage(seeds=$FUZZ_SEEDS, steps=$FUZZ_STEPS, clean=True)
+print('Recorded L3 coverage: ${FUZZ_SEEDS} seeds x ${FUZZ_STEPS} steps = CLEAN')
+print_coverage_summary()
+" || echo "WARNING: Failed to update catalog with L3 coverage"
         exit 0
     fi
 
