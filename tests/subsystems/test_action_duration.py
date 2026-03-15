@@ -336,9 +336,11 @@ class TestSessionBindingFollowsUpdatedAnchor:
         )
 
         # Enable detection random sync so we can verify consumption
-        s1 = s1.replace(
+        const = const.replace(
             use_detection_randoms=jnp.array(True),
-            detection_randoms=s1.detection_randoms.at[0].set(jnp.float32(0.99)),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)),
+        )
+        s1 = s1.replace(
             detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
