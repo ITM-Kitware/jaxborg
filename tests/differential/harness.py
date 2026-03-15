@@ -460,7 +460,7 @@ class CC4DifferentialHarness:
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
             )
-            self.jax_state = self.jax_state.replace(
+            self.jax_const = self.jax_const.replace(
                 use_red_privesc_choices=jnp.array(True),
             )
 
@@ -684,7 +684,7 @@ class CC4DifferentialHarness:
             privesc_row = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
             for ridx, choice_idx in random_sync_report.red_privesc_choices.items():
                 privesc_row[ridx] = choice_idx
-            red_privesc_choice_row = self.jax_state.red_privesc_choices.at[self.jax_state.time].set(
+            red_privesc_choice_row = self.jax_const.red_privesc_choices.at[self.jax_state.time].set(
                 jnp.array(privesc_row, dtype=jnp.int32)
             )
             self.jax_const = self.jax_const.replace(
@@ -693,9 +693,9 @@ class CC4DifferentialHarness:
                 blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
                 detection_randoms=detection_randoms,
                 use_detection_randoms=jnp.array(using_detection_sync),
+                red_privesc_choices=red_privesc_choice_row,
             )
             self.jax_state = self.jax_state.replace(
-                red_privesc_choices=red_privesc_choice_row,
                 detection_random_index=jnp.array(0, dtype=jnp.int32),
             )
             if self.strict_random_sync and random_sync_report.has_issues:

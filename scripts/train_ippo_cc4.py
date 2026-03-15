@@ -5,11 +5,19 @@ Trains Blue agents against scripted FSM red agents using feedforward networks.
 Fully JIT'd: rollout collection via jax.lax.scan + PPO update in one compiled fn.
 """
 
-import json
 import os
+from pathlib import Path
+
+# Persistent XLA compilation cache — must be set BEFORE importing JAX.
+# Default: ~/.cache/jaxborg/xla.  Override: JAX_COMPILATION_CACHE_DIR env var.
+if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
+    _default_cache = str(Path.home() / ".cache" / "jaxborg" / "xla")
+    os.environ["JAX_COMPILATION_CACHE_DIR"] = _default_cache
+os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+
+import json
 import pickle
 import time
-from pathlib import Path
 from typing import NamedTuple
 
 import distrax
@@ -505,6 +513,11 @@ def main(cfg):
     config = OmegaConf.to_container(cfg)
     mlflow_enabled = bool(config.get("MLFLOW_ENABLED", True))
 
+    cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "")
+    if cache_dir:
+        Path(cache_dir).mkdir(parents=True, exist_ok=True)
+        print(f"XLA compilation cache: {cache_dir}", flush=True)
+
     timestamp = time.strftime("%Y%m%d_%H%M")
     save_dir = EXP_DIR / f"ippo_cc4_{timestamp}"
     save_dir.mkdir(parents=True, exist_ok=True)
@@ -546,9 +559,12 @@ def main(cfg):
     print(f"Num steps per rollout: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
+    print(f"Topology mode: {config.get('TOPOLOGY_MODE', 'pure')}")
     print("=" * 60, flush=True)
 
+    t_setup = time.perf_counter()
     env, network, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config)
+    print(f"  env+network setup: {time.perf_counter() - t_setup:.1f}s", flush=True)
 
     rng = jax.random.PRNGKey(config["SEED"] + 1)
     rng, _rng = jax.random.split(rng)

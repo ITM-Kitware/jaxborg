@@ -72,6 +72,8 @@ class CC4Const:
     use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
     blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed blue decoy pid deltas
     use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
+    red_privesc_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed privesc session choice index
+    use_red_privesc_choices: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
 
 
 @struct.dataclass
@@ -141,9 +143,6 @@ class CC4State:
     red_pending_target_host: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target host for deferred actions
     red_pending_target_subnet: chex.Array  # (NUM_RED_AGENTS,) int32 — stored target subnet for deferred discover
 
-    red_privesc_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed privesc session choice index
-    use_red_privesc_choices: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-
     red_impact_attempted: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — any red Impact reached execution this step
 
     red_agent_active: chex.Array  # (NUM_RED_AGENTS,) bool — dynamically activated via session reassignment
@@ -195,6 +194,8 @@ def create_initial_const() -> CC4Const:
         use_red_pid_deltas=jnp.array(False),
         blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_pid_deltas=jnp.array(False),
+        red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_privesc_choices=jnp.array(False),
     )
 
 
@@ -252,8 +253,6 @@ def create_initial_state() -> CC4State:
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_random_index=jnp.array(0, dtype=jnp.int32),
-        red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        use_red_privesc_choices=jnp.array(False),
         red_pending_ticks=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),

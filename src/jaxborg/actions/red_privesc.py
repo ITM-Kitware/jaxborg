@@ -29,7 +29,7 @@ def apply_privesc(
     total_safe = jnp.maximum(target_count, jnp.int32(1))
     # CybORG: np_random.choice(sessions) picks a random session on the host.
     # Sync via precomputed choices when available to match CybORG's selection.
-    chosen_slot = sample_red_privesc_choice(state, state.time, agent_id, key, total_safe)
+    chosen_slot = sample_red_privesc_choice(const, state.time, agent_id, key, total_safe)
 
     # CybORG samples one concrete target session object on the host. The older
     # host-level sandbox flag is only safe to apply when a single session exists.
