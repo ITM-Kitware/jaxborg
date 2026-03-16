@@ -301,6 +301,7 @@ def train(args):
         "network": "[256, 256]",
         "shared_policy": "agents_0-3_shared",
         "anneal_lr": args.anneal_lr,
+        "num_rollouts_per_update": args.num_rollouts_per_update,
     })
 
     # Metrics file
@@ -321,12 +322,20 @@ def train(args):
     start_time = time.perf_counter()
     total_steps = 0
     num_updates = 0
+    rollouts_collected = 0
+    accum_obs_s, accum_obs_l = [], []
+    accum_act_s, accum_act_l = [], []
+    accum_lp_s, accum_lp_l = [], []
+    accum_adv_s, accum_adv_l = [], []
+    accum_ret_s, accum_ret_l = [], []
+    accum_val_s, accum_val_l = [], []
+    accum_mask_s, accum_mask_l = [], []
 
-    steps_per_update = args.num_envs * args.rollout_length
+    steps_per_update = args.num_envs * args.rollout_length * args.num_rollouts_per_update
     total_updates = args.total_timesteps // steps_per_update
-    # Agent-level batch size for SGD
-    small_batch = num_steps * args.num_envs * 4  # 4 small agents
-    large_batch = num_steps * args.num_envs * 1  # 1 large agent
+    # Agent-level batch size for SGD (accounts for accumulation)
+    small_batch = num_steps * args.num_envs * 4 * args.num_rollouts_per_update
+    large_batch = num_steps * args.num_envs * 1 * args.num_rollouts_per_update
     small_mb_size = small_batch // args.num_minibatches
     large_mb_size = large_batch // args.num_minibatches
 
@@ -335,6 +344,7 @@ def train(args):
     print(f"{'='*70}")
     print(f"  Envs: {args.num_envs}")
     print(f"  Rollout length: {args.rollout_length} (steps per env)")
+    print(f"  Rollouts per update: {args.num_rollouts_per_update}")
     print(f"  Steps per update: {steps_per_update:,} (env steps)")
     print(f"  Total timesteps: {args.total_timesteps:,}")
     print(f"  Total updates: {total_updates}")
@@ -480,6 +490,26 @@ def train(args):
 
                 returns_large = advantages_large + values_large
 
+            # ── Accumulate rollout data ──────────────────────────────
+            accum_obs_s.append(obs_small.reshape(-1, SMALL_OBS_DIM).clone())
+            accum_obs_l.append(obs_large.reshape(-1, LARGE_OBS_DIM).clone())
+            accum_act_s.append(actions_small.reshape(-1).clone())
+            accum_act_l.append(actions_large.reshape(-1).clone())
+            accum_lp_s.append(logprobs_small.reshape(-1).clone())
+            accum_lp_l.append(logprobs_large.reshape(-1).clone())
+            accum_adv_s.append(advantages_small.reshape(-1).clone())
+            accum_adv_l.append(advantages_large.reshape(-1).clone())
+            accum_ret_s.append(returns_small.reshape(-1).clone())
+            accum_ret_l.append(returns_large.reshape(-1).clone())
+            accum_val_s.append(values_small.reshape(-1).clone())
+            accum_val_l.append(values_large.reshape(-1).clone())
+            accum_mask_s.append(masks_small.reshape(-1, SMALL_ACT_DIM).clone())
+            accum_mask_l.append(masks_large.reshape(-1, LARGE_ACT_DIM).clone())
+            rollouts_collected += 1
+
+            if rollouts_collected < args.num_rollouts_per_update:
+                continue
+
             # ── PPO update ───────────────────────────────────────────
             num_updates += 1
 
@@ -492,21 +522,31 @@ def train(args):
             else:
                 lr = args.lr
 
-            # Flatten for minibatching
-            b_obs_s = obs_small.reshape(-1, SMALL_OBS_DIM)
-            b_obs_l = obs_large.reshape(-1, LARGE_OBS_DIM)
-            b_act_s = actions_small.reshape(-1)
-            b_act_l = actions_large.reshape(-1)
-            b_lp_s = logprobs_small.reshape(-1)
-            b_lp_l = logprobs_large.reshape(-1)
-            b_adv_s = advantages_small.reshape(-1)
-            b_adv_l = advantages_large.reshape(-1)
-            b_ret_s = returns_small.reshape(-1)
-            b_ret_l = returns_large.reshape(-1)
-            b_val_s = values_small.reshape(-1)
-            b_val_l = values_large.reshape(-1)
-            b_mask_s = masks_small.reshape(-1, SMALL_ACT_DIM)
-            b_mask_l = masks_large.reshape(-1, LARGE_ACT_DIM)
+            # Concatenate accumulated rollouts for minibatching
+            b_obs_s = torch.cat(accum_obs_s)
+            b_obs_l = torch.cat(accum_obs_l)
+            b_act_s = torch.cat(accum_act_s)
+            b_act_l = torch.cat(accum_act_l)
+            b_lp_s = torch.cat(accum_lp_s)
+            b_lp_l = torch.cat(accum_lp_l)
+            b_adv_s = torch.cat(accum_adv_s)
+            b_adv_l = torch.cat(accum_adv_l)
+            b_ret_s = torch.cat(accum_ret_s)
+            b_ret_l = torch.cat(accum_ret_l)
+            b_val_s = torch.cat(accum_val_s)
+            b_val_l = torch.cat(accum_val_l)
+            b_mask_s = torch.cat(accum_mask_s)
+            b_mask_l = torch.cat(accum_mask_l)
+
+            # Clear accumulators
+            accum_obs_s.clear(); accum_obs_l.clear()
+            accum_act_s.clear(); accum_act_l.clear()
+            accum_lp_s.clear(); accum_lp_l.clear()
+            accum_adv_s.clear(); accum_adv_l.clear()
+            accum_ret_s.clear(); accum_ret_l.clear()
+            accum_val_s.clear(); accum_val_l.clear()
+            accum_mask_s.clear(); accum_mask_l.clear()
+            rollouts_collected = 0
 
             total_s = b_obs_s.shape[0]
             total_l = b_obs_l.shape[0]
@@ -746,6 +786,8 @@ def main():
     parser.add_argument("--no-anneal-lr", dest="anneal_lr", action="store_false")
     parser.add_argument("--target-kl", type=float, default=None,
                         help="Target KL for early stopping (None = no early stopping)")
+    parser.add_argument("--num-rollouts-per-update", type=int, default=1,
+                        help="Number of rollouts to accumulate before each PPO update")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default="")
 
