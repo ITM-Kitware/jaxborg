@@ -268,13 +268,21 @@ SUBSYSTEMS: list[Subsystem] = [
 SUBSYSTEMS_BY_ID = {s.id: s for s in SUBSYSTEMS}
 
 
-def _load_status() -> dict[int, str]:
+def _load_status() -> dict[int | str, object]:
     if not CATALOG_STATUS_PATH.exists():
         return {}
-    return {int(k): v for k, v in json.loads(CATALOG_STATUS_PATH.read_text()).items()}
+    raw_status = json.loads(CATALOG_STATUS_PATH.read_text())
+    status: dict[int | str, object] = {}
+    for key, value in raw_status.items():
+        try:
+            parsed_key: int | str = int(key)
+        except ValueError:
+            parsed_key = key
+        status[parsed_key] = value
+    return status
 
 
-def _save_status(status: dict) -> None:
+def _save_status(status: dict[int | str, object]) -> None:
     sorted_items = sorted(status.items(), key=lambda x: str(x[0]))
     CATALOG_STATUS_PATH.write_text(json.dumps({str(k): v for k, v in sorted_items}, indent=2) + "\n")
 
