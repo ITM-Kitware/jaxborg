@@ -32,6 +32,9 @@ export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$PWD/.cache/jax}"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS:-0}"
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 
+TMPFILE=$(mktemp)
+trap 'rm -f "$TMPFILE"' EXIT
+
 for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo ""
     echo "============================================"
@@ -39,7 +42,7 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
     echo "============================================"
 
     echo "Running fuzzer (seeds=0-$((FUZZ_SEEDS-1)), steps=$FUZZ_STEPS, mismatch_mode=$FUZZ_MISMATCH_MODE, blue_agent=$FUZZ_BLUE_AGENT, blue_action_source=$FUZZ_BLUE_ACTION_SOURCE)..."
-    output=$(uv run python -u -c "
+    uv run python -u -c "
 from tests.differential.fuzzer import run_differential_fuzz
 r = run_differential_fuzz(
     seeds=range($FUZZ_SEEDS),
@@ -56,7 +59,9 @@ if r:
     print(r.all_diffs_str)
 else:
     print('CLEAN')
-")
+" 2>&1 | tee "$TMPFILE"
+
+    output=$(cat "$TMPFILE")
 
     if echo "$output" | grep -q "^CLEAN$"; then
         echo ""

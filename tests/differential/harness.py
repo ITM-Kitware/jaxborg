@@ -187,8 +187,8 @@ class CC4DifferentialHarness:
         green_cls=EnterpriseGreenAgent,
         red_cls=FiniteStateRedAgent,
         check_rewards=True,
-        check_obs=False,
-        sync_green_rng=False,
+        check_obs=True,
+        sync_green_rng=True,
         strict_random_sync=False,
         use_cyborg_blue_policy=False,
     ):

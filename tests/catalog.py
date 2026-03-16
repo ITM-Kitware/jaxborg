@@ -274,8 +274,9 @@ def _load_status() -> dict[int, str]:
     return {int(k): v for k, v in json.loads(CATALOG_STATUS_PATH.read_text()).items()}
 
 
-def _save_status(status: dict[int, str]) -> None:
-    CATALOG_STATUS_PATH.write_text(json.dumps({str(k): v for k, v in sorted(status.items())}, indent=2) + "\n")
+def _save_status(status: dict) -> None:
+    sorted_items = sorted(status.items(), key=lambda x: str(x[0]))
+    CATALOG_STATUS_PATH.write_text(json.dumps({str(k): v for k, v in sorted_items}, indent=2) + "\n")
 
 
 def get_next_incomplete() -> Subsystem | None:
