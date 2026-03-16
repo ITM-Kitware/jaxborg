@@ -579,70 +579,73 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 
 
 def rollout_jaxborg_scan(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
-    """JAXborg-only eval using jax.lax.scan — fully compiled, GPU-accelerated.
+    """JAXborg-only eval using jax.lax.scan + jax.vmap — all episodes in parallel.
 
-    First call triggers XLA compilation (~5-15 min, cached to disk).
-    Subsequent episodes (and future runs with same code) execute in seconds.
+    Runs all episodes simultaneously on GPU via vmap over seeds.
+    First call triggers XLA compilation (~5-10 min, cached to disk).
+    Subsequent runs load from XLA cache and execute all episodes in one GPU pass.
     """
     env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
     scan_fn = make_scan_eval_fn(env, policy, policy_kind, deterministic)
 
-    all_actions = []
+    # Build keys for all episodes
+    keys = jnp.stack([jax.random.PRNGKey(seed + ep * 100) for ep in range(num_episodes)])
+
+    # Reset all episodes in parallel: vmap over seeds
+    print(f"  Resetting {num_episodes} episodes in parallel...", flush=True)
+    all_obs, all_env_states = jax.vmap(env.reset)(keys)
+
+    # Run all episodes in parallel: vmap(scan) over episodes
+    print("  (first run includes XLA compilation — cached for future runs)", flush=True)
+    t0 = time.perf_counter()
+    _, all_step_data = jax.vmap(scan_fn, in_axes=(None, 0, 0, 0))(params, keys, all_env_states, all_obs)
+    # all_step_data shapes: each field is (num_episodes, 500, ...) or (num_episodes, 500)
+
+    # Single device-to-host transfer for all episodes
+    actions_np = np.asarray(all_step_data["actions"])  # (num_episodes, 500, NUM_BLUE_AGENTS)
+    rewards_np = np.asarray(all_step_data["reward_mean"])  # (num_episodes, 500)
+    hosts_user_np = np.asarray(all_step_data["hosts_user"])
+    hosts_priv_np = np.asarray(all_step_data["hosts_priv"])
+    red_sess_np = np.asarray(all_step_data["red_sessions"])
+    phase_np = np.asarray(all_step_data["mission_phase"])
+
+    elapsed = time.perf_counter() - t0
+    ep_totals = rewards_np.sum(axis=1)
+    print(f"  {num_episodes} episodes completed in {elapsed:.1f}s ({elapsed / num_episodes:.1f}s/ep)")
+    for ep in range(num_episodes):
+        print(f"    ep {ep + 1}: reward={ep_totals[ep]:.1f}")
+
+    # Build result objects
+    all_actions_flat = []
     episode_rewards = []
     episode_results = []
 
     for ep in range(num_episodes):
-        t0 = time.perf_counter()
-        key = jax.random.PRNGKey(seed + ep * 100)
-        obs, env_state = env.reset(key)
-
-        if ep == 0:
-            print("  (first episode includes XLA compilation — cached for future runs)", flush=True)
-
-        final_state, step_data = scan_fn(params, key, env_state, obs)
-
-        # Transfer results to CPU (single sync)
-        actions_np = np.asarray(step_data["actions"])  # (500, NUM_BLUE_AGENTS)
-        rewards_np = np.asarray(step_data["reward_mean"])  # (500,)
-        hosts_user_np = np.asarray(step_data["hosts_user"])
-        hosts_priv_np = np.asarray(step_data["hosts_priv"])
-        red_sess_np = np.asarray(step_data["red_sessions"])
-        phase_np = np.asarray(step_data["mission_phase"])
-
-        elapsed = time.perf_counter() - t0
-        total_reward = float(rewards_np.sum())
-        cum_rewards = np.cumsum(rewards_np)
-        print(f"  JAXborg ep {ep + 1}: reward={total_reward:.1f} ({elapsed:.1f}s)")
-
-        # Build trajectory snapshots
+        cum_rewards = np.cumsum(rewards_np[ep])
         ep_trajectory = [
             StepSnapshot(
-                reward=float(rewards_np[s]),
+                reward=float(rewards_np[ep, s]),
                 cumulative_reward=float(cum_rewards[s]),
-                hosts_compromised_user=int(hosts_user_np[s]),
-                hosts_compromised_priv=int(hosts_priv_np[s]),
-                red_sessions_total=int(red_sess_np[s]),
-                mission_phase=int(phase_np[s]),
+                hosts_compromised_user=int(hosts_user_np[ep, s]),
+                hosts_compromised_priv=int(hosts_priv_np[ep, s]),
+                red_sessions_total=int(red_sess_np[ep, s]),
+                mission_phase=int(phase_np[ep, s]),
             )
-            for s in range(len(rewards_np))
+            for s in range(500)
         ]
-
-        # Build per-agent action lists
-        ep_actions_by_agent = [actions_np[:, i].tolist() for i in range(NUM_BLUE_AGENTS)]
-
-        flat_actions = actions_np.ravel().tolist()
-        all_actions.extend(flat_actions)
-        episode_rewards.append(total_reward)
+        ep_actions_by_agent = [actions_np[ep, :, i].tolist() for i in range(NUM_BLUE_AGENTS)]
+        all_actions_flat.extend(actions_np[ep].ravel().tolist())
+        episode_rewards.append(float(ep_totals[ep]))
         episode_results.append(
             EpisodeResult(
                 actions_by_agent=ep_actions_by_agent,
-                rewards=rewards_np.tolist(),
-                cumulative_reward=total_reward,
+                rewards=rewards_np[ep].tolist(),
+                cumulative_reward=float(ep_totals[ep]),
                 trajectory=ep_trajectory,
             )
         )
 
-    return np.array(all_actions), np.array(episode_rewards), episode_results
+    return np.array(all_actions_flat), np.array(episode_rewards), episode_results
 
 
 def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
