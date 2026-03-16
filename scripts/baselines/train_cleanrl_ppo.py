@@ -754,6 +754,27 @@ def train(args):
                 flush=True,
             )
 
+            # Periodic checkpoint
+            if args.checkpoint_every > 0 and total_steps % args.checkpoint_every < steps_per_update:
+                ckpt = {
+                    "agent_small": agent_small.state_dict(),
+                    "agent_large": agent_large.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "total_steps": total_steps,
+                    "num_updates": num_updates,
+                }
+                if reward_scaler is not None:
+                    ckpt["reward_scaler"] = {
+                        "returns": reward_scaler.returns,
+                        "mean": reward_scaler.mean,
+                        "var": reward_scaler.var,
+                        "count": reward_scaler.count,
+                    }
+                tag = args.tag or "default"
+                p = save_dir / f"checkpoint_{tag}_{total_steps // 1_000_000}M.pt"
+                torch.save(ckpt, p)
+                print(f"  ** Checkpoint saved: {p}", flush=True)
+
     except KeyboardInterrupt:
         print("\nInterrupted by user", flush=True)
 
@@ -842,6 +863,8 @@ def main():
                         help="Number of rollouts to accumulate before each PPO update")
     parser.add_argument("--resume-tag", type=str, default="",
                         help="Tag of a previous run to resume from (loads checkpoint)")
+    parser.add_argument("--checkpoint-every", type=int, default=0,
+                        help="Save checkpoint every N env steps (0 = only at end)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default="")
 
