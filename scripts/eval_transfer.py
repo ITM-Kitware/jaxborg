@@ -2,9 +2,15 @@
 
 # ruff: noqa: E402
 
+import os
+
+# Enable XLA compilation cache before importing JAX
+os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", os.path.expanduser("~/.cache/jaxborg/xla"))
+os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+
 import argparse
 import json
-import os
 import pickle
 import sys
 import time
@@ -235,6 +241,44 @@ def policy_dist(policy, params, policy_kind, obs_jax, mask):
     return policy.apply(params, obs_jax, mask)
 
 
+def make_batched_inference_fn(policy, params, policy_kind, deterministic):
+    """Build a JIT-compiled function that runs policy inference for all agents at once.
+
+    Returns batched_step(obs_stack, mask_stack, keys) -> (actions, logits)
+    where obs_stack/mask_stack are (NUM_BLUE_AGENTS, ...) and keys is (NUM_BLUE_AGENTS, 2).
+    """
+    if policy_kind == "current":
+
+        def _fwd(o, m):
+            return policy.apply(params, o, m, method=ActorCritic.actor).logits
+    else:
+
+        def _fwd(o, m):
+            return policy.apply(params, o, m).logits
+
+    if deterministic:
+
+        @jax.jit
+        def batched_step(obs_stack, mask_stack, _keys):
+            logits = jax.vmap(_fwd)(obs_stack, mask_stack)
+            return jnp.argmax(logits, axis=-1), logits
+    else:
+
+        @jax.jit
+        def batched_step(obs_stack, mask_stack, keys):
+            logits = jax.vmap(_fwd)(obs_stack, mask_stack)
+            actions = jax.vmap(lambda lg, k: distrax.Categorical(logits=lg).sample(seed=k))(logits, keys)
+            return actions, logits
+
+    return batched_step
+
+
+@jax.jit
+def _all_blue_masks(const, state):
+    """Compute action masks for all blue agents in one JIT call."""
+    return jnp.stack([compute_blue_action_mask(const, i, state) for i in range(NUM_BLUE_AGENTS)])
+
+
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
     """Translate a CybORG blue action into the JAX canonical action space."""
     cls_name = type(action).__name__
@@ -292,6 +336,90 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
             jax_mask[jax_idx] = True
 
     return jnp.array(jax_mask)
+
+
+def _build_cyborg_mask_cache(wrapper, mappings, const):
+    """Precompute CybORG-to-JAX action translation tables for all agents.
+
+    Returns a dict keyed by agent_name. Each value is a list (one per CybORG
+    action slot) of either:
+      - list[int]: static JAX indices (for non-Decoy actions)
+      - ("decoy", hostname, host_idx, agent_id, factory_jax_indices): precomputed decoy info
+      - None: padding/invalid slot (always skipped)
+    """
+    cache = {}
+    controller = wrapper.env.environment_controller
+    cyborg_state = controller.state
+
+    for agent_name in wrapper.possible_agents:
+        agent_id = int(agent_name.split("_")[-1])
+        cyborg_actions = wrapper.actions(agent_name)
+        cyborg_labels = wrapper.action_labels(agent_name)
+        agent_cache = []
+        for action, label in zip(cyborg_actions, cyborg_labels):
+            cls_name = type(action).__name__
+            if label.startswith("[Padding]") or (cls_name == "Sleep" and label.startswith("[Invalid]")):
+                agent_cache.append(None)
+            elif cls_name == "DeployDecoy":
+                # Precompute everything except the runtime is_host_compatible check
+                if action.hostname not in mappings.hostname_to_idx:
+                    agent_cache.append(None)
+                else:
+                    host_idx = mappings.hostname_to_idx[action.hostname]
+                    # Precompute JAX indices for each factory type
+                    factory_indices = [
+                        (factory, encode_blue_action(action_name, host_idx, agent_id, const=const))
+                        for factory, action_name in DECOY_FACTORY_ACTIONS
+                    ]
+                    agent_cache.append(("decoy", action.hostname, factory_indices))
+            else:
+                # Static translation — compute once
+                jax_indices = _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state)
+                agent_cache.append(jax_indices if jax_indices else None)
+        cache[agent_name] = agent_cache
+    return cache
+
+
+def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, const, mask_cache):
+    """Fast version of mask projection using precomputed translation cache.
+
+    Returns a numpy bool array (caller should stack and convert to jnp once).
+    """
+    controller = wrapper.env.environment_controller
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is not None and pending["remaining_ticks"] > 0:
+        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
+        label = f"[Pending] {type(pending['action']).__name__}"
+        for jax_idx in _cyborg_action_to_jax_indices(
+            pending["action"], label, agent_name, mappings, const, controller.state
+        ):
+            jax_mask[jax_idx] = True
+        return jax_mask
+
+    jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
+    action_space = wrapper.get_action_space(agent_name)
+    cyborg_mask = action_space["mask"]
+    agent_cache = mask_cache[agent_name]
+    cyborg_state = controller.state
+
+    for slot_idx, valid in enumerate(cyborg_mask):
+        if not valid:
+            continue
+        entry = agent_cache[slot_idx]
+        if entry is None:
+            continue
+        if isinstance(entry, tuple) and entry[0] == "decoy":
+            # Runtime decoy compatibility check (hostname + JAX indices precomputed)
+            _, hostname, factory_indices = entry
+            host = cyborg_state.hosts[hostname]
+            for factory, jax_idx in factory_indices:
+                if factory.is_host_compatible(host):
+                    jax_mask[jax_idx] = True
+        else:
+            for jax_idx in entry:
+                jax_mask[jax_idx] = True
+
+    return jax_mask
 
 
 def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
@@ -359,9 +487,10 @@ def make_cyborg_env(seed=42, bank_match_size=None):
     return BlueFlatWrapper(env=cyborg, pad_spaces=True)
 
 
-def _inject_live_red_policy_step(env_state, recorder):
+def _inject_live_red_policy_step(env_state, recorder, step_idx=None):
     """Inject CybORG-recorded red choice tokens for the current JAX step."""
-    step_idx = int(env_state.state.time)
+    if step_idx is None:
+        step_idx = int(env_state.state.time)
     step_tokens = jnp.asarray(recorder.extract_step(step_idx), dtype=jnp.float32)
     return env_state.replace(
         const=env_state.const.replace(
@@ -376,6 +505,7 @@ def _inject_live_red_policy_step(env_state, recorder):
 
 def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
     env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
     all_actions = []
     episode_rewards = []
     episode_results = []
@@ -395,28 +525,28 @@ def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=F
             key, step_key = jax.random.split(key)
             act_keys = jax.random.split(key, NUM_BLUE_AGENTS)
 
-            actions = {}
-            for agent_idx in range(NUM_BLUE_AGENTS):
-                agent = f"blue_{agent_idx}"
-                avail = compute_blue_action_mask(env_state.const, agent_idx, env_state.state)
-                pi = policy_dist(policy, params, policy_kind, obs[agent], avail)
+            # Batched mask computation + policy inference (1 JIT call instead of 5)
+            masks = _all_blue_masks(env_state.const, env_state.state)
+            obs_stack = jnp.stack([obs[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
+            actions_arr, _ = batched_step(obs_stack, masks, act_keys)
 
-                if deterministic:
-                    action = jnp.argmax(pi.logits)
-                else:
-                    action = pi.sample(seed=act_keys[agent_idx])
-
-                actions[agent] = action
-                ep_actions_by_agent[agent_idx].append(int(action))
+            # Single device-to-host transfer for all actions
+            actions_np = np.asarray(actions_arr)
+            actions = {f"blue_{i}": actions_arr[i] for i in range(NUM_BLUE_AGENTS)}
+            for i in range(NUM_BLUE_AGENTS):
+                ep_actions_by_agent[i].append(int(actions_np[i]))
 
             obs, env_state, rewards, dones, _ = env.step(step_key, env_state, actions)
-            step_reward = float(np.mean([float(rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
+
+            # Batch reward extraction (single transfer)
+            reward_arr = jnp.stack([rewards[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
+            reward_np = np.asarray(reward_arr)
+            step_reward = float(reward_np.mean())
             cum_reward += step_reward
             ep_step_rewards.append(step_reward)
-            for i in range(NUM_BLUE_AGENTS):
-                ep_reward[i] += float(rewards[f"blue_{i}"])
+            ep_reward += reward_np
 
-            # Extract trajectory snapshot from state
+            # Extract trajectory snapshot — defer int() conversions
             st = env_state.state
             active = np.array(env_state.const.host_active, dtype=bool)
             compromised = np.array(st.host_compromised)
@@ -455,6 +585,7 @@ def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=F
 
 
 def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
     all_actions = []
     episode_rewards = []
     all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
@@ -468,22 +599,30 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
         mappings = build_mappings_from_cyborg(inner)
 
         rng = jax.random.PRNGKey(seed + ep * 100)
+        mask_cache = _build_cyborg_mask_cache(env, mappings, const)
         total = 0.0
         ep_actions = []
 
         for _ in range(500):
+            rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
+            act_keys = jnp.stack(_rngs)
+
+            # CybORG mask with cached translation (skips re-translating static actions)
+            masks = jnp.stack(
+                [
+                    _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
+                    for agent_name in env.agents
+                ]
+            )
+            obs_stack = jnp.stack([jnp.array(observations[agent_name], dtype=jnp.float32) for agent_name in env.agents])
+
+            # Batched policy inference (1 forward pass instead of 5)
+            actions_arr, _ = batched_step(obs_stack, masks, act_keys)
+            actions_np = np.asarray(actions_arr)
+
             actions = {}
             for agent_idx, agent_name in enumerate(env.agents):
-                obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
-                mask = _live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const)
-                pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
-
-                if deterministic:
-                    action_idx = int(jnp.argmax(pi.logits))
-                else:
-                    rng, _rng = jax.random.split(rng)
-                    action_idx = int(pi.sample(seed=_rng))
-
+                action_idx = int(actions_np[agent_idx])
                 cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
                 actions[agent_name] = cyborg_action
                 ep_actions.append(action_idx)
@@ -503,11 +642,15 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
 def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
     """Run paired independent episodes with live CybORG red-choice sync into JAX.
 
-    Blue actions are still chosen independently from each environment's own
-    observations. Red stochastic choices are synced from CybORG step-by-step so
-    any remaining drift is due to simulator state/observation differences rather
-    than different RNG engines.
+    Blue actions are chosen independently in each env. Red stochastic choices
+    are synced from CybORG step-by-step so any remaining drift is due to
+    simulator state/observation differences rather than different RNG engines.
+
+    Optimized: batched policy inference (1 JIT'd vmap call per env instead of 5
+    per-agent calls), batched mask computation, minimized device-to-host syncs.
     """
+
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
 
     all_jax_actions = []
     all_cyborg_actions = []
@@ -532,6 +675,10 @@ def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_epi
         red_recorder = RedPolicyRecorder()
         red_recorder.install(inner, mappings)
 
+        # Pre-build agent name strings and mask cache
+        cyborg_agent_names = [f"blue_agent_{i}" for i in range(NUM_BLUE_AGENTS)]
+        mask_cache = _build_cyborg_mask_cache(cyborg_env, mappings, const)
+
         ep_jax_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         ep_cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         ep_step_rewards = []
@@ -543,61 +690,63 @@ def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_epi
 
         for step in range(500):
             key, step_key = jax.random.split(key)
-            act_keys = jax.random.split(key, NUM_BLUE_AGENTS + 1)
+            act_keys = jax.random.split(key, NUM_BLUE_AGENTS)
 
-            jax_blue_actions = {}
-            cyborg_blue_actions = {}
+            # --- JAX side: batched mask + policy inference (1 call, not 5) ---
+            jax_masks = _all_blue_masks(jax_state.const, jax_state.state)
+            jax_obs_stack = jnp.stack([jax_obs[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
+            jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, act_keys)
+
+            # --- CybORG side: cached mask translation + batched policy inference ---
+            cyborg_masks = jnp.stack(
+                [
+                    _live_blue_wrapper_mask_in_jax_space_cached(cyborg_env, name, mappings, const, mask_cache)
+                    for name in cyborg_agent_names
+                ]
+            )
+            cyborg_obs_stack = jnp.stack(
+                [jnp.array(cyborg_obs[name], dtype=jnp.float32) for name in cyborg_agent_names]
+            )
+            cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, act_keys)
+
+            # --- Single device-to-host sync for all 10 actions ---
+            jax_actions_np = np.asarray(jax_actions_arr)
+            cyborg_actions_np = np.asarray(cyborg_actions_arr)
+
+            # Build action dicts from numpy (no more JAX syncs)
+            jax_blue_actions = {f"blue_{i}": jax_actions_arr[i] for i in range(NUM_BLUE_AGENTS)}
             cyborg_actions = {}
+            for i in range(NUM_BLUE_AGENTS):
+                jax_act = int(jax_actions_np[i])
+                cyborg_act = int(cyborg_actions_np[i])
+                cyborg_actions[cyborg_agent_names[i]] = jax_blue_to_cyborg(cyborg_act, i, mappings, const=const)
+                ep_jax_actions_by_agent[i].append(jax_act)
+                ep_cyborg_actions_by_agent[i].append(cyborg_act)
+                cyborg_actions_by_agent[i].append(cyborg_act)
 
-            for agent_idx in range(NUM_BLUE_AGENTS):
-                jax_agent = f"blue_{agent_idx}"
-                cyborg_agent = f"blue_agent_{agent_idx}"
-
-                jax_mask = compute_blue_action_mask(jax_state.const, agent_idx, jax_state.state)
-                jax_pi = policy_dist(policy, params, policy_kind, jax_obs[jax_agent], jax_mask)
-                if deterministic:
-                    jax_action = int(jnp.argmax(jax_pi.logits))
-                else:
-                    jax_action = int(jax_pi.sample(seed=act_keys[agent_idx]))
-
-                cyborg_mask = _live_blue_wrapper_mask_in_jax_space(cyborg_env, cyborg_agent, mappings, const)
-                cyborg_pi = policy_dist(
-                    policy,
-                    params,
-                    policy_kind,
-                    jnp.array(cyborg_obs[cyborg_agent], dtype=jnp.float32),
-                    cyborg_mask,
-                )
-                if deterministic:
-                    cyborg_action = int(jnp.argmax(cyborg_pi.logits))
-                else:
-                    cyborg_action = int(cyborg_pi.sample(seed=act_keys[agent_idx]))
-
-                jax_blue_actions[jax_agent] = jnp.int32(jax_action)
-                cyborg_blue_actions[agent_idx] = cyborg_action
-                cyborg_actions[cyborg_agent] = jax_blue_to_cyborg(cyborg_action, agent_idx, mappings, const=const)
-
-                ep_jax_actions_by_agent[agent_idx].append(jax_action)
-                ep_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
-                cyborg_actions_by_agent[agent_idx].append(cyborg_action)
-
+            # First action diff check (already numpy, no additional sync)
             if first_action_diff is None:
-                action_vec_jax = [int(jax_blue_actions[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]
-                action_vec_cy = [int(cyborg_blue_actions[i]) for i in range(NUM_BLUE_AGENTS)]
-                if action_vec_jax != action_vec_cy:
-                    first_action_diff = (step, action_vec_jax, action_vec_cy)
+                jax_vec = jax_actions_np.tolist()
+                cy_vec = cyborg_actions_np.tolist()
+                if jax_vec != cy_vec:
+                    first_action_diff = (step, jax_vec, cy_vec)
 
+            # --- Step both envs ---
             cyborg_obs, cyborg_step_rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(
                 cyborg_env, actions=cyborg_actions
             )
             cyborg_step_reward = float(mean(cyborg_step_rewards.values()))
             cyborg_total += cyborg_step_reward
 
-            jax_state = _inject_live_red_policy_step(jax_state, red_recorder)
+            jax_state = _inject_live_red_policy_step(jax_state, red_recorder, step_idx=step)
             jax_obs, jax_state, jax_step_rewards, _, _ = jax_env.step(step_key, jax_state, jax_blue_actions)
-            jax_step_reward = float(np.mean([float(jax_step_rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
+
+            # Batch reward extraction
+            jax_reward_arr = jnp.stack([jax_step_rewards[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
+            jax_step_reward = float(np.asarray(jax_reward_arr).mean())
             jax_total += jax_step_reward
 
+            # State comparison (only until first diff found)
             if first_state_diff is None:
                 diffs = compare_snapshots(
                     extract_cyborg_snapshot(inner, mappings),
@@ -669,7 +818,15 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
     JAX-selected actions drive the synced rollout so the underlying episode stays
     matched. CybORG-selected actions are recorded from the same synced states for
     transfer diagnostics, not applied.
+
+    Optimized: batched policy inference across agents.
     """
+
+    if not deterministic:
+        raise ValueError("Matched transfer mode currently requires deterministic evaluation")
+
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic=True)
+    dummy_keys = jnp.zeros((NUM_BLUE_AGENTS, 2), dtype=jnp.uint32)  # unused for deterministic
 
     all_jax_actions = []
     all_cyborg_actions = []
@@ -682,6 +839,8 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
         harness = CC4DifferentialHarness(seed=seed + ep * 100, check_obs=True, sync_green_rng=True)
         harness.reset()
 
+        cyborg_agent_names = [f"blue_agent_{i}" for i in range(NUM_BLUE_AGENTS)]
+        mask_cache = _build_cyborg_mask_cache(harness._blue_wrapper, harness.mappings, harness.jax_const)
         ep_jax_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         ep_cyborg_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         ep_step_rewards = []
@@ -689,37 +848,42 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
         cum_reward = 0.0
 
         for _ in range(500):
+            # --- JAX side: batched obs + masks + policy ---
+            jax_obs_stack = jnp.stack(
+                [get_blue_obs(harness.jax_state, harness.jax_const, i) for i in range(NUM_BLUE_AGENTS)]
+            )
+            jax_masks = _all_blue_masks(harness.jax_const, harness.jax_state)
+            jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, dummy_keys)
+
+            # --- CybORG side: cached mask translation + batched policy ---
+            cyborg_obs_list = []
+            cyborg_mask_list = []
+            for i, name in enumerate(cyborg_agent_names):
+                cyborg_obs_dict = harness.cyborg_env.get_observation(name)
+                cyborg_obs_list.append(
+                    jnp.array(harness._blue_wrapper.observation_change(name, cyborg_obs_dict), dtype=jnp.float32)
+                )
+                cyborg_mask_list.append(
+                    _live_blue_wrapper_mask_in_jax_space_cached(
+                        harness._blue_wrapper, name, harness.mappings, harness.jax_const, mask_cache
+                    )
+                )
+            cyborg_obs_stack = jnp.stack(cyborg_obs_list)
+            cyborg_masks = jnp.stack(cyborg_mask_list)
+            cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, dummy_keys)
+
+            # Single device-to-host sync
+            jax_actions_np = np.asarray(jax_actions_arr)
+            cyborg_actions_np = np.asarray(cyborg_actions_arr)
+
             jax_actions = {}
-            for agent_idx in range(NUM_BLUE_AGENTS):
-                agent_name = f"blue_agent_{agent_idx}"
-
-                jax_obs = get_blue_obs(harness.jax_state, harness.jax_const, agent_idx)
-                jax_mask = compute_blue_action_mask(harness.jax_const, agent_idx, harness.jax_state)
-                jax_pi = policy_dist(policy, params, policy_kind, jax_obs, jax_mask)
-
-                cyborg_obs_dict = harness.cyborg_env.get_observation(agent_name)
-                cyborg_obs = jnp.array(
-                    harness._blue_wrapper.observation_change(agent_name, cyborg_obs_dict),
-                    dtype=jnp.float32,
-                )
-                cyborg_mask = _live_blue_wrapper_mask_in_jax_space(
-                    harness._blue_wrapper,
-                    agent_name,
-                    harness.mappings,
-                    harness.jax_const,
-                )
-                cyborg_pi = policy_dist(policy, params, policy_kind, cyborg_obs, cyborg_mask)
-
-                if deterministic:
-                    jax_action = int(jnp.argmax(jax_pi.logits))
-                    cyborg_action = int(jnp.argmax(cyborg_pi.logits))
-                else:
-                    raise ValueError("Matched transfer mode currently requires deterministic evaluation")
-
-                jax_actions[agent_idx] = jax_action
-                ep_jax_actions_by_agent[agent_idx].append(jax_action)
-                ep_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
-                all_cyborg_actions_by_agent[agent_idx].append(cyborg_action)
+            for i in range(NUM_BLUE_AGENTS):
+                jax_act = int(jax_actions_np[i])
+                cyborg_act = int(cyborg_actions_np[i])
+                jax_actions[i] = jax_act
+                ep_jax_actions_by_agent[i].append(jax_act)
+                ep_cyborg_actions_by_agent[i].append(cyborg_act)
+                all_cyborg_actions_by_agent[i].append(cyborg_act)
 
             result = harness.full_step(blue_actions=jax_actions)
             if result.diffs:
@@ -1142,6 +1306,11 @@ def main():
         action="store_true",
         help="Run independent JAX/CybORG episodes instead of matched-state transfer diagnostics",
     )
+    parser.add_argument(
+        "--jax-only",
+        action="store_true",
+        help="Run JAXborg-only evaluation (no CybORG, much faster)",
+    )
     parser.add_argument("--seed", type=int, default=0, help="RNG seed (default 0)")
     parser.add_argument("--baselines", action="store_true", help="Run sleep + random baselines")
     parser.add_argument("--verbose", type=int, default=0, help="Step-by-step CybORG trace for N steps")
@@ -1156,6 +1325,29 @@ def main():
 
     if args.mask_summary:
         print_mask_summary()
+
+    if args.jax_only:
+        print("\n" + "=" * 70)
+        print("JAX-ONLY EVALUATION (no CybORG)")
+        print("=" * 70)
+        jax_actions, jax_rewards, jax_results = rollout_jaxborg(
+            policy, params, policy_kind, args.episodes, deterministic, seed=args.seed
+        )
+        jax_pooled_by_agent = [
+            [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
+        ]
+        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+        print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
+
+        print(f"\nMean reward ({args.episodes} episodes): {jax_rewards.mean():.1f}")
+        if len(jax_rewards) > 1:
+            print(f"Stdev: {stdev(jax_rewards.tolist()):.1f}")
+
+        if args.plot:
+            output_dir = EXP_DIR
+            output_dir.mkdir(parents=True, exist_ok=True)
+            plot_action_distribution(jax_actions, "JAXborg Action Distribution", output_dir / "jax_action_dist.png")
+        return
 
     if args.independent_rollouts:
         print("\n" + "=" * 70)
