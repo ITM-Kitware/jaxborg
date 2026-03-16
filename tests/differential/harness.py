@@ -25,6 +25,7 @@ from jaxborg.actions.encoding import (
     decode_red_action,
     encode_blue_action,
 )
+from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.agents.fsm_red import (
     fsm_red_apply_delayed_update,
@@ -49,6 +50,11 @@ from jaxborg.translate import (
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,
     jax_red_to_cyborg,
+)
+from tests.differential.blue_mask_projection import (
+    format_action_index_set,
+    live_blue_wrapper_mask_in_jax_space,
+    refresh_blue_wrapper_action_space,
 )
 
 
@@ -188,6 +194,7 @@ class CC4DifferentialHarness:
         red_cls=FiniteStateRedAgent,
         check_rewards=True,
         check_obs=True,
+        check_masks=True,
         sync_green_rng=True,
         strict_random_sync=False,
         use_cyborg_blue_policy=False,
@@ -199,6 +206,7 @@ class CC4DifferentialHarness:
         self.red_cls = red_cls
         self.check_rewards = check_rewards
         self.check_obs = check_obs
+        self.check_masks = check_masks
         self.sync_green_rng = sync_green_rng
         self.strict_random_sync = strict_random_sync
         self.use_cyborg_blue_policy = use_cyborg_blue_policy
@@ -234,10 +242,11 @@ class CC4DifferentialHarness:
         self.cyborg_env = CybORG(scenario_generator=sg, seed=self.seed)
         self.cyborg_env.reset()
 
-        if self.check_obs:
+        if self.check_obs or self.check_masks:
             from CybORG.Agents.Wrappers.BlueFlatWrapper import BlueFlatWrapper
 
             self._blue_wrapper = BlueFlatWrapper(env=self.cyborg_env, pad_spaces=True)
+            refresh_blue_wrapper_action_space(self._blue_wrapper)
 
         self.jax_const = build_const_from_cyborg(self.cyborg_env)
         self.mappings = build_mappings_from_cyborg(self.cyborg_env)
@@ -470,6 +479,59 @@ class CC4DifferentialHarness:
             extract_cyborg_snapshot(self.cyborg_env, self.mappings),
             extract_jax_snapshot(self.jax_state, self.jax_const, self.mappings),
         )
+
+    def compare_policy_inputs(self) -> list[StateDiff]:
+        diffs: list[StateDiff] = []
+        if self._blue_wrapper is None:
+            return diffs
+
+        refresh_blue_wrapper_action_space(self._blue_wrapper)
+
+        if self.check_obs:
+            from jaxborg.observations import get_blue_obs
+
+            for b in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{b}"
+                cyborg_obs_dict = self.cyborg_env.get_observation(agent_name)
+                cyborg_obs = self._blue_wrapper.observation_change(agent_name, cyborg_obs_dict)
+                cyborg_obs = np.asarray(cyborg_obs, dtype=np.float32)
+
+                jax_obs = np.asarray(get_blue_obs(self.jax_state, self.jax_const, b), dtype=np.float32)
+
+                min_len = min(len(cyborg_obs), len(jax_obs))
+                cyborg_trimmed = cyborg_obs[:min_len]
+                jax_trimmed = jax_obs[:min_len]
+
+                if not np.allclose(cyborg_trimmed, jax_trimmed, atol=1e-5):
+                    mismatched_indices = np.where(np.abs(cyborg_trimmed - jax_trimmed) > 1e-5)[0]
+                    detail = ", ".join(
+                        f"idx={i} cy={cyborg_trimmed[i]:.0f} jax={jax_trimmed[i]:.4f}" for i in mismatched_indices[:10]
+                    )
+                    diffs.append(StateDiff("observation", cyborg_trimmed, jax_trimmed, f"{agent_name}: {detail}"))
+
+        if self.check_masks:
+            for b in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{b}"
+                cyborg_mask = live_blue_wrapper_mask_in_jax_space(
+                    self._blue_wrapper,
+                    agent_name,
+                    self.mappings,
+                    self.jax_const,
+                )
+                jax_mask = np.asarray(
+                    compute_blue_action_mask(self.jax_const, b, self.jax_state),
+                    dtype=np.bool_,
+                )
+
+                if not np.array_equal(cyborg_mask, jax_mask):
+                    cyborg_only = np.flatnonzero(cyborg_mask & ~jax_mask).tolist()
+                    jax_only = np.flatnonzero(jax_mask & ~cyborg_mask).tolist()
+                    cyborg_only_desc = format_action_index_set(cyborg_only, self.mappings, self.jax_const)
+                    jax_only_desc = format_action_index_set(jax_only, self.mappings, self.jax_const)
+                    detail = f"{agent_name}: cyborg_only={cyborg_only_desc} jax_only={jax_only_desc}"
+                    diffs.append(StateDiff("action_mask", cyborg_only, jax_only, detail))
+
+        return diffs
 
     def step_red_only(self, agent_id: int, action_idx: int) -> StepResult:
         self.rng_key, subkey = jax.random.split(self.rng_key)
@@ -834,29 +896,7 @@ class CC4DifferentialHarness:
         if abs(jax_reward - cyborg_reward) > 1e-6:
             diffs.append(StateDiff("rewards", cyborg_reward, jax_reward))
 
-        # --- Observation comparison ---
-        if self.check_obs and self._blue_wrapper is not None:
-            from jaxborg.observations import get_blue_obs
-
-            for b in range(NUM_BLUE_AGENTS):
-                agent_name = f"blue_agent_{b}"
-                cyborg_obs_dict = self.cyborg_env.get_observation(agent_name)
-                cyborg_obs = self._blue_wrapper.observation_change(agent_name, cyborg_obs_dict)
-                cyborg_obs = np.asarray(cyborg_obs, dtype=np.float32)
-
-                jax_obs = np.asarray(get_blue_obs(self.jax_state, self.jax_const, b), dtype=np.float32)
-
-                # Trim to same length (padded wrapper may be longer)
-                min_len = min(len(cyborg_obs), len(jax_obs))
-                cyborg_trimmed = cyborg_obs[:min_len]
-                jax_trimmed = jax_obs[:min_len]
-
-                if not np.allclose(cyborg_trimmed, jax_trimmed, atol=1e-5):
-                    mismatched_indices = np.where(np.abs(cyborg_trimmed - jax_trimmed) > 1e-5)[0]
-                    detail = ", ".join(
-                        f"idx={i} cy={cyborg_trimmed[i]:.0f} jax={jax_trimmed[i]:.4f}" for i in mismatched_indices[:10]
-                    )
-                    diffs.append(StateDiff("observation", cyborg_trimmed, jax_trimmed, f"{agent_name}: {detail}"))
+        diffs.extend(self.compare_policy_inputs())
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
 

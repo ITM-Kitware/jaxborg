@@ -26,6 +26,17 @@ class TestCC4EnvDifferential:
         errors = [d for d in diffs if d.field_name in _ERROR_FIELDS]
         assert len(errors) == 0, f"Initial state:\n{format_diffs(errors)}"
 
+    def test_initial_policy_input_parity(self):
+        """After reset, matched JAX/CybORG states must produce the same blue obs and masks."""
+        harness = self._make_harness(seed=42)
+        harness.reset()
+
+        from tests.differential.state_comparator import format_diffs
+
+        diffs = harness.compare_policy_inputs()
+        errors = [d for d in diffs if d.field_name in {"observation", "action_mask"}]
+        assert len(errors) == 0, f"Initial policy inputs:\n{format_diffs(errors)}"
+
     def test_red_discover_scan_parity(self):
         """Red discovers a subnet then scans a host. Compare state."""
         harness = self._make_harness(seed=42)
@@ -110,3 +121,15 @@ class TestCC4EnvDifferential:
             total_errors += sum(1 for d in diffs if d.field_name in _ERROR_FIELDS)
 
         assert total_errors == 0, f"Had {total_errors} errors across {len(seeds)} seeds"
+
+    def test_policy_input_parity_after_five_full_steps(self):
+        """Obs and masks should stay aligned through several matched full steps."""
+        harness = self._make_harness(seed=42)
+        harness.reset()
+
+        from tests.differential.state_comparator import format_diffs
+
+        for step in range(5):
+            result = harness.full_step()
+            errors = [d for d in result.diffs if d.field_name in {"observation", "action_mask"}]
+            assert len(errors) == 0, f"Policy inputs after full step {step + 1}:\n{format_diffs(errors)}"

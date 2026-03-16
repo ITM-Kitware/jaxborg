@@ -6,38 +6,16 @@ import pytest
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import DecoyApache
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import DecoyHarakaSMPT
 
-from jaxborg.actions.encoding import (
-    BLUE_SLEEP,
-    encode_blue_action,
-)
+from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import SERVICE_IDS
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
-
-
-def _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=None):
-    """Translate a CybORG action to JAX index, or None if untranslatable."""
-    from jaxborg.translate import cyborg_blue_to_jax
-
-    cls_name = type(action).__name__
-
-    if label.startswith("[Padding]"):
-        return None
-
-    if cls_name == "Sleep" and not label.startswith("[Invalid]"):
-        return BLUE_SLEEP
-
-    if cls_name == "Sleep" and label.startswith("[Invalid]"):
-        return None
-
-    if cls_name == "DeployDecoy":
-        return None
-
-    try:
-        return cyborg_blue_to_jax(action, agent_name, mappings, const=const)
-    except (KeyError, ValueError):
-        return None
+from tests.differential.blue_mask_projection import (
+    format_action_index_set,
+    live_blue_wrapper_mask_in_jax_space,
+    refresh_blue_wrapper_action_space,
+)
 
 
 class TestActionMaskDifferential:
@@ -51,28 +29,22 @@ class TestActionMaskDifferential:
 
         mappings = build_mappings_from_cyborg(cyborg_env)
         const = build_const_from_cyborg(cyborg_env)
+        jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        refresh_blue_wrapper_action_space(wrapped)
 
         for agent_idx in range(5):
             agent_name = f"blue_agent_{agent_idx}"
-            cyborg_actions = wrapped.actions(agent_name)
-            cyborg_mask = wrapped.action_mask(agent_name)
-            cyborg_labels = wrapped.action_labels(agent_name)
+            cyborg_mask = live_blue_wrapper_mask_in_jax_space(wrapped, agent_name, mappings, const)
+            jax_mask = np.asarray(compute_blue_action_mask(const, agent_idx, jax_state), dtype=np.bool_)
 
-            jax_mask = np.array(compute_blue_action_mask(const, agent_idx))
-
-            mismatches = []
-            for i, (action, valid, label) in enumerate(zip(cyborg_actions, cyborg_mask, cyborg_labels)):
-                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=const)
-                if jax_idx is None:
-                    continue
-
-                jax_val = bool(jax_mask[jax_idx])
-                if valid != jax_val:
-                    mismatches.append((i, label, valid, jax_val))
-
-            if mismatches:
-                details = "\n".join(f"  [{i}] {label}: cyborg={cv}, jax={jv}" for i, label, cv, jv in mismatches[:20])
-                pytest.fail(f"Agent {agent_idx}: {len(mismatches)} mask mismatches:\n{details}")
+            if not np.array_equal(cyborg_mask, jax_mask):
+                cyborg_only = np.flatnonzero(cyborg_mask & ~jax_mask).tolist()
+                jax_only = np.flatnonzero(jax_mask & ~cyborg_mask).tolist()
+                pytest.fail(
+                    f"{agent_name}: projected live mask mismatch\n"
+                    f"  cyborg_only={format_action_index_set(cyborg_only, mappings, const)}\n"
+                    f"  jax_only={format_action_index_set(jax_only, mappings, const)}"
+                )
 
     def test_valid_action_counts_match(self, cyborg_env):
         from CybORG.Agents.Wrappers import BlueFlatWrapper
@@ -84,30 +56,15 @@ class TestActionMaskDifferential:
 
         mappings = build_mappings_from_cyborg(cyborg_env)
         const = build_const_from_cyborg(cyborg_env)
+        jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        refresh_blue_wrapper_action_space(wrapped)
 
         for agent_idx in range(5):
             agent_name = f"blue_agent_{agent_idx}"
-            cyborg_actions = wrapped.actions(agent_name)
-            cyborg_mask = wrapped.action_mask(agent_name)
-            cyborg_labels = wrapped.action_labels(agent_name)
-
-            jax_mask = np.array(compute_blue_action_mask(const, agent_idx))
-
-            mapped_agree = 0
-            mapped_disagree = 0
-
-            for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
-                jax_idx = _cyborg_action_to_jax_index(action, label, agent_name, mappings, const=const)
-                if jax_idx is None:
-                    continue
-                if bool(valid) == bool(jax_mask[jax_idx]):
-                    mapped_agree += 1
-                else:
-                    mapped_disagree += 1
-
-            assert mapped_agree > 0, f"Agent {agent_idx}: no mapped actions found"
-            assert mapped_disagree == 0, (
-                f"Agent {agent_idx}: {mapped_disagree} disagreements out of {mapped_agree + mapped_disagree}"
+            cyborg_mask = live_blue_wrapper_mask_in_jax_space(wrapped, agent_name, mappings, const)
+            jax_mask = np.asarray(compute_blue_action_mask(const, agent_idx, jax_state), dtype=np.bool_)
+            assert int(cyborg_mask.sum()) == int(jax_mask.sum()), (
+                f"{agent_name}: projected valid count {int(cyborg_mask.sum())} != jax {int(jax_mask.sum())}"
             )
 
     def test_haraka_mask_matches_cyborg_failure_on_smtp_host(self, cyborg_env):
