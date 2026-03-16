@@ -260,6 +260,42 @@ def train(args):
     # Reward scaler
     reward_scaler = RewardScaler(args.num_envs, args.gamma) if args.norm_rewards else None
 
+    # Resume from checkpoint
+    resumed_steps = 0
+    resumed_updates = 0
+    if args.resume_tag:
+        ckpt_dir = EXP_DIR / "cleanrl_ppo"
+        ckpt_path = ckpt_dir / f"checkpoint_{args.resume_tag}.pt"
+        if ckpt_path.exists():
+            print(f"Resuming from full checkpoint {ckpt_path}...", flush=True)
+            ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+            agent_small.load_state_dict(ckpt["agent_small"])
+            agent_large.load_state_dict(ckpt["agent_large"])
+            optimizer.load_state_dict(ckpt["optimizer"])
+            resumed_steps = ckpt["total_steps"]
+            resumed_updates = ckpt["num_updates"]
+            if reward_scaler is not None and "reward_scaler" in ckpt:
+                rs = ckpt["reward_scaler"]
+                reward_scaler.returns = rs["returns"]
+                reward_scaler.mean = rs["mean"]
+                reward_scaler.var = rs["var"]
+                reward_scaler.count = rs["count"]
+        else:
+            # Fall back to bare model weights (no optimizer/scaler state)
+            small_path = ckpt_dir / f"model_small_{args.resume_tag}.pt"
+            large_path = ckpt_dir / f"model_large_{args.resume_tag}.pt"
+            print(f"No full checkpoint; loading bare weights from {small_path}...", flush=True)
+            agent_small.load_state_dict(torch.load(small_path, map_location=device, weights_only=True))
+            agent_large.load_state_dict(torch.load(large_path, map_location=device, weights_only=True))
+            # Estimate resumed steps from metrics file
+            metrics_src = ckpt_dir / f"metrics_{args.resume_tag}.jsonl"
+            if metrics_src.exists():
+                last_line = metrics_src.read_text().strip().split("\n")[-1]
+                last = json.loads(last_line)
+                resumed_steps = last["steps"]
+                resumed_updates = last["update"]
+        print(f"  Resumed at step {resumed_steps:,}, update {resumed_updates}", flush=True)
+
     # Rollout storage
     num_steps = args.rollout_length
 
@@ -308,7 +344,7 @@ def train(args):
     save_dir = EXP_DIR / "cleanrl_ppo"
     save_dir.mkdir(parents=True, exist_ok=True)
     metrics_path = save_dir / f"metrics_{args.tag or 'default'}.jsonl"
-    metrics_file = open(metrics_path, "w")
+    metrics_file = open(metrics_path, "a" if args.resume_tag else "w")
 
     # Initial reset
     all_obs, all_info = envs.reset()
@@ -320,8 +356,8 @@ def train(args):
     completed_lengths = []
 
     start_time = time.perf_counter()
-    total_steps = 0
-    num_updates = 0
+    total_steps = resumed_steps
+    num_updates = resumed_updates
     rollouts_collected = 0
     accum_obs_s, accum_obs_l = [], []
     accum_act_s, accum_act_l = [], []
@@ -725,10 +761,26 @@ def train(args):
     elapsed = time.perf_counter() - start_time
     sps = total_steps / elapsed if elapsed > 0 else 0
 
-    model_path = save_dir / f"model_small_{args.tag or 'default'}.pt"
-    torch.save(agent_small.state_dict(), model_path)
-    model_path_l = save_dir / f"model_large_{args.tag or 'default'}.pt"
-    torch.save(agent_large.state_dict(), model_path_l)
+    # Save full checkpoint for resume
+    ckpt = {
+        "agent_small": agent_small.state_dict(),
+        "agent_large": agent_large.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "total_steps": total_steps,
+        "num_updates": num_updates,
+    }
+    if reward_scaler is not None:
+        ckpt["reward_scaler"] = {
+            "returns": reward_scaler.returns,
+            "mean": reward_scaler.mean,
+            "var": reward_scaler.var,
+            "count": reward_scaler.count,
+        }
+    ckpt_path = save_dir / f"checkpoint_{args.tag or 'default'}.pt"
+    torch.save(ckpt, ckpt_path)
+    # Also save bare weights for eval script compatibility
+    torch.save(agent_small.state_dict(), save_dir / f"model_small_{args.tag or 'default'}.pt")
+    torch.save(agent_large.state_dict(), save_dir / f"model_large_{args.tag or 'default'}.pt")
 
     if completed_rewards:
         final_reward = np.mean(completed_rewards[-50:])
@@ -788,6 +840,8 @@ def main():
                         help="Target KL for early stopping (None = no early stopping)")
     parser.add_argument("--num-rollouts-per-update", type=int, default=1,
                         help="Number of rollouts to accumulate before each PPO update")
+    parser.add_argument("--resume-tag", type=str, default="",
+                        help="Tag of a previous run to resume from (loads checkpoint)")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default="")
 
