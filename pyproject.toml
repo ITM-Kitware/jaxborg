@@ -31,6 +31,7 @@ jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 [dependency-groups]
 dev = [
     "ruff",
+    "pytest-xdist",
 ]
 cuda = [
     "jax-cuda12-pjrt==0.4.38",
