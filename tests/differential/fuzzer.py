@@ -50,6 +50,13 @@ def _init_cpu_worker():
     """Force CPU-only JAX before it's imported in spawned worker processes."""
     os.environ["JAX_PLATFORMS"] = "cpu"
     os.environ["CUDA_VISIBLE_DEVICES"] = ""
+    # Enable XLA compilation cache so workers share compiled kernels.
+    # First worker compiles; subsequent workers (and future runs) load from disk.
+    os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+    os.environ.setdefault(
+        "JAX_COMPILATION_CACHE_DIR", os.path.expanduser("~/.cache/jaxborg/xla")
+    )
+    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 
 
 def _fuzz_one_seed(args):
