@@ -27,7 +27,6 @@ class TestGreenSyncParity:
         harness = self._make_harness(max_steps=1)
         harness.reset()
         result = harness.full_step()
-        harness.jax_state = harness.jax_state.replace(time=1)
 
         error_fields = {"host_compromised", "red_sessions", "red_privilege"}
         errors = [d for d in result.diffs if d.field_name in error_fields]
@@ -40,7 +39,6 @@ class TestGreenSyncParity:
 
         for t in range(5):
             result = harness.full_step()
-            harness.jax_state = harness.jax_state.replace(time=t + 1)
 
             error_fields = {"host_compromised", "red_sessions", "red_privilege"}
             errors = [d for d in result.diffs if d.field_name in error_fields]
@@ -54,7 +52,6 @@ class TestGreenSyncParity:
         mismatches = 0
         for t in range(10):
             result = harness.full_step()
-            harness.jax_state = harness.jax_state.replace(time=t + 1)
 
             activity_diffs = [d for d in result.diffs if d.field_name == "host_activity_detected"]
             mismatches += len(activity_diffs)
@@ -69,14 +66,6 @@ class TestGreenSyncParity:
         for t in range(10):
             harness.full_step()
 
-            harness.jax_state = harness.jax_state.replace(
-                time=t + 1,
-                green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
-            )
-
     def test_recorder_produces_valid_array(self):
         """Check that the recorder produces a well-formed array."""
         harness = self._make_harness(max_steps=500)
@@ -84,7 +73,6 @@ class TestGreenSyncParity:
 
         for t in range(3):
             harness.full_step()
-            harness.jax_state = harness.jax_state.replace(time=t + 1)
 
         arr = harness.green_recorder.to_jax_array()
         assert arr.shape == (500, GLOBAL_MAX_HOSTS, 8)
@@ -107,13 +95,6 @@ class TestGreenSyncParity:
 
         for t in range(10):
             result = harness.full_step()
-            harness.jax_state = harness.jax_state.replace(
-                time=t + 1,
-                green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-                red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
-            )
 
             errors = [d for d in result.diffs if d.field_name in error_fields]
             total_errors += len(errors)
