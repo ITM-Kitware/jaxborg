@@ -43,20 +43,20 @@ class TestJITCompatibility:
 
 
 class TestHostCounts:
-    def test_host_counts_in_range(self):
-        for seed in range(20):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
-            n = int(c.num_hosts)
-            assert 41 <= n <= 137, f"seed={seed}: num_hosts={n}"
+    @pytest.mark.parametrize("seed", range(20))
+    def test_host_counts_in_range(self, seed):
+        c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+        n = int(c.num_hosts)
+        assert 41 <= n <= 137, f"seed={seed}: num_hosts={n}"
 
-    def test_non_internet_subnets_have_5_to_17_hosts(self):
-        for seed in range(10):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
-            for sid, sname in enumerate(SUBNET_NAMES):
-                if sname == "INTERNET":
-                    continue
-                count = int(jnp.sum(c.host_active & (c.host_subnet == sid)))
-                assert 5 <= count <= 17, f"seed={seed} subnet {sname}: {count}"
+    @pytest.mark.parametrize("seed", range(10))
+    def test_non_internet_subnets_have_5_to_17_hosts(self, seed):
+        c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+        for sid, sname in enumerate(SUBNET_NAMES):
+            if sname == "INTERNET":
+                continue
+            count = int(jnp.sum(c.host_active & (c.host_subnet == sid)))
+            assert 5 <= count <= 17, f"seed={seed} subnet {sname}: {count}"
 
     def test_internet_has_1_host(self):
         c = build_topology(jax.random.PRNGKey(0), num_steps=100)
@@ -74,15 +74,15 @@ class TestAlphabeticalOrdering:
             else:
                 assert pattern == ["router", "server", "user"], f"{sname}: {pattern}"
 
-    def test_ordering_consistent_across_seeds(self):
-        for seed in range(10):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
-            for sid, sname in enumerate(SUBNET_NAMES):
-                pattern = _dedup_type_sequence(c, sid)
-                if sname == "INTERNET":
-                    assert pattern == ["internet"]
-                else:
-                    assert pattern == ["router", "server", "user"], f"seed={seed} {sname}"
+    @pytest.mark.parametrize("seed", range(10))
+    def test_ordering_consistent_across_seeds(self, seed):
+        c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
+        for sid, sname in enumerate(SUBNET_NAMES):
+            pattern = _dedup_type_sequence(c, sid)
+            if sname == "INTERNET":
+                assert pattern == ["internet"]
+            else:
+                assert pattern == ["router", "server", "user"], f"seed={seed} {sname}"
 
 
 class TestSubnetRouters:
@@ -255,29 +255,29 @@ class TestCybORGStructuralParity:
             if bool(cyborg_const.host_is_server[h]) or bool(cyborg_const.host_is_user[h]):
                 assert bool(cyborg_const.initial_services[h, SERVICE_IDS["SSHD"]])
 
-    def test_structural_parity_multiple_seeds(self):
+    @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
+    def test_structural_parity_multiple_seeds(self, seed):
         from CybORG import CybORG
         from CybORG.Agents import SleepAgent
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.topology import build_const_from_cyborg
 
-        for seed in [0, 1, 2, 3, 4]:
-            sg = EnterpriseScenarioGenerator(
-                blue_agent_class=SleepAgent,
-                green_agent_class=SleepAgent,
-                red_agent_class=SleepAgent,
-            )
-            env = CybORG(scenario_generator=sg, seed=seed)
-            cyborg_const = build_const_from_cyborg(env)
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+        )
+        env = CybORG(scenario_generator=sg, seed=seed)
+        cyborg_const = build_const_from_cyborg(env)
 
-            for sid, sname in enumerate(SUBNET_NAMES):
-                mask = cyborg_const.host_active & (cyborg_const.host_subnet == sid)
-                count = int(jnp.sum(mask))
-                assert count >= 1, f"seed={seed} subnet {sname} has no hosts"
-                if sname != "INTERNET":
-                    router_count = int(jnp.sum(mask & cyborg_const.host_is_router))
-                    assert router_count == 1, f"seed={seed} subnet {sname}: {router_count} routers"
+        for sid, sname in enumerate(SUBNET_NAMES):
+            mask = cyborg_const.host_active & (cyborg_const.host_subnet == sid)
+            count = int(jnp.sum(mask))
+            assert count >= 1, f"seed={seed} subnet {sname} has no hosts"
+            if sname != "INTERNET":
+                router_count = int(jnp.sum(mask & cyborg_const.host_is_router))
+                assert router_count == 1, f"seed={seed} subnet {sname}: {router_count} routers"
 
 
 class TestAutoResetIntegration:

@@ -117,13 +117,13 @@ class TestGreenAgentBasics:
             if not jax_const.green_agent_active[h]:
                 assert not new_state.host_activity_detected[h] or jax_state.host_activity_detected[h]
 
-    def test_pure_green_agent_host_matches_cyborg_generation_order(self):
-        for seed in range(3):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            expected_hosts = _expected_green_hosts_in_cyborg_order(const)
-            expected_indices = list(range(len(expected_hosts)))
-            actual_indices = [int(const.green_agent_host[h]) for h in expected_hosts]
-            assert actual_indices == expected_indices
+    @pytest.mark.parametrize("seed", range(3))
+    def test_pure_green_agent_host_matches_cyborg_generation_order(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        expected_hosts = _expected_green_hosts_in_cyborg_order(const)
+        expected_indices = list(range(len(expected_hosts)))
+        actual_indices = [int(const.green_agent_host[h]) for h in expected_hosts]
+        assert actual_indices == expected_indices
 
     def test_apply_green_agents_uses_green_agent_order(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=500)
@@ -186,42 +186,42 @@ class TestDynamicTopology:
             counts.add(int(const.num_hosts))
         assert len(counts) > 1, "Different seeds should produce different host counts"
 
-    def test_host_count_range(self):
-        for seed in range(10):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            num = int(const.num_hosts)
-            assert 37 <= num <= 137, f"Seed {seed}: host count {num} out of expected range"
+    @pytest.mark.parametrize("seed", range(10))
+    def test_host_count_range(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        num = int(const.num_hosts)
+        assert 37 <= num <= 137, f"Seed {seed}: host count {num} out of expected range"
 
-    def test_padding_to_global_max(self):
-        for seed in range(5):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            assert const.host_active.shape == (GLOBAL_MAX_HOSTS,)
-            assert const.host_subnet.shape == (GLOBAL_MAX_HOSTS,)
-            assert const.data_links.shape == (GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS)
+    @pytest.mark.parametrize("seed", range(5))
+    def test_padding_to_global_max(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        assert const.host_active.shape == (GLOBAL_MAX_HOSTS,)
+        assert const.host_subnet.shape == (GLOBAL_MAX_HOSTS,)
+        assert const.data_links.shape == (GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS)
 
-    def test_host_active_consistency(self):
-        for seed in range(5):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            active_count = int(jnp.sum(const.host_active))
-            assert active_count == int(const.num_hosts)
-            for h in range(GLOBAL_MAX_HOSTS):
-                if h >= int(const.num_hosts):
-                    assert not const.host_active[h]
+    @pytest.mark.parametrize("seed", range(5))
+    def test_host_active_consistency(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        active_count = int(jnp.sum(const.host_active))
+        assert active_count == int(const.num_hosts)
+        for h in range(GLOBAL_MAX_HOSTS):
+            if h >= int(const.num_hosts):
+                assert not const.host_active[h]
 
-    def test_green_agents_present(self):
-        for seed in range(5):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            num_green = int(jnp.sum(const.green_agent_active))
-            num_user = int(jnp.sum(const.host_is_user))
-            assert num_green == num_user
-            assert int(const.num_green_agents) == num_user
+    @pytest.mark.parametrize("seed", range(5))
+    def test_green_agents_present(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        num_green = int(jnp.sum(const.green_agent_active))
+        num_user = int(jnp.sum(const.host_is_user))
+        assert num_green == num_user
+        assert int(const.num_green_agents) == num_user
 
-    def test_all_subnets_have_hosts(self):
-        for seed in range(10):
-            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            for sid in range(NUM_SUBNETS):
-                count = int(jnp.sum(const.host_active & (const.host_subnet == sid)))
-                assert count >= 1, f"Seed {seed}: subnet {sid} has no hosts"
+    @pytest.mark.parametrize("seed", range(10))
+    def test_all_subnets_have_hosts(self, seed):
+        const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+        for sid in range(NUM_SUBNETS):
+            count = int(jnp.sum(const.host_active & (const.host_subnet == sid)))
+            assert count >= 1, f"Seed {seed}: subnet {sid} has no hosts"
 
 
 class TestDifferentialGreen:

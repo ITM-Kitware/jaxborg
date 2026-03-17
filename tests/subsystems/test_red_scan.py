@@ -1556,21 +1556,18 @@ class TestDeferredScanSessionBinding:
             red_pending_source_host=state.red_pending_source_host.at[red_agent_id].set(stale_source_host),
         )
 
-        chosen_key = None
         session_counts = state.red_session_count[red_agent_id]
-        for seed in range(2048):
-            probe_key = jax.random.PRNGKey(seed)
-            promoted = int(
-                select_new_primary_session_host(
-                    session_counts,
-                    jax_const.host_active,
-                    jax.random.fold_in(probe_key, jnp.int32(931)),
-                )
+        # This fixed key promotes the concrete session host for the deterministic
+        # two-session setup above, without a brute-force seed search.
+        chosen_key = jax.random.PRNGKey(0)
+        promoted = int(
+            select_new_primary_session_host(
+                session_counts,
+                jax_const.host_active,
+                jax.random.fold_in(chosen_key, jnp.int32(931)),
             )
-            if promoted == non_abstract_host:
-                chosen_key = probe_key
-                break
-        assert chosen_key is not None
+        )
+        assert promoted == non_abstract_host
 
         new_state = process_red_with_duration(
             state,

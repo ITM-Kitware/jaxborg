@@ -104,23 +104,20 @@ class TestCC4EnvDifferential:
             ]
             assert len(errors) == 0, f"After blue action {action}:\n{format_diffs(errors)}"
 
-    def test_multi_seed_initial_parity(self):
+    @pytest.mark.parametrize("seed", [42, 123, 456])
+    def test_multi_seed_initial_parity(self, seed):
         """Multiple seeds produce matching initial states."""
         from tests.differential.state_comparator import (
             _ERROR_FIELDS,
             compare_snapshots,
+            format_diffs,
         )
 
-        seeds = [42, 123, 456]
-        total_errors = 0
-
-        for seed in seeds:
-            harness = self._make_harness(seed=seed)
-            cyborg_snap, jax_snap = harness.reset()
-            diffs = compare_snapshots(cyborg_snap, jax_snap)
-            total_errors += sum(1 for d in diffs if d.field_name in _ERROR_FIELDS)
-
-        assert total_errors == 0, f"Had {total_errors} errors across {len(seeds)} seeds"
+        harness = self._make_harness(seed=seed)
+        cyborg_snap, jax_snap = harness.reset()
+        diffs = compare_snapshots(cyborg_snap, jax_snap)
+        errors = [d for d in diffs if d.field_name in _ERROR_FIELDS]
+        assert len(errors) == 0, f"seed={seed}:\n{format_diffs(errors)}"
 
     def test_policy_input_parity_after_five_full_steps(self):
         """Obs and masks should stay aligned through several matched full steps."""
