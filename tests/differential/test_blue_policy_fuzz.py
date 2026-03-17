@@ -8,6 +8,10 @@ from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import De
 
 from jaxborg.actions.blue_decoys import apply_blue_decoy
 from jaxborg.constants import DECOY_IDS
+from tests.differential.blue_mask_projection import (
+    comparison_blue_mask_in_jax_space,
+    live_blue_wrapper_mask_in_jax_space,
+)
 from tests.differential.fuzzer import run_differential_fuzz
 from tests.differential.harness import CC4DifferentialHarness
 
@@ -85,6 +89,45 @@ def test_generic_deploy_decoy_pending_ticks_match_jax():
 
     assert step1.diffs == []
     assert jax_decoys == _DECOY_SERVICE_TO_FLAGS[added_service]
+
+
+def test_generic_deploy_decoy_pending_mask_matches_jax_projection():
+    target_hostname = "restricted_zone_b_subnet_server_host_1"
+    blue_cls = _make_scripted_blue_agent(
+        "blue_agent_2",
+        lambda agent_name: DeployDecoy(session=0, agent=agent_name, hostname=target_hostname),
+    )
+    harness = CC4DifferentialHarness(
+        seed=0,
+        max_steps=20,
+        blue_cls=blue_cls,
+        green_cls=SleepAgent,
+        red_cls=SleepAgent,
+        sync_green_rng=False,
+        use_cyborg_blue_policy=True,
+    )
+    harness.reset()
+
+    harness.full_step()
+    agent_name = "blue_agent_2"
+    controller = harness.cyborg_env.environment_controller
+    cyborg_mask = live_blue_wrapper_mask_in_jax_space(
+        harness._blue_wrapper,
+        agent_name,
+        harness.mappings,
+        harness.jax_const,
+    )
+    jax_mask = comparison_blue_mask_in_jax_space(
+        controller,
+        agent_name,
+        2,
+        harness.jax_state,
+        harness.mappings,
+        harness.jax_const,
+    )
+
+    assert np.flatnonzero(cyborg_mask).tolist() == [739, 883]
+    np.testing.assert_array_equal(jax_mask, cyborg_mask)
 
 
 def test_router_restore_pending_ticks_match_jax():

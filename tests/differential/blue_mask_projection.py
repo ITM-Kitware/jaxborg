@@ -1,7 +1,16 @@
 import numpy as np
 
+from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
+from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.translate import cyborg_blue_to_jax, describe_blue_action
+
+_GENERIC_PENDING_DECOY_ACTIONS = (
+    "DeployDecoy_HarakaSMPT",
+    "DeployDecoy_Apache",
+    "DeployDecoy_Tomcat",
+    "DeployDecoy_Vsftpd",
+)
 
 
 def refresh_blue_wrapper_action_space(wrapper) -> None:
@@ -76,6 +85,36 @@ def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
         for jax_idx in cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const, controller.state):
             jax_mask[jax_idx] = True
     return jax_mask
+
+
+def comparison_blue_mask_in_jax_space(controller, agent_name, agent_idx, state, mappings, const):
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is None or int(pending["remaining_ticks"]) <= 0:
+        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
+
+    action = pending["action"]
+    if type(action).__name__ != "DeployDecoy":
+        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
+
+    host_idx = mappings.hostname_to_idx.get(action.hostname)
+    if host_idx is None:
+        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
+
+    compatibility = np.asarray(
+        host_decoy_compatibility_mask(state.host_services[host_idx], state.host_decoys[host_idx]),
+        dtype=np.bool_,
+    )
+    pending_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
+
+    for decoy_type, action_name in enumerate(_GENERIC_PENDING_DECOY_ACTIONS):
+        if not compatibility[decoy_type]:
+            continue
+        jax_idx = encode_blue_action(action_name, host_idx, agent_idx, const=const)
+        pending_mask[jax_idx] = True
+
+    if pending_mask.any():
+        return pending_mask
+    return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
 
 
 def format_action_index_set(indices, mappings, const, *, max_items: int = 5) -> str:

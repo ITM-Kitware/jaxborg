@@ -33,7 +33,6 @@ from jaxborg.actions.encoding import (
     decode_red_action,
     encode_blue_action,
 )
-from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.agents.fsm_red import (
     fsm_red_apply_delayed_update,
@@ -60,6 +59,7 @@ from jaxborg.translate import (
     jax_red_to_cyborg,
 )
 from tests.differential.blue_mask_projection import (
+    comparison_blue_mask_in_jax_space,
     format_action_index_set,
     live_blue_wrapper_mask_in_jax_space,
     refresh_blue_wrapper_action_space,
@@ -655,6 +655,7 @@ class CC4DifferentialHarness:
         if self._blue_wrapper is None:
             return diffs
 
+        controller = self.cyborg_env.environment_controller
         refresh_blue_wrapper_action_space(self._blue_wrapper)
 
         if self.check_obs:
@@ -688,9 +689,13 @@ class CC4DifferentialHarness:
                     self.mappings,
                     self.jax_const,
                 )
-                jax_mask = np.asarray(
-                    compute_blue_action_mask(self.jax_const, b, self.jax_state),
-                    dtype=np.bool_,
+                jax_mask = comparison_blue_mask_in_jax_space(
+                    controller,
+                    agent_name,
+                    b,
+                    self.jax_state,
+                    self.mappings,
+                    self.jax_const,
                 )
 
                 if not np.array_equal(cyborg_mask, jax_mask):
