@@ -53,7 +53,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
 from jaxborg.topology import CYBORG_SUBNET_SUFFIX, CYBORG_SUFFIX_TO_ID
 
 
@@ -332,14 +332,9 @@ def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings, const=Non
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
         return encode_blue_action(hostname_actions[cls_name], host_idx, aid, const=const)
 
-    if cls_name in _CYBORG_BLUE_DECOY_NAMES:
-        encode_name = _CYBORG_BLUE_DECOY_NAMES[cls_name]
+    if cls_name in _CYBORG_BLUE_DECOY_NAMES or cls_name == "DeployDecoy":
         host_idx = _host_idx_from_hostname(action.hostname, mappings)
-        return encode_blue_action(encode_name, host_idx, aid, const=const)
-
-    if cls_name == "DeployDecoy":
-        host_idx = _host_idx_from_hostname(action.hostname, mappings)
-        return encode_blue_action("DeployDecoy_HarakaSMPT", host_idx, aid, const=const)
+        return encode_blue_action("DeployDecoy", host_idx, aid, const=const)
 
     if cls_name == "BlockTrafficZone":
         from_sid = CYBORG_SUFFIX_TO_ID[action.from_subnet]
@@ -366,10 +361,7 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
         AllowTrafficZone,
         BlockTrafficZone,
     )
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import DecoyApache
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import DecoyHarakaSMPT
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import DecoyTomcat
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import DecoyVsftpd
+    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
 
     agent_name = f"blue_agent_{agent_id}"
     session = 0
@@ -393,13 +385,10 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
             return cls(session=session, agent=agent_name, hostname=hostname)
 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
-        offset = action_idx - BLUE_DECOY_START
-        decoy_type = offset // ACTION_HOST_SLOTS
-        flat_slot = offset % ACTION_HOST_SLOTS
+        flat_slot = action_idx - BLUE_DECOY_START
         host_idx = _slot_to_global(flat_slot, const)
         hostname = mappings.idx_to_hostname[host_idx]
-        decoy_cls = [DecoyHarakaSMPT, DecoyApache, DecoyTomcat, DecoyVsftpd][decoy_type]
-        return decoy_cls(session=session, agent=agent_name, hostname=hostname)
+        return DeployDecoy(session=session, agent=agent_name, hostname=hostname)
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START
@@ -423,21 +412,9 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
 def jax_blue_to_cyborg_wrapper_action(action_idx: int, agent_id: int, mappings: CC4Mappings, const=None):
     """Translate a JAX blue action into the BlueFlatWrapper-compatible action space.
 
-    BlueFlatWrapper exposes generic DeployDecoy actions, not the concrete decoy
-    subclasses in the JAX canonical action space. For wrapper-based eval, map all
-    concrete decoy choices back to generic DeployDecoy on the same hostname.
+    Now identical to jax_blue_to_cyborg since the action space uses generic
+    DeployDecoy (one per host slot, type selected at execution time).
     """
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DeployDecoy import DeployDecoy
-
-    if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
-        agent_name = f"blue_agent_{agent_id}"
-        session = 0
-        offset = action_idx - BLUE_DECOY_START
-        flat_slot = offset % ACTION_HOST_SLOTS
-        host_idx = _slot_to_global(flat_slot, const)
-        hostname = mappings.idx_to_hostname[host_idx]
-        return DeployDecoy(session=session, agent=agent_name, hostname=hostname)
-
     return jax_blue_to_cyborg(action_idx, agent_id, mappings, const=const)
 
 
@@ -478,16 +455,13 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> 
             return f"{name}({hostname})"
 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
-        offset = action_idx - BLUE_DECOY_START
-        decoy_type = offset // ACTION_HOST_SLOTS
-        flat_slot = offset % ACTION_HOST_SLOTS
+        flat_slot = action_idx - BLUE_DECOY_START
         if const is not None:
             host_idx = _slot_to_global(flat_slot, const)
         else:
             host_idx = flat_slot
         hostname = mappings.idx_to_hostname.get(host_idx, f"slot_{flat_slot}")
-        decoy_names = ["HarakaSMPT", "Apache", "Tomcat", "Vsftpd"]
-        return f"DeployDecoy_{decoy_names[decoy_type]}({hostname})"
+        return f"DeployDecoy({hostname})"
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START

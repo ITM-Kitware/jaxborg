@@ -85,6 +85,28 @@ def sample_red_privesc_choice(const: CC4Const, time, agent_id, key, num_sessions
     return jax.lax.cond(const.use_red_privesc_choices, from_precomputed, from_rng, None)
 
 
+def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility):
+    """Return a compatible decoy type index, selected randomly from available types.
+
+    Uses precomputed CybORG choice if available, else deterministic JAX RNG
+    derived from (time, agent_id).  The returned index is a raw decoy type
+    (0–3) guaranteed to be compatible with the host.
+    """
+
+    def from_precomputed(_):
+        return const.blue_decoy_type_choices[time, agent_id]
+
+    def from_fallback_rng(_):
+        seed = jnp.int32(time * NUM_BLUE_AGENTS + agent_id)
+        key = jax.random.fold_in(jax.random.PRNGKey(0xDEC0), seed)
+        perm = jax.random.permutation(key, 4, independent=True)
+        # Pick the first compatible type in the random permutation
+        scores = jnp.where(compatibility, perm, jnp.int32(100))
+        return jnp.argmin(scores).astype(jnp.int32)
+
+    return jax.lax.cond(const.use_blue_decoy_type_choices, from_precomputed, from_fallback_rng, None)
+
+
 def sample_blue_decoy_pid_delta(const: CC4Const, time, agent_id):
     """Return Host.create_pid delta in [1, 9] for blue decoy process creation."""
 

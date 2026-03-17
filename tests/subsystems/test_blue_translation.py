@@ -68,40 +68,15 @@ class TestBlueActionTranslation:
         assert action.hostname == hostname
         assert cyborg_blue_to_jax(action, f"blue_agent_{agent_id}", mappings, const=const) == action_idx
 
-    @pytest.mark.parametrize(
-        ("action_name", "expected_cls", "factory_cls"),
-        [
-            ("DeployDecoy_HarakaSMPT", "DecoyHarakaSMPT", "HarakaDecoyFactory"),
-            ("DeployDecoy_Apache", "DecoyApache", "ApacheDecoyFactory"),
-            ("DeployDecoy_Tomcat", "DecoyTomcat", "TomcatDecoyFactory"),
-            ("DeployDecoy_Vsftpd", "DecoyVsftpd", "VsftpdDecoyFactory"),
-        ],
-    )
-    def test_decoy_roundtrip(self, blue_translation_context, action_name, expected_cls, factory_cls):
+    def test_decoy_roundtrip(self, blue_translation_context):
+        """With collapsed action space, all decoy actions produce generic DeployDecoy."""
         const, mappings, cy_state = blue_translation_context
 
-        if factory_cls == "HarakaDecoyFactory":
-            from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
-
-            factory = HarakaDecoyFactory()
-        elif factory_cls == "ApacheDecoyFactory":
-            from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
-
-            factory = ApacheDecoyFactory()
-        elif factory_cls == "TomcatDecoyFactory":
-            from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
-
-            factory = TomcatDecoyFactory()
-        else:
-            from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
-
-            factory = VsftpdDecoyFactory()
-
-        agent_id, host_idx, hostname = _find_blue_host(const, mappings, cy_state, predicate=factory.is_host_compatible)
-        action_idx = encode_blue_action(action_name, host_idx, agent_id, const=const)
+        agent_id, host_idx, hostname = _find_blue_host(const, mappings, cy_state)
+        action_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
 
         action = jax_blue_to_cyborg(action_idx, agent_id, mappings, const=const)
-        assert type(action).__name__ == expected_cls
+        assert type(action).__name__ == "DeployDecoy"
         assert action.hostname == hostname
         assert cyborg_blue_to_jax(action, f"blue_agent_{agent_id}", mappings, const=const) == action_idx
 

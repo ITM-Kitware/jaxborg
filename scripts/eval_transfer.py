@@ -23,10 +23,6 @@ import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
 from flax.linen.initializers import constant, orthogonal
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -96,12 +92,6 @@ ACTION_TYPE_RANGES = [
     (BLUE_BLOCK_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_START),
     (BLUE_ALLOW_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_END),
 ]
-DECOY_FACTORY_ACTIONS = (
-    (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
-    (ApacheDecoyFactory(), "DeployDecoy_Apache"),
-    (TomcatDecoyFactory(), "DeployDecoy_Tomcat"),
-    (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
-)
 
 DEFAULT_NUM_STEPS = 500
 DEFAULT_BANK_SIZE = 32
@@ -317,13 +307,11 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
     if cls_name == "DeployDecoy":
         if action.hostname not in mappings.hostname_to_idx:
             return []
-        host = cyborg_state.hosts[action.hostname]
         host_idx = mappings.hostname_to_idx[action.hostname]
-        return [
-            encode_blue_action(action_name, host_idx, agent_id, const=const)
-            for factory, action_name in DECOY_FACTORY_ACTIONS
-            if factory.is_host_compatible(host)
-        ]
+        jax_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
+        if jax_idx == BLUE_SLEEP:
+            return []
+        return [jax_idx]
 
     try:
         return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
@@ -382,17 +370,15 @@ def _build_cyborg_mask_cache(wrapper, mappings, const):
             if label.startswith("[Padding]") or (cls_name == "Sleep" and label.startswith("[Invalid]")):
                 agent_cache.append(None)
             elif cls_name == "DeployDecoy":
-                # Precompute everything except the runtime is_host_compatible check
                 if action.hostname not in mappings.hostname_to_idx:
                     agent_cache.append(None)
                 else:
                     host_idx = mappings.hostname_to_idx[action.hostname]
-                    # Precompute JAX indices for each factory type
-                    factory_indices = [
-                        (factory, encode_blue_action(action_name, host_idx, agent_id, const=const))
-                        for factory, action_name in DECOY_FACTORY_ACTIONS
-                    ]
-                    agent_cache.append(("decoy", action.hostname, factory_indices))
+                    jax_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
+                    if jax_idx == BLUE_SLEEP:
+                        agent_cache.append(None)
+                    else:
+                        agent_cache.append([jax_idx])
             else:
                 # Static translation — compute once
                 jax_indices = _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state)
@@ -421,7 +407,6 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
     action_space = wrapper.get_action_space(agent_name)
     cyborg_mask = action_space["mask"]
     agent_cache = mask_cache[agent_name]
-    cyborg_state = controller.state
 
     for slot_idx, valid in enumerate(cyborg_mask):
         if not valid:
@@ -429,16 +414,8 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
         entry = agent_cache[slot_idx]
         if entry is None:
             continue
-        if isinstance(entry, tuple) and entry[0] == "decoy":
-            # Runtime decoy compatibility check (hostname + JAX indices precomputed)
-            _, hostname, factory_indices = entry
-            host = cyborg_state.hosts[hostname]
-            for factory, jax_idx in factory_indices:
-                if factory.is_host_compatible(host):
-                    jax_mask[jax_idx] = True
-        else:
-            for jax_idx in entry:
-                jax_mask[jax_idx] = True
+        for jax_idx in entry:
+            jax_mask[jax_idx] = True
 
     return jax_mask
 

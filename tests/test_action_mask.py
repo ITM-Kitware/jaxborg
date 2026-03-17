@@ -16,11 +16,9 @@ from jaxborg.actions.encoding import (
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
     ACTION_HOST_SLOTS,
-    DECOY_IDS,
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
-    SERVICE_IDS,
 )
 from jaxborg.topology import build_topology
 
@@ -87,6 +85,7 @@ class TestHostBasedActions:
             assert a == r == s, f"Mismatch at slot {slot}: analyse={a}, remove={r}, restore={s}"
 
     def test_decoy_mask_respects_initial_service_compatibility(self):
+        """With collapsed action space, a decoy slot is valid if ANY type is compatible."""
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
         mask = compute_blue_action_mask(const, 0)
         for slot in range(ACTION_HOST_SLOTS):
@@ -95,21 +94,10 @@ class TestHostBasedActions:
             subslot = slot % OBS_HOSTS_PER_SUBNET
             host_idx = int(const.obs_host_map[sid, subslot])
 
-            expected_by_type = {
-                DECOY_IDS["HarakaSMPT"]: host_valid
-                and host_idx != GLOBAL_MAX_HOSTS
-                and not bool(const.initial_services[host_idx, SERVICE_IDS["SMTP"]]),
-                DECOY_IDS["Apache"]: host_valid
-                and host_idx != GLOBAL_MAX_HOSTS
-                and not bool(const.initial_services[host_idx, SERVICE_IDS["APACHE2"]]),
-                DECOY_IDS["Tomcat"]: host_valid,
-                DECOY_IDS["Vsftpd"]: host_valid,
-            }
-
-            for decoy_type, expected in expected_by_type.items():
-                offset = BLUE_DECOY_START + decoy_type * ACTION_HOST_SLOTS
-                actual = bool(mask[offset + slot])
-                assert actual == expected, f"Decoy type {decoy_type} slot {slot} mismatch"
+            # Tomcat is always compatible, so any valid host slot should have decoy enabled
+            expected = host_valid
+            actual = bool(mask[BLUE_DECOY_START + slot])
+            assert actual == expected, f"Decoy slot {slot} mismatch: expected={expected}, actual={actual}"
 
 
 class TestTrafficActions:

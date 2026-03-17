@@ -126,7 +126,9 @@ def test_generic_deploy_decoy_pending_mask_matches_jax_projection():
         harness.jax_const,
     )
 
-    assert np.flatnonzero(cyborg_mask).tolist() == [739, 883]
+    # With collapsed action space, pending decoy maps to a single index per host slot
+    pending_indices = np.flatnonzero(cyborg_mask).tolist()
+    assert len(pending_indices) == 1, f"Expected 1 pending decoy index, got {pending_indices}"
     np.testing.assert_array_equal(jax_mask, cyborg_mask)
 
 

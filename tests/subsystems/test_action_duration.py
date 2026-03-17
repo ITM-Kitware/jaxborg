@@ -1035,7 +1035,7 @@ class TestDurationDifferential:
             blue_cls=SleepAgent,
             green_cls=SleepAgent,
             red_cls=SleepAgent,
-            sync_green_rng=False,
+            sync_green_rng=True,
         )
         harness.reset()
         controller = harness.cyborg_env.environment_controller
@@ -1045,7 +1045,7 @@ class TestDurationDifferential:
         target = int(jnp.argmax(blue_hosts))
 
         blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
-        blue_actions[0] = encode_blue_action("DeployDecoy_Tomcat", target, 0, const=harness.jax_const)
+        blue_actions[0] = encode_blue_action("DeployDecoy", target, 0, const=harness.jax_const)
 
         result = harness.full_step(blue_actions=blue_actions)
         step_errors = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]

@@ -1,7 +1,7 @@
 import jax.numpy as jnp
 
 from jaxborg.actions.pids import allocate_host_pid_from_delta
-from jaxborg.actions.rng import sample_blue_decoy_pid_delta
+from jaxborg.actions.rng import sample_blue_decoy_pid_delta, sample_blue_decoy_type_choice
 from jaxborg.constants import DECOY_IDS, SERVICE_IDS
 from jaxborg.state import CC4Const, CC4State
 
@@ -31,8 +31,13 @@ def host_decoy_compatibility_mask(host_services: jnp.ndarray, host_decoys: jnp.n
 def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_host: int, decoy_type: int) -> CC4State:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
     compatibility = host_decoy_compatibility_mask(state.host_services[target_host], state.host_decoys[target_host])
-    compatible = compatibility[decoy_type]
 
+    # When decoy_type == -1 (collapsed action space), randomly select a compatible type.
+    # When decoy_type >= 0 (direct call from tests), use the explicit type.
+    random_type = sample_blue_decoy_type_choice(const, state.time, agent_id, compatibility)
+    decoy_type = jnp.where(decoy_type < 0, random_type, decoy_type)
+
+    compatible = compatibility[decoy_type]
     can_deploy = covers_host & compatible
     pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id)
     new_pid = allocate_host_pid_from_delta(state, const, target_host, pid_delta)

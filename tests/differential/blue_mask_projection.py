@@ -1,16 +1,8 @@
 import numpy as np
 
-from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.translate import cyborg_blue_to_jax, describe_blue_action
-
-_GENERIC_PENDING_DECOY_ACTIONS = (
-    "DeployDecoy_HarakaSMPT",
-    "DeployDecoy_Apache",
-    "DeployDecoy_Tomcat",
-    "DeployDecoy_Vsftpd",
-)
 
 
 def refresh_blue_wrapper_action_space(wrapper) -> None:
@@ -24,18 +16,6 @@ def refresh_blue_wrapper_action_space(wrapper) -> None:
 
 def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
     """Translate a CybORG blue action slot into one or more JAX canonical indices."""
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
-    from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
-
-    decoy_factory_actions = (
-        (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
-        (ApacheDecoyFactory(), "DeployDecoy_Apache"),
-        (TomcatDecoyFactory(), "DeployDecoy_Tomcat"),
-        (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
-    )
-
     cls_name = type(action).__name__
     agent_id = int(agent_name.split("_")[-1])
 
@@ -48,13 +28,14 @@ def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const
     if cls_name == "DeployDecoy":
         if action.hostname not in mappings.hostname_to_idx:
             return []
-        host = cyborg_state.hosts[action.hostname]
         host_idx = mappings.hostname_to_idx[action.hostname]
-        return [
-            encode_blue_action(action_name, host_idx, agent_id, const=const)
-            for factory, action_name in decoy_factory_actions
-            if factory.is_host_compatible(host)
-        ]
+        jax_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
+        if jax_idx == BLUE_SLEEP:
+            # Unsupported host (e.g. router) — when pending, JAX masks to Sleep-only
+            if label.startswith("[Pending]"):
+                return [BLUE_SLEEP]
+            return []
+        return [jax_idx]
 
     try:
         return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
@@ -88,32 +69,12 @@ def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
 
 
 def comparison_blue_mask_in_jax_space(controller, agent_name, agent_idx, state, mappings, const):
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is None or int(pending["remaining_ticks"]) <= 0:
-        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
+    """Return the JAX mask for comparison with CybORG.
 
-    action = pending["action"]
-    if type(action).__name__ != "DeployDecoy":
-        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
-
-    host_idx = mappings.hostname_to_idx.get(action.hostname)
-    if host_idx is None:
-        return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
-
-    compatibility = np.asarray(
-        host_decoy_compatibility_mask(state.host_services[host_idx], state.host_decoys[host_idx]),
-        dtype=np.bool_,
-    )
-    pending_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
-
-    for decoy_type, action_name in enumerate(_GENERIC_PENDING_DECOY_ACTIONS):
-        if not compatibility[decoy_type]:
-            continue
-        jax_idx = encode_blue_action(action_name, host_idx, agent_idx, const=const)
-        pending_mask[jax_idx] = True
-
-    if pending_mask.any():
-        return pending_mask
+    Now that the action space uses a single DeployDecoy per host slot,
+    compute_blue_action_mask already produces the correct mask for all cases
+    including pending decoy actions.
+    """
     return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
 
 

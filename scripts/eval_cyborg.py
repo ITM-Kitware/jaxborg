@@ -13,10 +13,6 @@ import numpy as np
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
-from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from flax.linen.initializers import constant, orthogonal
 from train_ippo_cc4 import ActorCritic
@@ -30,12 +26,6 @@ from jaxborg.translate import (
 )
 
 EPISODE_LENGTH = 500
-DECOY_FACTORY_ACTIONS = (
-    (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
-    (ApacheDecoyFactory(), "DeployDecoy_Apache"),
-    (TomcatDecoyFactory(), "DeployDecoy_Tomcat"),
-    (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
-)
 
 
 class LegacyActor(nn.Module):
@@ -124,13 +114,11 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
     if cls_name == "DeployDecoy":
         if action.hostname not in mappings.hostname_to_idx:
             return []
-        host = cyborg_state.hosts[action.hostname]
         host_idx = mappings.hostname_to_idx[action.hostname]
-        return [
-            encode_blue_action(action_name, host_idx, agent_id, const=const)
-            for factory, action_name in DECOY_FACTORY_ACTIONS
-            if factory.is_host_compatible(host)
-        ]
+        jax_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
+        if jax_idx == BLUE_SLEEP:
+            return []
+        return [jax_idx]
 
     try:
         return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]

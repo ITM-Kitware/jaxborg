@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_DECOY_END, BLUE_DECOY_START, BLUE_SLEEP
 from jaxborg.constants import (
     ACTION_HOST_SLOTS,
     DECOY_IDS,
@@ -13,14 +13,14 @@ from jaxborg.state import CC4Const, CC4State
 
 
 def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarray) -> jnp.ndarray:
-    """Compute per-decoy compatibility for all host slots at once.
+    """Compute per-slot decoy compatibility: True if ANY decoy type is compatible.
 
     Args:
         flat_services: (ACTION_HOST_SLOTS, NUM_SERVICES) bool
         flat_decoys: (ACTION_HOST_SLOTS, NUM_DECOY_TYPES) bool
 
     Returns:
-        (NUM_DECOY_TYPES, ACTION_HOST_SLOTS) bool — decoy_type-major for concat
+        (ACTION_HOST_SLOTS,) bool — True if at least one decoy type can be deployed
     """
     has_port_25 = flat_services[:, SERVICE_IDS["SMTP"]] | flat_decoys[:, DECOY_IDS["HarakaSMPT"]]
     has_port_80 = (
@@ -28,9 +28,15 @@ def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarra
         | flat_decoys[:, DECOY_IDS["Apache"]]
         | flat_decoys[:, DECOY_IDS["Vsftpd"]]
     )
-    has_port_443 = flat_decoys[:, DECOY_IDS["Tomcat"]]
+    # has_port_443 = flat_decoys[:, DECOY_IDS["Tomcat"]]  # Tomcat is always compatible
 
-    return jnp.stack([~has_port_25, ~has_port_80, ~has_port_443, jnp.ones(flat_services.shape[0], dtype=jnp.bool_)])
+    # Any-compatible: Tomcat is always True, so at least one type is always available.
+    # But we still gate by slot validity below, so just return True for all slots.
+    # More precisely: HarakaSMPT needs ~port25, Apache needs ~port80, Tomcat always, Vsftpd needs ~port80
+    # Since Tomcat is always compatible, any_compatible is always True for valid slots.
+    # However, we keep the per-type check for correctness if Tomcat compatibility changes.
+    per_type = jnp.stack([~has_port_25, ~has_port_80, jnp.ones(flat_services.shape[0], dtype=jnp.bool_), ~has_port_80])
+    return per_type.any(axis=0)
 
 
 def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | None = None) -> jnp.ndarray:
@@ -54,10 +60,10 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
 
     flat_services = host_services.reshape(ACTION_HOST_SLOTS, -1)
     flat_decoys = host_decoys.reshape(ACTION_HOST_SLOTS, -1)
-    # (NUM_DECOY_TYPES, ACTION_HOST_SLOTS) — decoy-type major
-    decoy_compat = _decoy_compat_vectorized(flat_services, flat_decoys)
-    # Gate each decoy type by slot validity
-    decoy_mask = (decoy_compat & slot_valid_flat[None, :]).reshape(-1)
+    # (ACTION_HOST_SLOTS,) — True if any decoy type is compatible on this slot
+    any_decoy_compat = _decoy_compat_vectorized(flat_services, flat_decoys)
+    # Gate by slot validity
+    decoy_mask = any_decoy_compat & slot_valid_flat
 
     # Traffic: agent controls dst subnet, src != dst
     src_idx = jnp.arange(NUM_SUBNETS)
@@ -70,7 +76,7 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
             slot_valid_flat,  # analyse
             slot_valid_flat,  # remove
             slot_valid_flat,  # restore
-            decoy_mask,  # decoys (4 types x 144 slots)
+            decoy_mask,  # decoys (1 per host slot)
             traffic_flat,  # block traffic
             traffic_flat,  # allow traffic
         ]
@@ -78,8 +84,21 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
 
     if state is not None:
         busy = state.blue_pending_ticks[agent_id] > 0
-        pending_action = jnp.clip(state.blue_pending_action[agent_id], 0, BLUE_ALLOW_TRAFFIC_END - 1)
-        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[pending_action].set(True)
+        pending_action = state.blue_pending_action[agent_id]
+
+        # When pending action is BLUE_SLEEP, the agent is busy with an
+        # unsupported action (e.g. Restore on router) — mask everything.
+        is_unsupported_pending = pending_action == BLUE_SLEEP
+
+        # For all pending actions: one-hot for the stored action
+        safe_action = jnp.clip(pending_action, 0, BLUE_ALLOW_TRAFFIC_END - 1)
+        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[safe_action].set(True)
+
+        # Unsupported pending → only Sleep is allowed (CybORG allows Sleep
+        # even when the agent is busy with an unsupported action like Restore).
+        unsupported_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[BLUE_SLEEP].set(True)
+        pending_mask = jnp.where(is_unsupported_pending, unsupported_mask, pending_mask)
+
         return jnp.where(busy, pending_mask, mask)
 
     return mask

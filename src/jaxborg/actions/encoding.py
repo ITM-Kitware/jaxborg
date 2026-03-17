@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
+from jaxborg.constants import ACTION_HOST_SLOTS, GLOBAL_MAX_HOSTS, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
 from jaxborg.state import CC4Const
 
 RED_SLEEP = 0
@@ -96,7 +96,7 @@ BLUE_REMOVE_END = BLUE_REMOVE_START + ACTION_HOST_SLOTS
 BLUE_RESTORE_START = BLUE_REMOVE_END
 BLUE_RESTORE_END = BLUE_RESTORE_START + ACTION_HOST_SLOTS
 BLUE_DECOY_START = BLUE_RESTORE_END
-BLUE_DECOY_END = BLUE_DECOY_START + ACTION_HOST_SLOTS * NUM_DECOY_TYPES
+BLUE_DECOY_END = BLUE_DECOY_START + ACTION_HOST_SLOTS
 BLUE_BLOCK_TRAFFIC_START = BLUE_DECOY_END
 BLUE_BLOCK_TRAFFIC_END = BLUE_BLOCK_TRAFFIC_START + NUM_SUBNETS * NUM_SUBNETS
 BLUE_ALLOW_TRAFFIC_START = BLUE_BLOCK_TRAFFIC_END
@@ -198,11 +198,12 @@ _BLUE_ENCODE_MAP = {
     "Restore": BLUE_RESTORE_START,
 }
 
-_BLUE_DECOY_ENCODE_MAP = {
-    "DeployDecoy_HarakaSMPT": 0,
-    "DeployDecoy_Apache": 1,
-    "DeployDecoy_Tomcat": 2,
-    "DeployDecoy_Vsftpd": 3,
+_BLUE_DECOY_ENCODE_NAMES = {
+    "DeployDecoy",
+    "DeployDecoy_HarakaSMPT",
+    "DeployDecoy_Apache",
+    "DeployDecoy_Tomcat",
+    "DeployDecoy_Vsftpd",
 }
 
 
@@ -237,12 +238,11 @@ def encode_blue_action(
         if slot < 0:
             return BLUE_SLEEP
         return base + slot
-    if action_name in _BLUE_DECOY_ENCODE_MAP:
-        decoy_type = _BLUE_DECOY_ENCODE_MAP[action_name]
+    if action_name in _BLUE_DECOY_ENCODE_NAMES:
         slot = _global_host_to_slot(const, target_host)
         if slot < 0:
             return BLUE_SLEEP
-        return BLUE_DECOY_START + decoy_type * ACTION_HOST_SLOTS + slot
+        return BLUE_DECOY_START + slot
     if action_name == "BlockTrafficZone":
         return BLUE_BLOCK_TRAFFIC_START + src_subnet * NUM_SUBNETS + dst_subnet
     if action_name == "AllowTrafficZone":
@@ -279,9 +279,8 @@ def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
     flat_slot = jnp.where(is_remove, action_idx - BLUE_REMOVE_START, flat_slot)
     flat_slot = jnp.where(is_restore, action_idx - BLUE_RESTORE_START, flat_slot)
 
-    decoy_offset = action_idx - BLUE_DECOY_START
-    decoy_type = jnp.where(is_decoy, decoy_offset // ACTION_HOST_SLOTS, jnp.int32(-1))
-    flat_slot = jnp.where(is_decoy, decoy_offset % ACTION_HOST_SLOTS, flat_slot)
+    decoy_type = jnp.int32(-1)  # type selected at execution time
+    flat_slot = jnp.where(is_decoy, action_idx - BLUE_DECOY_START, flat_slot)
 
     is_host_action = is_analyse | is_remove | is_restore | is_decoy
     target_host = jnp.where(is_host_action, _slot_to_global_host(const, flat_slot), jnp.int32(-1))

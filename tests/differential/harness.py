@@ -1389,7 +1389,6 @@ class CC4DifferentialHarness:
         return cyborg_blue_to_jax(action, agent_name, self.mappings, const=self.jax_const)
 
     _SERVICE_TO_DECOY = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
-    _GENERIC_DECOY_PLACEHOLDER = "DeployDecoy_HarakaSMPT"
     _UNSUPPORTED_BLUE_HOST_ACTIONS = {
         "Analyse": apply_blue_analyse,
         "Remove": apply_blue_remove,
@@ -1414,16 +1413,22 @@ class CC4DifferentialHarness:
         self.jax_state = apply_fn(self.jax_state, self.jax_const, agent_idx, host_idx)
 
     def _correct_pending_decoys(self, new_services_by_host):
+        """Record the decoy type CybORG chose into the precomputed tape.
+
+        When a pending decoy is about to execute (pending_ticks == 1), observe
+        which new service appeared on the target host and record the resolved
+        decoy type into blue_decoy_type_choices so that apply_blue_decoy
+        selects the same type via the precomputed path.
+        """
         for b in range(NUM_BLUE_AGENTS):
             if int(self.jax_state.blue_pending_ticks[b]) != 1:
                 continue
             pending_action = int(self.jax_state.blue_pending_action[b])
             if not (BLUE_DECOY_START <= pending_action < BLUE_DECOY_END):
                 continue
-            from jaxborg.constants import ACTION_HOST_SLOTS, OBS_HOSTS_PER_SUBNET
+            from jaxborg.constants import OBS_HOSTS_PER_SUBNET
 
-            offset = pending_action - BLUE_DECOY_START
-            flat_slot = offset % ACTION_HOST_SLOTS
+            flat_slot = pending_action - BLUE_DECOY_START
             sid = flat_slot // OBS_HOSTS_PER_SUBNET
             slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
             target_host = int(self.jax_const.obs_host_map[sid, slot_within])
@@ -1435,9 +1440,12 @@ class CC4DifferentialHarness:
                     resolved_type = self._SERVICE_TO_DECOY[svc_name]
                     break
             if resolved_type is not None:
-                correct_action = BLUE_DECOY_START + resolved_type * ACTION_HOST_SLOTS + flat_slot
-                self.jax_state = self.jax_state.replace(
-                    blue_pending_action=self.jax_state.blue_pending_action.at[b].set(correct_action)
+                # Record the CybORG-chosen decoy type for this step+agent
+                self.jax_const = self.jax_const.replace(
+                    blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[
+                        self.jax_state.time, b
+                    ].set(resolved_type),
+                    use_blue_decoy_type_choices=jnp.array(True),
                 )
             else:
                 self.jax_state = self.jax_state.replace(
@@ -1462,16 +1470,16 @@ class CC4DifferentialHarness:
             host_idx = self.mappings.hostname_to_idx.get(action.hostname)
             if host_idx is None:
                 continue
-            placeholder = encode_blue_action(
-                self._GENERIC_DECOY_PLACEHOLDER,
+            jax_action = encode_blue_action(
+                "DeployDecoy",
                 host_idx,
                 b,
                 const=self.jax_const,
             )
-            if placeholder == BLUE_SLEEP:
+            if jax_action == BLUE_SLEEP:
                 continue
             blue_pending_ticks = blue_pending_ticks.at[b].set(int(pending["remaining_ticks"]))
-            blue_pending_action = blue_pending_action.at[b].set(placeholder)
+            blue_pending_action = blue_pending_action.at[b].set(jax_action)
             changed = True
 
         if changed:
@@ -1492,13 +1500,13 @@ class CC4DifferentialHarness:
                 hostname = pending["action"].hostname
                 host_idx = self.mappings.hostname_to_idx.get(hostname)
                 if host_idx is not None:
-                    placeholder = encode_blue_action(
-                        self._GENERIC_DECOY_PLACEHOLDER,
+                    jax_action = encode_blue_action(
+                        "DeployDecoy",
                         host_idx,
                         b,
                         const=self.jax_const,
                     )
-                    if placeholder == BLUE_SLEEP:
+                    if jax_action == BLUE_SLEEP:
                         next_pending[b] = ("DeployDecoy", host_idx, int(pending["remaining_ticks"]))
                         continue
             if pending is not None and self._is_unsupported_blue_host_action(pending["action"]):
@@ -1526,7 +1534,14 @@ class CC4DifferentialHarness:
                             resolved = self._SERVICE_TO_DECOY[service_name]
                             break
                     if resolved is not None:
-                        self.jax_state = apply_blue_decoy(self.jax_state, self.jax_const, b, host_idx, resolved)
+                        # Record the resolved type so apply_blue_decoy picks it up
+                        self.jax_const = self.jax_const.replace(
+                            blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[
+                                self.jax_state.time, b
+                            ].set(resolved),
+                            use_blue_decoy_type_choices=jnp.array(True),
+                        )
+                        self.jax_state = apply_blue_decoy(self.jax_state, self.jax_const, b, host_idx, -1)
                     continue
                 self._apply_unsupported_blue_host_action(b, action_name, host_idx)
 

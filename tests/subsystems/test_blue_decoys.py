@@ -82,35 +82,28 @@ VSFTPD_IDX = DECOY_IDS["Vsftpd"]
 
 
 class TestBlueDecoyEncoding:
-    def test_encode_decoy_haraka_roundtrip(self, jax_const):
-        idx = encode_blue_action("DeployDecoy_HarakaSMPT", 5, 0, const=jax_const)
+    def test_encode_decoy_roundtrip(self, jax_const):
+        idx = encode_blue_action("DeployDecoy", 5, 0, const=jax_const)
         action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_DECOY
         assert int(target_host) == 5
-        assert int(decoy_type) == HARAKA_IDX
+        assert int(decoy_type) == -1  # type selected at execution time
 
-    def test_encode_decoy_apache_roundtrip(self, jax_const):
-        idx = encode_blue_action("DeployDecoy_Apache", 10, 0, const=jax_const)
-        action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
+    def test_all_decoy_names_map_to_same_index(self, jax_const):
+        """All legacy decoy names and generic DeployDecoy map to the same action index."""
+        decoy_names = [
+            "DeployDecoy",
+            "DeployDecoy_HarakaSMPT",
+            "DeployDecoy_Apache",
+            "DeployDecoy_Tomcat",
+            "DeployDecoy_Vsftpd",
+        ]
+        indices = [encode_blue_action(name, 3, 0, const=jax_const) for name in decoy_names]
+        assert len(set(indices)) == 1, f"Expected all same index, got {indices}"
+        action_type, target_host, decoy_type, *_ = decode_blue_action(indices[0], 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_DECOY
-        assert int(target_host) == 10
-        assert int(decoy_type) == APACHE_IDX
-
-    def test_decode_decoy(self, jax_const):
-        idx = encode_blue_action("DeployDecoy_Tomcat", 7, 0, const=jax_const)
-        action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
-        assert int(action_type) == BLUE_ACTION_TYPE_DECOY
-        assert int(target_host) == 7
-        assert int(decoy_type) == TOMCAT_IDX
-
-    def test_decode_all_decoy_types(self, jax_const):
-        decoy_names = ["DeployDecoy_HarakaSMPT", "DeployDecoy_Apache", "DeployDecoy_Tomcat", "DeployDecoy_Vsftpd"]
-        for dtype, name in enumerate(decoy_names):
-            idx = encode_blue_action(name, 3, 0, const=jax_const)
-            action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
-            assert int(action_type) == BLUE_ACTION_TYPE_DECOY
-            assert int(target_host) == 3
-            assert int(decoy_type) == dtype
+        assert int(target_host) == 3
+        assert int(decoy_type) == -1
 
 
 class TestApplyBlueDecoy:
@@ -203,9 +196,10 @@ class TestDecoyViaDispatch:
         blue_idx = _find_blue_for_host(jax_const, target)
         assert blue_idx is not None
 
-        action_idx = encode_blue_action("DeployDecoy_Tomcat", target, blue_idx, const=jax_const)
+        action_idx = encode_blue_action("DeployDecoy", target, blue_idx, const=jax_const)
         new_state = _jit_apply_blue(state, jax_const, blue_idx, action_idx)
-        assert bool(new_state.host_decoys[target, TOMCAT_IDX])
+        # With random selection, at least one decoy type should be deployed
+        assert bool(new_state.host_decoys[target].any())
 
 
 class TestBlueActionOrder:
@@ -291,7 +285,12 @@ class TestDifferentialWithCybORG:
         after_decoys = sum(getattr(proc, "decoy_type", None) is not None for proc in cyborg_host.processes)
 
         jax_state = _make_jax_state(const)
-        action_idx = encode_blue_action("DeployDecoy_Apache", target, blue_idx, const=const)
+        action_idx = encode_blue_action("DeployDecoy", target, blue_idx, const=const)
+        # Force selection of Apache via precomputed tape
+        const = const.replace(
+            blue_decoy_type_choices=const.blue_decoy_type_choices.at[0, blue_idx].set(APACHE_IDX),
+            use_blue_decoy_type_choices=jnp.array(True),
+        )
         new_state = process_blue_with_duration(jax_state, const, blue_idx, action_idx)
 
         assert str(cy_obs.success).upper() == "FALSE"
