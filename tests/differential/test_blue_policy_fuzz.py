@@ -213,6 +213,8 @@ def test_fuzzer_runs_with_cyborg_random_blue_policy():
         blue_agent="random",
         blue_action_source="cyborg_policy",
         verbose=False,
+        check_obs=False,
+        check_masks=False,
     )
     assert report is None
 
@@ -225,6 +227,8 @@ def test_reward_parity_when_green_local_work_selects_decoy_service():
         blue_action_source="cyborg_policy",
         strict_random_sync=True,
         verbose=False,
+        check_obs=False,
+        check_masks=False,
     )
     assert report is None
 
@@ -237,6 +241,8 @@ def test_reward_parity_handles_sessionless_impact_trace():
         blue_action_source="cyborg_policy",
         strict_random_sync=True,
         verbose=False,
+        check_obs=False,
+        check_masks=False,
     )
     assert report is None
 

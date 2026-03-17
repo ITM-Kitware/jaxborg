@@ -61,14 +61,14 @@ def _init_cpu_worker():
 
 def _fuzz_one_seed(args):
     """Run differential fuzzing for a single seed (worker function for multiprocessing)."""
-    seed, max_steps, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs = args
+    seed, max_steps, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs, check_masks = args
 
     blue_cls = BLUE_AGENT_CLASSES[blue_agent]
     use_cyborg_blue_policy = blue_action_source == "cyborg_policy"
 
     harness = CC4DifferentialHarness(
         seed=seed,
-        max_steps=500,
+        max_steps=max_steps,
         blue_cls=blue_cls,
         green_cls=EnterpriseGreenAgent,
         red_cls=FiniteStateRedAgent,
@@ -76,6 +76,7 @@ def _fuzz_one_seed(args):
         strict_random_sync=strict_random_sync,
         use_cyborg_blue_policy=use_cyborg_blue_policy,
         check_obs=check_obs,
+        check_masks=check_masks,
     )
     harness.reset()
 
@@ -122,6 +123,7 @@ def run_differential_fuzz(
     blue_action_source: str = "sleep",
     strict_random_sync: bool = False,
     check_obs: bool = True,
+    check_masks: bool = True,
     parallel: int | None = None,
 ) -> MismatchReport | None:
     """Run differential fuzzing across seeds.
@@ -154,11 +156,21 @@ def run_differential_fuzz(
             blue_action_source,
             strict_random_sync,
             check_obs,
+            check_masks,
         )
 
     # Parallel path
     args_list = [
-        (seed, max_steps_per_seed, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs)
+        (
+            seed,
+            max_steps_per_seed,
+            mismatch_mode,
+            blue_agent,
+            blue_action_source,
+            strict_random_sync,
+            check_obs,
+            check_masks,
+        )
         for seed in seeds
     ]
 
@@ -189,7 +201,15 @@ def run_differential_fuzz(
 
 
 def _run_serial(
-    seeds, max_steps_per_seed, verbose, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs
+    seeds,
+    max_steps_per_seed,
+    verbose,
+    mismatch_mode,
+    blue_agent,
+    blue_action_source,
+    strict_random_sync,
+    check_obs,
+    check_masks,
 ):
     """Original serial execution path."""
     wall_start = time.time()
@@ -199,7 +219,16 @@ def _run_serial(
             print(f"--- Seed {seed} (blue_agent={blue_agent}, blue_action_source={blue_action_source}) ---")
 
         report = _fuzz_one_seed(
-            (seed, max_steps_per_seed, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs)
+            (
+                seed,
+                max_steps_per_seed,
+                mismatch_mode,
+                blue_agent,
+                blue_action_source,
+                strict_random_sync,
+                check_obs,
+                check_masks,
+            )
         )
         if report is not None:
             return report

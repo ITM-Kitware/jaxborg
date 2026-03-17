@@ -1,3 +1,5 @@
+import functools
+
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -23,6 +25,16 @@ from jaxborg.topology import build_topology
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
 SEEDS = [1, 7, 42, 100, 256, 999, 12345, 54321]
+
+
+@functools.lru_cache(maxsize=1)
+def _seed_variability_sample():
+    """Batch topology generation so the seed-sweep properties don't pay Python loop overhead."""
+    keys = jnp.stack([jax.random.PRNGKey(seed) for seed in range(100)])
+    consts = jax.vmap(lambda key: build_topology(key, num_steps=500))(keys)
+    counts = np.asarray(consts.num_hosts, dtype=np.int32)
+    starts = np.asarray(consts.red_start_hosts[:, 0], dtype=np.int32)
+    return counts, starts
 
 
 @pytest.fixture(params=SEEDS)
@@ -158,27 +170,15 @@ class TestInactiveHostSlots:
 
 
 class TestSeedVariability:
-    def test_different_seeds_different_host_counts(self):
-        counts = set()
-        for seed in range(50):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            counts.add(int(c.num_hosts))
-        assert len(counts) > 1
-
-    def test_different_seeds_different_start_hosts(self):
-        starts = set()
-        for seed in range(20):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            starts.add(int(c.red_start_hosts[0]))
-        assert len(starts) > 1
-
-    def test_host_count_distribution(self):
+    def test_seed_variability_and_host_count_distribution(self):
         min_total = 8 * MIN_HOSTS_PER_SUBNET + 1
         max_total = 8 * MAX_HOSTS_PER_SUBNET + 1
-        counts = []
-        for seed in range(100):
-            c = build_topology(jax.random.PRNGKey(seed), num_steps=500)
-            counts.append(int(c.num_hosts))
+        counts, starts = _seed_variability_sample()
+        counts_50 = counts[:50]
+        starts_20 = starts[:20]
+
+        assert len(set(map(int, counts_50))) > 1
+        assert len(set(map(int, starts_20))) > 1
         assert min(counts) >= min_total
         assert max(counts) <= max_total
         spread = max(counts) - min(counts)

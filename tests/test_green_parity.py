@@ -24,7 +24,7 @@ class TestGreenSyncParity:
 
     def test_green_sync_single_step(self):
         """Run one full step with green sync and check for state parity."""
-        harness = self._make_harness()
+        harness = self._make_harness(max_steps=1)
         harness.reset()
         result = harness.full_step()
         harness.jax_state = harness.jax_state.replace(time=1)
@@ -35,7 +35,7 @@ class TestGreenSyncParity:
 
     def test_green_sync_five_steps(self):
         """Run 5 full steps with green sync and check for state parity."""
-        harness = self._make_harness()
+        harness = self._make_harness(max_steps=5)
         harness.reset()
 
         for t in range(5):
@@ -48,7 +48,7 @@ class TestGreenSyncParity:
 
     def test_green_activity_detected_parity(self):
         """Check host_activity_detected matches between CybORG and JAX."""
-        harness = self._make_harness()
+        harness = self._make_harness(max_steps=10)
         harness.reset()
 
         mismatches = 0
@@ -63,7 +63,7 @@ class TestGreenSyncParity:
 
     def test_green_lwf_asf_parity(self):
         """Check green_lwf and green_asf flags match between CybORG and JAX."""
-        harness = self._make_harness()
+        harness = self._make_harness(max_steps=10)
         harness.reset()
 
         for t in range(10):
@@ -79,7 +79,7 @@ class TestGreenSyncParity:
 
     def test_recorder_produces_valid_array(self):
         """Check that the recorder produces a well-formed array."""
-        harness = self._make_harness()
+        harness = self._make_harness(max_steps=500)
         harness.reset()
 
         for t in range(3):
@@ -99,7 +99,7 @@ class TestGreenSyncParity:
 
     def test_full_episode_green_sync_10_steps(self):
         """Run 10 steps and verify no critical state divergence."""
-        harness = self._make_harness(max_steps=500)
+        harness = self._make_harness(max_steps=10)
         harness.reset()
 
         total_errors = 0

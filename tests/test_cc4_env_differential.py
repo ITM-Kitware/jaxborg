@@ -13,7 +13,7 @@ class TestCC4EnvDifferential:
 
     def test_initial_state_parity(self):
         """After reset, CybORG and JAX agree on host_compromised and red_sessions."""
-        harness = self._make_harness(seed=42)
+        harness = self._make_harness(seed=42, max_steps=1)
         cyborg_snap, jax_snap = harness.reset()
 
         from tests.differential.state_comparator import (
@@ -28,7 +28,7 @@ class TestCC4EnvDifferential:
 
     def test_initial_policy_input_parity(self):
         """After reset, matched JAX/CybORG states must produce the same blue obs and masks."""
-        harness = self._make_harness(seed=42)
+        harness = self._make_harness(seed=42, max_steps=1)
         harness.reset()
 
         from tests.differential.state_comparator import format_diffs
@@ -39,7 +39,7 @@ class TestCC4EnvDifferential:
 
     def test_red_discover_scan_parity(self):
         """Red discovers a subnet then scans a host. Compare state."""
-        harness = self._make_harness(seed=42)
+        harness = self._make_harness(seed=42, max_steps=20)
         harness.reset()
 
         from jaxborg.actions.encoding import RED_DISCOVER_START, RED_SCAN_START
@@ -63,7 +63,7 @@ class TestCC4EnvDifferential:
         system, so we only compare state on the specific host being targeted
         (green/phishing side-effects on other hosts are expected to diverge).
         """
-        harness = self._make_harness(seed=42)
+        harness = self._make_harness(seed=42, max_steps=20)
         harness.reset()
 
         from CybORG.Simulator.Actions import Sleep
@@ -113,7 +113,7 @@ class TestCC4EnvDifferential:
             format_diffs,
         )
 
-        harness = self._make_harness(seed=seed)
+        harness = self._make_harness(seed=seed, max_steps=1)
         cyborg_snap, jax_snap = harness.reset()
         diffs = compare_snapshots(cyborg_snap, jax_snap)
         errors = [d for d in diffs if d.field_name in _ERROR_FIELDS]
@@ -121,7 +121,7 @@ class TestCC4EnvDifferential:
 
     def test_policy_input_parity_after_five_full_steps(self):
         """Obs and masks should stay aligned through several matched full steps."""
-        harness = self._make_harness(seed=42)
+        harness = self._make_harness(seed=42, max_steps=20)
         harness.reset()
 
         from tests.differential.state_comparator import format_diffs

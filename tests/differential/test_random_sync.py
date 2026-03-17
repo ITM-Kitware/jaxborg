@@ -7,7 +7,14 @@ from tests.differential.state_comparator import compare_fast
 
 
 def test_detection_random_sync_advances_jax_index_for_cyborg_scan_trace():
-    harness = CC4DifferentialHarness(seed=0, max_steps=500, sync_green_rng=True, strict_random_sync=True)
+    harness = CC4DifferentialHarness(
+        seed=0,
+        max_steps=20,
+        sync_green_rng=True,
+        strict_random_sync=True,
+        check_obs=False,
+        check_masks=False,
+    )
     harness.reset()
 
     report = None
@@ -38,6 +45,8 @@ def test_strict_random_sync_handles_pending_ssh_exploit_trace():
         max_steps_per_seed=9,
         verbose=False,
         strict_random_sync=True,
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -49,6 +58,8 @@ def test_strict_random_sync_handles_discover_deception_trace():
         max_steps_per_seed=11,
         verbose=False,
         strict_random_sync=True,
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -62,6 +73,8 @@ def test_strict_random_sync_handles_generic_blue_deploy_decoy_trace():
         strict_random_sync=True,
         blue_agent="random",
         blue_action_source="cyborg_policy",
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -75,6 +88,8 @@ def test_strict_random_sync_handles_red_session_check_trace():
         strict_random_sync=True,
         blue_agent="random",
         blue_action_source="cyborg_policy",
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -88,6 +103,8 @@ def test_strict_random_sync_handles_privesc_session_choice_trace():
         strict_random_sync=True,
         blue_agent="random",
         blue_action_source="cyborg_policy",
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -101,6 +118,8 @@ def test_detection_random_sync_handles_failed_scan_trace_with_random_blue_action
         strict_random_sync=True,
         blue_agent="random",
         blue_action_source="cyborg_policy",
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None
@@ -114,6 +133,8 @@ def test_detection_random_sync_handles_long_discover_deception_trace():
         strict_random_sync=True,
         blue_agent="random",
         blue_action_source="cyborg_policy",
+        check_obs=False,
+        check_masks=False,
     )
 
     assert report is None

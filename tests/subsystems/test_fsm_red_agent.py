@@ -741,7 +741,7 @@ class TestRedAgentActivation:
         """JAXborg should match CybORG: only red_agent_0 active at reset."""
         from tests.differential.harness import CC4DifferentialHarness
 
-        h = CC4DifferentialHarness(seed=42, max_steps=500)
+        h = CC4DifferentialHarness(seed=42, max_steps=1)
         h.reset()
 
         controller = h.cyborg_env.environment_controller
@@ -765,7 +765,7 @@ class TestRedAgentActivation:
         """CybORG activates only red_0 at reset across seeds."""
         from tests.differential.harness import CC4DifferentialHarness
 
-        h = CC4DifferentialHarness(seed=seed, max_steps=500)
+        h = CC4DifferentialHarness(seed=seed, max_steps=1)
         h.reset()
 
         controller = h.cyborg_env.environment_controller
@@ -787,7 +787,7 @@ class TestRedAgentActivation:
         """JAX FSM initial host state should match CybORG's FSM host_states at step 0."""
         from tests.differential.harness import CC4DifferentialHarness
 
-        h = CC4DifferentialHarness(seed=42, max_steps=500)
+        h = CC4DifferentialHarness(seed=42, max_steps=1)
         h.reset()
 
         # CybORG: get_action processes the initial observation and populates host_states
