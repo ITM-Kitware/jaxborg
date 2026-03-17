@@ -967,11 +967,8 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
     Optimized: batched policy inference across agents.
     """
 
-    if not deterministic:
-        raise ValueError("Matched transfer mode currently requires deterministic evaluation")
-
-    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic=True)
-    dummy_keys = jnp.zeros((NUM_BLUE_AGENTS, 2), dtype=jnp.uint32)  # unused for deterministic
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic=deterministic)
+    rng = jax.random.PRNGKey(seed + 9999)  # separate stream for action sampling
 
     all_jax_actions = []
     all_cyborg_actions = []
@@ -998,7 +995,12 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
                 [get_blue_obs(harness.jax_state, harness.jax_const, i) for i in range(NUM_BLUE_AGENTS)]
             )
             jax_masks = _all_blue_masks(harness.jax_const, harness.jax_state)
-            jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, dummy_keys)
+            if deterministic:
+                step_keys = jnp.zeros((NUM_BLUE_AGENTS, 2), dtype=jnp.uint32)
+            else:
+                rng, _sub = jax.random.split(rng)
+                step_keys = jax.random.split(_sub, NUM_BLUE_AGENTS)
+            jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, step_keys)
 
             # --- CybORG side: cached mask translation + batched policy ---
             cyborg_obs_list = []
@@ -1015,7 +1017,7 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
                 )
             cyborg_obs_stack = jnp.stack(cyborg_obs_list)
             cyborg_masks = jnp.stack(cyborg_mask_list)
-            cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, dummy_keys)
+            cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, step_keys)
 
             # Single device-to-host sync
             jax_actions_np = np.asarray(jax_actions_arr)
@@ -1532,10 +1534,9 @@ def main():
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
         print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
     else:
-        if not deterministic:
-            raise ValueError("Matched transfer diagnostics require deterministic evaluation")
+        mode_label = "STOCHASTIC" if not deterministic else "DETERMINISTIC"
         print("\n" + "=" * 70)
-        print("MATCHED TRANSFER ROLLOUT")
+        print(f"MATCHED TRANSFER ROLLOUT ({mode_label})")
         print("=" * 70)
         print("Stepping synced episodes with JAX-selected actions.")
         print("CybORG actions below are the policy outputs on matched CybORG observations, not applied actions.")
