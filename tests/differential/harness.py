@@ -808,6 +808,7 @@ class CC4DifferentialHarness:
                 self._resync_ordering_divergence(cy_state, expected_consumed)
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
+        self._sync_blue_observation_events(controller)
         primary_abstract_flags = _extract_primary_is_abstract(cy_state)
         # CybORG scan memory (ports) lives on session 0.  When session 0
         # is destroyed and replaced (even on the same host), its ports are
@@ -1342,6 +1343,56 @@ class CC4DifferentialHarness:
                 self._apply_unsupported_blue_host_action(b, action_name, host_idx)
 
         self._blue_unsupported_pending = next_pending
+
+        # Mirror externally-tracked unsupported pending actions into JAX state
+        # so compute_blue_action_mask() sees the same busy/pending state as the
+        # CybORG wrapper path during differential checks.
+        blue_pending_ticks = self.jax_state.blue_pending_ticks
+        blue_pending_action = self.jax_state.blue_pending_action
+        synced = False
+        for b, (_, _, ticks) in next_pending.items():
+            if int(blue_pending_ticks[b]) == 0 and ticks > 0:
+                blue_pending_ticks = blue_pending_ticks.at[b].set(ticks)
+                blue_pending_action = blue_pending_action.at[b].set(BLUE_SLEEP)
+                synced = True
+        if synced:
+            self.jax_state = self.jax_state.replace(
+                blue_pending_ticks=blue_pending_ticks,
+                blue_pending_action=blue_pending_action,
+            )
+
+    def _sync_blue_observation_events(self, controller):
+        """Sync live CybORG event visibility into JAX observation fields.
+
+        JAX tracks monitor-aging with current/old event arrays, and CybORG's
+        wrapper reads both current and aged host event lists directly. Mirror
+        those lists into the corresponding JAX arrays so differential checks
+        compare the same source of truth.
+        """
+        host_activity_detected = self.jax_state.host_activity_detected
+        old_host_activity_detected = self.jax_state.old_host_activity_detected
+        host_exploit_detected = self.jax_state.host_exploit_detected
+        old_host_exploit_detected = self.jax_state.old_host_exploit_detected
+
+        for hostname, host_idx in self.mappings.hostname_to_idx.items():
+            host = controller.state.hosts.get(hostname)
+            if host is None:
+                continue
+            has_network = bool(host.events.network_connections)
+            has_old_network = bool(host.events.old_network_connections)
+            has_process = bool(host.events.process_creation)
+            has_old_process = bool(host.events.old_process_creation)
+            host_activity_detected = host_activity_detected.at[host_idx].set(has_network)
+            old_host_activity_detected = old_host_activity_detected.at[host_idx].set(has_old_network)
+            host_exploit_detected = host_exploit_detected.at[host_idx].set(has_process)
+            old_host_exploit_detected = old_host_exploit_detected.at[host_idx].set(has_old_process)
+
+        self.jax_state = self.jax_state.replace(
+            host_activity_detected=host_activity_detected,
+            old_host_activity_detected=old_host_activity_detected,
+            host_exploit_detected=host_exploit_detected,
+            old_host_exploit_detected=old_host_exploit_detected,
+        )
 
     def _resync_ordering_divergence(self, cy_state, expected_detection_count):
         """Resync JAX state from CybORG after action-ordering divergence.
