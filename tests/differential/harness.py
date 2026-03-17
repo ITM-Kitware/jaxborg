@@ -13,11 +13,19 @@ from jaxborg.actions.blue_decoys import apply_blue_decoy
 from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.encoding import (
+    ACTION_TYPE_AGGRESSIVE_SCAN,
+    ACTION_TYPE_DEGRADE,
+    ACTION_TYPE_DISCOVER,
     ACTION_TYPE_DISCOVER_DECEPTION,
+    ACTION_TYPE_EXPLOIT_BLUEKEEP,
     ACTION_TYPE_EXPLOIT_HTTP,
     ACTION_TYPE_EXPLOIT_SQL,
     ACTION_TYPE_EXPLOIT_SSH,
+    ACTION_TYPE_IMPACT,
     ACTION_TYPE_PRIVESC,
+    ACTION_TYPE_SCAN,
+    ACTION_TYPE_STEALTH_SCAN,
+    ACTION_TYPE_WITHDRAW,
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
@@ -891,12 +899,19 @@ class CC4DifferentialHarness:
         # --- Compare ---
         from tests.differential.state_comparator import StateDiff, compare_fast
 
-        diffs = compare_fast(
+        primary_pid_post = _extract_primary_pids(cy_state)
+        diffs = self._compare_red_identity(
+            controller,
+            forced_primary_hosts_post,
+            primary_abstract_flags,
+            primary_pid_post,
+        )
+        diffs.extend(compare_fast(
             self.cyborg_env,
             self.jax_state,
             self.jax_const,
             self.mappings,
-        )
+        ))
 
         if abs(jax_reward - cyborg_reward) > 1e-6:
             diffs.append(StateDiff("rewards", cyborg_reward, jax_reward))
@@ -904,6 +919,53 @@ class CC4DifferentialHarness:
         diffs.extend(self.compare_policy_inputs())
 
         return StepResult(step=int(self.jax_state.time), diffs=diffs)
+
+    def _compare_red_identity(
+        self,
+        controller,
+        primary_hosts_post,
+        primary_abstract_flags,
+        primary_pid_post,
+    ) -> list[StateDiff]:
+        diffs = []
+        for r in range(NUM_RED_AGENTS):
+            agent_name = f"red_agent_{r}"
+            cy_host = int(primary_hosts_post[r])
+            jax_host = int(self.jax_state.red_scan_anchor_host[r])
+            if cy_host != jax_host:
+                diffs.append(StateDiff("identity_primary_host", cy_host, jax_host, agent_name))
+
+            cy_pid = int(primary_pid_post[r])
+            jax_pid = int(self.jax_state.red_primary_pid[r])
+            if cy_pid != jax_pid:
+                diffs.append(StateDiff("identity_primary_pid", cy_pid, jax_pid, agent_name))
+
+            cy_abstract = bool(primary_abstract_flags[r])
+            jax_abstract = bool(self.jax_state.red_primary_is_abstract[r])
+            if cy_abstract != jax_abstract:
+                diffs.append(StateDiff("identity_primary_abstract", cy_abstract, jax_abstract, agent_name))
+
+            cy_pending = controller.actions_in_progress.get(agent_name)
+            cy_busy = cy_pending is not None
+            jax_busy = bool(self.jax_state.red_pending_ticks[r] > 0)
+            if cy_busy != jax_busy:
+                diffs.append(StateDiff("identity_pending_busy", cy_busy, jax_busy, agent_name))
+                continue
+
+            if not cy_busy:
+                continue
+
+            cy_ticks = int(cy_pending["remaining_ticks"])
+            jax_ticks = int(self.jax_state.red_pending_ticks[r])
+            if cy_ticks != jax_ticks:
+                diffs.append(StateDiff("identity_pending_ticks", cy_ticks, jax_ticks, agent_name))
+
+            cy_action = type(cy_pending["action"]).__name__
+            jax_action = _jax_red_pending_action_name(int(self.jax_state.red_pending_action[r]), self.jax_const)
+            if jax_action is not None and cy_action != jax_action:
+                diffs.append(StateDiff("identity_pending_action", cy_action, jax_action, agent_name))
+
+        return diffs
 
     def _sync_red_action_randoms(self, random_sync_report, red_actions):
         synced_randoms = list(random_sync_report.detection_randoms)
@@ -1428,6 +1490,32 @@ def _extract_primary_pids(state) -> jax.Array:
         if primary is not None:
             primary_pids = primary_pids.at[r].set(int(getattr(primary, "pid", -1)))
     return primary_pids
+
+
+def _jax_red_pending_action_name(action_idx: int, const) -> str | None:
+    action_type, _, _ = decode_red_action(action_idx, 0, const)
+    action_type = int(action_type)
+    if action_type == ACTION_TYPE_DISCOVER:
+        return "DiscoverRemoteSystems"
+    if action_type == ACTION_TYPE_SCAN:
+        return "DiscoverNetworkServices"
+    if ACTION_TYPE_EXPLOIT_SSH <= action_type <= ACTION_TYPE_EXPLOIT_BLUEKEEP:
+        return "ExploitRemoteService"
+    if action_type == ACTION_TYPE_PRIVESC:
+        return "PrivilegeEscalate"
+    if action_type == ACTION_TYPE_IMPACT:
+        return "Impact"
+    if action_type == ACTION_TYPE_AGGRESSIVE_SCAN:
+        return "AggressiveServiceDiscovery"
+    if action_type == ACTION_TYPE_STEALTH_SCAN:
+        return "StealthServiceDiscovery"
+    if action_type == ACTION_TYPE_DISCOVER_DECEPTION:
+        return "DiscoverDeception"
+    if action_type == ACTION_TYPE_DEGRADE:
+        return "DegradeServices"
+    if action_type == ACTION_TYPE_WITHDRAW:
+        return "Withdraw"
+    return None
 
 
 def _extract_primary_is_abstract(state) -> jax.Array:

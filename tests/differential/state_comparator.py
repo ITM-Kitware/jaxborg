@@ -14,6 +14,12 @@ from tests.differential.harness import StateDiff, StateSnapshot
 _DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
 
 _ERROR_FIELDS = {
+    "identity_primary_host",
+    "identity_primary_pid",
+    "identity_primary_abstract",
+    "identity_pending_busy",
+    "identity_pending_ticks",
+    "identity_pending_action",
     "host_compromised",
     "red_privilege",
     "red_sessions",
