@@ -16,9 +16,10 @@ from jaxborg.actions.duration import (
     process_red_with_duration,
 )
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
-from jaxborg.actions.green import apply_green_agents
+from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.red_common import apply_red_session_check
 from jaxborg.agents.fsm_red import fsm_red_init_states
 from jaxborg.constants import (
     BLUE_OBS_SIZE,
@@ -39,6 +40,71 @@ from jaxborg.topology import (
     get_cyborg_topology_bank,
 )
 
+TOTAL_ACTION_ACTOR_SLOTS = NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS + NUM_RED_AGENTS
+
+
+def _frontload_order(front_slots: tuple[int, ...]) -> jnp.ndarray:
+    slots = [slot for slot in range(TOTAL_ACTION_ACTOR_SLOTS) if slot not in front_slots]
+    return jnp.array([*front_slots, *slots], dtype=jnp.int32)
+
+
+def _default_execution_order(key: chex.PRNGKey) -> jnp.ndarray:
+    return jax.random.permutation(key, jnp.arange(TOTAL_ACTION_ACTOR_SLOTS, dtype=jnp.int32))
+
+
+def apply_all_actions_in_order(
+    state: CC4State,
+    const: CC4Const,
+    blue_actions: jnp.ndarray,
+    red_actions: jnp.ndarray,
+    key_green: chex.PRNGKey,
+    red_keys: jnp.ndarray,
+    forced_primary_hosts: jnp.ndarray,
+    forced_primary_pids: jnp.ndarray,
+    execution_order: jnp.ndarray,
+) -> CC4State:
+    """Apply one CybORG step using an explicit chosen-action execution order."""
+    green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
+
+    def step_actor(step_idx, carry_state):
+        actor_slot = execution_order[step_idx]
+        blue_id = jnp.clip(actor_slot, 0, NUM_BLUE_AGENTS - 1)
+        green_host = jnp.clip(actor_slot - NUM_BLUE_AGENTS, 0, GLOBAL_MAX_HOSTS - 1)
+        red_id = jnp.clip(actor_slot - NUM_BLUE_AGENTS - GLOBAL_MAX_HOSTS, 0, NUM_RED_AGENTS - 1)
+
+        is_blue = actor_slot < NUM_BLUE_AGENTS
+        is_green = (actor_slot >= NUM_BLUE_AGENTS) & (actor_slot < NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS)
+
+        return jax.lax.cond(
+            is_blue,
+            lambda s: process_blue_with_duration(s, const, blue_id, blue_actions[blue_id]),
+            lambda s: jax.lax.cond(
+                is_green,
+                lambda gs: apply_green_agent_action(gs, const, green_host, green_keys[green_host]),
+                lambda rs: process_red_with_duration(
+                    rs,
+                    const,
+                    red_id,
+                    red_actions[red_id],
+                    red_keys[red_id],
+                    forced_primary_host=forced_primary_hosts[red_id],
+                    forced_primary_pid=forced_primary_pids[red_id],
+                    run_session_check=False,
+                ),
+                s,
+            ),
+            carry_state,
+        )
+
+    state = jax.lax.fori_loop(0, TOTAL_ACTION_ACTOR_SLOTS, step_actor, state)
+    state = reassign_cross_subnet_sessions(state, const)
+    for b in range(NUM_BLUE_AGENTS):
+        state = apply_blue_monitor(state, const, b)
+    for r in range(NUM_RED_AGENTS):
+        session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
+        state = apply_red_session_check(state, const, r, session_check_key)
+    return state
+
 
 def apply_all_actions(
     state: CC4State,
@@ -50,7 +116,7 @@ def apply_all_actions(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
 ) -> CC4State:
-    """Apply all agent actions in CybORG-correct order: blue → green → red → reassign → monitors.
+    """Apply all agent actions in CybORG's chosen-action shuffle order.
 
     Shared by CC4Env.step_env and the differential harness.
 
@@ -61,27 +127,18 @@ def apply_all_actions(
         forced_primary_hosts: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_HOST` for no override
         forced_primary_pids: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_PID` for no override
     """
-    for b in range(NUM_BLUE_AGENTS):
-        state = process_blue_with_duration(state, const, b, blue_actions[b])
-
-    state = apply_green_agents(state, const, key_green)
-
-    for r in range(NUM_RED_AGENTS):
-        state = process_red_with_duration(
-            state,
-            const,
-            r,
-            red_actions[r],
-            red_keys[r],
-            forced_primary_host=forced_primary_hosts[r],
-            forced_primary_pid=forced_primary_pids[r],
-        )
-
-    state = reassign_cross_subnet_sessions(state, const)
-    for b in range(NUM_BLUE_AGENTS):
-        state = apply_blue_monitor(state, const, b)
-
-    return state
+    execution_order = _default_execution_order(jax.random.fold_in(key_green, jnp.int32(0xC4)))
+    return apply_all_actions_in_order(
+        state,
+        const,
+        blue_actions,
+        red_actions,
+        key_green,
+        red_keys,
+        forced_primary_hosts,
+        forced_primary_pids,
+        execution_order,
+    )
 
 
 @struct.dataclass

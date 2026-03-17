@@ -8,10 +8,13 @@ from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_SERVER_HOSTS,
+    MAX_USER_HOSTS,
     NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
+    SUBNET_IDS,
 )
 from jaxborg.state import CC4Const, CC4State
 
@@ -23,6 +26,80 @@ GREEN_LOCAL_WORK = 1
 GREEN_ACCESS_SERVICE = 2
 NUM_GREEN_ACTIONS = 3
 
+_CYBORG_GENERATION_SUBNET_ORDER = (
+    SUBNET_IDS["RESTRICTED_ZONE_A"],
+    SUBNET_IDS["OPERATIONAL_ZONE_A"],
+    SUBNET_IDS["RESTRICTED_ZONE_B"],
+    SUBNET_IDS["OPERATIONAL_ZONE_B"],
+    SUBNET_IDS["CONTRACTOR_NETWORK"],
+    SUBNET_IDS["PUBLIC_ACCESS_ZONE"],
+    SUBNET_IDS["ADMIN_NETWORK"],
+    SUBNET_IDS["OFFICE_NETWORK"],
+    SUBNET_IDS["INTERNET"],
+)
+
+
+def _ordered_green_hosts(const: CC4Const) -> jax.Array:
+    inactive_keys = const.num_green_agents + jnp.arange(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+    order_keys = jnp.where(const.green_agent_active, const.green_agent_host, inactive_keys)
+    return jnp.argsort(order_keys)
+
+
+def _cyborg_host_iteration_ranks(const: CC4Const) -> jax.Array:
+    host_ranks = jnp.full(GLOBAL_MAX_HOSTS, jnp.int32(GLOBAL_MAX_HOSTS * 2), dtype=jnp.int32)
+    next_rank = jnp.int32(0)
+    host_indices = jnp.arange(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+
+    def _assign_rank(ranks, host_idx, rank):
+        valid = host_idx < GLOBAL_MAX_HOSTS
+        ranks = jax.lax.cond(
+            valid,
+            lambda arr: arr.at[host_idx].set(rank),
+            lambda arr: arr,
+            ranks,
+        )
+        rank = rank + valid.astype(jnp.int32)
+        return ranks, rank
+
+    for sid in _CYBORG_GENERATION_SUBNET_ORDER:
+        if sid == SUBNET_IDS["INTERNET"]:
+            internet_hosts = jnp.sort(
+                jnp.where(const.host_active & (const.host_subnet == sid), host_indices, GLOBAL_MAX_HOSTS)
+            )
+            host_ranks, next_rank = _assign_rank(host_ranks, internet_hosts[0], next_rank)
+            continue
+
+        router_hosts = jnp.sort(
+            jnp.where(
+                const.host_active & const.host_is_router & (const.host_subnet == sid),
+                host_indices,
+                GLOBAL_MAX_HOSTS,
+            )
+        )
+        host_ranks, next_rank = _assign_rank(host_ranks, router_hosts[0], next_rank)
+
+        user_hosts = jnp.sort(
+            jnp.where(
+                const.host_active & const.host_is_user & (const.host_subnet == sid),
+                host_indices,
+                GLOBAL_MAX_HOSTS,
+            )
+        )
+        for slot in range(MAX_USER_HOSTS):
+            host_ranks, next_rank = _assign_rank(host_ranks, user_hosts[slot], next_rank)
+
+        server_hosts = jnp.sort(
+            jnp.where(
+                const.host_active & const.host_is_server & (const.host_subnet == sid),
+                host_indices,
+                GLOBAL_MAX_HOSTS,
+            )
+        )
+        for slot in range(MAX_SERVER_HOSTS):
+            host_ranks, next_rank = _assign_rank(host_ranks, server_hosts[slot], next_rank)
+
+    return host_ranks
+
 
 def _find_phishing_red_agent(
     state: CC4State,
@@ -31,26 +108,32 @@ def _find_phishing_red_agent(
     key: jax.Array,
 ) -> jnp.int32:
     target_subnet = const.host_subnet[host_idx]
-    session_pairs = state.red_sessions & const.host_active[None, :]
-    source_subnets = jnp.broadcast_to(const.host_subnet[None, :], session_pairs.shape)
-    routable_pairs = session_pairs & ~state.blocked_zones[source_subnets, target_subnet]
-    same_subnet_pairs = routable_pairs & (source_subnets == target_subnet)
+    host_ranks = _cyborg_host_iteration_ranks(const)
+    # CybORG PhishingEmail uses RemoteAction.check_routable(), which checks
+    # connected_components and does not consult subnet blocks. In CC4 the
+    # physical topology remains connected, so phishing source selection should
+    # consider all active red sessions, not only currently unblocked ones.
+    candidate_pairs = state.red_sessions & const.host_active[None, :]
+    source_subnets = jnp.broadcast_to(const.host_subnet[None, :], candidate_pairs.shape)
+    same_subnet_pairs = candidate_pairs & (source_subnets == target_subnet)
 
     same_subnet_by_host = jnp.any(same_subnet_pairs, axis=0)
     first_same_agent_by_host = jnp.argmax(same_subnet_pairs, axis=0).astype(jnp.int32)
-    host_indices = jnp.arange(same_subnet_by_host.shape[0], dtype=jnp.int32)
-    last_same_host = jnp.max(jnp.where(same_subnet_by_host, host_indices, jnp.int32(-1)))
-    has_same_subnet = last_same_host >= 0
-    same_subnet_agent = first_same_agent_by_host[jnp.clip(last_same_host, 0, same_subnet_by_host.shape[0] - 1)]
+    last_same_rank = jnp.max(jnp.where(same_subnet_by_host, host_ranks, jnp.int32(-1)))
+    has_same_subnet = last_same_rank >= 0
+    last_same_host = jnp.argmax(jnp.where(host_ranks == last_same_rank, 1, 0)).astype(jnp.int32)
+    same_subnet_agent = first_same_agent_by_host[last_same_host]
 
-    routable_flat = jnp.transpose(routable_pairs, (1, 0)).reshape(-1)
-    num_routable = jnp.sum(routable_flat.astype(jnp.int32))
-    candidate_indices = jnp.where(routable_flat, jnp.arange(routable_flat.shape[0]), routable_flat.shape[0])
+    ordered_hosts = jnp.argsort(host_ranks)
+    ordered_candidates = jnp.take(jnp.transpose(candidate_pairs, (1, 0)), ordered_hosts, axis=0)
+    candidate_flat = ordered_candidates.reshape(-1)
+    num_candidates = jnp.sum(candidate_flat.astype(jnp.int32))
+    candidate_indices = jnp.where(candidate_flat, jnp.arange(candidate_flat.shape[0]), candidate_flat.shape[0])
     sorted_candidates = jnp.sort(candidate_indices)
-    fallback_pick = jax.random.randint(key, (), 0, jnp.maximum(num_routable, 1))
+    fallback_pick = jax.random.randint(key, (), 0, jnp.maximum(num_candidates, 1))
     fallback_flat_idx = sorted_candidates[fallback_pick]
     fallback_agent = (fallback_flat_idx % NUM_RED_AGENTS).astype(jnp.int32)
-    fallback_agent = jnp.where(num_routable > 0, fallback_agent, jnp.int32(-1))
+    fallback_agent = jnp.where(num_candidates > 0, fallback_agent, jnp.int32(-1))
 
     return jnp.where(has_same_subnet, same_subnet_agent, fallback_agent)
 
@@ -288,10 +371,12 @@ def _apply_single_green(
 
 def apply_green_agents(state: CC4State, const: CC4Const, key: jax.Array) -> CC4State:
     keys = jax.random.split(key, GLOBAL_MAX_HOSTS)
+    host_order = _ordered_green_hosts(const)
 
-    def step_fn(carry_state, idx):
-        is_active = const.green_agent_active[idx]
-        new_state = _apply_single_green(carry_state, const, idx, keys[idx])
+    def step_fn(carry_state, ordered_idx):
+        host_idx = host_order[ordered_idx]
+        is_active = const.green_agent_active[host_idx]
+        new_state = _apply_single_green(carry_state, const, host_idx, keys[host_idx])
         out_state = jax.tree.map(
             lambda new, old: jnp.where(is_active, new, old),
             new_state,
@@ -305,3 +390,19 @@ def apply_green_agents(state: CC4State, const: CC4Const, key: jax.Array) -> CC4S
         jnp.arange(GLOBAL_MAX_HOSTS),
     )
     return final_state
+
+
+def apply_green_agent_action(
+    state: CC4State,
+    const: CC4Const,
+    host_idx: jnp.int32,
+    key: jax.Array,
+) -> CC4State:
+    """Apply one green host action if that host owns an active green agent."""
+    is_active = const.green_agent_active[host_idx]
+    new_state = _apply_single_green(state, const, host_idx, key)
+    return jax.tree.map(
+        lambda new, old: jnp.where(is_active, new, old),
+        new_state,
+        state,
+    )

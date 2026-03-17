@@ -321,19 +321,12 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
             if dst_hostname in hostname_to_idx:
                 host_info_links[src_idx, hostname_to_idx[dst_hostname]] = True
 
-    green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
-    green_agent_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    green_count = 0
-    for agent_name, agent_info in sorted(scenario.agents.items()):
-        if not agent_name.startswith("green_agent_"):
-            continue
-        if agent_info.starting_sessions:
-            sess = agent_info.starting_sessions[0]
-            if sess.hostname in hostname_to_idx:
-                hidx = hostname_to_idx[sess.hostname]
-                green_agent_host[hidx] = green_count
-                green_agent_active[hidx] = True
-        green_count += 1
+    green_agent_host, green_agent_active, green_count = _build_green_agent_map_numpy(
+        host_active=host_active,
+        host_subnet=host_subnet,
+        host_is_user=host_is_user,
+        num_hosts=num_hosts,
+    )
 
     phase_boundaries = _compute_phase_boundaries(scenario.mission_phases)
     allowed_subnet_pairs = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
@@ -738,10 +731,11 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
             dst_s0 = server0_idx[SUBNET_IDS[dst_name]]
             host_info_links = host_info_links.at[src_s0, dst_s0].set(True)
 
-    cum_users = jnp.cumsum(host_is_user.astype(jnp.int32)) - 1
-    green_agent_host = jnp.where(host_is_user, cum_users, jnp.int32(-1))
-    green_agent_active = host_is_user
-    num_green_agents = jnp.sum(host_is_user.astype(jnp.int32))
+    green_agent_host, green_agent_active, num_green_agents = _build_green_agent_map_jax(
+        host_active=host_active,
+        host_subnet=host_subnet.astype(jnp.int32),
+        host_is_user=host_is_user,
+    )
 
     obs_host_map = jnp.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=jnp.int32)
     for sid in range(NUM_SUBNETS):
@@ -874,6 +868,70 @@ JAX_TO_CYBORG_ORDER = np.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=np.int32)
 
 _ALPHA_SUBNET_ORDER_NP = np.array([5, 4, 6, 2, 3, 7, 0, 1, 8])
 _ALPHA_SUBNET_ORDER = jnp.array(_ALPHA_SUBNET_ORDER_NP)
+_CYBORG_GENERATION_SUBNET_ORDER_NP = np.array(
+    [
+        SUBNET_IDS["RESTRICTED_ZONE_A"],
+        SUBNET_IDS["OPERATIONAL_ZONE_A"],
+        SUBNET_IDS["RESTRICTED_ZONE_B"],
+        SUBNET_IDS["OPERATIONAL_ZONE_B"],
+        SUBNET_IDS["CONTRACTOR_NETWORK"],
+        SUBNET_IDS["PUBLIC_ACCESS_ZONE"],
+        SUBNET_IDS["ADMIN_NETWORK"],
+        SUBNET_IDS["OFFICE_NETWORK"],
+        SUBNET_IDS["INTERNET"],
+    ],
+    dtype=np.int32,
+)
+_CYBORG_GENERATION_SUBNET_ORDER = jnp.array(_CYBORG_GENERATION_SUBNET_ORDER_NP)
+
+
+def _build_green_agent_map_numpy(
+    host_active: np.ndarray,
+    host_subnet: np.ndarray,
+    host_is_user: np.ndarray,
+    num_hosts: int,
+) -> tuple[np.ndarray, np.ndarray, np.int32]:
+    green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
+    green_agent_active = host_active & host_is_user
+    green_count = 0
+    for sid in _CYBORG_GENERATION_SUBNET_ORDER_NP:
+        for host_idx in range(num_hosts):
+            if not host_active[host_idx]:
+                continue
+            if host_subnet[host_idx] != sid:
+                continue
+            if not host_is_user[host_idx]:
+                continue
+            green_agent_host[host_idx] = green_count
+            green_count += 1
+    return green_agent_host, green_agent_active, np.int32(green_count)
+
+
+def _build_green_agent_map_jax(
+    host_active: jax.Array,
+    host_subnet: jax.Array,
+    host_is_user: jax.Array,
+) -> tuple[jax.Array, jax.Array, jax.Array]:
+    green_agent_host = jnp.full(GLOBAL_MAX_HOSTS, -1, dtype=jnp.int32)
+    green_agent_active = host_active & host_is_user
+    next_idx = jnp.int32(0)
+    host_indices = jnp.arange(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+
+    for sid in _CYBORG_GENERATION_SUBNET_ORDER_NP:
+        user_mask = host_active & host_is_user & (host_subnet == sid)
+        sorted_users = jnp.sort(jnp.where(user_mask, host_indices, GLOBAL_MAX_HOSTS))
+        for slot in range(MAX_USER_HOSTS):
+            host_idx = sorted_users[slot]
+            valid = host_idx < GLOBAL_MAX_HOSTS
+            green_agent_host = jax.lax.cond(
+                valid,
+                lambda arr: arr.at[host_idx].set(next_idx),
+                lambda arr: arr,
+                green_agent_host,
+            )
+            next_idx = next_idx + valid.astype(jnp.int32)
+
+    return green_agent_host, green_agent_active, next_idx
 
 
 def _build_obs_host_map(

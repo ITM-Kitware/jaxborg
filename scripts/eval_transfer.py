@@ -103,6 +103,9 @@ DECOY_FACTORY_ACTIONS = (
     (VsftpdDecoyFactory(), "DeployDecoy_Vsftpd"),
 )
 
+DEFAULT_NUM_STEPS = 500
+DEFAULT_BANK_SIZE = 32
+
 
 class LegacyActor(nn.Module):
     action_dim: int
@@ -233,6 +236,24 @@ def load_checkpoint(path):
         return policy, ckpt["params"], "legacy"
 
     raise ValueError(f"Unrecognized checkpoint format: nested params keys={sorted(nested_params.keys())}")
+
+
+def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
+    if topology_mode == "cyborg_bank":
+        if topology_bank_size <= 0:
+            raise ValueError(f"topology_bank_size must be > 0 for cyborg_bank, got {topology_bank_size}")
+        return FsmRedCC4Env(
+            num_steps=DEFAULT_NUM_STEPS,
+            topology_mode=topology_mode,
+            topology_bank_size=topology_bank_size,
+        )
+    return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS, topology_mode=topology_mode)
+
+
+def _default_cyborg_bank_match_size(jax_topology_mode: str, topology_bank_size: int) -> int | None:
+    if jax_topology_mode == "cyborg_bank":
+        return topology_bank_size
+    return None
 
 
 def policy_dist(policy, params, policy_kind, obs_jax, mask):
@@ -578,14 +599,23 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
     return scan_eval
 
 
-def rollout_jaxborg_scan(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+def rollout_jaxborg_scan(
+    policy,
+    params,
+    policy_kind,
+    num_episodes=3,
+    deterministic=False,
+    seed=0,
+    jax_topology_mode="cyborg_bank",
+    topology_bank_size=DEFAULT_BANK_SIZE,
+):
     """JAXborg-only eval using jax.lax.scan + jax.vmap — all episodes in parallel.
 
     Runs all episodes simultaneously on GPU via vmap over seeds.
     First call triggers XLA compilation (~5-10 min, cached to disk).
     Subsequent runs load from XLA cache and execute all episodes in one GPU pass.
     """
-    env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
+    env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
     scan_fn = make_scan_eval_fn(env, policy, policy_kind, deterministic)
 
     # Build keys for all episodes
@@ -648,8 +678,17 @@ def rollout_jaxborg_scan(policy, params, policy_kind, num_episodes=3, determinis
     return np.array(all_actions_flat), np.array(episode_rewards), episode_results
 
 
-def rollout_jaxborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
-    env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
+def rollout_jaxborg(
+    policy,
+    params,
+    policy_kind,
+    num_episodes=3,
+    deterministic=False,
+    seed=0,
+    jax_topology_mode="cyborg_bank",
+    topology_bank_size=DEFAULT_BANK_SIZE,
+):
+    env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
     batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
     all_actions = []
     episode_rewards = []
@@ -784,18 +823,32 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
     return np.array(all_actions), np.array(episode_rewards), all_actions_by_agent
 
 
-def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+def rollout_independent_transfer_synced_red(
+    policy,
+    params,
+    policy_kind,
+    num_episodes=3,
+    deterministic=False,
+    seed=0,
+    jax_topology_mode="cyborg_bank",
+    topology_bank_size=DEFAULT_BANK_SIZE,
+    cyborg_bank_match_size=None,
+):
     """Run paired independent episodes with live CybORG red-choice sync into JAX.
 
     Blue actions are chosen independently in each env. Red stochastic choices
-    are synced from CybORG step-by-step so any remaining drift is due to
-    simulator state/observation differences rather than different RNG engines.
+    are synced from CybORG step-by-step via RedPolicyRecorder choice tokens.
+    This is only a partial sync: it does not replay the broader random/order
+    corrections used by CC4DifferentialHarness (green RNG, detection draws,
+    PID deltas, privesc session choices, or CybORG action-order resync).
 
     Optimized: batched policy inference (1 JIT'd vmap call per env instead of 5
     per-agent calls), batched mask computation, minimized device-to-host syncs.
     """
 
     batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
+    if cyborg_bank_match_size is None:
+        cyborg_bank_match_size = _default_cyborg_bank_match_size(jax_topology_mode, topology_bank_size)
 
     all_jax_actions = []
     all_cyborg_actions = []
@@ -808,11 +861,11 @@ def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_epi
         t0 = time.perf_counter()
         ep_seed = seed + ep * 100
 
-        jax_env = FsmRedCC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=32)
+        jax_env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
         key = jax.random.PRNGKey(ep_seed)
         jax_obs, jax_state = jax_env.reset(key)
 
-        cyborg_env = make_cyborg_env(seed=ep_seed, bank_match_size=32)
+        cyborg_env = make_cyborg_env(seed=ep_seed, bank_match_size=cyborg_bank_match_size)
         cyborg_obs, _ = cyborg_env.reset()
         inner = cyborg_env.env
         const = build_const_from_cyborg(inner)
@@ -955,6 +1008,12 @@ def rollout_independent_transfer_synced_red(policy, params, policy_kind, num_epi
         np.array(cyborg_rewards),
         cyborg_actions_by_agent,
     )
+
+
+def print_independent_sync_caveat():
+    print("Independent sync caveat: this path only replays red FSM choice tokens.")
+    print("It does not sync green RNG, detection draws, PID deltas, privesc choices,")
+    print("or CybORG same-priority action ordering the way CC4DifferentialHarness does.")
 
 
 def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
@@ -1115,6 +1174,21 @@ def print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rew
     if len(jax_rewards) > 1:
         js, cs = stdev(jax_rewards.tolist()), stdev(cyborg_rewards.tolist())
         print(f"{'Stdev':14} {js:10.1f} {cs:10.1f}")
+
+
+def print_independent_mode_comparison(rows):
+    print("\n" + "=" * 70)
+    print("INDEPENDENT MODE COMPARISON")
+    print("=" * 70)
+    print(f"{'JAX Mode':<14} {'JAX Mean':>10} {'CybORG Mean':>12} {'Gap':>10}")
+    print("-" * 50)
+    for row in rows:
+        print(
+            f"{row['jax_mode']:<14} "
+            f"{row['jax_mean']:>10.1f} "
+            f"{row['cyborg_mean']:>12.1f} "
+            f"{row['gap_mean']:>+10.1f}"
+        )
 
 
 def save_reward_plot(jax_rewards, cyborg_rewards):
@@ -1454,6 +1528,11 @@ def main():
         help="Run independent JAX/CybORG episodes instead of matched-state transfer diagnostics",
     )
     parser.add_argument(
+        "--compare-jax-modes",
+        action="store_true",
+        help="Run independent diagnostics for both pure and cyborg_bank JAX envs against the same CybORG seed bank",
+    )
+    parser.add_argument(
         "--jax-only",
         action="store_true",
         help="Run JAXborg-only evaluation (no CybORG, much faster)",
@@ -1468,6 +1547,24 @@ def main():
     parser.add_argument("--verbose", type=int, default=0, help="Step-by-step CybORG trace for N steps")
     parser.add_argument("--plot", action="store_true", help="Save action dist + training curve PNGs")
     parser.add_argument("--mask-summary", action="store_true", help="Print per-agent mask breakdown")
+    parser.add_argument(
+        "--jax-topology-mode",
+        choices=("pure", "cyborg_bank"),
+        default="cyborg_bank",
+        help="JAX env topology mode for JAX-only or independent rollouts",
+    )
+    parser.add_argument(
+        "--topology-bank-size",
+        type=int,
+        default=DEFAULT_BANK_SIZE,
+        help="Topology bank size for cyborg_bank mode (default 32)",
+    )
+    parser.add_argument(
+        "--cyborg-bank-match-size",
+        type=int,
+        default=None,
+        help="Optional CybORG seed-bank size for independent rollouts; defaults to the JAX bank size in cyborg_bank mode",
+    )
     args = parser.parse_args()
 
     deterministic = not args.stochastic
@@ -1487,7 +1584,14 @@ def main():
         if use_scan:
             print("Using jax.lax.scan (compiled rollout, cached to disk)")
         jax_actions, jax_rewards, jax_results = rollout_fn(
-            policy, params, policy_kind, args.episodes, deterministic, seed=args.seed
+            policy,
+            params,
+            policy_kind,
+            args.episodes,
+            deterministic,
+            seed=args.seed,
+            jax_topology_mode=args.jax_topology_mode,
+            topology_bank_size=args.topology_bank_size,
         )
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
@@ -1505,12 +1609,75 @@ def main():
             plot_action_distribution(jax_actions, "JAXborg Action Distribution", output_dir / "jax_action_dist.png")
         return
 
+    if args.compare_jax_modes:
+        print("\n" + "=" * 70)
+        print("INDEPENDENT MODE SPLIT DIAGNOSTIC")
+        print("=" * 70)
+        print("Comparing pure vs cyborg_bank JAX envs against a fixed CybORG seed bank.")
+        print_independent_sync_caveat()
+        cyborg_bank_match_size = args.cyborg_bank_match_size or args.topology_bank_size
+        rows = []
+
+        for jax_mode in ("pure", "cyborg_bank"):
+            mode_bank_size = args.topology_bank_size if jax_mode == "cyborg_bank" else 0
+            print(f"\n--- JAX mode: {jax_mode} ---")
+            (
+                jax_actions,
+                jax_rewards,
+                _jax_results,
+                cyborg_actions,
+                cyborg_rewards,
+                _cyborg_actions_by_agent,
+            ) = rollout_independent_transfer_synced_red(
+                policy,
+                params,
+                policy_kind,
+                args.episodes,
+                deterministic,
+                seed=args.seed,
+                jax_topology_mode=jax_mode,
+                topology_bank_size=mode_bank_size,
+                cyborg_bank_match_size=cyborg_bank_match_size,
+            )
+            print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
+            rows.append(
+                {
+                    "jax_mode": jax_mode,
+                    "jax_mean": float(jax_rewards.mean()),
+                    "cyborg_mean": float(cyborg_rewards.mean()),
+                    "gap_mean": float(jax_rewards.mean() - cyborg_rewards.mean()),
+                    "jax_rewards": jax_rewards.tolist(),
+                    "cyborg_rewards": cyborg_rewards.tolist(),
+                }
+            )
+
+        print_independent_mode_comparison(rows)
+        out_path = EXP_DIR / "independent_mode_compare.json"
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        out_path.write_text(
+            json.dumps(
+                {
+                    "checkpoint": str(args.checkpoint),
+                    "episodes": args.episodes,
+                    "stochastic": not deterministic,
+                    "seed": args.seed,
+                    "cyborg_bank_match_size": cyborg_bank_match_size,
+                    "rows": rows,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+        print(f"Saved mode split report: {out_path}")
+        return
+
     if args.independent_rollouts:
         print("\n" + "=" * 70)
         print("INDEPENDENT ROLLOUTS")
         print("=" * 70)
         print("Blue actions are chosen independently in each env.")
         print("Red stochastic choices are synced live from CybORG into JAX.")
+        print_independent_sync_caveat()
         (
             jax_actions,
             jax_rewards,
@@ -1525,6 +1692,9 @@ def main():
             args.episodes,
             deterministic,
             seed=args.seed,
+            jax_topology_mode=args.jax_topology_mode,
+            topology_bank_size=args.topology_bank_size,
+            cyborg_bank_match_size=args.cyborg_bank_match_size,
         )
 
         jax_pooled_by_agent = [

@@ -40,6 +40,8 @@ def process_red_with_duration(
     key: jax.Array,
     forced_primary_host: jnp.int32 = UNKNOWN_PRIMARY_HOST,
     forced_primary_pid: jnp.int32 = UNKNOWN_PRIMARY_PID,
+    *,
+    run_session_check: bool = True,
 ) -> CC4State:
     is_busy = state.red_pending_ticks[agent_id] > 0
 
@@ -78,9 +80,9 @@ def process_red_with_duration(
     )
     live_bound_source_host = select_bound_source_host(state, const, agent_id)
     bound_source_host = jnp.where(
-        forced_source_valid,
-        forced_primary_host,
-        jnp.where(primary_missing, jnp.int32(-1), live_bound_source_host),
+        primary_snapshot_known,
+        jnp.where(forced_source_valid, forced_primary_host, jnp.int32(-1)),
+        live_bound_source_host,
     )
     queued_source_host = jnp.where(
         is_scan_action,
@@ -148,8 +150,12 @@ def process_red_with_duration(
     # distinguishes RedSessionCheck promotion (session 0 moved) from blue
     # restore (session 0 destroyed, action fails).
     execution_source_host = jnp.where(
-        is_busy & (pending_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING) & forced_source_valid,
-        forced_primary_host,
+        is_busy & (pending_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING),
+        jnp.where(
+            primary_snapshot_known,
+            jnp.where(forced_source_valid, forced_primary_host, jnp.int32(-1)),
+            effective_source_binding_host,
+        ),
         effective_source_binding_host,
     )
     effective_source_host = jnp.where(
@@ -231,15 +237,16 @@ def process_red_with_duration(
         red_pending_source_host=new_state.red_pending_source_host.at[agent_id].set(final_source_host),
     )
 
-    session_check_key = jax.random.fold_in(jnp.asarray(key, dtype=jnp.uint32), jnp.int32(931))
-    new_state = apply_red_session_check(
-        new_state,
-        const,
-        agent_id,
-        session_check_key,
-        forced_primary_host=forced_primary_host,
-        forced_primary_pid=forced_primary_pid,
-    )
+    if run_session_check:
+        session_check_key = jax.random.fold_in(jnp.asarray(key, dtype=jnp.uint32), jnp.int32(931))
+        new_state = apply_red_session_check(
+            new_state,
+            const,
+            agent_id,
+            session_check_key,
+            forced_primary_host=forced_primary_host,
+            forced_primary_pid=forced_primary_pid,
+        )
 
     return new_state
 

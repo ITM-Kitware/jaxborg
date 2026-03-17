@@ -19,6 +19,8 @@ from jaxborg.actions.green import (
     GREEN_ACCESS_SERVICE,
     GREEN_LOCAL_WORK,
     PHISHING_ERROR_RATE,
+    _find_phishing_red_agent,
+    _ordered_green_hosts,
     apply_green_agents,
 )
 from jaxborg.actions.red_common import apply_exploit_success
@@ -30,6 +32,7 @@ from jaxborg.constants import (
     NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
+    SUBNET_IDS,
 )
 from jaxborg.rewards import ASF, compute_reward_breakdown
 from jaxborg.state import create_initial_state
@@ -50,6 +53,32 @@ def _run_many_green(state, const, num_trials=50):
     for i in range(num_trials):
         results.append(jitted(state, const, keys[i]))
     return results
+
+
+_CYBORG_GREEN_SUBNET_ORDER = [
+    "RESTRICTED_ZONE_A",
+    "OPERATIONAL_ZONE_A",
+    "RESTRICTED_ZONE_B",
+    "OPERATIONAL_ZONE_B",
+    "CONTRACTOR_NETWORK",
+    "PUBLIC_ACCESS_ZONE",
+    "ADMIN_NETWORK",
+    "OFFICE_NETWORK",
+]
+
+
+def _expected_green_hosts_in_cyborg_order(const):
+    ordered_hosts = []
+    for subnet_name in _CYBORG_GREEN_SUBNET_ORDER:
+        sid = SUBNET_IDS[subnet_name]
+        for host_idx in range(int(const.num_hosts)):
+            if not bool(const.host_active[host_idx]):
+                continue
+            if int(const.host_subnet[host_idx]) != sid:
+                continue
+            if bool(const.host_is_user[host_idx]):
+                ordered_hosts.append(host_idx)
+    return ordered_hosts
 
 
 class TestGreenAgentBasics:
@@ -87,6 +116,24 @@ class TestGreenAgentBasics:
         for h in range(GLOBAL_MAX_HOSTS):
             if not jax_const.green_agent_active[h]:
                 assert not new_state.host_activity_detected[h] or jax_state.host_activity_detected[h]
+
+    def test_pure_green_agent_host_matches_cyborg_generation_order(self):
+        for seed in range(3):
+            const = build_topology(jax.random.PRNGKey(seed), num_steps=500)
+            expected_hosts = _expected_green_hosts_in_cyborg_order(const)
+            expected_indices = list(range(len(expected_hosts)))
+            actual_indices = [int(const.green_agent_host[h]) for h in expected_hosts]
+            assert actual_indices == expected_indices
+
+    def test_apply_green_agents_uses_green_agent_order(self):
+        const = build_topology(jax.random.PRNGKey(0), num_steps=500)
+        expected_hosts = _expected_green_hosts_in_cyborg_order(const)
+        ordered_hosts = [
+            int(h)
+            for h in np.array(_ordered_green_hosts(const))
+            if bool(const.green_agent_active[int(h)])
+        ]
+        assert ordered_hosts[: len(expected_hosts)] == expected_hosts
 
 
 class TestGreenLocalWorkFalsePositive:
@@ -204,6 +251,18 @@ class TestDifferentialGreen:
             if const.host_is_user[h]:
                 assert const.green_agent_active[h]
                 assert const.green_agent_host[h] >= 0
+
+    def test_green_agent_host_matches_cyborg_agent_creation_order(self, cyborg_env):
+        const = build_const_from_cyborg(cyborg_env)
+        state = cyborg_env.environment_controller.state
+        hostname_to_idx = {hostname: idx for idx, hostname in enumerate(sorted(state.hosts.keys()))}
+        expected_hosts = [
+            agent_info.starting_sessions[0].hostname
+            for agent_name, agent_info in state.scenario.agents.items()
+            if agent_name.startswith("green_agent_")
+        ]
+        actual_indices = [int(const.green_agent_host[hostname_to_idx[hostname]]) for hostname in expected_hosts]
+        assert actual_indices == list(range(len(expected_hosts)))
 
     def test_phishing_rate_matches_cyborg(self):
         assert PHISHING_ERROR_RATE == 0.01
@@ -339,6 +398,46 @@ class TestGreenStatisticalDifferential:
             steps=500,
         )
         return CybORG(scenario_generator=sg, seed=42)
+
+
+class TestGreenSourceSelection:
+    def test_same_subnet_phishing_prefers_last_host_in_cyborg_generation_order(self, jax_const, jax_state):
+        target_host = None
+        user_source = None
+        server_source = None
+        for subnet_name in _CYBORG_GREEN_SUBNET_ORDER:
+            sid = SUBNET_IDS[subnet_name]
+            users = [
+                h
+                for h in range(int(jax_const.num_hosts))
+                if bool(jax_const.host_active[h])
+                and int(jax_const.host_subnet[h]) == sid
+                and bool(jax_const.host_is_user[h])
+            ]
+            servers = [
+                h
+                for h in range(int(jax_const.num_hosts))
+                if bool(jax_const.host_active[h])
+                and int(jax_const.host_subnet[h]) == sid
+                and bool(jax_const.host_is_server[h])
+            ]
+            if len(users) >= 2 and servers:
+                user_source = users[0]
+                target_host = users[1]
+                server_source = servers[0]
+                break
+
+        if target_host is None:
+            pytest.skip("Need a subnet with at least two users and one server")
+
+        state = jax_state.replace(
+            red_sessions=jax_state.red_sessions.at[0, user_source].set(True).at[1, server_source].set(True),
+        )
+
+        # CybORG iterates hosts in scenario creation order: router -> users -> servers,
+        # so the server-host session is encountered after the user-host session.
+        chosen_agent = int(_find_phishing_red_agent(state, jax_const, jnp.int32(target_host), jax.random.PRNGKey(0)))
+        assert chosen_agent == 1
 
     def test_fp_rate_within_statistical_bounds(self, cyborg_env):
         """Run many steps with only green active, check FP rate is statistically consistent."""
@@ -548,6 +647,92 @@ def test_phishing_creates_abstract_session_matches_cyborg():
 
     jax_owner = next(r for r in range(NUM_RED_AGENTS) if bool(jax_after.red_sessions[r, target_host]))
     assert bool(jax_after.red_session_is_abstract[jax_owner, target_host])
+
+
+def test_phishing_ignores_subnet_blocks_for_source_selection_matches_cyborg():
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    cyborg_env = CybORG(scenario_generator=sg, seed=0)
+    cyborg_env.reset()
+    cy_state = cyborg_env.environment_controller.state
+    const = build_const_from_cyborg(cyborg_env)
+    mappings = build_mappings_from_cyborg(cyborg_env)
+
+    for r in range(NUM_RED_AGENTS):
+        red_name = f"red_agent_{r}"
+        cy_state.sessions[red_name] = {}
+        cy_state.sessions_count[red_name] = 0
+    for host in cy_state.hosts.values():
+        for r in range(NUM_RED_AGENTS):
+            host.sessions[f"red_agent_{r}"] = []
+
+    target_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.green_agent_active[h]) and bool(const.host_active[h]) and not bool(const.host_is_router[h])
+    )
+    target_subnet = int(const.host_subnet[target_host])
+    source_host = next(
+        h
+        for h in range(int(const.num_hosts))
+        if bool(const.host_active[h])
+        and not bool(const.host_is_router[h])
+        and int(const.host_subnet[h]) != target_subnet
+    )
+    source_subnet = int(const.host_subnet[source_host])
+    target_hostname = mappings.idx_to_hostname[target_host]
+    source_hostname = mappings.idx_to_hostname[source_host]
+
+    cy_state.add_session(
+        RedAbstractSession(
+            ident=None,
+            hostname=source_hostname,
+            username="user",
+            agent="red_agent_0",
+            parent=0,
+            session_type="shell",
+            pid=None,
+        )
+    )
+    cy_state.blocks.setdefault(cy_state.hostname_subnet_map[target_hostname].value, []).append(
+        cy_state.hostname_subnet_map[source_hostname].value
+    )
+    cy_state.blocks.setdefault(cy_state.hostname_subnet_map[source_hostname].value, []).append(
+        cy_state.hostname_subnet_map[target_hostname].value
+    )
+
+    green_name = f"green_agent_{int(const.green_agent_host[target_host])}"
+    target_ip = mappings.hostname_to_ip[target_hostname]
+    cy_action = PhishingEmail(session=0, agent=green_name, ip_address=target_ip)
+    cy_obs = cy_action.execute(cy_state)
+    assert str(cy_obs.success).upper() == "TRUE"
+    assert any(sess.hostname == target_hostname for sess in cy_state.sessions["red_agent_0"].values())
+
+    jax_state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+    blocked_zones = np.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
+    blocked_zones[target_subnet, source_subnet] = True
+    blocked_zones[source_subnet, target_subnet] = True
+    jax_state = jax_state.replace(
+        red_sessions=jax_state.red_sessions.at[0, source_host].set(True),
+        red_session_count=jax_state.red_session_count.at[0, source_host].set(1),
+        red_session_is_abstract=jax_state.red_session_is_abstract.at[0, source_host].set(True),
+        blocked_zones=jnp.array(blocked_zones),
+    )
+
+    green_randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    green_randoms[0, target_host, 0] = (GREEN_LOCAL_WORK + 0.5) / 3.0
+    green_randoms[0, target_host, 1] = 0.5
+    green_randoms[0, target_host, 2] = 0.0
+    green_randoms[0, target_host, 3] = 0.5
+    green_randoms[0, target_host, 4] = 0.0
+    const = const.replace(green_randoms=jnp.array(green_randoms), use_green_randoms=jnp.array(True))
+    jax_after = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+
+    assert bool(jax_after.red_sessions[0, target_host])
 
 
 def test_phishing_does_not_reuse_stale_blue_suspicious_pid_matches_cyborg():
