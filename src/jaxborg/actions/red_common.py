@@ -13,6 +13,7 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
     first_valid_pid,
+    move_pid_to_row_end,
     pid_row_contains,
 )
 from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
@@ -28,6 +29,7 @@ from jaxborg.state import CC4Const, CC4State
 
 EXPLOIT_ROUTE_DETECTION_RATE = 0.95
 EXPLOIT_PROCESS_EVENT_DETECTION_RATE = 0.95
+UNKNOWN_PRIMARY_PID = jnp.int32(-2)
 
 
 def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
@@ -240,6 +242,7 @@ def apply_red_session_check(
     agent_id: int,
     key: jax.Array,
     forced_primary_host: chex.Array = jnp.int32(-1),
+    forced_primary_pid: chex.Array = UNKNOWN_PRIMARY_PID,
 ) -> CC4State:
     """Ensure each active red agent has a valid primary-session anchor host."""
     session_counts = effective_session_counts(state)[agent_id]
@@ -252,6 +255,7 @@ def apply_red_session_check(
     needs_primary = has_any_sessions & ~primary_valid
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
+    forced_pid_valid = forced_valid & pid_row_contains(state.red_session_pids[agent_id, forced_idx], forced_primary_pid)
     sampled = select_new_primary_session_host(session_counts, const.host_active, key)
     promoted = jnp.where(needs_primary, sampled, anchor)
     next_anchor = jnp.where(
@@ -260,7 +264,6 @@ def apply_red_session_check(
         jnp.int32(-1),
     )
     next_idx = jnp.clip(next_anchor, 0, state.red_sessions.shape[1] - 1)
-    next_session_count = jnp.where(next_anchor >= 0, session_counts[next_idx], jnp.int32(0))
     current_pid_matches_next_anchor = (
         (next_anchor >= 0)
         & (next_anchor == anchor)
@@ -274,20 +277,44 @@ def apply_red_session_check(
     )
     next_primary_pid = jnp.where(
         has_any_sessions,
-        jnp.where(current_pid_matches_next_anchor, current_primary_pid, selected_primary_pid),
+        jnp.where(
+            current_pid_matches_next_anchor,
+            current_primary_pid,
+            jnp.where(forced_pid_valid, forced_primary_pid, selected_primary_pid),
+        ),
         jnp.int32(-1),
+    )
+    should_reorder_primary_row = needs_primary & (next_anchor >= 0) & (next_primary_pid >= 0)
+    reordered_pid_row = move_pid_to_row_end(state.red_session_pids[agent_id, next_idx], next_primary_pid)
+    reordered_abstract_pid_row = move_pid_to_row_end(
+        state.red_session_abstract_pids[agent_id, next_idx], next_primary_pid
+    )
+    reordered_privileged_pid_row = move_pid_to_row_end(
+        state.red_session_privileged_pids[agent_id, next_idx], next_primary_pid
+    )
+    red_session_pids = jnp.where(
+        should_reorder_primary_row,
+        state.red_session_pids.at[agent_id, next_idx].set(reordered_pid_row),
+        state.red_session_pids,
+    )
+    red_session_abstract_pids = jnp.where(
+        should_reorder_primary_row,
+        state.red_session_abstract_pids.at[agent_id, next_idx].set(reordered_abstract_pid_row),
+        state.red_session_abstract_pids,
+    )
+    red_session_privileged_pids = jnp.where(
+        should_reorder_primary_row,
+        state.red_session_privileged_pids.at[agent_id, next_idx].set(reordered_privileged_pid_row),
+        state.red_session_privileged_pids,
     )
     next_primary_is_abstract = jax.lax.cond(
         next_anchor >= 0,
-        lambda _: pid_row_contains(state.red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
+        lambda _: pid_row_contains(red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
         lambda _: jnp.array(False),
         operand=None,
     )
     promoted_abstract_primary = (
-        has_any_sessions
-        & (next_anchor >= 0)
-        & (next_anchor != anchor)
-        & next_primary_is_abstract
+        has_any_sessions & (next_anchor >= 0) & (next_anchor != anchor) & next_primary_is_abstract
     )
     red_abstract_host_rank = jax.lax.cond(
         promoted_abstract_primary,
@@ -323,6 +350,9 @@ def apply_red_session_check(
         red_abstract_host_rank=red_abstract_host_rank,
         red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(next_primary_is_abstract),
         red_primary_pid=state.red_primary_pid.at[agent_id].set(next_primary_pid),
+        red_session_pids=red_session_pids,
+        red_session_abstract_pids=red_session_abstract_pids,
+        red_session_privileged_pids=red_session_privileged_pids,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scanned_hosts=red_scanned_hosts,
     )

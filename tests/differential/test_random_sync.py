@@ -1,7 +1,9 @@
+import jax.numpy as jnp
 import numpy as np
 
 from tests.differential.fuzzer import run_differential_fuzz
 from tests.differential.harness import CC4DifferentialHarness
+from tests.differential.state_comparator import compare_fast
 
 
 def test_detection_random_sync_advances_jax_index_for_cyborg_scan_trace():
@@ -115,3 +117,61 @@ def test_detection_random_sync_handles_long_discover_deception_trace():
     )
 
     assert report is None
+
+
+class _FakeProcessEvent:
+    def __init__(self, pid: int):
+        self.pid = pid
+
+
+def test_compare_fast_reports_detection_event_drift():
+    harness = CC4DifferentialHarness(seed=0, max_steps=1)
+    harness.reset()
+
+    host_idx = min(harness.mappings.idx_to_hostname)
+    hostname = harness.mappings.idx_to_hostname[host_idx]
+    events = harness.cyborg_env.environment_controller.state.hosts[hostname].events
+    events.network_connections = [object()]
+    events.old_network_connections = [object()]
+    events.process_creation = [_FakeProcessEvent(4321)]
+    events.old_process_creation = [_FakeProcessEvent(1234)]
+
+    diffs = compare_fast(harness.cyborg_env, harness.jax_state, harness.jax_const, harness.mappings)
+    fields = {(d.field_name, d.host_or_agent) for d in diffs}
+
+    assert ("host_activity_detected", f"host_{host_idx}") in fields
+    assert ("old_host_activity_detected", f"host_{host_idx}") in fields
+    assert ("host_exploit_detected", f"host_{host_idx}") in fields
+    assert ("old_host_exploit_detected", f"host_{host_idx}") in fields
+    assert ("host_process_creation_pids", f"host_{host_idx}") in fields
+
+
+def test_ordering_resync_rebuilds_detection_event_state():
+    harness = CC4DifferentialHarness(seed=0, max_steps=1)
+    harness.reset()
+
+    host_idx = min(harness.mappings.idx_to_hostname)
+    hostname = harness.mappings.idx_to_hostname[host_idx]
+    events = harness.cyborg_env.environment_controller.state.hosts[hostname].events
+    events.network_connections = [object()]
+    events.old_network_connections = [object()]
+    events.process_creation = [_FakeProcessEvent(4321)]
+    events.old_process_creation = [_FakeProcessEvent(1234)]
+
+    harness.jax_state = harness.jax_state.replace(
+        host_activity_detected=harness.jax_state.host_activity_detected.at[host_idx].set(False),
+        old_host_activity_detected=harness.jax_state.old_host_activity_detected.at[host_idx].set(False),
+        host_exploit_detected=harness.jax_state.host_exploit_detected.at[host_idx].set(False),
+        old_host_exploit_detected=harness.jax_state.old_host_exploit_detected.at[host_idx].set(False),
+        host_process_creation_pids=harness.jax_state.host_process_creation_pids.at[host_idx].set(
+            jnp.full_like(harness.jax_state.host_process_creation_pids[host_idx], -1)
+        ),
+    )
+
+    harness._resync_ordering_divergence(harness.cyborg_env.environment_controller.state, 0)
+
+    assert bool(harness.jax_state.host_activity_detected[host_idx])
+    assert bool(harness.jax_state.old_host_activity_detected[host_idx])
+    assert bool(harness.jax_state.host_exploit_detected[host_idx])
+    assert bool(harness.jax_state.old_host_exploit_detected[host_idx])
+    assert int(harness.jax_state.host_process_creation_pids[host_idx, 0]) == 4321

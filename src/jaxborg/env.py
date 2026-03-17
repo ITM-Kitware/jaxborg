@@ -9,7 +9,12 @@ from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.blue_monitor import apply_blue_monitor
-from jaxborg.actions.duration import UNKNOWN_PRIMARY_HOST, process_blue_with_duration, process_red_with_duration
+from jaxborg.actions.duration import (
+    UNKNOWN_PRIMARY_HOST,
+    UNKNOWN_PRIMARY_PID,
+    process_blue_with_duration,
+    process_red_with_duration,
+)
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.actions.green import apply_green_agents
 from jaxborg.actions.masking import compute_blue_action_mask
@@ -43,6 +48,7 @@ def apply_all_actions(
     key_green: chex.PRNGKey,
     red_keys: jnp.ndarray,
     forced_primary_hosts: jnp.ndarray,
+    forced_primary_pids: jnp.ndarray,
 ) -> CC4State:
     """Apply all agent actions in CybORG-correct order: blue → green → red → reassign → monitors.
 
@@ -53,6 +59,7 @@ def apply_all_actions(
         red_actions: (NUM_RED_AGENTS,) int32
         red_keys: (NUM_RED_AGENTS, 2) PRNGKey per red agent
         forced_primary_hosts: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_HOST` for no override
+        forced_primary_pids: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_PID` for no override
     """
     for b in range(NUM_BLUE_AGENTS):
         state = process_blue_with_duration(state, const, b, blue_actions[b])
@@ -61,7 +68,13 @@ def apply_all_actions(
 
     for r in range(NUM_RED_AGENTS):
         state = process_red_with_duration(
-            state, const, r, red_actions[r], red_keys[r], forced_primary_host=forced_primary_hosts[r]
+            state,
+            const,
+            r,
+            red_actions[r],
+            red_keys[r],
+            forced_primary_host=forced_primary_hosts[r],
+            forced_primary_pid=forced_primary_pids[r],
         )
 
     state = reassign_cross_subnet_sessions(state, const)
@@ -340,8 +353,18 @@ class CC4Env(MultiAgentEnv):
         blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(NUM_BLUE_AGENTS)], dtype=jnp.int32)
         red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(NUM_RED_AGENTS)], dtype=jnp.int32)
         no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
+        no_forced_pids = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        state = apply_all_actions(state, const, blue_action_arr, red_action_arr, key_green, red_keys, no_forced)
+        state = apply_all_actions(
+            state,
+            const,
+            blue_action_arr,
+            red_action_arr,
+            key_green,
+            red_keys,
+            no_forced,
+            no_forced_pids,
+        )
 
         reward_breakdown = compute_reward_breakdown(
             state,

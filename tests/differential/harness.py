@@ -121,6 +121,13 @@ def _capture_service_process_map(cy_state):
     return service_map
 
 
+def _event_pid(event) -> int:
+    pid = getattr(event, "pid", None)
+    if pid is None and isinstance(event, dict):
+        pid = event.get("pid")
+    return int(pid) if pid is not None else -1
+
+
 def _cy_action_succeeded(controller, agent_name: str) -> bool | None:
     obs_set = controller.observation.get(agent_name)
     if obs_set is None:
@@ -188,8 +195,19 @@ def _jit_fsm_red_schedule_post_step_update(
 
 
 @jax.jit
-def _jit_apply_all_actions(state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts):
-    return apply_all_actions(state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts)
+def _jit_apply_all_actions(
+    state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts, forced_primary_pids
+):
+    return apply_all_actions(
+        state,
+        const,
+        blue_actions,
+        red_actions,
+        key_green,
+        red_keys,
+        forced_primary_hosts,
+        forced_primary_pids,
+    )
 
 
 class CC4DifferentialHarness:
@@ -237,6 +255,122 @@ class CC4DifferentialHarness:
                 f"> MAX_TRACKED_SESSION_PIDS={max_session_tracked}. "
                 "CybORG session PID tracking is effectively unbounded; increase JAX PID capacity."
             )
+
+    def _extract_live_red_session_metadata(self, cyborg_state):
+        from CybORG.Shared.Session import RedAbstractSession
+
+        red_sessions = jnp.zeros_like(self.jax_state.red_sessions)
+        red_session_count = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32)
+        red_privilege = jnp.zeros_like(self.jax_state.red_privilege)
+        red_session_is_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
+        red_abstract_host_rank = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
+            jnp.int32(ABSTRACT_RANK_NONE),
+            dtype=jnp.int32,
+        )
+        red_next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
+        red_session_pids = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32)
+        red_session_abstract_pids = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        )
+        red_session_privileged_pids = jnp.full(
+            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, MAX_TRACKED_SESSION_PIDS), -1, dtype=jnp.int32
+        )
+        max_pid_seen = -1
+
+        for agent_name, sessions in cyborg_state.sessions.items():
+            if not agent_name.startswith("red_agent_"):
+                continue
+            red_idx = int(agent_name.split("_")[-1])
+            if red_idx >= NUM_RED_AGENTS:
+                continue
+            for sess in sessions.values():
+                hidx = self.mappings.hostname_to_idx.get(sess.hostname)
+                if hidx is None:
+                    continue
+
+                red_sessions = red_sessions.at[red_idx, hidx].set(True)
+                red_session_count = red_session_count.at[red_idx, hidx].add(1)
+
+                if isinstance(sess, RedAbstractSession):
+                    sess_ident = int(getattr(sess, "ident", -1))
+                    red_session_is_abstract = red_session_is_abstract.at[red_idx, hidx].set(True)
+                    if sess_ident >= 0:
+                        red_abstract_host_rank = red_abstract_host_rank.at[red_idx, hidx].set(
+                            jnp.minimum(red_abstract_host_rank[red_idx, hidx], jnp.int32(sess_ident))
+                        )
+                        red_next_abstract_rank = red_next_abstract_rank.at[red_idx].set(
+                            jnp.maximum(red_next_abstract_rank[red_idx], jnp.int32(sess_ident + 1))
+                        )
+
+                sess_pid = int(getattr(sess, "pid", -1))
+                if sess_pid >= 0:
+                    max_pid_seen = max(max_pid_seen, sess_pid)
+                    red_session_pids = red_session_pids.at[red_idx, hidx].set(
+                        append_pid_to_row(red_session_pids[red_idx, hidx], sess_pid)
+                    )
+                    if isinstance(sess, RedAbstractSession):
+                        red_session_abstract_pids = red_session_abstract_pids.at[red_idx, hidx].set(
+                            append_pid_to_row(red_session_abstract_pids[red_idx, hidx], sess_pid)
+                        )
+
+                privilege_level = 2 if getattr(sess, "username", None) in ("root", "SYSTEM") else 1
+                red_privilege = red_privilege.at[red_idx, hidx].set(
+                    jnp.maximum(red_privilege[red_idx, hidx], privilege_level)
+                )
+                if privilege_level >= 2 and sess_pid >= 0:
+                    red_session_privileged_pids = red_session_privileged_pids.at[red_idx, hidx].set(
+                        append_pid_to_row(red_session_privileged_pids[red_idx, hidx], sess_pid)
+                    )
+
+        return {
+            "red_sessions": red_sessions,
+            "red_session_count": red_session_count,
+            "red_privilege": red_privilege,
+            "red_session_is_abstract": red_session_is_abstract,
+            "red_abstract_host_rank": red_abstract_host_rank,
+            "red_next_abstract_rank": red_next_abstract_rank,
+            "red_session_pids": red_session_pids,
+            "red_session_abstract_pids": red_session_abstract_pids,
+            "red_session_privileged_pids": red_session_privileged_pids,
+            "max_pid_seen": max_pid_seen,
+        }
+
+    def _extract_live_detection_metadata(self, cyborg_state):
+        host_activity_detected = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        old_host_activity_detected = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        host_exploit_detected = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        old_host_exploit_detected = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        host_process_creation_pids = np.full(
+            (GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS),
+            -1,
+            dtype=np.int32,
+        )
+
+        for hostname, host in cyborg_state.hosts.items():
+            host_idx = self.mappings.hostname_to_idx.get(hostname)
+            if host_idx is None:
+                continue
+            events = getattr(host, "events", None)
+            if events is None:
+                continue
+
+            host_activity_detected[host_idx] = bool(events.network_connections)
+            old_host_activity_detected[host_idx] = bool(events.old_network_connections)
+            host_exploit_detected[host_idx] = bool(events.process_creation)
+            old_host_exploit_detected[host_idx] = bool(events.old_process_creation)
+            for slot, event in enumerate(events.process_creation[:MAX_TRACKED_SUSPICIOUS_PIDS]):
+                pid = _event_pid(event)
+                if pid >= 0:
+                    host_process_creation_pids[host_idx, slot] = pid
+
+        return {
+            "host_activity_detected": jnp.array(host_activity_detected),
+            "old_host_activity_detected": jnp.array(old_host_activity_detected),
+            "host_exploit_detected": jnp.array(host_exploit_detected),
+            "old_host_exploit_detected": jnp.array(old_host_exploit_detected),
+            "host_process_creation_pids": jnp.array(host_process_creation_pids),
+        }
 
     def reset(self):
         self._blue_unsupported_pending = {}
@@ -673,6 +807,7 @@ class CC4DifferentialHarness:
 
         cy_state = controller.state
         forced_primary_hosts_pre = _extract_primary_hosts(cy_state, self.mappings)
+        forced_primary_pids_pre = _extract_primary_pids(cy_state)
         pre_service_map = _capture_service_process_map(cy_state)
 
         # Capture session 0 object references before the step so we can
@@ -795,6 +930,7 @@ class CC4DifferentialHarness:
             key_green,
             jnp.stack(subkeys[:NUM_RED_AGENTS]),
             forced_primary_hosts_pre,
+            forced_primary_pids_pre,
         )
         if self.green_recorder:
             detection_consumed = int(self.jax_state.detection_random_index)
@@ -907,12 +1043,14 @@ class CC4DifferentialHarness:
             primary_abstract_flags,
             primary_pid_post,
         )
-        diffs.extend(compare_fast(
-            self.cyborg_env,
-            self.jax_state,
-            self.jax_const,
-            self.mappings,
-        ))
+        diffs.extend(
+            compare_fast(
+                self.cyborg_env,
+                self.jax_state,
+                self.jax_const,
+                self.mappings,
+            )
+        )
 
         if abs(jax_reward - cyborg_reward) > 1e-6:
             diffs.append(StateDiff("rewards", cyborg_reward, jax_reward))
@@ -1461,6 +1599,31 @@ class CC4DifferentialHarness:
                 self.jax_state = self.jax_state.replace(
                     ot_service_stopped=self.jax_state.ot_service_stopped.at[h].set(d.cyborg_value),
                 )
+
+        red_meta = self._extract_live_red_session_metadata(cy_state)
+        self.jax_state = self.jax_state.replace(
+            red_sessions=red_meta["red_sessions"],
+            red_session_count=red_meta["red_session_count"],
+            red_privilege=red_meta["red_privilege"],
+            red_session_is_abstract=red_meta["red_session_is_abstract"],
+            red_abstract_host_rank=red_meta["red_abstract_host_rank"],
+            red_next_abstract_rank=red_meta["red_next_abstract_rank"],
+            red_session_pids=red_meta["red_session_pids"],
+            red_session_abstract_pids=red_meta["red_session_abstract_pids"],
+            red_session_privileged_pids=red_meta["red_session_privileged_pids"],
+            red_discovered_hosts=self.jax_state.red_discovered_hosts | red_meta["red_sessions"],
+            red_agent_active=self.jax_state.red_agent_active | jnp.any(red_meta["red_sessions"], axis=1),
+            red_next_pid=jnp.maximum(self.jax_state.red_next_pid, jnp.int32(red_meta["max_pid_seen"] + 1)),
+        )
+
+        detection_meta = self._extract_live_detection_metadata(cy_state)
+        self.jax_state = self.jax_state.replace(
+            host_activity_detected=detection_meta["host_activity_detected"],
+            old_host_activity_detected=detection_meta["old_host_activity_detected"],
+            host_exploit_detected=detection_meta["host_exploit_detected"],
+            old_host_exploit_detected=detection_meta["old_host_exploit_detected"],
+            host_process_creation_pids=detection_meta["host_process_creation_pids"],
+        )
 
         # Reset detection random index to match expected consumption
         self.jax_state = self.jax_state.replace(

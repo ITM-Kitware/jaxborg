@@ -12,7 +12,7 @@ from jaxborg.actions.encoding import (
     RED_SLEEP,
     encode_blue_action,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.env import CC4Env
 
 
@@ -695,6 +695,109 @@ class TestScanFailsWhenRemoveKillsPrimarySession:
         assert int(s1.red_pending_ticks[agent_id]) == 0
         assert int(s1.detection_random_index) == 0
         assert int(s1.red_activity_this_step[target_host]) == 0
+
+
+class TestExploitFailsWhenRemoveKillsPrimarySession:
+    """Regression: queued exploit must fail when blue Remove kills session 0.
+
+    CybORG's ExploitRemoteService executes through ``state.sessions[agent][0]``.
+    If blue Remove kills session 0 on the source host before the exploit
+    finishes, the queued exploit must not fall back to another surviving
+    abstract session on that host.
+    """
+
+    def test_pending_exploit_blocked_after_remove_kills_primary_only(self, env_and_state):
+        from jaxborg.actions.blue_remove import apply_blue_remove
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        blue_id = 0
+        key = jax.random.PRNGKey(91)
+
+        source_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and bool(const.blue_agent_hosts[blue_id, h]):
+                source_host = h
+                break
+        if source_host < 0:
+            pytest.skip("No host covered by blue_agent_0")
+        target_subnet = int(const.host_subnet[source_host])
+
+        ssh_idx = SERVICE_IDS["SSHD"]
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if not bool(const.host_active[h]):
+                continue
+            if int(const.host_subnet[h]) != target_subnet or h == source_host:
+                continue
+            if not bool(const.initial_services[h, ssh_idx]):
+                continue
+            if not bool(const.host_has_bruteforceable_user[h]):
+                continue
+            target_host = h
+            break
+        if target_host < 0:
+            pytest.skip("No same-subnet SSH target with a bruteforceable user")
+
+        primary_pid = jnp.int32(101)
+        other_pid = jnp.int32(202)
+        suspicious = jnp.full((GLOBAL_MAX_HOSTS, state.blue_suspicious_pids.shape[2]), -1, dtype=jnp.int32)
+        suspicious = suspicious.at[source_host, 0].set(primary_pid)
+
+        state = state.replace(
+            host_services=jnp.array(const.initial_services),
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, source_host].set(2),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(source_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(primary_pid),
+            red_session_pids=state.red_session_pids.at[agent_id, source_host, 0]
+            .set(primary_pid)
+            .at[agent_id, source_host, 1]
+            .set(other_pid),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, source_host, 0]
+            .set(primary_pid)
+            .at[agent_id, source_host, 1]
+            .set(other_pid),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+            red_scanned_hosts=state.red_scanned_hosts.at[agent_id, target_host].set(True),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[agent_id, target_host, source_host].set(True),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_id].set(suspicious),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+
+        after_remove = apply_blue_remove(state, const, blue_id, source_host)
+        assert int(after_remove.red_session_count[agent_id, source_host]) == 1
+        assert int(after_remove.red_primary_pid[agent_id]) == -1
+        assert int(after_remove.red_scan_anchor_host[agent_id]) == -1
+
+        exploit_action = RED_EXPLOIT_SSH_START + target_host
+        pending_state = after_remove.replace(
+            red_pending_ticks=after_remove.red_pending_ticks.at[agent_id].set(1),
+            red_pending_action=after_remove.red_pending_action.at[agent_id].set(exploit_action),
+            red_pending_key=after_remove.red_pending_key.at[agent_id].set(jnp.asarray(key, dtype=jnp.uint32)),
+        )
+
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+        s1 = process_jit(
+            pending_state,
+            const,
+            agent_id,
+            RED_SLEEP,
+            key,
+            forced_primary_host=jnp.int32(source_host),
+            forced_primary_pid=primary_pid,
+        )
+
+        assert int(s1.red_pending_ticks[agent_id]) == 0
+        assert int(s1.red_session_count[agent_id, target_host]) == 0
+        assert not bool(s1.red_sessions[agent_id, target_host])
+        assert int(s1.red_activity_this_step[target_host]) == 0
+        assert int(s1.detection_random_index) == 0
 
 
 class TestDurationDifferential:

@@ -5,6 +5,8 @@ from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
     ACTION_TYPE_AGGRESSIVE_SCAN,
     ACTION_TYPE_DISCOVER_DECEPTION,
+    ACTION_TYPE_EXPLOIT_BLUEKEEP,
+    ACTION_TYPE_EXPLOIT_SSH,
     ACTION_TYPE_SCAN,
     ACTION_TYPE_STEALTH_SCAN,
     BLUE_ACTION_DURATIONS,
@@ -17,6 +19,7 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_NONE,
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
+from jaxborg.actions.pids import pid_row_contains
 from jaxborg.actions.red_common import (
     apply_red_session_check,
     scan_sources,
@@ -26,6 +29,7 @@ from jaxborg.actions.red_common import (
 from jaxborg.state import CC4Const, CC4State
 
 UNKNOWN_PRIMARY_HOST = jnp.int32(-2)
+UNKNOWN_PRIMARY_PID = jnp.int32(-2)
 
 
 def process_red_with_duration(
@@ -35,6 +39,7 @@ def process_red_with_duration(
     action_idx: int,
     key: jax.Array,
     forced_primary_host: jnp.int32 = UNKNOWN_PRIMARY_HOST,
+    forced_primary_pid: jnp.int32 = UNKNOWN_PRIMARY_PID,
 ) -> CC4State:
     is_busy = state.red_pending_ticks[agent_id] > 0
 
@@ -53,16 +58,23 @@ def process_red_with_duration(
         | (action_type == ACTION_TYPE_AGGRESSIVE_SCAN)
         | (action_type == ACTION_TYPE_STEALTH_SCAN)
     )
+    is_exploit_action = (action_type >= ACTION_TYPE_EXPLOIT_SSH) & (action_type <= ACTION_TYPE_EXPLOIT_BLUEKEEP)
+    is_target_source_action = is_scan_action | is_exploit_action
     pending_source_kind = state.red_pending_source_kind[agent_id]
     pending_source_host = state.red_pending_source_host[agent_id]
     source_is_bound = pending_source_kind != PENDING_SOURCE_KIND_NONE
     primary_snapshot_known = forced_primary_host != UNKNOWN_PRIMARY_HOST
     primary_missing = primary_snapshot_known & (forced_primary_host < 0)
     forced_source_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
+    forced_primary_pid_known = forced_primary_pid != UNKNOWN_PRIMARY_PID
+    forced_primary_pid_live = pid_row_contains(state.red_session_pids[agent_id, forced_source_idx], forced_primary_pid)
     forced_source_valid = (
         (forced_primary_host >= 0)
         & state.red_sessions[agent_id, forced_source_idx]
         & const.host_active[forced_source_idx]
+        # Distinguish "session 0 survived" from "another session still exists on
+        # the same host after blue Remove killed session 0".
+        & jnp.where(forced_primary_pid_known, forced_primary_pid_live, jnp.array(True))
     )
     live_bound_source_host = select_bound_source_host(state, const, agent_id)
     bound_source_host = jnp.where(
@@ -75,9 +87,17 @@ def process_red_with_duration(
         jnp.where(
             source_is_bound,
             pending_source_host,
-            jnp.where(primary_missing, jnp.int32(-1), select_scan_execution_source_host(state, const, agent_id, target_host)),
+            jnp.where(
+                primary_missing,
+                jnp.int32(-1),
+                select_scan_execution_source_host(state, const, agent_id, target_host),
+            ),
         ),
-        jnp.int32(-1),
+        jnp.where(
+            is_exploit_action,
+            jnp.where(primary_missing, jnp.int32(-1), bound_source_host),
+            jnp.int32(-1),
+        ),
     )
     queued_source_host = jnp.where(
         is_scan_action & ~source_is_bound & forced_source_valid,
@@ -100,7 +120,11 @@ def process_red_with_duration(
             jnp.where(
                 is_scan_action & (queued_source_host >= 0),
                 PENDING_SOURCE_KIND_HOST,
-                PENDING_SOURCE_KIND_NONE,
+                jnp.where(
+                    is_exploit_action & (queued_source_host >= 0),
+                    PENDING_SOURCE_KIND_SESSION_BINDING,
+                    PENDING_SOURCE_KIND_NONE,
+                ),
             ),
         ),
     )
@@ -169,11 +193,11 @@ def process_red_with_duration(
         & state.red_sessions[agent_id, deception_source_idx]
         & const.host_active[deception_source_idx]
     )
-    requires_bound_source = is_scan_action | is_discover_deception
+    requires_bound_source = is_target_source_action | is_discover_deception
     source_ok = jnp.where(is_discover_deception, deception_source_valid, source_valid)
     can_execute = should_execute & ((~requires_bound_source) | source_ok)
     execution_pending_kind = jnp.where(
-        is_scan_action & (effective_source_host >= 0),
+        is_target_source_action & (effective_source_host >= 0),
         PENDING_SOURCE_KIND_HOST,
         PENDING_SOURCE_KIND_NONE,
     )
@@ -214,6 +238,7 @@ def process_red_with_duration(
         agent_id,
         session_check_key,
         forced_primary_host=forced_primary_host,
+        forced_primary_pid=forced_primary_pid,
     )
 
     return new_state

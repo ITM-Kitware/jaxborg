@@ -40,6 +40,19 @@ def remove_pid_from_row(pid_row, pid):
     return jnp.where(pid_row == pid, -1, pid_row)
 
 
+def move_pid_to_row_end(pid_row, pid):
+    """Mirror CybORG session-dict reinsertion order for promoted session 0."""
+    idx = jnp.arange(pid_row.shape[0], dtype=jnp.int32)
+    scores = jnp.where(
+        pid_row < 0,
+        pid_row.shape[0] * 2 + idx,
+        jnp.where(pid_row == pid, pid_row.shape[0] + idx, idx),
+    )
+    order = jnp.argsort(scores)
+    moved = pid_row[order]
+    return jnp.where((pid >= 0) & jnp.any(pid_row == pid), moved, pid_row)
+
+
 def count_pid_matches(pid_row, candidate_pids):
     return jnp.sum((candidate_pids[:, None] >= 0) & (pid_row[None, :] == candidate_pids[:, None]))
 

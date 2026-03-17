@@ -2,6 +2,7 @@ import numpy as np
 from CybORG.Shared.Enums import DecoyType
 
 from jaxborg.constants import (
+    MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
@@ -38,6 +39,10 @@ _ERROR_FIELDS = {
 
 _WARNING_FIELDS = {
     "host_activity_detected",
+    "old_host_activity_detected",
+    "host_exploit_detected",
+    "old_host_exploit_detected",
+    "host_process_creation_pids",
 }
 
 
@@ -294,6 +299,11 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     jax_decoys = np.asarray(jax_state.host_decoys[:n])
     jax_ot_stopped = np.asarray(jax_state.ot_service_stopped[:n])
     jax_has_malware = np.asarray(jax_state.host_has_malware[:n])
+    jax_activity = np.asarray(jax_state.host_activity_detected[:n])
+    jax_old_activity = np.asarray(jax_state.old_host_activity_detected[:n])
+    jax_exploit = np.asarray(jax_state.host_exploit_detected[:n])
+    jax_old_exploit = np.asarray(jax_state.old_host_exploit_detected[:n])
+    jax_process_creation_pids = np.asarray(jax_state.host_process_creation_pids[:n, :MAX_TRACKED_SUSPICIOUS_PIDS])
     jax_blocked = np.asarray(jax_state.blocked_zones)
     jax_phase = int(jax_state.mission_phase)
 
@@ -308,6 +318,11 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     cyborg_service_reliability = np.full((n, NUM_SERVICES), 100, dtype=np.int32)
     cyborg_has_malware = np.zeros(n, dtype=np.bool_)
     cyborg_ot_stopped = np.zeros(n, dtype=np.bool_)
+    cyborg_activity = np.zeros(n, dtype=np.bool_)
+    cyborg_old_activity = np.zeros(n, dtype=np.bool_)
+    cyborg_exploit = np.zeros(n, dtype=np.bool_)
+    cyborg_old_exploit = np.zeros(n, dtype=np.bool_)
+    cyborg_process_creation_pids = np.full((n, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=np.int32)
 
     for hostname, host in cyborg_state.hosts.items():
         if hostname not in mappings.hostname_to_idx:
@@ -326,6 +341,19 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             cyborg_service_reliability[hidx, sid] = int(svc.get_service_reliability())
             if svc_str == "OTSERVICE" and not bool(svc.active):
                 cyborg_ot_stopped[hidx] = True
+
+        events = getattr(host, "events", None)
+        if events is not None:
+            cyborg_activity[hidx] = bool(events.network_connections)
+            cyborg_old_activity[hidx] = bool(events.old_network_connections)
+            cyborg_exploit[hidx] = bool(events.process_creation)
+            cyborg_old_exploit[hidx] = bool(events.old_process_creation)
+            for slot, event in enumerate(events.process_creation[:MAX_TRACKED_SUSPICIOUS_PIDS]):
+                pid = getattr(event, "pid", None)
+                if pid is None and isinstance(event, dict):
+                    pid = event.get("pid")
+                if pid is not None:
+                    cyborg_process_creation_pids[hidx, slot] = int(pid)
 
     for agent_name, sessions in cyborg_state.sessions.items():
         if not agent_name.startswith("red_agent_"):
@@ -408,6 +436,42 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     malware_mismatch = np.where(cyborg_has_malware != jax_has_malware)[0]
     for h in malware_mismatch:
         diffs.append(StateDiff("host_has_malware", bool(cyborg_has_malware[h]), bool(jax_has_malware[h]), f"host_{h}"))
+
+    activity_mismatch = np.where(cyborg_activity != jax_activity)[0]
+    for h in activity_mismatch:
+        diffs.append(StateDiff("host_activity_detected", bool(cyborg_activity[h]), bool(jax_activity[h]), f"host_{h}"))
+
+    old_activity_mismatch = np.where(cyborg_old_activity != jax_old_activity)[0]
+    for h in old_activity_mismatch:
+        diffs.append(
+            StateDiff(
+                "old_host_activity_detected",
+                bool(cyborg_old_activity[h]),
+                bool(jax_old_activity[h]),
+                f"host_{h}",
+            )
+        )
+
+    exploit_mismatch = np.where(cyborg_exploit != jax_exploit)[0]
+    for h in exploit_mismatch:
+        diffs.append(StateDiff("host_exploit_detected", bool(cyborg_exploit[h]), bool(jax_exploit[h]), f"host_{h}"))
+
+    old_exploit_mismatch = np.where(cyborg_old_exploit != jax_old_exploit)[0]
+    for h in old_exploit_mismatch:
+        diffs.append(
+            StateDiff("old_host_exploit_detected", bool(cyborg_old_exploit[h]), bool(jax_old_exploit[h]), f"host_{h}")
+        )
+
+    for h in range(n):
+        if not np.array_equal(cyborg_process_creation_pids[h], jax_process_creation_pids[h]):
+            diffs.append(
+                StateDiff(
+                    "host_process_creation_pids",
+                    tuple(int(x) for x in cyborg_process_creation_pids[h].tolist()),
+                    tuple(int(x) for x in jax_process_creation_pids[h].tolist()),
+                    f"host_{h}",
+                )
+            )
 
     cyborg_decoys = np.zeros((n, NUM_DECOY_TYPES), dtype=np.bool_)
     for hostname, host in cyborg_state.hosts.items():
