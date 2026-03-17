@@ -789,18 +789,18 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         comms_policy=_COMMS_POLICY,
         max_steps=num_steps,
         num_hosts=num_hosts,
-        # Precomputed RNG arrays (disabled — minimal placeholders for pure mode)
-        green_randoms=jnp.zeros((1, 1, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        # Precomputed RNG arrays (defaults: disabled / zeros)
+        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
-        red_policy_randoms=jnp.full((1, 1, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
+        red_policy_randoms=jnp.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
         use_red_policy_randoms=jnp.array(False),
-        detection_randoms=jnp.zeros(1, dtype=jnp.float32),
+        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
         use_detection_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros((1, 1), dtype=jnp.int32),
+        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros((1, 1), dtype=jnp.int32),
+        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_pid_deltas=jnp.array(False),
-        red_privesc_choices=jnp.zeros((1, 1), dtype=jnp.int32),
+        red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_privesc_choices=jnp.array(False),
     )
 
