@@ -142,6 +142,30 @@ def _cy_action_succeeded(controller, agent_name: str) -> bool | None:
     return str(success).upper() == "TRUE"
 
 
+def _cy_obs_success(controller, agent_name: str) -> bool:
+    """Return True if CybORG observation for *agent_name* reports success."""
+    obs_set = controller.observation.get(agent_name)
+    if obs_set is None:
+        return False
+    try:
+        s = obs_set.observations[0].data.get("success")
+    except (IndexError, AttributeError):
+        return False
+    return s is not None and str(s).upper() == "TRUE"
+
+
+def _cy_obs_failed(controller, agent_name: str) -> bool:
+    """Return True if CybORG observation for *agent_name* reports failure."""
+    obs_set = controller.observation.get(agent_name)
+    if obs_set is None:
+        return False
+    try:
+        s = obs_set.observations[0].data.get("success")
+    except (IndexError, AttributeError):
+        return False
+    return s is not None and str(s).upper() == "FALSE"
+
+
 @jax.jit
 def _jit_fsm_red_select_actions(state, const, red_keys):
     return fsm_red_select_actions(state, const, red_keys)
@@ -996,6 +1020,12 @@ class CC4DifferentialHarness:
         # may execute before blue Remove (session alive → succeeds).
         # JAX always runs blue first, so Impact may fail if blue killed
         # the session.  Sync the flag from CybORG's actual outcomes.
+        #
+        # CybORG's BlueRewardMachine uses ``success`` (truthy check, NOT
+        # ``success == True``) for Impact.  Because TernaryEnum.FALSE has
+        # value 3, **all** TernaryEnum values are truthy, so Impact is
+        # rewarded whenever the agent has any active session — regardless
+        # of the observation success field.
         cy_impact = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
         for agent_name, actions_list in controller.action.items():
             if "red" not in agent_name:
@@ -1010,6 +1040,43 @@ class CC4DifferentialHarness:
                             cy_impact = cy_impact.at[hidx].set(True)
         self.jax_state = self.jax_state.replace(red_impact_attempted=cy_impact)
 
+        # --- Sync green event flags from CybORG ---
+        # Like impact, sync green failure events from CybORG so the reward
+        # comparison uses identical inputs on both sides.
+        cy_green_lwf = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        cy_green_asf = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
+        for agent_name, actions_list in controller.action.items():
+            if "green" not in agent_name:
+                continue
+            if not actions_list:
+                continue
+            action = actions_list[0]
+            action_cls = type(action).__name__
+            if action_cls not in ("GreenLocalWork", "GreenAccessService"):
+                continue
+            agent_sessions = cy_state.sessions.get(agent_name, {})
+            if not any(s.active for s in agent_sessions.values()):
+                continue
+            if not _cy_obs_failed(controller, agent_name):
+                continue
+            ip_addr = getattr(action, "ip_address", None)
+            if ip_addr is None:
+                continue
+            hostname = cy_state.ip_addresses.get(ip_addr)
+            if hostname is None:
+                continue
+            hidx = self.mappings.hostname_to_idx.get(hostname)
+            if hidx is None:
+                continue
+            if action_cls == "GreenLocalWork":
+                cy_green_lwf[hidx] = True
+            elif action_cls == "GreenAccessService":
+                cy_green_asf[hidx] = True
+        self.jax_state = self.jax_state.replace(
+            green_lwf_this_step=jnp.array(cy_green_lwf),
+            green_asf_this_step=jnp.array(cy_green_asf),
+        )
+
         # --- Ordering-divergence resync ---
         # CybORG shuffles same-priority actions randomly.  If the shuffle
         # put red before blue, exploits/impacts may succeed in CybORG but
@@ -1021,17 +1088,16 @@ class CC4DifferentialHarness:
         )
 
         # --- Reward comparison ---
-        impact_hosts = self.jax_state.red_impact_attempted
         jax_reward = float(
             _jit_compute_rewards(
                 self.jax_state,
                 self.jax_const,
-                impact_hosts,
+                self.jax_state.red_impact_attempted,
                 self.jax_state.green_lwf_this_step,
                 self.jax_state.green_asf_this_step,
             )
         )
-        cyborg_reward = controller.reward.get("Blue", {}).get("BlueRewardMachine", 0.0)
+        cyborg_reward = float(controller.reward.get("Blue", {}).get("BlueRewardMachine", 0.0))
 
         # --- Compare ---
         from tests.differential.state_comparator import StateDiff, compare_fast
@@ -1057,7 +1123,12 @@ class CC4DifferentialHarness:
 
         diffs.extend(self.compare_policy_inputs())
 
-        return StepResult(step=int(self.jax_state.time), diffs=diffs)
+        return StepResult(
+            step=int(self.jax_state.time),
+            diffs=diffs,
+            cyborg_rewards={"total": cyborg_reward},
+            jax_rewards={"total": jax_reward},
+        )
 
     def _compare_red_identity(
         self,
