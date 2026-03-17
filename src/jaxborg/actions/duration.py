@@ -25,6 +25,8 @@ from jaxborg.actions.red_common import (
 )
 from jaxborg.state import CC4Const, CC4State
 
+UNKNOWN_PRIMARY_HOST = jnp.int32(-2)
+
 
 def process_red_with_duration(
     state: CC4State,
@@ -32,7 +34,7 @@ def process_red_with_duration(
     agent_id: int,
     action_idx: int,
     key: jax.Array,
-    forced_primary_host: jnp.int32 = jnp.int32(-1),
+    forced_primary_host: jnp.int32 = UNKNOWN_PRIMARY_HOST,
 ) -> CC4State:
     is_busy = state.red_pending_ticks[agent_id] > 0
 
@@ -54,23 +56,26 @@ def process_red_with_duration(
     pending_source_kind = state.red_pending_source_kind[agent_id]
     pending_source_host = state.red_pending_source_host[agent_id]
     source_is_bound = pending_source_kind != PENDING_SOURCE_KIND_NONE
+    primary_snapshot_known = forced_primary_host != UNKNOWN_PRIMARY_HOST
+    primary_missing = primary_snapshot_known & (forced_primary_host < 0)
     forced_source_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_source_valid = (
         (forced_primary_host >= 0)
         & state.red_sessions[agent_id, forced_source_idx]
         & const.host_active[forced_source_idx]
     )
+    live_bound_source_host = select_bound_source_host(state, const, agent_id)
     bound_source_host = jnp.where(
         forced_source_valid,
         forced_primary_host,
-        select_bound_source_host(state, const, agent_id),
+        jnp.where(primary_missing, jnp.int32(-1), live_bound_source_host),
     )
     queued_source_host = jnp.where(
         is_scan_action,
         jnp.where(
             source_is_bound,
             pending_source_host,
-            select_scan_execution_source_host(state, const, agent_id, target_host),
+            jnp.where(primary_missing, jnp.int32(-1), select_scan_execution_source_host(state, const, agent_id, target_host)),
         ),
         jnp.int32(-1),
     )

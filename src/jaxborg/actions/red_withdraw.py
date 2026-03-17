@@ -93,6 +93,26 @@ def apply_withdraw(
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    primary_removed = (
+        success
+        & (state.red_scan_anchor_host[agent_id] == target_host)
+        & (state.red_primary_pid[agent_id] >= 0)
+    )
+    red_scan_anchor_host = jnp.where(
+        primary_removed,
+        state.red_scan_anchor_host.at[agent_id].set(jnp.int32(-1)),
+        state.red_scan_anchor_host,
+    )
+    red_primary_is_abstract = jnp.where(
+        primary_removed,
+        state.red_primary_is_abstract.at[agent_id].set(False),
+        state.red_primary_is_abstract,
+    )
+    red_primary_pid = jnp.where(
+        primary_removed,
+        state.red_primary_pid.at[agent_id].set(jnp.int32(-1)),
+        state.red_primary_pid,
+    )
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
         success,
@@ -111,6 +131,9 @@ def apply_withdraw(
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scan_anchor_host=red_scan_anchor_host,
+        red_primary_is_abstract=red_primary_is_abstract,
+        red_primary_pid=red_primary_pid,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,

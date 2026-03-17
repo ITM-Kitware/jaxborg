@@ -554,6 +554,149 @@ class TestScanFailsWhenSession0NotAbstract:
         )
 
 
+class TestScanFailsWhenSession0Missing:
+    """Regression: scans must fail when CybORG session 0 is missing, even if
+    other abstract sessions still exist on the anchor host.
+
+    CybORG's DiscoverNetworkServices.execute() first looks up
+    ``state.sessions[agent][0]`` and returns failure immediately when slot 0
+    is absent. In parity mode the harness passes ``forced_primary_host=-1`` to
+    mean "session 0 was missing before red execution this step".
+    """
+
+    def test_scan_blocked_when_primary_session_missing(self, env_and_state):
+        from jaxborg.actions.encoding import RED_AGGRESSIVE_SCAN_START
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        blue_id = 0
+        key = jax.random.PRNGKey(89)
+
+        source_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and bool(const.blue_agent_hosts[blue_id, h]):
+                source_host = h
+                break
+        if source_host < 0:
+            pytest.skip("No host covered by blue_agent_0")
+        target_subnet = int(const.host_subnet[source_host])
+
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != source_host:
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("No scan target in same subnet")
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(source_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+        const = const.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.01)),
+        )
+
+        scan_action = RED_AGGRESSIVE_SCAN_START + target_host
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+
+        s1 = process_jit(state, const, agent_id, scan_action, key, forced_primary_host=jnp.int32(-1))
+        assert int(s1.red_pending_ticks[agent_id]) == 0
+        assert int(s1.detection_random_index) == 0, (
+            f"AggressiveServiceDiscovery consumed {int(s1.detection_random_index)} detection random(s) "
+            f"but should have failed because CybORG session 0 was missing"
+        )
+        assert int(s1.red_activity_this_step[target_host]) == 0
+
+
+class TestScanFailsWhenRemoveKillsPrimarySession:
+    """Regression: same-step blue Remove must invalidate the current primary
+    session even when another abstract session survives on the same host.
+
+    This mirrors the seed-28 failure where CybORG removed session 0 on the
+    source host, the queued scan ran before RedSessionCheck, and only then was
+    another surviving abstract session promoted back into slot 0.
+    """
+
+    def test_pending_scan_blocked_after_remove_kills_primary_only(self, env_and_state):
+        from jaxborg.actions.blue_remove import apply_blue_remove
+        from jaxborg.actions.encoding import RED_AGGRESSIVE_SCAN_START
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        blue_id = 0
+        key = jax.random.PRNGKey(90)
+
+        source_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and bool(const.blue_agent_hosts[blue_id, h]):
+                source_host = h
+                break
+        if source_host < 0:
+            pytest.skip("No host covered by blue_agent_0")
+        target_subnet = int(const.host_subnet[source_host])
+
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != source_host:
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("No scan target in same subnet")
+
+        primary_pid = jnp.int32(101)
+        other_pid = jnp.int32(202)
+        suspicious = jnp.full((GLOBAL_MAX_HOSTS, state.blue_suspicious_pids.shape[2]), -1, dtype=jnp.int32)
+        suspicious = suspicious.at[source_host, 0].set(primary_pid)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, source_host].set(2),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(source_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(primary_pid),
+            red_session_pids=state.red_session_pids.at[agent_id, source_host, 0]
+            .set(primary_pid)
+            .at[agent_id, source_host, 1]
+            .set(other_pid),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, source_host, 0]
+            .set(primary_pid)
+            .at[agent_id, source_host, 1]
+            .set(other_pid),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_id].set(suspicious),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+        const = const.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.01)),
+        )
+
+        after_remove = apply_blue_remove(state, const, blue_id, source_host)
+        assert int(after_remove.red_session_count[agent_id, source_host]) == 1
+        assert int(after_remove.red_primary_pid[agent_id]) == -1
+        assert int(after_remove.red_scan_anchor_host[agent_id]) == -1
+
+        scan_action = RED_AGGRESSIVE_SCAN_START + target_host
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+        s1 = process_jit(after_remove, const, agent_id, scan_action, key)
+        assert int(s1.red_pending_ticks[agent_id]) == 0
+        assert int(s1.detection_random_index) == 0
+        assert int(s1.red_activity_this_step[target_host]) == 0
+
+
 class TestDurationDifferential:
     """Differential tests verifying JAX duration tracking matches CybORG.
 

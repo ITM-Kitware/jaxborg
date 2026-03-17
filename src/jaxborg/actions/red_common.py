@@ -12,7 +12,8 @@ from jaxborg.actions.pids import (
     allocate_host_pid_from_delta,
     append_pid_to_row,
     append_pid_to_row_allow_duplicates,
-    count_valid_pids,
+    first_valid_pid,
+    pid_row_contains,
 )
 from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
@@ -245,8 +246,10 @@ def apply_red_session_check(
     has_any_sessions = jnp.any((session_counts > 0) & const.host_active)
     anchor = state.red_scan_anchor_host[agent_id]
     anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
+    current_primary_pid = state.red_primary_pid[agent_id]
     anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
-    needs_primary = has_any_sessions & ~anchor_valid
+    primary_valid = anchor_valid & pid_row_contains(state.red_session_pids[agent_id, anchor_idx], current_primary_pid)
+    needs_primary = has_any_sessions & ~primary_valid
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
     sampled = select_new_primary_session_host(session_counts, const.host_active, key)
@@ -258,21 +261,33 @@ def apply_red_session_check(
     )
     next_idx = jnp.clip(next_anchor, 0, state.red_sessions.shape[1] - 1)
     next_session_count = jnp.where(next_anchor >= 0, session_counts[next_idx], jnp.int32(0))
-    next_abstract_count = jax.lax.cond(
+    current_pid_matches_next_anchor = (
+        (next_anchor >= 0)
+        & (next_anchor == anchor)
+        & pid_row_contains(state.red_session_pids[agent_id, next_idx], current_primary_pid)
+    )
+    selected_primary_pid = jax.lax.cond(
         next_anchor >= 0,
-        lambda _: count_valid_pids(state.red_session_abstract_pids[agent_id, next_idx]),
-        lambda _: jnp.int32(0),
+        lambda _: first_valid_pid(state.red_session_pids[agent_id, next_idx]),
+        lambda _: jnp.int32(-1),
         operand=None,
     )
-    # CybORG's RedSessionCheck can promote a newly reassigned abstract foothold
-    # into session 0. When every session on the promoted host is abstract, the
-    # bound primary session must therefore be treated as abstract in JAX too.
+    next_primary_pid = jnp.where(
+        has_any_sessions,
+        jnp.where(current_pid_matches_next_anchor, current_primary_pid, selected_primary_pid),
+        jnp.int32(-1),
+    )
+    next_primary_is_abstract = jax.lax.cond(
+        next_anchor >= 0,
+        lambda _: pid_row_contains(state.red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
+        lambda _: jnp.array(False),
+        operand=None,
+    )
     promoted_abstract_primary = (
         has_any_sessions
         & (next_anchor >= 0)
         & (next_anchor != anchor)
-        & (next_session_count > 0)
-        & (next_abstract_count == next_session_count)
+        & next_primary_is_abstract
     )
     red_abstract_host_rank = jax.lax.cond(
         promoted_abstract_primary,
@@ -280,18 +295,7 @@ def apply_red_session_check(
         lambda ranks: ranks,
         state.red_abstract_host_rank,
     )
-    # Track whether the primary session (session 0 equivalent) is abstract.
-    # CybORG's _choose_new_primary_session randomly picks ANY session;
-    # if the host has mixed abstract/non-abstract sessions, the picked one
-    # might not be abstract.  When all sessions are abstract, the primary
-    # is guaranteed abstract; otherwise it may not be.
     anchor_changed = has_any_sessions & (next_anchor >= 0) & (next_anchor != anchor)
-    new_primary_is_abstract = jnp.where(
-        anchor_changed,
-        # Only guaranteed abstract when every session on the host is abstract
-        next_abstract_count == next_session_count,
-        state.red_primary_is_abstract[agent_id],
-    )
 
     # CybORG scan memory (ports dict) lives on session 0.  When session 0 is
     # destroyed and RedSessionCheck promotes a new primary on a different host,
@@ -317,7 +321,8 @@ def apply_red_session_check(
     return state.replace(
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),
         red_abstract_host_rank=red_abstract_host_rank,
-        red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(new_primary_is_abstract),
+        red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(next_primary_is_abstract),
+        red_primary_pid=state.red_primary_pid.at[agent_id].set(next_primary_pid),
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scanned_hosts=red_scanned_hosts,
     )

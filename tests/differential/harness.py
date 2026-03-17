@@ -320,6 +320,7 @@ class CC4DifferentialHarness:
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
         start_scanned_source_hosts = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
+        start_primary_pid = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
         start_abstract_rank = jnp.full(
             (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
@@ -406,6 +407,8 @@ class CC4DifferentialHarness:
                 if primary.hostname in self.mappings.hostname_to_idx:
                     anchor_host = self.mappings.hostname_to_idx[primary.hostname]
                     start_scan_anchor = start_scan_anchor.at[red_idx].set(anchor_host)
+                primary_pid = int(getattr(primary, "pid", -1))
+                start_primary_pid = start_primary_pid.at[red_idx].set(primary_pid)
             if red_agent_active[red_idx]:
                 fsm_states = fsm_states.at[red_idx].set(fsm_red_init_states(self.jax_const, red_idx))
                 start_host = int(self.jax_const.red_start_hosts[red_idx])
@@ -445,6 +448,7 @@ class CC4DifferentialHarness:
             red_scanned_hosts=start_scanned,
             red_scanned_source_hosts=start_scanned_source_hosts,
             red_scan_anchor_host=start_scan_anchor,
+            red_primary_pid=start_primary_pid,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
             red_session_is_abstract=start_abstract,
@@ -816,6 +820,7 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(
             red_scan_anchor_host=forced_primary_hosts_post,
             red_primary_is_abstract=primary_abstract_flags,
+            red_primary_pid=_extract_primary_pids(cy_state),
             red_scanned_source_hosts=red_scanned_source_hosts,
             red_scanned_hosts=red_scanned_hosts,
         )
@@ -1412,6 +1417,17 @@ def _extract_primary_hosts(state, mappings) -> jax.Array:
         if primary is not None and primary.hostname in mappings.hostname_to_idx:
             primary_hosts = primary_hosts.at[r].set(mappings.hostname_to_idx[primary.hostname])
     return primary_hosts
+
+
+def _extract_primary_pids(state) -> jax.Array:
+    """Return per-agent session-0 PID, or -1 when no primary exists."""
+    primary_pids = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
+    for r in range(NUM_RED_AGENTS):
+        sessions = state.sessions.get(f"red_agent_{r}", {})
+        primary = sessions.get(0)
+        if primary is not None:
+            primary_pids = primary_pids.at[r].set(int(getattr(primary, "pid", -1)))
+    return primary_pids
 
 
 def _extract_primary_is_abstract(state) -> jax.Array:

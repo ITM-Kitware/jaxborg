@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import first_valid_pid, pid_row_contains, remove_pid_from_row
+from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
@@ -193,32 +193,35 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_suspicious_process.at[target_host].set(any_suspicious_after),
         state.host_suspicious_process,
     )
-    # When Remove destroys all sessions on the anchor host, invalidate the
-    # anchor (set to -1) rather than promoting a fallback.  In CybORG,
-    # session 0 is simply gone until RedSessionCheck promotes a new primary.
-    # Premature fallback promotion can fool privesc checks that rely on the
-    # stale red_primary_is_abstract flag.
+    # When Remove destroys session 0, invalidate the anchor (set to -1)
+    # rather than promoting a fallback. In CybORG, session 0 is simply gone
+    # until RedSessionCheck promotes a new primary. Host-level session
+    # presence is not enough here because other sessions may survive on the
+    # same host after session 0 is killed.
     anchor_on_target = state.red_scan_anchor_host == target_host
     lost_all_on_target = covers_host & (session_count_before[:, target_host] > 0) & ~new_sessions[:, target_host]
+    primary_pid_survives = jax.vmap(pid_row_contains, in_axes=(0, 0))(
+        new_session_pids[:, target_host, :],
+        state.red_primary_pid,
+    )
+    primary_pid_killed = (
+        covers_host & anchor_on_target & (state.red_primary_pid >= 0) & ~primary_pid_survives
+    )
+    primary_invalidated = anchor_on_target & (lost_all_on_target | primary_pid_killed)
     red_scan_anchor_host = jnp.where(
-        anchor_on_target & lost_all_on_target,
+        primary_invalidated,
         jnp.int32(-1),
         state.red_scan_anchor_host,
     )
-    # Session 0's PID corresponds to the first abstract PID on the anchor
-    # host (slot 0 of the abstract PID array — insertion order is preserved
-    # since remove_pid_from_row only sets entries to -1).  When Remove kills
-    # that specific PID, session 0 is gone and primary-is-abstract must be
-    # cleared so scans and privesc correctly fail.
-    old_first_abstract = jax.vmap(first_valid_pid)(state.red_session_abstract_pids[:, target_host, :])
-    new_first_abstract = jax.vmap(first_valid_pid)(new_session_abstract_pids[:, target_host, :])
-    primary_pid_killed = (
-        covers_host & anchor_on_target & (old_first_abstract >= 0) & (old_first_abstract != new_first_abstract)
-    )
     red_primary_is_abstract = jnp.where(
-        primary_pid_killed,
+        primary_invalidated,
         False,
         state.red_primary_is_abstract,
+    )
+    red_primary_pid = jnp.where(
+        primary_invalidated,
+        jnp.int32(-1),
+        state.red_primary_pid,
     )
 
     scan_synced = sync_scan_memory_fields(
@@ -247,4 +250,5 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_primary_is_abstract=red_primary_is_abstract,
+        red_primary_pid=red_primary_pid,
     )

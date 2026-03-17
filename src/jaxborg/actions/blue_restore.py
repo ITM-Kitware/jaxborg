@@ -82,6 +82,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         False,
         state.red_primary_is_abstract,
     )
+    red_primary_pid = jnp.where(
+        anchor_on_target & lost_all_on_target,
+        jnp.int32(-1),
+        state.red_primary_pid,
+    )
     scan_synced = sync_scan_memory_fields(
         state.replace(
             red_sessions=red_sessions,
@@ -173,4 +178,5 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_primary_is_abstract=red_primary_is_abstract,
+        red_primary_pid=red_primary_pid,
     )

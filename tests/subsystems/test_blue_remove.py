@@ -260,6 +260,55 @@ class TestApplyBlueRemove:
         new_state = apply_blue_remove(state, jax_const, blue_idx, target)
         np.testing.assert_array_equal(np.array(new_state.red_sessions), np.array(state.red_sessions))
 
+    def test_remove_on_non_anchor_host_preserves_primary_session(self, jax_const):
+        state = _make_jax_state(jax_const)
+        agent_id = 0
+        blue_idx = 0
+
+        covered_hosts = [
+            h
+            for h in range(int(jax_const.num_hosts))
+            if bool(jax_const.host_active[h]) and bool(jax_const.blue_agent_hosts[blue_idx, h])
+        ]
+        assert len(covered_hosts) >= 2
+        anchor_host = covered_hosts[0]
+        target_host = covered_hosts[1]
+
+        primary_pid = 6003
+        other_pid = 7003
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, anchor_host]
+            .set(True)
+            .at[agent_id, target_host]
+            .set(True),
+            red_session_count=state.red_session_count.at[agent_id, anchor_host]
+            .set(1)
+            .at[agent_id, target_host]
+            .set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, anchor_host]
+            .set(True)
+            .at[agent_id, target_host]
+            .set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(anchor_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(jnp.int32(primary_pid)),
+            red_session_pids=state.red_session_pids.at[agent_id, anchor_host, 0]
+            .set(primary_pid)
+            .at[agent_id, target_host, 0]
+            .set(other_pid),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, anchor_host, 0]
+            .set(primary_pid)
+            .at[agent_id, target_host, 0]
+            .set(other_pid),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target_host, 0].set(other_pid),
+        )
+
+        new_state = apply_blue_remove(state, jax_const, blue_idx, target_host)
+        assert not bool(new_state.red_sessions[agent_id, target_host])
+        assert int(new_state.red_primary_pid[agent_id]) == primary_pid
+        assert bool(new_state.red_primary_is_abstract[agent_id])
+        assert int(new_state.red_scan_anchor_host[agent_id]) == anchor_host
+
     def test_remove_clears_user_but_leaves_other_red_agents_privileged(self, jax_const):
         state = _make_jax_state(jax_const)
         target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")

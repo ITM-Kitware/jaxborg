@@ -9,7 +9,7 @@ from jaxmarl.environments.multi_agent_env import MultiAgentEnv, State
 from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.blue_monitor import apply_blue_monitor
-from jaxborg.actions.duration import process_blue_with_duration, process_red_with_duration
+from jaxborg.actions.duration import UNKNOWN_PRIMARY_HOST, process_blue_with_duration, process_red_with_duration
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.actions.green import apply_green_agents
 from jaxborg.actions.masking import compute_blue_action_mask
@@ -52,7 +52,7 @@ def apply_all_actions(
         blue_actions: (NUM_BLUE_AGENTS,) int32
         red_actions: (NUM_RED_AGENTS,) int32
         red_keys: (NUM_RED_AGENTS, 2) PRNGKey per red agent
-        forced_primary_hosts: (NUM_RED_AGENTS,) int32, -1 for no override
+        forced_primary_hosts: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_HOST` for no override
     """
     for b in range(NUM_BLUE_AGENTS):
         state = process_blue_with_duration(state, const, b, blue_actions[b])
@@ -87,6 +87,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     host_compromised = state.host_compromised
     red_scan_anchor_host = state.red_scan_anchor_host
     red_session_is_abstract = state.red_session_is_abstract
+    red_primary_pid = state.red_primary_pid
     red_abstract_host_rank = state.red_abstract_host_rank
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_source_hosts = state.red_scanned_source_hosts
@@ -137,6 +138,11 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_session_abstract_pids.at[r, start_host].set(append_pid_to_row(abstract_pid_row, red_next_pid)),
             red_session_abstract_pids,
         )
+        red_primary_pid = jnp.where(
+            is_active,
+            red_primary_pid.at[r].set(red_next_pid),
+            red_primary_pid,
+        )
         red_next_pid = jnp.where(is_active, red_next_pid + 1, red_next_pid)
         red_privilege = jnp.where(
             is_active,
@@ -178,6 +184,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_scanned_hosts=red_scanned,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scan_anchor_host=red_scan_anchor_host,
+        red_primary_pid=red_primary_pid,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
         red_session_is_abstract=red_session_is_abstract,
@@ -332,7 +339,7 @@ class CC4Env(MultiAgentEnv):
 
         blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(NUM_BLUE_AGENTS)], dtype=jnp.int32)
         red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(NUM_RED_AGENTS)], dtype=jnp.int32)
-        no_forced = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
+        no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
 
         state = apply_all_actions(state, const, blue_action_arr, red_action_arr, key_green, red_keys, no_forced)
 
