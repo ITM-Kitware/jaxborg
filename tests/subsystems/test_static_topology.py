@@ -23,7 +23,7 @@ from jaxborg.topology import (
 )
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def cyborg_env():
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,

@@ -20,6 +20,20 @@ OBS_SIZE = 210
 
 FUZZ_SEEDS = list(range(50))
 
+# ---------------------------------------------------------------------------
+# CybORG environment cache
+# ---------------------------------------------------------------------------
+# The CybORG constructor is the dominant cost (~1-2 s each).  The three
+# "initial-state" checks (initial_obs, topology, reward_tables) all create
+# a CybORG env with the same all-SleepAgent config for a given seed, so we
+# cache (cyborg_env, const) per seed and reuse it.
+#
+# _check_obs_after_sleep_steps mutates the env via wrapped.step(), so it
+# always creates a fresh CybORG instance to avoid polluting the cache.
+# ---------------------------------------------------------------------------
+
+_env_cache: dict[int, tuple] = {}
+
 
 def _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=EnterpriseGreenAgent, red_cls=FiniteStateRedAgent):
     sg = EnterpriseScenarioGenerator(
@@ -31,10 +45,23 @@ def _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=EnterpriseGreenAgent, 
     return CybORG(scenario_generator=sg, seed=seed)
 
 
+def _get_cached_env_and_const(seed):
+    """Return a cached (cyborg_env, const) for the all-SleepAgent config at *seed*.
+
+    The CybORG env is in its constructor state (not reset/stepped).
+    Tests that need to step MUST create their own env.
+    """
+    if seed not in _env_cache:
+        env = _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent)
+        const = build_const_from_cyborg(env)
+        _env_cache[seed] = (env, const)
+    return _env_cache[seed]
+
+
 def _check_initial_obs(seed):
+    _, const = _get_cached_env_and_const(seed)
     cyborg_env = _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent)
     wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
-    const = build_const_from_cyborg(cyborg_env)
 
     state = create_initial_state()
     state = state.replace(host_services=jnp.array(const.initial_services))
@@ -54,8 +81,7 @@ def _check_initial_obs(seed):
 
 
 def _check_topology_consistency(seed):
-    cyborg_env = _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent)
-    const = build_const_from_cyborg(cyborg_env)
+    cyborg_env, const = _get_cached_env_and_const(seed)
     cyborg_state = cyborg_env.environment_controller.state
     sorted_hosts = sorted(cyborg_state.hosts.keys())
     mismatches = []
@@ -87,8 +113,7 @@ def _check_topology_consistency(seed):
 
 
 def _check_reward_tables(seed):
-    cyborg_env = _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent)
-    const = build_const_from_cyborg(cyborg_env)
+    _, const = _get_cached_env_and_const(seed)
     mismatches = []
 
     from jaxborg.topology import CYBORG_SUFFIX_TO_ID
@@ -111,9 +136,9 @@ def _check_reward_tables(seed):
 
 
 def _check_obs_after_sleep_steps(seed, num_sleep_steps=5):
+    _, const = _get_cached_env_and_const(seed)
     cyborg_env = _make_cyborg_env(seed, blue_cls=SleepAgent, green_cls=SleepAgent, red_cls=SleepAgent)
     wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
-    const = build_const_from_cyborg(cyborg_env)
 
     state = create_initial_state()
     state = state.replace(host_services=jnp.array(const.initial_services))

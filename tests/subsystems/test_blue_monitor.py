@@ -35,7 +35,7 @@ _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 SSH_SVC = SERVICE_IDS["SSHD"]
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def jax_const():
     return build_const_from_cyborg(_make_cyborg_env())
 

@@ -60,7 +60,7 @@ class TestPhaseRewardsPopulated:
 
 
 class TestPhaseRewardsMatchCybORG:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -225,7 +225,7 @@ class TestComputeRewards:
 
 
 class TestRewardsDifferential:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,

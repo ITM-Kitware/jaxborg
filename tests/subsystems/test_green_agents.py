@@ -178,7 +178,7 @@ class TestDynamicTopology:
 
 
 class TestDifferentialGreen:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -330,7 +330,7 @@ def test_green_access_service_reward_uses_source_subnet_matches_cyborg():
 
 
 class TestGreenStatisticalDifferential:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,

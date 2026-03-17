@@ -42,7 +42,7 @@ def _make_cyborg_env():
     return CybORG(scenario_generator=sg, seed=42)
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def jax_const():
     return build_const_from_cyborg(_make_cyborg_env())
 

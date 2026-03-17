@@ -68,7 +68,7 @@ class TestAdvanceMissionPhase:
 
 
 class TestPhaseTransitionsMatchCybORG:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -118,7 +118,7 @@ class TestPhaseTransitionsMatchCybORG:
 
 
 class TestPhaseDifferential:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,

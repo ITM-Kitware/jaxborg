@@ -27,6 +27,16 @@ def _make_env(seed: int = 0):
     return env
 
 
+_const_cache: dict[int, tuple] = {}
+
+
+def _cached_const_and_mappings(seed: int = 0):
+    if seed not in _const_cache:
+        env = _make_env(seed)
+        _const_cache[seed] = (build_const_from_cyborg(env), build_mappings_from_cyborg(env))
+    return _const_cache[seed]
+
+
 def _find_reassignment_case(const, source_agent: int):
     for host_idx in range(int(const.num_hosts)):
         if not bool(const.host_active[host_idx]) or bool(const.host_is_router[host_idx]):
@@ -57,7 +67,7 @@ def _cy_scanned_hosts(state, mappings, agent_id: int):
 def test_red_agent_allowed_subnets_match_cyborg():
     env = _make_env(seed=0)
     controller = env.environment_controller
-    const = build_const_from_cyborg(env)
+    const, _ = _cached_const_and_mappings(seed=0)
     for red_id in range(NUM_RED_AGENTS):
         cy_allowed = set(controller.agent_interfaces[f"red_agent_{red_id}"].allowed_subnets)
         cy_allowed_ids = {CYBORG_SUFFIX_TO_ID[name] for name in cy_allowed if name in CYBORG_SUFFIX_TO_ID}
@@ -69,8 +79,7 @@ def test_cross_subnet_reassignment_drops_session_scan_memory_matches_cyborg():
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 5
     target_idx = None
@@ -170,8 +179,7 @@ def test_cross_subnet_reassignment_preserves_nonabstract_session_type_matches_cy
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 5
     target_idx = None
@@ -235,8 +243,7 @@ def test_cross_subnet_reassignment_does_not_overclear_existing_scan_memory_match
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 0
     target_idx, _ = _find_reassignment_case(const, source_agent)
@@ -310,8 +317,7 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 0
     target_idx, _ = _find_reassignment_case(const, source_agent)
@@ -382,8 +388,7 @@ def test_cross_subnet_reassignment_keeps_remote_scan_memory_when_unrelated_sessi
 
 
 def test_reassignment_does_not_rebind_busy_scan_when_bound_source_becomes_invalid():
-    env = _make_env(seed=0)
-    const = build_const_from_cyborg(env)
+    const, _ = _cached_const_and_mappings(seed=0)
 
     agent_id = 0
     candidate_hosts = [
@@ -413,8 +418,7 @@ def test_cross_subnet_reassignment_clears_remote_scan_memory_when_scan_owner_ses
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 0
     target_idx, _ = _find_reassignment_case(const, source_agent)
@@ -489,8 +493,7 @@ def test_cross_subnet_reassignment_preserves_scan_anchor_host_matches_cyborg():
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 0
     red_name = f"red_agent_{source_agent}"
@@ -583,8 +586,7 @@ def test_cross_subnet_reassignment_sums_transferred_suspicious_counts_per_sessio
     env = _make_env(seed=0)
     controller = env.environment_controller
     cy_state = controller.state
-    const = build_const_from_cyborg(env)
-    mappings = build_mappings_from_cyborg(env)
+    const, mappings = _cached_const_and_mappings(seed=0)
 
     source_agent = 0
     target_idx, dest_agent = _find_reassignment_case(const, source_agent)

@@ -36,3 +36,59 @@ def cyborg_env():
         steps=500,
     )
     return CybORG(scenario_generator=sg, seed=42)
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped shared CybORG environments and their extracted CC4Const.
+#
+# These exist purely for const extraction and state inspection.  Tests that
+# need to step/reset CybORG must create their own function-scoped fixtures.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="session")
+def cyborg_env_sleep42():
+    """CybORG with all SleepAgent agents, seed=42 (most common config for differential tests)."""
+    from CybORG import CybORG
+    from CybORG.Agents import SleepAgent
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=SleepAgent,
+        red_agent_class=SleepAgent,
+        steps=500,
+    )
+    return CybORG(scenario_generator=sg, seed=42)
+
+
+@pytest.fixture(scope="session")
+def cyborg_const_sleep42(cyborg_env_sleep42):
+    """CC4Const extracted from the all-SleepAgent CybORG env (seed=42)."""
+    from jaxborg.topology import build_const_from_cyborg
+
+    return build_const_from_cyborg(cyborg_env_sleep42)
+
+
+@pytest.fixture(scope="session")
+def cyborg_env_default42():
+    """CybORG with default agents (SleepAgent blue, EnterpriseGreenAgent green, FiniteStateRedAgent red), seed=42."""
+    from CybORG import CybORG
+    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+    sg = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=FiniteStateRedAgent,
+        steps=500,
+    )
+    return CybORG(scenario_generator=sg, seed=42)
+
+
+@pytest.fixture(scope="session")
+def cyborg_const_default42(cyborg_env_default42):
+    """CC4Const extracted from the default-agent CybORG env (seed=42)."""
+    from jaxborg.topology import build_const_from_cyborg
+
+    return build_const_from_cyborg(cyborg_env_default42)

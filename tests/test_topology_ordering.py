@@ -199,7 +199,7 @@ class TestTopologyVariation:
 
 
 class TestCybORGStructuralParity:
-    @pytest.fixture
+    @pytest.fixture(scope="class")
     def cyborg_env(self):
         from CybORG import CybORG
         from CybORG.Agents import SleepAgent
