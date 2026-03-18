@@ -251,7 +251,15 @@ def apply_red_session_check(
     anchor_idx = jnp.clip(anchor, 0, state.red_sessions.shape[1] - 1)
     current_primary_pid = state.red_primary_pid[agent_id]
     anchor_valid = (anchor >= 0) & state.red_sessions[agent_id, anchor_idx] & const.host_active[anchor_idx]
-    primary_valid = anchor_valid & pid_row_contains(state.red_session_pids[agent_id, anchor_idx], current_primary_pid)
+    primary_pid_tracked = pid_row_contains(state.red_session_pids[agent_id, anchor_idx], current_primary_pid)
+    # When CybORG PID allocation diverges from JAX, the synced primary PID may
+    # not appear in JAX's session_pids even though session 0 is still alive.
+    # Fall back to abstract-session existence so PID drift doesn't trigger a
+    # spurious primary invalidation (which clears scan memory).
+    primary_pid_or_abstract = primary_pid_tracked | (
+        state.red_session_is_abstract[agent_id, anchor_idx] & (current_primary_pid >= 0)
+    )
+    primary_valid = anchor_valid & primary_pid_or_abstract
     needs_primary = has_any_sessions & ~primary_valid
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]

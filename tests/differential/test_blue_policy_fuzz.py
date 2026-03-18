@@ -16,6 +16,10 @@ from tests.differential.fuzzer import run_differential_fuzz
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS
 
+# These tests verify decoy/pending-action state parity, not observation parity.
+# Observation diffs are tracked separately by the full campaign tests.
+_STATE_ERROR_FIELDS = _ERROR_FIELDS - {"observation"}
+
 _DECOY_SERVICE_TO_FLAGS = {
     "haraka": (True, False, False, False),
     "apache2": (False, True, False, False),
@@ -73,7 +77,7 @@ def test_generic_deploy_decoy_pending_ticks_match_jax():
     step0 = harness.full_step()
     pending = controller.actions_in_progress["blue_agent_2"]
 
-    assert [d for d in step0.diffs if d.field_name in _ERROR_FIELDS] == []
+    assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert type(pending["action"]).__name__ == "DeployDecoy"
     assert pending["action"].hostname == target_hostname
     assert int(pending["remaining_ticks"]) == 1
@@ -88,7 +92,7 @@ def test_generic_deploy_decoy_pending_ticks_match_jax():
     added_service = next(iter(added_services))
     jax_decoys = tuple(bool(v) for v in harness.jax_state.host_decoys[target_host_idx])
 
-    assert [d for d in step1.diffs if d.field_name in _ERROR_FIELDS] == []
+    assert [d for d in step1.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert jax_decoys == _DECOY_SERVICE_TO_FLAGS[added_service]
 
 
@@ -155,7 +159,7 @@ def test_router_restore_pending_ticks_match_jax():
     pending = controller.actions_in_progress["blue_agent_0"]
     pending_name, pending_host, pending_ticks = harness._blue_unsupported_pending[0]
 
-    assert [d for d in step0.diffs if d.field_name in _ERROR_FIELDS] == []
+    assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert type(pending["action"]).__name__ == "Restore"
     assert pending["action"].hostname == target_hostname
     assert int(pending["remaining_ticks"]) == 4
@@ -187,7 +191,7 @@ def test_router_generic_deploy_decoy_matches_jax():
     pending = controller.actions_in_progress["blue_agent_3"]
     pending_name, pending_host, pending_ticks = harness._blue_unsupported_pending[3]
 
-    assert [d for d in step0.diffs if d.field_name in _ERROR_FIELDS] == []
+    assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert type(pending["action"]).__name__ == "DeployDecoy"
     assert pending["action"].hostname == target_hostname
     assert int(pending["remaining_ticks"]) == 1
@@ -204,7 +208,7 @@ def test_router_generic_deploy_decoy_matches_jax():
     added_service = next(iter(added_services))
     jax_decoys = tuple(bool(v) for v in harness.jax_state.host_decoys[target_host_idx])
 
-    assert [d for d in step1.diffs if d.field_name in _ERROR_FIELDS] == []
+    assert [d for d in step1.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert jax_decoys == _DECOY_SERVICE_TO_FLAGS[added_service]
 
 

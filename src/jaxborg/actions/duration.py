@@ -70,13 +70,23 @@ def process_red_with_duration(
     forced_source_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_primary_pid_known = forced_primary_pid != UNKNOWN_PRIMARY_PID
     forced_primary_pid_live = pid_row_contains(state.red_session_pids[agent_id, forced_source_idx], forced_primary_pid)
+    # When CybORG PID allocation diverges from JAX (different deltas), the
+    # forced PID won't appear in JAX's session_pids even though session 0 is
+    # still alive.  Fall back to abstract-session existence so PID drift
+    # doesn't falsely invalidate the source.  Blue Remove already clears
+    # red_primary_is_abstract when it kills session 0, so the downstream
+    # source_valid gate (which checks that flag) still correctly blocks
+    # scans after session 0 destruction.
+    forced_primary_pid_ok = forced_primary_pid_live | (
+        state.red_session_is_abstract[agent_id, forced_source_idx] & state.red_sessions[agent_id, forced_source_idx]
+    )
     forced_source_valid = (
         (forced_primary_host >= 0)
         & state.red_sessions[agent_id, forced_source_idx]
         & const.host_active[forced_source_idx]
         # Distinguish "session 0 survived" from "another session still exists on
         # the same host after blue Remove killed session 0".
-        & jnp.where(forced_primary_pid_known, forced_primary_pid_live, jnp.array(True))
+        & jnp.where(forced_primary_pid_known, forced_primary_pid_ok, jnp.array(True))
     )
     live_bound_source_host = select_bound_source_host(state, const, agent_id)
     bound_source_host = jnp.where(
