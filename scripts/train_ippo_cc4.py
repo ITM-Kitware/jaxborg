@@ -10,6 +10,7 @@ from pathlib import Path
 
 # Persistent XLA compilation cache — must be set BEFORE importing JAX.
 # Default: ~/.cache/jaxborg/xla.  Override: JAX_COMPILATION_CACHE_DIR env var.
+os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
 if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
     _default_cache = str(Path.home() / ".cache" / "jaxborg" / "xla")
     os.environ["JAX_COMPILATION_CACHE_DIR"] = _default_cache

@@ -28,7 +28,7 @@ FUZZ_CHECK_OBS="${FUZZ_CHECK_OBS:-1}"
 # Persist JAX compilations between loop iterations so repeated uv/python
 # processes avoid recompilation costs.
 export JAX_ENABLE_COMPILATION_CACHE="${JAX_ENABLE_COMPILATION_CACHE:-1}"
-export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$PWD/.cache/jax}"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$HOME/.cache/jaxborg/xla}"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS="${JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS:-0}"
 mkdir -p "$JAX_COMPILATION_CACHE_DIR"
 

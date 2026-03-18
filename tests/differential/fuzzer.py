@@ -5,6 +5,7 @@ import os
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
+from pathlib import Path
 
 from CybORG.Agents import (
     EnterpriseGreenAgent,
@@ -44,6 +45,7 @@ BLUE_AGENT_CLASSES = {
 }
 
 BLUE_ACTION_SOURCES = {"sleep", "cyborg_policy"}
+_DEFAULT_JAX_CACHE_DIR = Path.home() / ".cache" / "jaxborg" / "xla"
 
 
 def _init_cpu_worker():
@@ -53,10 +55,9 @@ def _init_cpu_worker():
     # Enable XLA compilation cache so workers share compiled kernels.
     # First worker compiles; subsequent workers (and future runs) load from disk.
     os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
-    os.environ.setdefault(
-        "JAX_COMPILATION_CACHE_DIR", os.path.expanduser("~/.cache/jaxborg/xla")
-    )
+    os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", str(_DEFAULT_JAX_CACHE_DIR))
     os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+    _DEFAULT_JAX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _fuzz_one_seed(args):

@@ -214,7 +214,7 @@ def test_fuzzer_runs_with_cyborg_random_blue_policy():
         blue_action_source="cyborg_policy",
         verbose=False,
     )
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_reward_parity_when_green_local_work_selects_decoy_service():
@@ -226,7 +226,7 @@ def test_reward_parity_when_green_local_work_selects_decoy_service():
         strict_random_sync=True,
         verbose=False,
     )
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_reward_parity_handles_sessionless_impact_trace():
@@ -238,7 +238,7 @@ def test_reward_parity_handles_sessionless_impact_trace():
         strict_random_sync=True,
         verbose=False,
     )
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_generic_deploy_decoy_reusing_service_name_matches_jax():

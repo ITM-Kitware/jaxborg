@@ -12,6 +12,7 @@ from jaxborg.actions.encoding import (
     RED_SLEEP,
     encode_blue_action,
 )
+from jaxborg.actions.red_common import apply_red_session_check
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.env import CC4Env
 
@@ -798,6 +799,147 @@ class TestExploitFailsWhenRemoveKillsPrimarySession:
         assert not bool(s1.red_sessions[agent_id, target_host])
         assert int(s1.red_activity_this_step[target_host]) == 0
         assert int(s1.detection_random_index) == 0
+
+
+class TestSessionBindingToleratesPrimaryPidRowLag:
+    """Regression: pending session-bound scans should still execute when the
+    live CybORG session-0 PID matches JAX's tracked primary PID but the
+    per-host PID row has not caught up yet."""
+
+    def test_pending_scan_executes_when_primary_pid_matches_but_pid_row_is_stale(self, env_and_state):
+        from jaxborg.actions.encoding import RED_STEALTH_SCAN_START
+        from jaxborg.actions.pending_source import PENDING_SOURCE_KIND_SESSION_BINDING
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        key = jax.random.PRNGKey(123)
+
+        source_host = int(const.red_start_hosts[agent_id])
+        target_subnet = int(const.host_subnet[source_host])
+
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != source_host:
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("Need a same-subnet scan target")
+
+        primary_pid = jnp.int32(101)
+        stale_pid_a = jnp.int32(201)
+        stale_pid_b = jnp.int32(202)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, source_host].set(2),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(source_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(primary_pid),
+            red_session_pids=state.red_session_pids.at[agent_id, source_host, 0]
+            .set(stale_pid_a)
+            .at[agent_id, source_host, 1]
+            .set(stale_pid_b),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, source_host, 0]
+            .set(stale_pid_a)
+            .at[agent_id, source_host, 1]
+            .set(stale_pid_b),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
+            red_pending_ticks=state.red_pending_ticks.at[agent_id].set(1),
+            red_pending_action=state.red_pending_action.at[agent_id].set(RED_STEALTH_SCAN_START + target_host),
+            red_pending_source_kind=state.red_pending_source_kind.at[agent_id].set(
+                PENDING_SOURCE_KIND_SESSION_BINDING
+            ),
+            red_pending_source_host=state.red_pending_source_host.at[agent_id].set(jnp.int32(source_host)),
+            detection_random_index=jnp.array(0, dtype=jnp.int32),
+        )
+        const = const.replace(
+            use_detection_randoms=jnp.array(True),
+            detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)),
+        )
+
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+        new_state = process_jit(
+            state,
+            const,
+            agent_id,
+            RED_SLEEP,
+            key,
+            forced_primary_host=jnp.int32(source_host),
+            forced_primary_pid=primary_pid,
+        )
+
+        assert bool(new_state.red_scanned_hosts[agent_id, target_host]), (
+            "Queued stealth scan should execute from the forced session-0 host "
+            "when red_primary_pid matches CybORG even if red_session_pids lags"
+        )
+        assert int(new_state.detection_random_index) == 1
+
+
+class TestSessionCheckToleratesPrimaryPidRowLag:
+    """Regression: scan memory should survive a session-check pass when the
+    tracked primary PID matches CybORG but the host PID row is stale."""
+
+    def test_session_check_preserves_scan_memory_when_primary_pid_matches_but_pid_row_is_stale(self, env_and_state):
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        agent_id = 0
+        key = jax.random.PRNGKey(124)
+
+        source_host = int(const.red_start_hosts[agent_id])
+        target_subnet = int(const.host_subnet[source_host])
+
+        target_host = -1
+        for h in range(GLOBAL_MAX_HOSTS):
+            if bool(const.host_active[h]) and int(const.host_subnet[h]) == target_subnet and h != source_host:
+                target_host = h
+                break
+        if target_host < 0:
+            pytest.skip("Need a same-subnet scan target")
+
+        primary_pid = jnp.int32(101)
+        stale_pid_a = jnp.int32(201)
+        stale_pid_b = jnp.int32(202)
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, source_host].set(2),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, source_host].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(source_host)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(primary_pid),
+            red_session_pids=state.red_session_pids.at[agent_id, source_host, 0]
+            .set(stale_pid_a)
+            .at[agent_id, source_host, 1]
+            .set(stale_pid_b),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, source_host, 0]
+            .set(stale_pid_a)
+            .at[agent_id, source_host, 1]
+            .set(stale_pid_b),
+            red_scanned_hosts=state.red_scanned_hosts.at[agent_id, target_host].set(True),
+            red_scanned_source_hosts=state.red_scanned_source_hosts.at[agent_id, target_host, source_host].set(True),
+        )
+
+        new_state = apply_red_session_check(
+            state,
+            const,
+            agent_id,
+            key,
+            forced_primary_host=jnp.int32(source_host),
+            forced_primary_pid=primary_pid,
+        )
+
+        assert bool(new_state.red_scanned_hosts[agent_id, target_host]), (
+            "Session check should not clear scan memory when the forced session-0 "
+            "PID matches red_primary_pid but the host PID row lags"
+        )
+        assert bool(new_state.red_scanned_source_hosts[agent_id, target_host, source_host])
+        assert int(new_state.red_primary_pid[agent_id]) == int(primary_pid)
 
 
 class TestDurationDifferential:

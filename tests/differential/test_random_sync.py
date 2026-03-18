@@ -45,7 +45,7 @@ def test_strict_random_sync_handles_pending_ssh_exploit_trace():
         strict_random_sync=True,
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_strict_random_sync_handles_discover_deception_trace():
@@ -56,7 +56,7 @@ def test_strict_random_sync_handles_discover_deception_trace():
         strict_random_sync=True,
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_strict_random_sync_handles_generic_blue_deploy_decoy_trace():
@@ -69,7 +69,7 @@ def test_strict_random_sync_handles_generic_blue_deploy_decoy_trace():
         blue_action_source="cyborg_policy",
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_strict_random_sync_handles_red_session_check_trace():
@@ -82,7 +82,7 @@ def test_strict_random_sync_handles_red_session_check_trace():
         blue_action_source="cyborg_policy",
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_strict_random_sync_handles_privesc_session_choice_trace():
@@ -95,7 +95,7 @@ def test_strict_random_sync_handles_privesc_session_choice_trace():
         blue_action_source="cyborg_policy",
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_detection_random_sync_handles_failed_scan_trace_with_random_blue_actions():
@@ -108,7 +108,7 @@ def test_detection_random_sync_handles_failed_scan_trace_with_random_blue_action
         blue_action_source="cyborg_policy",
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 def test_detection_random_sync_handles_long_discover_deception_trace():
@@ -121,7 +121,7 @@ def test_detection_random_sync_handles_long_discover_deception_trace():
         blue_action_source="cyborg_policy",
     )
 
-    assert report is None
+    assert report is None, str(report)
 
 
 class _FakeProcessEvent:

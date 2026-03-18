@@ -1,3 +1,12 @@
+import os
+from pathlib import Path
+
+_JAX_CACHE_DIR = Path.home() / ".cache" / "jaxborg" / "xla"
+os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", str(_JAX_CACHE_DIR))
+os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
+_JAX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+
 import jax
 import pytest
 
