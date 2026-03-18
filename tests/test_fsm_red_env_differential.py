@@ -1007,8 +1007,6 @@ class TestFsmRedEnvDifferential:
         harness = CC4DifferentialHarness(
             seed=0,
             max_steps=500,
-            check_obs=False,
-            check_masks=False,
             sync_green_rng=True,
             strict_random_sync=True,
         )
