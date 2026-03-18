@@ -89,15 +89,11 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
                 mask_s = torch.zeros(4, SMALL_ACT_DIM)
                 for i in range(4):
                     obs_s[i] = torch.from_numpy(obs[AGENT_IDS[i]].astype(np.float32))
-                    mask_s[i] = torch.from_numpy(
-                        np.array(info[AGENT_IDS[i]]["action_mask"], dtype=np.float32)
-                    )
+                    mask_s[i] = torch.from_numpy(np.array(info[AGENT_IDS[i]]["action_mask"], dtype=np.float32))
                 acts_s = agent_small.get_action(obs_s, mask_s, deterministic=deterministic)
 
                 obs_l = torch.from_numpy(obs[AGENT_IDS[4]].astype(np.float32)).unsqueeze(0)
-                mask_l = torch.from_numpy(
-                    np.array(info[AGENT_IDS[4]]["action_mask"], dtype=np.float32)
-                ).unsqueeze(0)
+                mask_l = torch.from_numpy(np.array(info[AGENT_IDS[4]]["action_mask"], dtype=np.float32)).unsqueeze(0)
                 act_l = agent_large.get_action(obs_l, mask_l, deterministic=deterministic)
 
             actions = {}
@@ -116,7 +112,7 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
 
         if (ep + 1) % 10 == 0:
             print(
-                f"  Episode {ep+1}/{num_episodes}: "
+                f"  Episode {ep + 1}/{num_episodes}: "
                 f"mean={np.mean(episode_rewards):.1f} +/- {np.std(episode_rewards):.1f}, "
                 f"last={ep_reward:.1f}"
             )
@@ -126,16 +122,16 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
     std_rew = np.std(episode_rewards)
     mean_len = np.mean(episode_lengths)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"Evaluation Results ({num_episodes} episodes)")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(f"  Mean reward: {mean_rew:.1f} +/- {std_rew:.1f}")
     print(f"  Min reward:  {np.min(episode_rewards):.1f}")
     print(f"  Max reward:  {np.max(episode_rewards):.1f}")
     print(f"  Mean length: {mean_len:.1f}")
     print(f"  Wall time:   {elapsed:.1f}s")
     print(f"  Mode:        {'deterministic' if deterministic else 'stochastic'}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     # Save results
     results = {
@@ -158,8 +154,7 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate CleanRL PPO on CC4")
-    parser.add_argument("--model-dir", type=str,
-                        default=str(EXP_DIR / "cleanrl_ppo"))
+    parser.add_argument("--model-dir", type=str, default=str(EXP_DIR / "cleanrl_ppo"))
     parser.add_argument("--num-episodes", type=int, default=50)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--tag", type=str, default="default")

@@ -92,7 +92,7 @@ class TestHostBasedActions:
             host_valid = bool(mask[BLUE_ANALYSE_START + slot])
             sid = slot // OBS_HOSTS_PER_SUBNET
             subslot = slot % OBS_HOSTS_PER_SUBNET
-            host_idx = int(const.obs_host_map[sid, subslot])
+            int(const.obs_host_map[sid, subslot])
 
             # Tomcat is always compatible, so any valid host slot should have decoy enabled
             expected = host_valid

@@ -129,9 +129,7 @@ class TestGreenAgentBasics:
         const = build_topology(jax.random.PRNGKey(0), num_steps=500)
         expected_hosts = _expected_green_hosts_in_cyborg_order(const)
         ordered_hosts = [
-            int(h)
-            for h in np.array(_ordered_green_hosts(const))
-            if bool(const.green_agent_active[int(h)])
+            int(h) for h in np.array(_ordered_green_hosts(const)) if bool(const.green_agent_active[int(h)])
         ]
         assert ordered_hosts[: len(expected_hosts)] == expected_hosts
 

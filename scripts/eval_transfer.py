@@ -1160,12 +1160,7 @@ def print_independent_mode_comparison(rows):
     print(f"{'JAX Mode':<14} {'JAX Mean':>10} {'CybORG Mean':>12} {'Gap':>10}")
     print("-" * 50)
     for row in rows:
-        print(
-            f"{row['jax_mode']:<14} "
-            f"{row['jax_mean']:>10.1f} "
-            f"{row['cyborg_mean']:>12.1f} "
-            f"{row['gap_mean']:>+10.1f}"
-        )
+        print(f"{row['jax_mode']:<14} {row['jax_mean']:>10.1f} {row['cyborg_mean']:>12.1f} {row['gap_mean']:>+10.1f}")
 
 
 def save_reward_plot(jax_rewards, cyborg_rewards):
@@ -1540,7 +1535,8 @@ def main():
         "--cyborg-bank-match-size",
         type=int,
         default=None,
-        help="Optional CybORG seed-bank size for independent rollouts; defaults to the JAX bank size in cyborg_bank mode",
+        help="Optional CybORG seed-bank size for independent rollouts; "
+        "defaults to the JAX bank size in cyborg_bank mode",
     )
     args = parser.parse_args()
 

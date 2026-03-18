@@ -277,14 +277,8 @@ class TestApplyBlueRemove:
         primary_pid = 6003
         other_pid = 7003
         state = state.replace(
-            red_sessions=state.red_sessions.at[agent_id, anchor_host]
-            .set(True)
-            .at[agent_id, target_host]
-            .set(True),
-            red_session_count=state.red_session_count.at[agent_id, anchor_host]
-            .set(1)
-            .at[agent_id, target_host]
-            .set(1),
+            red_sessions=state.red_sessions.at[agent_id, anchor_host].set(True).at[agent_id, target_host].set(True),
+            red_session_count=state.red_session_count.at[agent_id, anchor_host].set(1).at[agent_id, target_host].set(1),
             red_session_is_abstract=state.red_session_is_abstract.at[agent_id, anchor_host]
             .set(True)
             .at[agent_id, target_host]

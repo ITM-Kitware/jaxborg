@@ -15,7 +15,11 @@ from jaxborg.actions.duration import (
     process_blue_with_duration,
     process_red_with_duration,
 )
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
+from jaxborg.actions.encoding import (
+    BLUE_ALLOW_TRAFFIC_END,
+    BLUE_BLOCK_TRAFFIC_START,
+    RED_WITHDRAW_END,
+)
 from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
@@ -48,8 +52,23 @@ def _frontload_order(front_slots: tuple[int, ...]) -> jnp.ndarray:
     return jnp.array([*front_slots, *slots], dtype=jnp.int32)
 
 
-def _default_execution_order(key: chex.PRNGKey) -> jnp.ndarray:
-    return jax.random.permutation(key, jnp.arange(TOTAL_ACTION_ACTOR_SLOTS, dtype=jnp.int32))
+def _cyborg_priority_execution_order(blue_actions: jnp.ndarray) -> jnp.ndarray:
+    """Build execution order matching CybORG's deterministic priority sort.
+
+    CybORG sorts actions by priority (stable sort):
+      - ControlTraffic (BlockTraffic/AllowTraffic): priority 1 → execute first
+      - Everything else: priority 99 → execute after
+
+    Within the same priority tier the original agent-interface insertion order
+    is preserved (blue 0-4, then green hosts, then red 0-5).
+    """
+    all_slots = jnp.arange(TOTAL_ACTION_ACTOR_SLOTS, dtype=jnp.int32)
+    # Blue agents doing BlockTraffic or AllowTraffic have priority 1.
+    is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
+    # Build priority: 1 for traffic-control blue slots, 99 for everything else.
+    priorities = jnp.full(TOTAL_ACTION_ACTOR_SLOTS, 99, dtype=jnp.int32)
+    priorities = priorities.at[:NUM_BLUE_AGENTS].set(jnp.where(is_traffic, 1, 99))
+    return all_slots[jnp.argsort(priorities, stable=True)]
 
 
 def apply_all_actions_in_order(
@@ -116,7 +135,10 @@ def apply_all_actions(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
 ) -> CC4State:
-    """Apply all agent actions in CybORG's chosen-action shuffle order.
+    """Apply all agent actions in CybORG's deterministic priority order.
+
+    CybORG sorts by action priority (ControlTraffic=1, else=99) then
+    executes in agent-interface insertion order within each tier.
 
     Shared by CC4Env.step_env and the differential harness.
 
@@ -127,7 +149,7 @@ def apply_all_actions(
         forced_primary_hosts: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_HOST` for no override
         forced_primary_pids: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_PID` for no override
     """
-    execution_order = _default_execution_order(jax.random.fold_in(key_green, jnp.int32(0xC4)))
+    execution_order = _cyborg_priority_execution_order(blue_actions)
     return apply_all_actions_in_order(
         state,
         const,

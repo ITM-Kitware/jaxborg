@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_DECOY_END, BLUE_DECOY_START, BLUE_SLEEP
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP
 from jaxborg.constants import (
     ACTION_HOST_SLOTS,
     DECOY_IDS,

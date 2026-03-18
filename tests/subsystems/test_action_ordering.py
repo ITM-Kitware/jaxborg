@@ -1,12 +1,12 @@
-import numpy as np
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 
 from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP, encode_blue_action
 from jaxborg.actions.green import GREEN_ACCESS_SERVICE
 from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_BLUE_AGENTS, NUM_GREEN_RANDOM_FIELDS, NUM_RED_AGENTS
-from jaxborg.env import CC4Env, TOTAL_ACTION_ACTOR_SLOTS, apply_all_actions_in_order
+from jaxborg.env import TOTAL_ACTION_ACTOR_SLOTS, CC4Env, apply_all_actions_in_order
 
 
 def _move_slots_to_front(*front_slots: int) -> jnp.ndarray:

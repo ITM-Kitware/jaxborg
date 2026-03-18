@@ -204,9 +204,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         new_session_pids[:, target_host, :],
         state.red_primary_pid,
     )
-    primary_pid_killed = (
-        covers_host & anchor_on_target & (state.red_primary_pid >= 0) & ~primary_pid_survives
-    )
+    primary_pid_killed = covers_host & anchor_on_target & (state.red_primary_pid >= 0) & ~primary_pid_survives
     primary_invalidated = anchor_on_target & (lost_all_on_target | primary_pid_killed)
     red_scan_anchor_host = jnp.where(
         primary_invalidated,

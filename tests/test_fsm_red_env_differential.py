@@ -1010,6 +1010,7 @@ class TestFsmRedEnvDifferential:
 
     def test_native_generic_exploit_respects_blocked_scan_source_route_matches_cyborg(self):
         """A blocked scan-owning abstract session must not exploit via another agent session's route."""
+        from jaxborg.constants import NUM_RED_AGENTS
         from tests.differential.harness import CC4DifferentialHarness
 
         harness = CC4DifferentialHarness(
@@ -1057,12 +1058,9 @@ class TestFsmRedEnvDifferential:
                             for diff in step_result.diffs
                             if diff.field_name
                             in {"host_compromised", "red_sessions", "red_privilege", "host_has_malware"}
-                            and diff.host_or_agent
-                            in {f"host_{target_host}", f"red_{r}_host_{target_host}", agent_name}
+                            and diff.host_or_agent in {f"host_{target_host}", f"red_{r}_host_{target_host}", agent_name}
                         ]
-                        assert target_diffs == [], (
-                            f"Step {step}: blocked-route exploit parity diffs: {target_diffs}"
-                        )
+                        assert target_diffs == [], f"Step {step}: blocked-route exploit parity diffs: {target_diffs}"
                         break
                 if found_step is not None:
                     break

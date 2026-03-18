@@ -80,8 +80,8 @@ class TestActionMaskDifferential:
 
         cy_action = DecoyHarakaSMPT(session=0, agent=f"blue_agent_{blue_idx}", hostname=hostname)
         cy_obs = cy_action.execute(cy_state)
-        jax_mask = np.array(compute_blue_action_mask(const, blue_idx, jax_state))
-        jax_idx = encode_blue_action("DeployDecoy", target, blue_idx, const=const)
+        np.array(compute_blue_action_mask(const, blue_idx, jax_state))
+        encode_blue_action("DeployDecoy", target, blue_idx, const=const)
 
         assert str(cy_obs.success).upper() == "FALSE"
         # With collapsed action space, the slot is still valid (other decoy types may be compatible)
@@ -103,8 +103,8 @@ class TestActionMaskDifferential:
 
         cy_action = DecoyApache(session=0, agent=f"blue_agent_{blue_idx}", hostname=hostname)
         cy_obs = cy_action.execute(cy_state)
-        jax_mask = np.array(compute_blue_action_mask(const, blue_idx, jax_state))
-        jax_idx = encode_blue_action("DeployDecoy", target, blue_idx, const=const)
+        np.array(compute_blue_action_mask(const, blue_idx, jax_state))
+        encode_blue_action("DeployDecoy", target, blue_idx, const=const)
 
         assert str(cy_obs.success).upper() == "FALSE"
         # With collapsed action space, slot may still be valid if other types are compatible

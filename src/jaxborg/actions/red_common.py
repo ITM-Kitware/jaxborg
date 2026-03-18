@@ -331,10 +331,7 @@ def apply_red_session_check(
     # new session).  Also clear when all sessions are lost.
     anchor_changed_host = anchor_changed & (anchor >= 0)
     primary_invalidated_same_host = (
-        (needs_primary | ~has_any_sessions)
-        & ~anchor_changed_host
-        & (anchor >= 0)
-        & (current_primary_pid >= 0)
+        (needs_primary | ~has_any_sessions) & ~anchor_changed_host & (anchor >= 0) & (current_primary_pid >= 0)
     )
     should_clear_scan = anchor_changed_host | primary_invalidated_same_host
     old_anchor_idx = jnp.clip(anchor, 0, state.red_scanned_source_hosts.shape[2] - 1)

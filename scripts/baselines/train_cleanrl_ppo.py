@@ -83,8 +83,6 @@ def env_worker(pipe, env_id):
             done = any(term.values()) or any(trunc.values())
             if done:
                 # Auto-reset, return the fresh obs but keep the terminal reward
-                final_obs = obs
-                final_rew = rew
                 obs, info = env.reset()
             pipe.send((obs, rew, done, info))
         elif cmd == "close":
@@ -319,26 +317,28 @@ def train(args):
     mlflow.set_experiment("cleanrl-ppo-baseline")
     run_name = f"cleanrl-ppo-{args.tag}" if args.tag else "cleanrl-ppo"
     mlflow.start_run(run_name=run_name)
-    mlflow.log_params({
-        "algorithm": "CleanRL-PPO-IPPO-Masked",
-        "seed": args.seed,
-        "num_envs": args.num_envs,
-        "rollout_length": args.rollout_length,
-        "lr": args.lr,
-        "gamma": args.gamma,
-        "gae_lambda": args.gae_lambda,
-        "num_epochs": args.num_epochs,
-        "num_minibatches": args.num_minibatches,
-        "clip_coef": args.clip_coef,
-        "ent_coef": args.ent_coef,
-        "vf_coef": args.vf_coef,
-        "max_grad_norm": args.max_grad_norm,
-        "norm_rewards": args.norm_rewards,
-        "network": "[256, 256]",
-        "shared_policy": "agents_0-3_shared",
-        "anneal_lr": args.anneal_lr,
-        "num_rollouts_per_update": args.num_rollouts_per_update,
-    })
+    mlflow.log_params(
+        {
+            "algorithm": "CleanRL-PPO-IPPO-Masked",
+            "seed": args.seed,
+            "num_envs": args.num_envs,
+            "rollout_length": args.rollout_length,
+            "lr": args.lr,
+            "gamma": args.gamma,
+            "gae_lambda": args.gae_lambda,
+            "num_epochs": args.num_epochs,
+            "num_minibatches": args.num_minibatches,
+            "clip_coef": args.clip_coef,
+            "ent_coef": args.ent_coef,
+            "vf_coef": args.vf_coef,
+            "max_grad_norm": args.max_grad_norm,
+            "norm_rewards": args.norm_rewards,
+            "network": "[256, 256]",
+            "shared_policy": "agents_0-3_shared",
+            "anneal_lr": args.anneal_lr,
+            "num_rollouts_per_update": args.num_rollouts_per_update,
+        }
+    )
 
     # Metrics file
     save_dir = EXP_DIR / "cleanrl_ppo"
@@ -375,9 +375,9 @@ def train(args):
     small_mb_size = small_batch // args.num_minibatches
     large_mb_size = large_batch // args.num_minibatches
 
-    print(f"\n{'='*70}")
-    print(f"CleanRL PPO for CybORG CC4")
-    print(f"{'='*70}")
+    print(f"\n{'=' * 70}")
+    print("CleanRL PPO for CybORG CC4")
+    print(f"{'=' * 70}")
     print(f"  Envs: {args.num_envs}")
     print(f"  Rollout length: {args.rollout_length} (steps per env)")
     print(f"  Rollouts per update: {args.num_rollouts_per_update}")
@@ -391,7 +391,7 @@ def train(args):
     print(f"  Ent coef: {args.ent_coef}, VF coef: {args.vf_coef}")
     print(f"  Reward normalization: {args.norm_rewards}")
     print(f"  LR annealing: {args.anneal_lr}")
-    print(f"{'='*70}\n", flush=True)
+    print(f"{'=' * 70}\n", flush=True)
 
     try:
         while total_steps < args.total_timesteps:
@@ -401,16 +401,12 @@ def train(args):
                 for env_idx in range(args.num_envs):
                     for i in range(4):
                         agent_id = AGENT_IDS[i]
-                        obs_small[step, env_idx, i] = torch.from_numpy(
-                            all_obs[env_idx][agent_id].astype(np.float32)
-                        )
+                        obs_small[step, env_idx, i] = torch.from_numpy(all_obs[env_idx][agent_id].astype(np.float32))
                         masks_small[step, env_idx, i] = torch.from_numpy(
                             np.array(all_info[env_idx][agent_id]["action_mask"], dtype=np.float32)
                         )
                     agent_id = AGENT_IDS[4]
-                    obs_large[step, env_idx, 0] = torch.from_numpy(
-                        all_obs[env_idx][agent_id].astype(np.float32)
-                    )
+                    obs_large[step, env_idx, 0] = torch.from_numpy(all_obs[env_idx][agent_id].astype(np.float32))
                     masks_large[step, env_idx, 0] = torch.from_numpy(
                         np.array(all_info[env_idx][agent_id]["action_mask"], dtype=np.float32)
                     )
@@ -419,18 +415,14 @@ def train(args):
                 with torch.no_grad():
                     obs_s_flat = obs_small[step].reshape(-1, SMALL_OBS_DIM)
                     mask_s_flat = masks_small[step].reshape(-1, SMALL_ACT_DIM)
-                    act_s, lp_s, _, val_s = agent_small.get_action_and_value(
-                        obs_s_flat, mask_s_flat
-                    )
+                    act_s, lp_s, _, val_s = agent_small.get_action_and_value(obs_s_flat, mask_s_flat)
                     actions_small[step] = act_s.reshape(args.num_envs, 4)
                     logprobs_small[step] = lp_s.reshape(args.num_envs, 4)
                     values_small[step] = val_s.reshape(args.num_envs, 4)
 
                     obs_l_flat = obs_large[step].reshape(-1, LARGE_OBS_DIM)
                     mask_l_flat = masks_large[step].reshape(-1, LARGE_ACT_DIM)
-                    act_l, lp_l, _, val_l = agent_large.get_action_and_value(
-                        obs_l_flat, mask_l_flat
-                    )
+                    act_l, lp_l, _, val_l = agent_large.get_action_and_value(obs_l_flat, mask_l_flat)
                     actions_large[step] = act_l.reshape(args.num_envs, 1)
                     logprobs_large[step] = lp_l.reshape(args.num_envs, 1)
                     values_large[step] = val_l.reshape(args.num_envs, 1)
@@ -482,9 +474,7 @@ def train(args):
                         obs_s_flat[env_idx * 4 + i] = torch.from_numpy(
                             all_obs[env_idx][AGENT_IDS[i]].astype(np.float32)
                         )
-                    obs_l_flat[env_idx] = torch.from_numpy(
-                        all_obs[env_idx][AGENT_IDS[4]].astype(np.float32)
-                    )
+                    obs_l_flat[env_idx] = torch.from_numpy(all_obs[env_idx][AGENT_IDS[4]].astype(np.float32))
 
                 next_val_s = agent_small.get_value(obs_s_flat).reshape(args.num_envs, 4)
                 next_val_l = agent_large.get_value(obs_l_flat).reshape(args.num_envs, 1)
@@ -575,13 +565,20 @@ def train(args):
             b_mask_l = torch.cat(accum_mask_l)
 
             # Clear accumulators
-            accum_obs_s.clear(); accum_obs_l.clear()
-            accum_act_s.clear(); accum_act_l.clear()
-            accum_lp_s.clear(); accum_lp_l.clear()
-            accum_adv_s.clear(); accum_adv_l.clear()
-            accum_ret_s.clear(); accum_ret_l.clear()
-            accum_val_s.clear(); accum_val_l.clear()
-            accum_mask_s.clear(); accum_mask_l.clear()
+            accum_obs_s.clear()
+            accum_obs_l.clear()
+            accum_act_s.clear()
+            accum_act_l.clear()
+            accum_lp_s.clear()
+            accum_lp_l.clear()
+            accum_adv_s.clear()
+            accum_adv_l.clear()
+            accum_ret_s.clear()
+            accum_ret_l.clear()
+            accum_val_s.clear()
+            accum_val_l.clear()
+            accum_mask_s.clear()
+            accum_mask_l.clear()
             rollouts_collected = 0
 
             total_s = b_obs_s.shape[0]
@@ -622,12 +619,8 @@ def train(args):
                     mb_mask_l = b_mask_l[idx_l]
 
                     # Forward pass
-                    _, new_lp_s, ent_s, new_val_s = agent_small.get_action_and_value(
-                        mb_obs_s, mb_mask_s, mb_act_s
-                    )
-                    _, new_lp_l, ent_l, new_val_l = agent_large.get_action_and_value(
-                        mb_obs_l, mb_mask_l, mb_act_l
-                    )
+                    _, new_lp_s, ent_s, new_val_s = agent_small.get_action_and_value(mb_obs_s, mb_mask_s, mb_act_s)
+                    _, new_lp_l, ent_l, new_val_l = agent_large.get_action_and_value(mb_obs_l, mb_mask_l, mb_act_l)
 
                     # ── Small agent loss ──
                     adv_s = (mb_adv_s - mb_adv_s.mean()) / (mb_adv_s.std() + 1e-8)
@@ -698,11 +691,7 @@ def train(args):
                 all_vals = torch.cat([b_val_s, b_val_l])
                 all_rets = torch.cat([b_ret_s, b_ret_l])
                 y_var = all_rets.var()
-                explained_var = (
-                    (1 - (all_rets - all_vals).var() / (y_var + 1e-8)).item()
-                    if y_var > 1e-8
-                    else 0.0
-                )
+                explained_var = (1 - (all_rets - all_vals).var() / (y_var + 1e-8)).item() if y_var > 1e-8 else 0.0
 
             # Episode reward stats
             if completed_rewards:
@@ -750,7 +739,7 @@ def train(args):
                 f"pg {avg_pg_loss:>7.4f} | vf {avg_vf_loss:>8.4f} | "
                 f"ent {avg_entropy:>5.3f} | kl {avg_approx_kl:.4f} | "
                 f"clip {avg_clipfrac:.3f} | ev {explained_var:.4f} | "
-                f"{sps:.0f} sps | {elapsed/3600:.2f}h",
+                f"{sps:.0f} sps | {elapsed / 3600:.2f}h",
                 flush=True,
             )
 
@@ -822,49 +811,51 @@ def train(args):
     metrics_file.close()
     envs.close()
 
-    print(f"\n{'='*70}")
-    print(f"Training complete!")
-    print(f"  Wall time: {elapsed:.1f}s ({elapsed/3600:.1f}h)")
+    print(f"\n{'=' * 70}")
+    print("Training complete!")
+    print(f"  Wall time: {elapsed:.1f}s ({elapsed / 3600:.1f}h)")
     print(f"  Total steps: {total_steps:,}")
     print(f"  Throughput: {sps:.0f} sps")
     print(f"  Final ep reward (mean last 50): {final_reward:.1f}")
     print(f"  Total episodes: {len(completed_rewards)}")
     print(f"  Model saved to: {save_dir}")
-    print(f"{'='*70}")
+    print(f"{'=' * 70}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for CybORG CC4")
     parser.add_argument("--total-timesteps", type=int, default=5_000_000)
     parser.add_argument("--num-envs", type=int, default=16)
-    parser.add_argument("--rollout-length", type=int, default=500,
-                        help="Steps per rollout per env (500 = one full episode)")
-    parser.add_argument("--lr", type=float, default=3e-4,
-                        help="Learning rate")
-    parser.add_argument("--gamma", type=float, default=0.85,
-                        help="Discount factor (CC4 tutorial: 0.85)")
+    parser.add_argument(
+        "--rollout-length", type=int, default=500, help="Steps per rollout per env (500 = one full episode)"
+    )
+    parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
+    parser.add_argument("--gamma", type=float, default=0.85, help="Discount factor (CC4 tutorial: 0.85)")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--num-epochs", type=int, default=10,
-                        help="SGD epochs per rollout")
-    parser.add_argument("--num-minibatches", type=int, default=8,
-                        help="Number of minibatches per epoch")
+    parser.add_argument("--num-epochs", type=int, default=10, help="SGD epochs per rollout")
+    parser.add_argument("--num-minibatches", type=int, default=8, help="Number of minibatches per epoch")
     parser.add_argument("--clip-coef", type=float, default=0.2)
     parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--vf-coef", type=float, default=0.5)
     parser.add_argument("--max-grad-norm", type=float, default=0.5)
-    parser.add_argument("--norm-rewards", action="store_true", default=True,
-                        help="Normalize rewards using running return stats")
+    parser.add_argument(
+        "--norm-rewards", action="store_true", default=True, help="Normalize rewards using running return stats"
+    )
     parser.add_argument("--no-norm-rewards", dest="norm_rewards", action="store_false")
     parser.add_argument("--anneal-lr", action="store_true", default=True)
     parser.add_argument("--no-anneal-lr", dest="anneal_lr", action="store_false")
-    parser.add_argument("--target-kl", type=float, default=None,
-                        help="Target KL for early stopping (None = no early stopping)")
-    parser.add_argument("--num-rollouts-per-update", type=int, default=1,
-                        help="Number of rollouts to accumulate before each PPO update")
-    parser.add_argument("--resume-tag", type=str, default="",
-                        help="Tag of a previous run to resume from (loads checkpoint)")
-    parser.add_argument("--checkpoint-every", type=int, default=0,
-                        help="Save checkpoint every N env steps (0 = only at end)")
+    parser.add_argument(
+        "--target-kl", type=float, default=None, help="Target KL for early stopping (None = no early stopping)"
+    )
+    parser.add_argument(
+        "--num-rollouts-per-update", type=int, default=1, help="Number of rollouts to accumulate before each PPO update"
+    )
+    parser.add_argument(
+        "--resume-tag", type=str, default="", help="Tag of a previous run to resume from (loads checkpoint)"
+    )
+    parser.add_argument(
+        "--checkpoint-every", type=int, default=0, help="Save checkpoint every N env steps (0 = only at end)"
+    )
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default="")
 

@@ -929,7 +929,7 @@ class CC4DifferentialHarness:
             if self.strict_random_sync and random_sync_report.has_issues:
                 raise AssertionError(random_sync_report.format(int(self.jax_state.time)))
 
-        # --- JAX action application via shared apply_all_actions (same as training code path) ---
+        # --- JAX action application via shared apply_all_actions_in_order (same as training code path) ---
         blue_action_arr = jnp.array(
             [
                 self._resolve_blue_action(controller, b, blue_actions.get(b, BLUE_SLEEP))
@@ -958,12 +958,12 @@ class CC4DifferentialHarness:
             detection_consumed = int(self.jax_state.detection_random_index)
             expected_consumed = detection_count if using_detection_sync else 0
             if detection_consumed != expected_consumed:
-                # CybORG randomly shuffles same-priority actions, so red
-                # actions may execute before blue (or vice versa) differently
-                # from JAX's fixed blue→red ordering.  When this causes RNG
-                # consumption to diverge, resync session/privilege/service
-                # state from CybORG and reset the detection index.
-                self._resync_ordering_divergence(cy_state, expected_consumed)
+                # Detection RNG consumption diverged — reset the index so
+                # future steps stay in sync.  State diffs are no longer
+                # papered over; they surface as test errors.
+                self.jax_state = self.jax_state.replace(
+                    detection_random_index=jnp.array(expected_consumed, dtype=jnp.int32),
+                )
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
         primary_abstract_flags = _extract_primary_is_abstract(cy_state)
@@ -1054,16 +1054,6 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(
             green_lwf_this_step=jnp.array(cy_green_lwf),
             green_asf_this_step=jnp.array(cy_green_asf),
-        )
-
-        # --- Ordering-divergence resync ---
-        # CybORG shuffles same-priority actions randomly.  If the shuffle
-        # put red before blue, exploits/impacts may succeed in CybORG but
-        # fail in JAX (which always runs blue first).  Detect and resync
-        # any state divergence caused by this ordering difference.
-        self._resync_ordering_divergence(
-            cy_state,
-            int(self.jax_state.detection_random_index),
         )
 
         # --- Reward comparison ---
@@ -1442,9 +1432,9 @@ class CC4DifferentialHarness:
             if resolved_type is not None:
                 # Record the CybORG-chosen decoy type for this step+agent
                 self.jax_const = self.jax_const.replace(
-                    blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[
-                        self.jax_state.time, b
-                    ].set(resolved_type),
+                    blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[self.jax_state.time, b].set(
+                        resolved_type
+                    ),
                     use_blue_decoy_type_choices=jnp.array(True),
                 )
             else:
@@ -1563,104 +1553,6 @@ class CC4DifferentialHarness:
                 blue_pending_ticks=blue_pending_ticks,
                 blue_pending_action=blue_pending_action,
             )
-
-    def _resync_ordering_divergence(self, cy_state, expected_detection_count):
-        """Resync JAX state from CybORG after action-ordering divergence.
-
-        CybORG randomly shuffles same-priority actions, so a red exploit may
-        execute before blue Remove (session alive → succeeds) while JAX's
-        fixed blue→red ordering blocks it (session killed first).  Resync the
-        affected state fields from CybORG to keep the episode on track.
-        """
-        from tests.differential.state_comparator import compare_fast
-
-        # Use the full state comparator to find divergences, then patch them
-        diffs = compare_fast(self.cyborg_env, self.jax_state, self.jax_const, self.mappings)
-        if not diffs:
-            # Only RNG diverged, no state diffs — just reset the index
-            self.jax_state = self.jax_state.replace(
-                detection_random_index=jnp.array(expected_detection_count, dtype=jnp.int32),
-            )
-            return
-
-        # Extract CybORG state and patch JAX for each diverged field/host
-        for d in diffs:
-            if d.field_name == "red_sessions":
-                # d.host_or_agent is like "red_agent_1"
-                r = int(d.host_or_agent.split("_")[-1])
-                cy_hosts = d.cyborg_value  # set of host indices
-                jax_hosts = d.jax_value
-                for h in cy_hosts - jax_hosts:
-                    self.jax_state = self.jax_state.replace(
-                        red_sessions=self.jax_state.red_sessions.at[r, h].set(True),
-                        red_session_count=self.jax_state.red_session_count.at[r, h].set(
-                            jnp.maximum(self.jax_state.red_session_count[r, h], 1)
-                        ),
-                    )
-                for h in jax_hosts - cy_hosts:
-                    self.jax_state = self.jax_state.replace(
-                        red_sessions=self.jax_state.red_sessions.at[r, h].set(False),
-                        red_session_count=self.jax_state.red_session_count.at[r, h].set(0),
-                    )
-            elif d.field_name == "red_privilege":
-                parts = d.host_or_agent.split("_")  # "red_N_host_M"
-                r = int(parts[1])
-                h = int(parts[3])
-                self.jax_state = self.jax_state.replace(
-                    red_privilege=self.jax_state.red_privilege.at[r, h].set(d.cyborg_value),
-                )
-            elif d.field_name == "host_compromised":
-                h = int(d.host_or_agent.split("_")[-1])
-                self.jax_state = self.jax_state.replace(
-                    host_compromised=self.jax_state.host_compromised.at[h].set(d.cyborg_value),
-                )
-            elif d.field_name == "host_has_malware":
-                h = int(d.host_or_agent.split("_")[-1])
-                self.jax_state = self.jax_state.replace(
-                    host_has_malware=self.jax_state.host_has_malware.at[h].set(d.cyborg_value),
-                )
-            elif d.field_name == "host_services":
-                h = int(d.host_or_agent.split("_")[-1])
-                # d.cyborg_value is a tuple of bools per service
-                for s_idx, svc_val in enumerate(d.cyborg_value):
-                    self.jax_state = self.jax_state.replace(
-                        host_services=self.jax_state.host_services.at[h, s_idx].set(svc_val),
-                    )
-            elif d.field_name == "ot_service_stopped":
-                h = int(d.host_or_agent.split("_")[-1])
-                self.jax_state = self.jax_state.replace(
-                    ot_service_stopped=self.jax_state.ot_service_stopped.at[h].set(d.cyborg_value),
-                )
-
-        red_meta = self._extract_live_red_session_metadata(cy_state)
-        self.jax_state = self.jax_state.replace(
-            red_sessions=red_meta["red_sessions"],
-            red_session_count=red_meta["red_session_count"],
-            red_privilege=red_meta["red_privilege"],
-            red_session_is_abstract=red_meta["red_session_is_abstract"],
-            red_abstract_host_rank=red_meta["red_abstract_host_rank"],
-            red_next_abstract_rank=red_meta["red_next_abstract_rank"],
-            red_session_pids=red_meta["red_session_pids"],
-            red_session_abstract_pids=red_meta["red_session_abstract_pids"],
-            red_session_privileged_pids=red_meta["red_session_privileged_pids"],
-            red_discovered_hosts=self.jax_state.red_discovered_hosts | red_meta["red_sessions"],
-            red_agent_active=self.jax_state.red_agent_active | jnp.any(red_meta["red_sessions"], axis=1),
-            red_next_pid=jnp.maximum(self.jax_state.red_next_pid, jnp.int32(red_meta["max_pid_seen"] + 1)),
-        )
-
-        detection_meta = self._extract_live_detection_metadata(cy_state)
-        self.jax_state = self.jax_state.replace(
-            host_activity_detected=detection_meta["host_activity_detected"],
-            old_host_activity_detected=detection_meta["old_host_activity_detected"],
-            host_exploit_detected=detection_meta["host_exploit_detected"],
-            old_host_exploit_detected=detection_meta["old_host_exploit_detected"],
-            host_process_creation_pids=detection_meta["host_process_creation_pids"],
-        )
-
-        # Reset detection random index to match expected consumption
-        self.jax_state = self.jax_state.replace(
-            detection_random_index=jnp.array(expected_detection_count, dtype=jnp.int32),
-        )
 
     def run_episode(self, blue_policies=None, red_policy=None, max_steps=None) -> TestResult:
         max_steps = max_steps or self.max_steps
