@@ -1,11 +1,7 @@
 """Differential fuzzer: runs episodes across many seeds to find CybORG/JAX divergences."""
 
-import multiprocessing
-import os
 import time
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
-from pathlib import Path
 
 from CybORG.Agents import (
     EnterpriseGreenAgent,
@@ -45,25 +41,19 @@ BLUE_AGENT_CLASSES = {
 }
 
 BLUE_ACTION_SOURCES = {"sleep", "cyborg_policy"}
-_DEFAULT_JAX_CACHE_DIR = Path.home() / ".cache" / "jaxborg" / "xla"
 
 
-def _init_cpu_worker():
-    """Force CPU-only JAX before it's imported in spawned worker processes."""
-    os.environ["JAX_PLATFORMS"] = "cpu"
-    os.environ["CUDA_VISIBLE_DEVICES"] = ""
-    # Enable XLA compilation cache so workers share compiled kernels.
-    # First worker compiles; subsequent workers (and future runs) load from disk.
-    os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
-    os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", str(_DEFAULT_JAX_CACHE_DIR))
-    os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
-    _DEFAULT_JAX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _fuzz_one_seed(args):
-    """Run differential fuzzing for a single seed (worker function for multiprocessing)."""
-    seed, max_steps, mismatch_mode, blue_agent, blue_action_source, strict_random_sync, check_obs, check_masks = args
-
+def _fuzz_one_seed(
+    seed: int,
+    max_steps: int,
+    mismatch_mode: str,
+    blue_agent: str,
+    blue_action_source: str,
+    strict_random_sync: bool,
+    check_obs: bool,
+    check_masks: bool,
+) -> MismatchReport | None:
+    """Run differential fuzzing for a single seed."""
     blue_cls = BLUE_AGENT_CLASSES[blue_agent]
     use_cyborg_blue_policy = blue_action_source == "cyborg_policy"
 
@@ -127,12 +117,15 @@ def run_differential_fuzz(
     check_masks: bool = True,
     parallel: int | None = None,
 ) -> MismatchReport | None:
-    """Run differential fuzzing across seeds.
+    """Run differential fuzzing across seeds serially.
+
+    For parallel execution across seeds, use pytest-xdist with the
+    parametrized tests in test_full_episode_fuzzing.py.
 
     Args:
-        parallel: Number of parallel worker processes. None = auto (min(8, num_seeds, cpu_count//2)).
-                  Set to 1 to disable parallelism.
+        parallel: Ignored (kept for API compatibility). Use xdist instead.
     """
+    del parallel  # parallelism handled by xdist at pytest level
     if mismatch_mode not in {"error", "all"}:
         raise ValueError("mismatch_mode must be one of: error, all")
     if blue_agent not in BLUE_AGENT_CLASSES:
@@ -143,26 +136,12 @@ def run_differential_fuzz(
     seeds = list(seeds)
     wall_start = time.time()
 
-    # Determine worker count
-    if parallel is None:
-        parallel = min(8, len(seeds), max(1, os.cpu_count() // 2))
-    if parallel <= 1 or len(seeds) <= 1:
-        # Serial path (single seed or explicit serial)
-        return _run_serial(
-            seeds,
-            max_steps_per_seed,
-            verbose,
-            mismatch_mode,
-            blue_agent,
-            blue_action_source,
-            strict_random_sync,
-            check_obs,
-            check_masks,
-        )
+    for seed in seeds:
+        seed_start = time.time()
+        if verbose:
+            print(f"--- Seed {seed} (blue_agent={blue_agent}, blue_action_source={blue_action_source}) ---")
 
-    # Parallel path
-    args_list = [
-        (
+        report = _fuzz_one_seed(
             seed,
             max_steps_per_seed,
             mismatch_mode,
@@ -171,65 +150,6 @@ def run_differential_fuzz(
             strict_random_sync,
             check_obs,
             check_masks,
-        )
-        for seed in seeds
-    ]
-
-    if verbose:
-        print(f"Running {len(seeds)} seeds with {parallel} workers...")
-
-    # Use 'spawn' to avoid JAX/CUDA fork deadlock.
-    # _init_cpu_worker sets JAX_PLATFORMS=cpu before JAX is imported in children.
-    ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=parallel, mp_context=ctx, initializer=_init_cpu_worker) as executor:
-        futures = {executor.submit(_fuzz_one_seed, args): args[0] for args in args_list}
-        for future in as_completed(futures):
-            report = future.result()
-            seed = futures[future]
-            if verbose:
-                status = "MISMATCH" if report else "clean"
-                print(f"  Seed {seed}: {status}")
-            if report is not None:
-                # Cancel remaining futures on first mismatch
-                for f in futures:
-                    f.cancel()
-                return report
-
-    if verbose:
-        total = time.time() - wall_start
-        print(f"\nTotal: {total:.1f}s")
-    return None
-
-
-def _run_serial(
-    seeds,
-    max_steps_per_seed,
-    verbose,
-    mismatch_mode,
-    blue_agent,
-    blue_action_source,
-    strict_random_sync,
-    check_obs,
-    check_masks,
-):
-    """Original serial execution path."""
-    wall_start = time.time()
-    for seed in seeds:
-        seed_start = time.time()
-        if verbose:
-            print(f"--- Seed {seed} (blue_agent={blue_agent}, blue_action_source={blue_action_source}) ---")
-
-        report = _fuzz_one_seed(
-            (
-                seed,
-                max_steps_per_seed,
-                mismatch_mode,
-                blue_agent,
-                blue_action_source,
-                strict_random_sync,
-                check_obs,
-                check_masks,
-            )
         )
         if report is not None:
             return report
