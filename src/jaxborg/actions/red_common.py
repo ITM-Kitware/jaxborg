@@ -646,6 +646,11 @@ def apply_exploit_success(
     pid_delta = sample_red_pid_delta(const, state.time, agent_id, key)
     new_pid = allocate_host_pid_from_delta(state, const, target_host, pid_delta)
     red_next_pid = jnp.where(success, jnp.maximum(state.red_next_pid, new_pid + 1), state.red_next_pid)
+    host_max_pid = jnp.where(
+        success,
+        state.host_max_pid.at[target_host].set(jnp.maximum(state.host_max_pid[target_host], new_pid)),
+        state.host_max_pid,
+    )
     session_pid_row = state.red_session_pids[agent_id, target_host]
     pid_row_updated = append_pid_to_row(session_pid_row, new_pid)
     red_session_pids = jnp.where(
@@ -669,6 +674,7 @@ def apply_exploit_success(
         red_privilege=red_privilege,
         red_session_pids=red_session_pids,
         red_next_pid=red_next_pid,
+        host_max_pid=host_max_pid,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,

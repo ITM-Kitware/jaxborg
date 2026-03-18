@@ -475,6 +475,7 @@ class CC4DifferentialHarness:
         self.jax_state = create_initial_state()
         self.jax_state = self.jax_state.replace(
             host_services=jnp.array(self.jax_const.initial_services),
+            host_max_pid=self.jax_const.host_initial_max_pid,
         )
 
         from CybORG.Shared.Session import RedAbstractSession

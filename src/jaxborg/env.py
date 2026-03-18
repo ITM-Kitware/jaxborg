@@ -356,7 +356,10 @@ class CC4Env(MultiAgentEnv):
         if red_policy_randoms is not None:
             const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = create_initial_state()
-        state = state.replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            host_services=jnp.array(const.initial_services),
+            host_max_pid=const.host_initial_max_pid,
+        )
         state = _init_red_state(const, state)
 
         env_state = CC4EnvState(state=state, const=const)
@@ -374,7 +377,10 @@ class CC4Env(MultiAgentEnv):
         if red_policy_randoms is not None:
             const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = create_initial_state()
-        state = state.replace(host_services=const.initial_services)
+        state = state.replace(
+            host_services=const.initial_services,
+            host_max_pid=const.host_initial_max_pid,
+        )
         state = _init_red_state(const, state)
         return CC4EnvState(state=state, const=const)
 

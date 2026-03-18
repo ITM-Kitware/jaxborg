@@ -24,7 +24,10 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     has_process_creation_events = jnp.any(state.host_process_creation_pids >= 0, axis=1)
     # CybORG: scans create network_connection events, exploits create process_creation events
     host_activity_detected = state.host_activity_detected | (has_scan_activity & covers)
-    host_exploit_detected = state.host_exploit_detected | (has_process_creation_events & covers)
+    # CybORG stores process_creation events on the host object regardless of blue
+    # coverage. Monitor only ages/clears events on covered hosts. On uncovered hosts
+    # the events (and the derived detection flag) persist indefinitely.
+    host_exploit_detected = state.host_exploit_detected | has_process_creation_events
     # CybORG Monitor ages events: old = current, then clear current for covered hosts.
     # Observations read old | current, giving events 2-cycle persistence.
     old_host_activity_detected = jnp.where(covers, host_activity_detected, state.old_host_activity_detected)

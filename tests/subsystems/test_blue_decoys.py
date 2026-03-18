@@ -49,7 +49,10 @@ def jax_const():
 
 def _make_jax_state(const):
     state = create_initial_state()
-    state = state.replace(host_services=jnp.array(const.initial_services))
+    state = state.replace(
+        host_services=jnp.array(const.initial_services),
+        host_max_pid=const.host_initial_max_pid,
+    )
     return state
 
 

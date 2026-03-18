@@ -202,6 +202,29 @@ class TestApplyBlueMonitor:
         # Monitor ages current→old
         assert bool(new_state.old_host_activity_detected[0]) == expected_detected
 
+    def test_process_creation_on_uncovered_host_persists(self, jax_const):
+        """CybORG keeps events.process_creation on uncovered hosts forever (Monitor
+        never ages them). JAX must mirror this by keeping host_exploit_detected
+        True on uncovered hosts that have process_creation events."""
+        uncovered = _find_host_in_subnet(jax_const, "CONTRACTOR_NETWORK")
+        assert uncovered is not None
+        # Verify host is truly uncovered
+        assert not bool(jnp.any(jax_const.blue_agent_hosts[:, uncovered]))
+
+        state = _make_jax_state(jax_const)
+        # Simulate an exploit creating a process on the uncovered host
+        state = state.replace(
+            host_process_creation_pids=state.host_process_creation_pids.at[uncovered, 0].set(9999),
+        )
+        new_state = apply_blue_monitor(state, jax_const)
+        # On uncovered hosts, process_creation events persist and
+        # host_exploit_detected should reflect that (matching CybORG).
+        assert bool(new_state.host_exploit_detected[uncovered]), (
+            "host_exploit_detected should be True on uncovered hosts with process_creation events"
+        )
+        # Events should NOT be cleared on uncovered hosts
+        assert int(new_state.host_process_creation_pids[uncovered, 0]) == 9999
+
 
 class TestDifferentialWithCybORG:
     @pytest.fixture

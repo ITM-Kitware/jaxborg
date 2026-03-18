@@ -249,6 +249,11 @@ def _apply_single_green(
         jnp.maximum(state.red_next_pid, new_pid + 1),
         state.red_next_pid,
     )
+    host_max_pid = jnp.where(
+        phish_creates_session,
+        state.host_max_pid.at[host_idx].set(jnp.maximum(state.host_max_pid[host_idx], new_pid)),
+        state.host_max_pid,
+    )
     pid_row = state.red_session_pids[red_agent_idx, host_idx]
     updated_pid_row = append_pid_to_row(pid_row, new_pid)
     red_session_pids = jnp.where(
@@ -359,6 +364,7 @@ def _apply_single_green(
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_next_pid=red_next_pid,
+        host_max_pid=host_max_pid,
         red_privilege=red_privilege,
         red_scan_anchor_host=red_scan_anchor_host,
         host_compromised=host_compromised,

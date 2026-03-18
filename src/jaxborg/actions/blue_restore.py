@@ -125,6 +125,13 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.host_decoy_process_pids.at[target_host].set(-1),
         state.host_decoy_process_pids,
     )
+    # Restore re-images the host — all processes revert to initial state.
+    # Reset running max PID so future create_pid calls use the correct base.
+    host_max_pid = jnp.where(
+        covers_host,
+        state.host_max_pid.at[target_host].set(const.host_initial_max_pid[target_host]),
+        state.host_max_pid,
+    )
 
     host_activity_detected = jnp.where(
         covers_host,
@@ -170,6 +177,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_decoys=host_decoys,
         host_decoy_reliability=host_decoy_reliability,
         host_decoy_process_pids=host_decoy_process_pids,
+        host_max_pid=host_max_pid,
         host_activity_detected=host_activity_detected,
         old_host_activity_detected=old_host_activity_detected,
         host_suspicious_process=host_suspicious_process,

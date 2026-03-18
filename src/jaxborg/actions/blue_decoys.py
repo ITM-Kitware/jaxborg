@@ -56,8 +56,14 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
         state.host_decoy_process_pids.at[target_host, decoy_type].set(new_pid),
         state.host_decoy_process_pids,
     )
+    host_max_pid = jnp.where(
+        can_deploy,
+        state.host_max_pid.at[target_host].set(jnp.maximum(state.host_max_pid[target_host], new_pid)),
+        state.host_max_pid,
+    )
     return state.replace(
         host_decoys=host_decoys,
         host_decoy_reliability=host_decoy_reliability,
         host_decoy_process_pids=host_decoy_process_pids,
+        host_max_pid=host_max_pid,
     )

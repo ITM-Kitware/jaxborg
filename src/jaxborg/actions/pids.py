@@ -2,12 +2,14 @@ import jax.numpy as jnp
 
 
 def host_current_max_pid(state, const, host_idx):
-    """Mirror CybORG Host.create_pid base: max(current host processes)."""
-    host_session_pids = state.red_session_pids[:, host_idx, :]
-    session_max = jnp.max(jnp.where(host_session_pids >= 0, host_session_pids, -1))
-    host_decoy_pids = state.host_decoy_process_pids[host_idx]
-    decoy_max = jnp.max(jnp.where(host_decoy_pids >= 0, host_decoy_pids, -1))
-    return jnp.maximum(const.host_initial_max_pid[host_idx], jnp.maximum(session_max, decoy_max))
+    """Mirror CybORG Host.create_pid base: max(current host processes).
+
+    Uses the running per-host max PID tracked in state.host_max_pid, which is
+    updated whenever any process is created (red exploit, blue decoy, green
+    phishing, etc.).  This matches CybORG's Host.create_pid() which computes
+    max(all host processes).
+    """
+    return state.host_max_pid[host_idx]
 
 
 def allocate_host_pid_from_delta(state, const, host_idx, delta):
@@ -73,3 +75,21 @@ def nth_valid_pid(pid_row, n):
     target = valid & (ordinals == n)
     idx = jnp.argmax(target)
     return jnp.where(jnp.any(target), pid_row[idx], first_valid_pid(pid_row))
+
+
+def nth_valid_pid_sorted(pid_row, n):
+    """Return the nth valid PID in ascending order.
+
+    CybORG iterates sessions in dict insertion order (by ident), which
+    correlates with ascending PID order on the same host because create_pid()
+    is monotonically increasing.  Sorting valid PIDs ascending matches this
+    ordering even when JAX slot order diverges due to slot reuse after removal.
+    """
+    max_pid = jnp.int32(2**30)
+    sorted_pids = jnp.sort(jnp.where(pid_row >= 0, pid_row, max_pid))
+    valid_sorted = sorted_pids < max_pid
+    ordinals = jnp.cumsum(valid_sorted.astype(jnp.int32)) - 1
+    target = valid_sorted & (ordinals == n)
+    idx = jnp.argmax(target)
+    fallback = jnp.where(jnp.any(valid_sorted), sorted_pids[0], jnp.int32(-1))
+    return jnp.where(jnp.any(target), sorted_pids[idx], fallback)

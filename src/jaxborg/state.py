@@ -134,6 +134,7 @@ class CC4State:
     host_process_creation_pids: chex.Array  # (GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS) int32
     # pending monitor events
     host_decoy_process_pids: chex.Array  # (GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES) int32 — live decoy process pids
+    host_max_pid: chex.Array  # (GLOBAL_MAX_HOSTS,) int32 — running max PID per host
 
     red_pending_ticks: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 = idle
     red_pending_action: chex.Array  # (NUM_RED_AGENTS,) int32 — queued action index
@@ -260,6 +261,7 @@ def create_initial_state() -> CC4State:
         ),
         host_process_creation_pids=jnp.full((GLOBAL_MAX_HOSTS, MAX_TRACKED_SUSPICIOUS_PIDS), -1, dtype=jnp.int32),
         host_decoy_process_pids=jnp.full((GLOBAL_MAX_HOSTS, NUM_DECOY_TYPES), -1, dtype=jnp.int32),
+        host_max_pid=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         detection_random_index=jnp.array(0, dtype=jnp.int32),
