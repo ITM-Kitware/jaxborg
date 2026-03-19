@@ -21,7 +21,9 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     has_any_activity = state.red_activity_this_step != ACTIVITY_NONE
     has_scan_activity = state.red_activity_this_step == ACTIVITY_SCAN
     newly_detected = has_any_activity & covers
-    has_process_creation_events = jnp.any(state.host_process_creation_pids >= 0, axis=1)
+    # Check for any process creation event including no-PID sentinels (-2).
+    # CybORG's events.process_creation includes green FP events (no PID).
+    has_process_creation_events = jnp.any(state.host_process_creation_pids != -1, axis=1)
     # CybORG: scans create network_connection events, exploits create process_creation events
     host_activity_detected = state.host_activity_detected | (has_scan_activity & covers)
     # CybORG stores process_creation events on the host object regardless of blue

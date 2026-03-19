@@ -34,6 +34,26 @@ def append_pid_to_row_allow_duplicates(pid_row, pid):
     return jnp.where((pid >= 0) & has_empty, updated, pid_row)
 
 
+# Sentinel for process_creation events without a PID (CybORG green FP events).
+# Must be != -1 (so it's not treated as an empty slot) and < 0 (so Monitor
+# doesn't ingest it as a suspicious PID).
+PROCESS_EVENT_NO_PID = jnp.int32(-2)
+
+
+def append_process_event(event_row, pid):
+    """Append a process creation event PID to the event row.
+
+    Uses == -1 for empty-slot detection so that PROCESS_EVENT_NO_PID sentinels
+    (-2) are treated as occupied slots, matching CybORG's list append semantics
+    where green FP events (no PID) occupy a slot.
+    """
+    empty_mask = event_row == -1
+    has_empty = jnp.any(empty_mask)
+    insert_idx = jnp.argmax(empty_mask)
+    updated = event_row.at[insert_idx].set(pid)
+    return jnp.where(has_empty, updated, event_row)
+
+
 def pid_row_contains(pid_row, pid):
     return (pid >= 0) & jnp.any(pid_row == pid)
 

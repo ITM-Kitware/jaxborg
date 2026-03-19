@@ -1,7 +1,12 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import allocate_host_pid_from_delta, append_pid_to_row
+from jaxborg.actions.pids import (
+    PROCESS_EVENT_NO_PID,
+    allocate_host_pid_from_delta,
+    append_pid_to_row,
+    append_process_event,
+)
 from jaxborg.actions.rng import sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
@@ -347,12 +352,22 @@ def _apply_single_green(
         host_activity_detected,
     )
 
-    # CybORG: GreenLocalWork FP creates process_creation events on source host
+    # CybORG: GreenLocalWork FP creates process_creation events on source host.
+    # The event has no PID (dict with local_address/local_port only), but it
+    # occupies a slot in host.events.process_creation. We emit a sentinel so
+    # subsequent PID events land in the correct slot (matching CybORG ordering).
     host_exploit_detected = state.host_exploit_detected
     host_exploit_detected = jnp.where(
         local_fp,
         host_exploit_detected.at[host_idx].set(True),
         host_exploit_detected,
+    )
+    fp_event_row = state.host_process_creation_pids[host_idx]
+    fp_event_row_updated = append_process_event(fp_event_row, PROCESS_EVENT_NO_PID)
+    host_process_creation_pids = jnp.where(
+        local_fp,
+        state.host_process_creation_pids.at[host_idx].set(fp_event_row_updated),
+        state.host_process_creation_pids,
     )
 
     return state.replace(
@@ -370,6 +385,7 @@ def _apply_single_green(
         host_compromised=host_compromised,
         host_activity_detected=host_activity_detected,
         host_exploit_detected=host_exploit_detected,
+        host_process_creation_pids=host_process_creation_pids,
         green_lwf_this_step=green_lwf_this_step,
         green_asf_this_step=green_asf_this_step,
     )

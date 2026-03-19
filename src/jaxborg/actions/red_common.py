@@ -11,7 +11,7 @@ from jaxborg.actions.pending_source import (
 from jaxborg.actions.pids import (
     allocate_host_pid_from_delta,
     append_pid_to_row,
-    append_pid_to_row_allow_duplicates,
+    append_process_event,
     first_valid_pid,
     move_pid_to_row_end,
     pid_row_contains,
@@ -660,7 +660,7 @@ def apply_exploit_success(
     )
     emit_process_event = success if process_event_detected is None else (success & process_event_detected)
     event_row = state.host_process_creation_pids[target_host]
-    updated_event_row = append_pid_to_row_allow_duplicates(event_row, new_pid)
+    updated_event_row = append_process_event(event_row, new_pid)
     host_process_creation_pids = jnp.where(
         emit_process_event,
         state.host_process_creation_pids.at[target_host].set(updated_event_row),

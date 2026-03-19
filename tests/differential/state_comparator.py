@@ -304,6 +304,10 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
     jax_exploit = np.asarray(jax_state.host_exploit_detected[:n])
     jax_old_exploit = np.asarray(jax_state.old_host_exploit_detected[:n])
     jax_process_creation_pids = np.asarray(jax_state.host_process_creation_pids[:n, :MAX_TRACKED_SUSPICIOUS_PIDS])
+    # Map PROCESS_EVENT_NO_PID sentinels (-2) to -1 for comparison.
+    # CybORG stores green FP events as dicts without a 'pid' key, which the
+    # comparator renders as -1. JAX uses -2 sentinels to occupy the slot.
+    jax_process_creation_pids = np.where(jax_process_creation_pids == -2, -1, jax_process_creation_pids)
     jax_blocked = np.asarray(jax_state.blocked_zones)
     jax_phase = int(jax_state.mission_phase)
 
