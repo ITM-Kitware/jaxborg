@@ -7,12 +7,12 @@ os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", str(_JAX_CACHE_DIR))
 os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 _JAX_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
-import jax
-import pytest
+import jax  # noqa: E402
+import pytest  # noqa: E402
 
-from jaxborg.actions import apply_blue_action, apply_red_action
-from jaxborg.state import CC4State
-from jaxborg.topology import build_topology
+from jaxborg.actions import apply_blue_action, apply_red_action  # noqa: E402
+from jaxborg.state import CC4State  # noqa: E402
+from jaxborg.topology import build_topology  # noqa: E402
 
 jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
