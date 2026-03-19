@@ -850,9 +850,7 @@ class TestSessionBindingToleratesPrimaryPidRowLag:
             red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
             red_pending_ticks=state.red_pending_ticks.at[agent_id].set(1),
             red_pending_action=state.red_pending_action.at[agent_id].set(RED_STEALTH_SCAN_START + target_host),
-            red_pending_source_kind=state.red_pending_source_kind.at[agent_id].set(
-                PENDING_SOURCE_KIND_SESSION_BINDING
-            ),
+            red_pending_source_kind=state.red_pending_source_kind.at[agent_id].set(PENDING_SOURCE_KIND_SESSION_BINDING),
             red_pending_source_host=state.red_pending_source_host.at[agent_id].set(jnp.int32(source_host)),
             detection_random_index=jnp.array(0, dtype=jnp.int32),
         )

@@ -14,6 +14,7 @@ TWO_STEP_TRACE_STEPS = 2
 THREE_STEP_TRACE_STEPS = 3
 LIVE_RED_SYNC_TRACE_STEPS = 20
 
+
 @pytest.fixture
 def cyborg_sleep_env():
     from CybORG import CybORG

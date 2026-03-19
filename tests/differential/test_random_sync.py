@@ -148,5 +148,3 @@ def test_compare_fast_reports_detection_event_drift():
     assert ("host_exploit_detected", f"host_{host_idx}") in fields
     assert ("old_host_exploit_detected", f"host_{host_idx}") in fields
     assert ("host_process_creation_pids", f"host_{host_idx}") in fields
-
-
