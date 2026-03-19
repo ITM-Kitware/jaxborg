@@ -18,6 +18,7 @@ from jaxborg.constants import (
     ACTION_HOST_SLOTS,
     GLOBAL_MAX_HOSTS,
     MAX_SERVER_HOSTS,
+    MAX_USER_HOSTS,
     NUM_BLUE_AGENTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
@@ -30,7 +31,12 @@ def _slot_to_canonical(flat_slot: int):
     """Map a flat action slot to its canonical (subnet_id, role, slot_within_subnet)."""
     subnet_id = flat_slot // OBS_HOSTS_PER_SUBNET
     slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
-    role = "server" if slot_within < MAX_SERVER_HOSTS else "user"
+    if slot_within < MAX_SERVER_HOSTS:
+        role = "server"
+    elif slot_within < MAX_SERVER_HOSTS + MAX_USER_HOSTS:
+        role = "user"
+    else:
+        role = "router"
     return (SUBNET_NAMES[subnet_id], role, slot_within)
 
 
@@ -93,7 +99,9 @@ class TestActionEncodingTopologyInvariance:
             )
 
     def test_decode_resolves_to_correct_host_type(self):
-        """decode_blue_action resolves server slots to servers, user slots to users."""
+        """decode_blue_action resolves server slots to servers, user slots to users,
+        router slots to routers."""
+        router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
         c = build_topology(jax.random.PRNGKey(0), num_steps=100)
         mask = compute_blue_action_mask(c, 0)
 
@@ -106,16 +114,25 @@ class TestActionEncodingTopologyInvariance:
             slot_within = slot % OBS_HOSTS_PER_SUBNET
             if slot_within < MAX_SERVER_HOSTS:
                 assert bool(c.host_is_server[h]), f"slot {slot}: host {h} should be server"
-            else:
+            elif slot_within < router_slot:
                 assert bool(c.host_is_user[h]), f"slot {slot}: host {h} should be user"
+            else:
+                assert bool(c.host_is_router[h]), f"slot {slot}: host {h} should be router"
 
     def test_obs_host_map_slots_are_canonical(self):
         """obs_host_map (subnet, slot) ordering is consistent across seeds:
-        servers in slots 0..MAX_SERVER_HOSTS-1, users in the rest."""
+        servers in slots 0..MAX_SERVER_HOSTS-1, users in the next MAX_USER_HOSTS,
+        router at slot MAX_SERVER_HOSTS + MAX_USER_HOSTS."""
+        router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
         for seed in range(10):
             c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
             for sid in range(NUM_SUBNETS):
                 if SUBNET_NAMES[sid] == "INTERNET":
+                    # Internet subnet has no router — its router slot stays GLOBAL_MAX_HOSTS
+                    h = int(c.obs_host_map[sid, router_slot])
+                    assert h == GLOBAL_MAX_HOSTS, (
+                        f"seed={seed} INTERNET router slot should be GLOBAL_MAX_HOSTS, got {h}"
+                    )
                     continue
                 for slot in range(OBS_HOSTS_PER_SUBNET):
                     h = int(c.obs_host_map[sid, slot])
@@ -125,9 +142,13 @@ class TestActionEncodingTopologyInvariance:
                         assert bool(c.host_is_server[h]), (
                             f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: host {h} should be server"
                         )
-                    else:
+                    elif slot < router_slot:
                         assert bool(c.host_is_user[h]), (
                             f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: host {h} should be user"
+                        )
+                    else:
+                        assert bool(c.host_is_router[h]), (
+                            f"seed={seed} subnet={SUBNET_NAMES[sid]} slot={slot}: host {h} should be router"
                         )
 
 
@@ -173,13 +194,16 @@ class TestCybORGActionEncodingParity:
                     hostname = clean.split("Analyse ")[1]
                     cyborg_analyse.append((hostname, cyborg_mask[i]))
 
-            # CybORG orders hosts by agent's sorted subnets, 16 per subnet
-            # This maps to JAXborg's obs_host_map slots per the agent's subnets
+            # CybORG orders hosts by agent's sorted subnets, without routers.
+            # JAXborg's obs_host_map has MAX_SERVER_HOSTS+MAX_USER_HOSTS+1 slots
+            # per subnet (extra slot for router). Compare only the non-router
+            # slots since CybORG's wrapper excludes routers.
+            cyborg_hosts_per_subnet = MAX_SERVER_HOSTS + MAX_USER_HOSTS
             agent_subnets = cyborg_wrapped.subnets(agent_name)
             for sub_idx, subnet_name in enumerate(agent_subnets):
                 sid = CYBORG_SUFFIX_TO_ID[subnet_name]
-                for host_slot in range(OBS_HOSTS_PER_SUBNET):
-                    cyborg_slot = sub_idx * OBS_HOSTS_PER_SUBNET + host_slot
+                for host_slot in range(cyborg_hosts_per_subnet):
+                    cyborg_slot = sub_idx * cyborg_hosts_per_subnet + host_slot
                     if cyborg_slot >= len(cyborg_analyse):
                         break
                     cyborg_hostname, cyborg_valid = cyborg_analyse[cyborg_slot]

@@ -14,13 +14,15 @@ import torch
 import torch.nn as nn
 from torch.distributions import Categorical
 
+from jaxborg.constants import BLUE_OBS_SIZE
+
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 
 SMALL_OBS_DIM = 92
 SMALL_ACT_DIM = 82
-LARGE_OBS_DIM = 210
+LARGE_OBS_DIM = BLUE_OBS_SIZE
 LARGE_ACT_DIM = 242
 
 

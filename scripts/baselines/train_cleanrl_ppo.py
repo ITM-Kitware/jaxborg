@@ -32,6 +32,8 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
 
+from jaxborg.constants import BLUE_OBS_SIZE
+
 # ── Environment setup ──────────────────────────────────────────────────────
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -41,7 +43,7 @@ AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 # Agents 0-3 share obs/act spaces; agent 4 is different
 SMALL_OBS_DIM = 92
 SMALL_ACT_DIM = 82
-LARGE_OBS_DIM = 210
+LARGE_OBS_DIM = BLUE_OBS_SIZE
 LARGE_ACT_DIM = 242
 
 

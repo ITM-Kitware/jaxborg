@@ -331,7 +331,9 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     phase_boundaries = _compute_phase_boundaries(scenario.mission_phases)
     allowed_subnet_pairs = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
 
-    obs_host_map = _build_obs_host_map(host_subnet, host_is_server, host_is_user, host_active, num_hosts)
+    obs_host_map = _build_obs_host_map(
+        host_subnet, host_is_server, host_is_user, host_is_router, host_active, num_hosts
+    )
 
     return CC4Const(
         host_active=jnp.array(host_active),
@@ -740,6 +742,8 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
     )
 
     obs_host_map = jnp.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+    router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
+    host_indices = jnp.arange(GLOBAL_MAX_HOSTS)
     for sid in range(NUM_SUBNETS):
         is_srv = host_active & host_is_server & (host_subnet == sid)
         srv_idx = jnp.where(is_srv, j, GLOBAL_MAX_HOSTS)
@@ -751,6 +755,9 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         sorted_usr = jnp.sort(usr_idx)
         for slot in range(MAX_USER_HOSTS):
             obs_host_map = obs_host_map.at[sid, MAX_SERVER_HOSTS + slot].set(sorted_usr[slot])
+        is_rtr = host_active & host_is_router & (host_subnet == sid)
+        rtr_idx = jnp.where(is_rtr, host_indices, GLOBAL_MAX_HOSTS)
+        obs_host_map = obs_host_map.at[sid, router_slot].set(jnp.min(rtr_idx))
 
     phase_boundaries = jnp.array(_compute_phase_boundaries(_compute_mission_phases(num_steps)))
 
@@ -942,10 +949,12 @@ def _build_obs_host_map(
     host_subnet: np.ndarray,
     host_is_server: np.ndarray,
     host_is_user: np.ndarray,
+    host_is_router: np.ndarray,
     host_active: np.ndarray,
     num_hosts: int,
 ) -> np.ndarray:
     obs_map = np.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=np.int32)
+    router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
     for sid in range(NUM_SUBNETS):
         servers = []
         users = []
@@ -960,6 +969,11 @@ def _build_obs_host_map(
             obs_map[sid, i] = h
         for i, h in enumerate(users[:MAX_USER_HOSTS]):
             obs_map[sid, MAX_SERVER_HOSTS + i] = h
+        router_hosts = sorted(
+            [h for h in range(num_hosts) if host_active[h] and host_subnet[h] == sid and host_is_router[h]]
+        )
+        if router_hosts:
+            obs_map[sid, router_slot] = router_hosts[0]
     return obs_map
 
 

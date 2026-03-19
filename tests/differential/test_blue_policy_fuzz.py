@@ -154,18 +154,26 @@ def test_router_restore_pending_ticks_match_jax():
     )
     harness.reset()
 
+    # Verify that encode_blue_action succeeds for router hosts (no longer unsupported)
+    from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
+
+    router_host_idx = harness.mappings.hostname_to_idx[target_hostname]
+    encoded = encode_blue_action("Restore", router_host_idx, 0, const=harness.jax_const)
+    assert encoded != BLUE_SLEEP, "Router Restore should now encode via JIT pipeline"
+
     step0 = harness.full_step()
     controller = harness.cyborg_env.environment_controller
     pending = controller.actions_in_progress["blue_agent_0"]
-    pending_name, pending_host, pending_ticks = harness._blue_unsupported_pending[0]
 
     assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert type(pending["action"]).__name__ == "Restore"
     assert pending["action"].hostname == target_hostname
     assert int(pending["remaining_ticks"]) == 4
-    assert pending_name == "Restore"
-    assert pending_host == harness.mappings.hostname_to_idx[target_hostname]
-    assert pending_ticks == 4
+    # Router actions now go through the normal JIT pipeline, not the unsupported workaround
+    assert 0 not in harness._blue_unsupported_pending, (
+        "Router actions should go through JIT pipeline, not unsupported workaround"
+    )
+    assert int(harness.jax_state.blue_pending_ticks[0]) == 4
 
 
 def test_router_generic_deploy_decoy_matches_jax():
@@ -185,19 +193,27 @@ def test_router_generic_deploy_decoy_matches_jax():
     )
     harness.reset()
 
+    # Verify that encode_blue_action succeeds for router hosts (no longer unsupported)
+    from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
+
+    router_host_idx = harness.mappings.hostname_to_idx[target_hostname]
+    encoded = encode_blue_action("DeployDecoy", router_host_idx, 3, const=harness.jax_const)
+    assert encoded != BLUE_SLEEP, "Router DeployDecoy should now encode via JIT pipeline"
+
     controller = harness.cyborg_env.environment_controller
     before_services = {str(name).split(".")[-1].lower() for name in controller.state.hosts[target_hostname].services}
     step0 = harness.full_step()
     pending = controller.actions_in_progress["blue_agent_3"]
-    pending_name, pending_host, pending_ticks = harness._blue_unsupported_pending[3]
 
     assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
     assert type(pending["action"]).__name__ == "DeployDecoy"
     assert pending["action"].hostname == target_hostname
     assert int(pending["remaining_ticks"]) == 1
-    assert pending_name == "DeployDecoy"
-    assert pending_host == harness.mappings.hostname_to_idx[target_hostname]
-    assert pending_ticks == 1
+    # Router actions now go through the normal JIT pipeline, not the unsupported workaround
+    assert 3 not in harness._blue_unsupported_pending, (
+        "Router actions should go through JIT pipeline, not unsupported workaround"
+    )
+    assert int(harness.jax_state.blue_pending_ticks[3]) == 1
 
     step1 = harness.full_step()
     target_host = controller.state.hosts[target_hostname]

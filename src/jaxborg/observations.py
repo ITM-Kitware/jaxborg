@@ -9,7 +9,7 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     NUM_MESSAGES,
     NUM_SUBNETS,
-    OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
 )
 from jaxborg.state import CC4Const, CC4State
 
@@ -19,7 +19,7 @@ _inv = np.empty(NUM_SUBNETS, dtype=np.int32)
 _inv[np.array([5, 4, 8, 6, 2, 3, 7, 0, 1])] = np.arange(NUM_SUBNETS)
 JAX_ID_TO_CYBORG_POS = jnp.array(_inv, dtype=jnp.int32)
 
-SUBNET_BLOCK_SIZE = NUM_SUBNETS * 3 + OBS_HOSTS_PER_SUBNET * 2
+SUBNET_BLOCK_SIZE = NUM_SUBNETS * 3 + OBS_VECTOR_HOSTS_PER_SUBNET * 2
 
 
 def _subnet_block(
@@ -36,7 +36,10 @@ def _subnet_block(
     comms_jax = const.comms_policy[state.mission_phase, subnet_id]
     comms_cyborg = comms_jax[CYBORG_POS_TO_JAX_ID]
 
-    host_indices = const.obs_host_map[subnet_id]
+    # Observation vector uses only server+user slots (matching CybORG BlueFlatWrapper
+    # which excludes routers). obs_host_map has an extra router slot used for action
+    # encoding but not for observations.
+    host_indices = const.obs_host_map[subnet_id, :OBS_VECTOR_HOSTS_PER_SUBNET]
     is_active = host_indices < GLOBAL_MAX_HOSTS
 
     safe_indices = jnp.where(is_active, host_indices, 0)

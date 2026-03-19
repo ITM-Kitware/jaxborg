@@ -210,7 +210,7 @@ _BLUE_DECOY_ENCODE_NAMES = {
 def _global_host_to_slot(const: CC4Const, global_host: int) -> int:
     """Convert a global host index to a canonical (subnet_id * OBS_HOSTS_PER_SUBNET + slot) index.
 
-    Returns -1 if the host is not in obs_host_map (e.g. routers, internet host).
+    Returns -1 if the host is not in obs_host_map (e.g. internet host).
     """
     sid = int(const.host_subnet[global_host])
     for slot in range(OBS_HOSTS_PER_SUBNET):

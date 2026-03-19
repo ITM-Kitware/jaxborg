@@ -109,6 +109,28 @@ _ZERO_INT_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
 _ZERO_BOOL_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
 
+def _is_router_action_slot(action_idx, const):
+    """Return True if action_idx targets a router host slot.
+
+    CybORG's wrapper excludes routers from the action space but JAX includes
+    them.  Router slots are at position MAX_SERVER_HOSTS + MAX_USER_HOSTS
+    within each subnet's host slots.
+    """
+    from jaxborg.actions.encoding import (
+        BLUE_ALLOW_TRAFFIC_START,
+        BLUE_ANALYSE_START,
+        BLUE_MONITOR,
+    )
+    from jaxborg.constants import MAX_SERVER_HOSTS, MAX_USER_HOSTS, OBS_HOSTS_PER_SUBNET
+
+    # Only host-targeted actions (Analyse/Remove/Restore/Decoy) have router slots.
+    # Traffic and Monitor actions don't target hosts.
+    if action_idx <= BLUE_MONITOR or action_idx >= BLUE_ALLOW_TRAFFIC_START:
+        return False
+    slot = (action_idx - BLUE_ANALYSE_START) % OBS_HOSTS_PER_SUBNET
+    return slot == MAX_SERVER_HOSTS + MAX_USER_HOSTS
+
+
 def _capture_service_process_map(cy_state):
     service_map = {}
     for hostname, host in cy_state.hosts.items():
@@ -702,10 +724,16 @@ class CC4DifferentialHarness:
                 if not np.array_equal(cyborg_mask, jax_mask):
                     cyborg_only = np.flatnonzero(cyborg_mask & ~jax_mask).tolist()
                     jax_only = np.flatnonzero(jax_mask & ~cyborg_mask).tolist()
-                    cyborg_only_desc = format_action_index_set(cyborg_only, self.mappings, self.jax_const)
-                    jax_only_desc = format_action_index_set(jax_only, self.mappings, self.jax_const)
-                    detail = f"{agent_name}: cyborg_only={cyborg_only_desc} jax_only={jax_only_desc}"
-                    diffs.append(StateDiff("action_mask", cyborg_only, jax_only, detail))
+                    # CybORG's wrapper excludes router hosts from the action
+                    # space.  JAX includes them via obs_host_map.  Filter out
+                    # router-slot actions from jax_only since they are expected
+                    # to be JAX-only.
+                    jax_only = [idx for idx in jax_only if not _is_router_action_slot(idx, self.jax_const)]
+                    if cyborg_only or jax_only:
+                        cyborg_only_desc = format_action_index_set(cyborg_only, self.mappings, self.jax_const)
+                        jax_only_desc = format_action_index_set(jax_only, self.mappings, self.jax_const)
+                        detail = f"{agent_name}: cyborg_only={cyborg_only_desc} jax_only={jax_only_desc}"
+                        diffs.append(StateDiff("action_mask", cyborg_only, jax_only, detail))
 
         return diffs
 
