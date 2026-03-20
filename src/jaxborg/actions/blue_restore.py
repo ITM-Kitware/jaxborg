@@ -62,6 +62,12 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         state.red_session_privileged_pids.at[:, target_host].set(-1),
         state.red_session_privileged_pids,
     )
+    # Clear scan-owning PID for this source host since all sessions are gone.
+    red_scan_source_pid = jnp.where(
+        covers_host,
+        state.red_scan_source_pid.at[:, target_host].set(-1),
+        state.red_scan_source_pid,
+    )
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
@@ -171,6 +177,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         host_services=host_services,
         host_has_malware=host_has_malware,

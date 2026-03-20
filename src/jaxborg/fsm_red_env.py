@@ -67,6 +67,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             red_discovered_hosts=jnp.where(inactive[:, None], False, state.red_discovered_hosts),
             red_scanned_hosts=jnp.where(inactive[:, None], False, state.red_scanned_hosts),
             red_scanned_source_hosts=jnp.where(inactive[:, None, None], False, state.red_scanned_source_hosts),
+            red_scan_source_pid=jnp.where(inactive[:, None], jnp.int32(-1), state.red_scan_source_pid),
             red_scan_anchor_host=jnp.where(inactive, jnp.int32(-1), state.red_scan_anchor_host),
             red_primary_is_abstract=jnp.where(inactive, True, state.red_primary_is_abstract),
             red_primary_pid=jnp.where(inactive, jnp.int32(-1), state.red_primary_pid),

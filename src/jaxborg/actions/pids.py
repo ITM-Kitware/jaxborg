@@ -54,6 +54,27 @@ def append_process_event(event_row, pid):
     return jnp.where(has_empty, updated, event_row)
 
 
+def recompute_host_max_pid(state, const, target_host, session_pids):
+    """Recompute host_max_pid from remaining processes after removal.
+
+    CybORG's Host.create_pid() uses max(all current process PIDs). When a
+    process is removed (by blue Remove, red Withdraw, etc.), the max can
+    decrease. This recomputes from: initial service PIDs, remaining red
+    session PIDs, and blue decoy process PIDs.
+
+    Args:
+        session_pids: The *updated* red_session_pids array (after removal).
+    """
+    initial_max = const.host_initial_max_pid[target_host]
+    # Max across all red agents' remaining session PIDs on this host
+    all_red_pids = session_pids[:, target_host, :]  # (NUM_RED_AGENTS, MAX_TRACKED_SESSION_PIDS)
+    max_red = jnp.max(jnp.where(all_red_pids >= 0, all_red_pids, jnp.int32(0)))
+    # Max across blue decoy process PIDs on this host
+    decoy_pids = state.host_decoy_process_pids[target_host]
+    max_decoy = jnp.max(jnp.where(decoy_pids >= 0, decoy_pids, jnp.int32(0)))
+    return jnp.maximum(jnp.maximum(initial_max, max_red), max_decoy)
+
+
 def pid_row_contains(pid_row, pid):
     return (pid >= 0) & jnp.any(pid_row == pid)
 

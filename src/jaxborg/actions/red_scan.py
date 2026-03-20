@@ -43,9 +43,22 @@ def apply_scan(
         state.red_scan_anchor_host.at[agent_id].set(source_host),
         state.red_scan_anchor_host,
     )
+    # Record the PID of the session performing the scan on the source host.
+    # CybORG stores scan results (ports) in the executing session object;
+    # when that session is killed the scan knowledge is lost.  The scan is
+    # performed by the primary session (session 0), whose PID is tracked in
+    # red_primary_pid.  After promotions, session 0's PID is NOT necessarily
+    # the smallest — it's the promoted session's original PID.
+    executing_pid = state.red_primary_pid[agent_id]
+    red_scan_source_pid = jnp.where(
+        success,
+        state.red_scan_source_pid.at[agent_id, source_idx].set(executing_pid),
+        state.red_scan_source_pid,
+    )
 
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
+        red_scan_source_pid=red_scan_source_pid,
         red_activity_this_step=activity,
     )
     next_state = sync_scan_memory_fields(next_state, const, source_matrix=source_matrix)

@@ -508,6 +508,7 @@ class CC4DifferentialHarness:
         start_discovered = jnp.array(self.jax_const.red_initial_discovered_hosts)
         start_scanned = jnp.array(self.jax_const.red_initial_scanned_hosts)
         start_scanned_source_hosts = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
+        start_scan_source_pid = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32)
         start_scan_anchor = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_primary_pid = jnp.full((NUM_RED_AGENTS,), -1, dtype=jnp.int32)
         start_abstract = jnp.zeros_like(self.jax_state.red_session_is_abstract)
@@ -582,7 +583,11 @@ class CC4DifferentialHarness:
                             )
                     start_priv = start_priv.at[red_idx, hidx].set(jnp.maximum(start_priv[red_idx, hidx], level))
                     host_compromised = host_compromised.at[hidx].set(jnp.maximum(host_compromised[hidx], level))
-                    for ip in getattr(sess, "ports", {}).keys():
+                    sess_ports = getattr(sess, "ports", {})
+                    if sess_ports:
+                        # Record PID of the session owning scan memory on this source host
+                        start_scan_source_pid = start_scan_source_pid.at[red_idx, hidx].set(sess_pid)
+                    for ip in sess_ports.keys():
                         scanned_host = cyborg_state.ip_addresses.get(ip)
                         if scanned_host in self.mappings.hostname_to_idx:
                             scanned_hidx = self.mappings.hostname_to_idx[scanned_host]
@@ -604,6 +609,11 @@ class CC4DifferentialHarness:
                 start_scanned_source_hosts = start_scanned_source_hosts.at[red_idx, :, start_host].set(
                     start_scanned[red_idx]
                 )
+                # Record scan-owning PID for initial knowledge sourced from start_host
+                if bool(jnp.any(start_scanned[red_idx])):
+                    start_scan_source_pid = start_scan_source_pid.at[red_idx, start_host].set(
+                        int(start_primary_pid[red_idx])
+                    )
 
         for b in range(NUM_BLUE_AGENTS):
             blue_sessions = cyborg_state.sessions.get(f"blue_agent_{b}", {})
@@ -636,6 +646,7 @@ class CC4DifferentialHarness:
             red_discovered_hosts=start_discovered,
             red_scanned_hosts=start_scanned,
             red_scanned_source_hosts=start_scanned_source_hosts,
+            red_scan_source_pid=start_scan_source_pid,
             red_scan_anchor_host=start_scan_anchor,
             red_primary_pid=start_primary_pid,
             host_compromised=host_compromised,

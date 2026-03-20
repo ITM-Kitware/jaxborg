@@ -1,6 +1,7 @@
 import chex
 import jax.numpy as jnp
 
+from jaxborg.actions.pids import recompute_host_max_pid
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
@@ -58,6 +59,12 @@ def apply_withdraw(
         state.red_session_privileged_pids.at[agent_id, target_host].set(-1),
         state.red_session_privileged_pids,
     )
+    # Clear scan-owning PID for this source host since all sessions are gone.
+    red_scan_source_pid = jnp.where(
+        success,
+        state.red_scan_source_pid.at[agent_id, target_host].set(-1),
+        state.red_scan_source_pid,
+    )
 
     red_privilege = jnp.where(
         success,
@@ -73,6 +80,13 @@ def apply_withdraw(
         state.host_compromised,
     )
 
+    # Recompute host_max_pid from remaining processes after session removal.
+    recomputed_max = recompute_host_max_pid(state, const, target_host, red_session_pids)
+    host_max_pid = jnp.where(
+        success,
+        state.host_max_pid.at[target_host].set(recomputed_max),
+        state.host_max_pid,
+    )
     any_remaining_session = jnp.any(red_sessions[:, target_host])
     host_has_malware = jnp.where(
         success & ~any_remaining_session,
@@ -129,10 +143,12 @@ def apply_withdraw(
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_is_abstract=red_primary_is_abstract,
         red_primary_pid=red_primary_pid,
         host_compromised=host_compromised,
+        host_max_pid=host_max_pid,
         host_has_malware=host_has_malware,
         host_suspicious_process=host_suspicious_process,
     )

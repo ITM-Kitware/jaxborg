@@ -183,6 +183,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_abstract_host_rank = state.red_abstract_host_rank
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_source_hosts = state.red_scanned_source_hosts
+    red_scan_source_pid = state.red_scan_source_pid
     red_session_pids = state.red_session_pids
     red_session_abstract_pids = state.red_session_abstract_pids
     red_next_pid = state.red_next_pid
@@ -267,6 +268,13 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_scanned_source_hosts.at[r, :, start_host].set(initially_scanned),
             red_scanned_source_hosts,
         )
+        # Record scan-owning PID for initial knowledge sourced from start_host.
+        has_initial_scan = jnp.any(initially_scanned)
+        red_scan_source_pid = jnp.where(
+            is_active & has_initial_scan,
+            red_scan_source_pid.at[r, start_host].set(red_primary_pid[r]),
+            red_scan_source_pid,
+        )
 
     return state.replace(
         red_sessions=red_sessions,
@@ -275,6 +283,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_pid=red_primary_pid,
         host_compromised=host_compromised,

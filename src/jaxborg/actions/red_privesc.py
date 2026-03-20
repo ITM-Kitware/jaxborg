@@ -2,7 +2,13 @@ import chex
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row, count_valid_pids, first_valid_pid, nth_valid_pid_sorted
+from jaxborg.actions.pids import (
+    append_pid_to_row,
+    count_valid_pids,
+    first_valid_pid,
+    nth_valid_pid_sorted,
+    recompute_host_max_pid,
+)
 from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
 from jaxborg.actions.rng import sample_red_privesc_choice
 from jaxborg.actions.session_counts import effective_session_counts
@@ -116,6 +122,13 @@ def apply_privesc(
         state.red_activity_this_step.at[target_host].set(ACTIVITY_EXPLOIT),
         state.red_activity_this_step,
     )
+    # Recompute host_max_pid when sandboxed session is removed.
+    recomputed_max = recompute_host_max_pid(state, const, target_host, red_session_pids)
+    host_max_pid = jnp.where(
+        is_active & has_session & single_session_sandboxed,
+        state.host_max_pid.at[target_host].set(recomputed_max),
+        state.host_max_pid,
+    )
     had_any_sessions = jnp.any(session_counts > 0, axis=1)
     has_any_sessions_now = jnp.any(red_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
@@ -150,6 +163,7 @@ def apply_privesc(
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
         host_compromised=host_compromised,
+        host_max_pid=host_max_pid,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
     )

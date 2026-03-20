@@ -98,6 +98,7 @@ class CC4State:
     red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_scanned_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_scanned_source_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS) bool
+    red_scan_source_pid: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — PID owning scan memory per source host
     red_scan_anchor_host: chex.Array  # (NUM_RED_AGENTS,) int — host owning CybORG-like scan memory session
     red_primary_is_abstract: chex.Array  # (NUM_RED_AGENTS,) bool — session-0 equiv is abstract
     red_primary_pid: chex.Array  # (NUM_RED_AGENTS,) int32 — session-0 equiv PID, -1 if absent
@@ -225,6 +226,7 @@ def create_initial_state() -> CC4State:
         red_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scanned_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_scanned_source_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
+        red_scan_source_pid=jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), -1, dtype=jnp.int32),
         red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_primary_is_abstract=jnp.ones(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_primary_pid=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),

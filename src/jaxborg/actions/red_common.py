@@ -332,17 +332,20 @@ def apply_red_session_check(
     )
     anchor_changed = has_any_sessions & (next_anchor >= 0) & (next_anchor != anchor)
 
-    # CybORG scan memory (ports dict) lives on session 0.  Ports are lost
-    # whenever session 0 is destroyed — whether the anchor moves to a
-    # different host OR session 0 is replaced on the same host (e.g. blue
-    # Remove kills session 0, red re-exploits, RedSessionCheck promotes the
-    # new session).  Also clear when all sessions are lost.
+    # CybORG scan memory (ports dict) is per-session-object.  Ports survive
+    # as long as the session that performed the scan is alive, regardless of
+    # primary identity.  Only clear when the scan-owning session is dead.
     anchor_changed_host = anchor_changed & (anchor >= 0)
     primary_invalidated_same_host = (
         (needs_primary | ~has_any_sessions) & ~anchor_changed_host & (anchor >= 0) & (current_primary_pid >= 0)
     )
-    should_clear_scan = anchor_changed_host | primary_invalidated_same_host
     old_anchor_idx = jnp.clip(anchor, 0, state.red_scanned_source_hosts.shape[2] - 1)
+    scan_owner_pid = state.red_scan_source_pid[agent_id, old_anchor_idx]
+    scan_owner_alive = pid_row_contains(state.red_session_pids[agent_id, old_anchor_idx], scan_owner_pid)
+    # Preserve scan memory when the owning session is alive.  When no owner
+    # is recorded (pid == -1), fall back to clearing (conservative).
+    preserve_scan = scan_owner_alive & (scan_owner_pid >= 0)
+    should_clear_scan = (anchor_changed_host | primary_invalidated_same_host) & ~preserve_scan
     cleared_source_hosts = state.red_scanned_source_hosts.at[agent_id, :, old_anchor_idx].set(False)
     cleared_scanned_hosts = jnp.any(cleared_source_hosts[agent_id], axis=1)
     red_scanned_source_hosts = jnp.where(
@@ -355,6 +358,12 @@ def apply_red_session_check(
         state.red_scanned_hosts.at[agent_id].set(cleared_scanned_hosts),
         state.red_scanned_hosts,
     )
+    # Clear scan-owning PID on old anchor when scan memory is cleared.
+    red_scan_source_pid = jnp.where(
+        should_clear_scan,
+        state.red_scan_source_pid.at[agent_id, old_anchor_idx].set(-1),
+        state.red_scan_source_pid,
+    )
 
     return state.replace(
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),
@@ -366,6 +375,7 @@ def apply_red_session_check(
         red_session_privileged_pids=red_session_privileged_pids,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scanned_hosts=red_scanned_hosts,
+        red_scan_source_pid=red_scan_source_pid,
     )
 
 

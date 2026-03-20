@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import pid_row_contains, remove_pid_from_row
+from jaxborg.actions.pids import pid_row_contains, recompute_host_max_pid, remove_pid_from_row
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
@@ -183,6 +183,15 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_compromised.at[target_host].set(remaining_max_priv),
         state.host_compromised,
     )
+    # Recompute host_max_pid from remaining processes. CybORG's
+    # Host.create_pid() uses max(current processes) which decreases when
+    # processes are removed.
+    recomputed_max = recompute_host_max_pid(state, const, target_host, new_session_pids)
+    host_max_pid = jnp.where(
+        covers_host & any_removed,
+        state.host_max_pid.at[target_host].set(recomputed_max),
+        state.host_max_pid,
+    )
     had_any_sessions = jnp.any(session_count_before > 0, axis=1)
     has_any_sessions_now = jnp.any(new_session_count > 0, axis=1)
     cleared_all_sessions = had_any_sessions & ~has_any_sessions_now
@@ -232,6 +241,31 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     )
     new_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     new_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    # Per-session scan memory clearing: CybORG stores port knowledge on the
+    # specific session object that performed the scan.  When blue Remove kills
+    # that session (but other sessions survive on the same host), the scan
+    # knowledge is lost.  Check if the scan-owning PID on target_host was
+    # killed; if so, clear scan records sourced from target_host.
+    scan_owner_pids = state.red_scan_source_pid[:, target_host]  # (NUM_RED_AGENTS,)
+    owner_survived = jax.vmap(pid_row_contains, in_axes=(0, 0))(new_session_pids[:, target_host, :], scan_owner_pids)
+    owner_killed = covers_host & any_removed & (scan_owner_pids >= 0) & ~owner_survived
+    # Clear scan source records from target_host for agents whose owner died.
+    cleared_src = new_scanned_source_hosts.at[:, :, target_host].set(
+        jnp.where(owner_killed[:, None], False, new_scanned_source_hosts[:, :, target_host])
+    )
+    new_scanned_source_hosts = jnp.where(
+        jnp.any(owner_killed),
+        cleared_src,
+        new_scanned_source_hosts,
+    )
+    new_scanned_hosts = jnp.where(
+        owner_killed[:, None],
+        jnp.any(new_scanned_source_hosts, axis=2),
+        new_scanned_hosts,
+    )
+    new_scan_source_pid = state.red_scan_source_pid.at[:, target_host].set(
+        jnp.where(owner_killed, jnp.int32(-1), state.red_scan_source_pid[:, target_host])
+    )
     return state.replace(
         red_sessions=new_sessions,
         red_session_count=new_session_count,
@@ -243,7 +277,9 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_scan_anchor_host=red_scan_anchor_host,
         red_scanned_hosts=new_scanned_hosts,
         red_scanned_source_hosts=new_scanned_source_hosts,
+        red_scan_source_pid=new_scan_source_pid,
         host_compromised=new_host_compromised,
+        host_max_pid=host_max_pid,
         host_suspicious_process=new_suspicious_process,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,

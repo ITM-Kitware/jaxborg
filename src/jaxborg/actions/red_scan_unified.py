@@ -70,9 +70,17 @@ def apply_scan_unified(
         state.red_scan_anchor_host.at[agent_id].set(source_host),
         state.red_scan_anchor_host,
     )
+    # Record scan-owning PID on the source host (see apply_scan).
+    executing_pid = state.red_primary_pid[agent_id]
+    red_scan_source_pid = jnp.where(
+        success,
+        state.red_scan_source_pid.at[agent_id, source_idx].set(executing_pid),
+        state.red_scan_source_pid,
+    )
 
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
+        red_scan_source_pid=red_scan_source_pid,
         red_activity_this_step=activity,
         host_activity_detected=scan_detected,
     )
