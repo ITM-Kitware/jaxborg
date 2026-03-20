@@ -15,6 +15,7 @@ from jaxborg.actions.duration import process_blue_with_duration
 from jaxborg.actions.encoding import (
     BLUE_ACTION_TYPE_DECOY,
     BLUE_DECOY_START,
+    BLUE_SLEEP,
     decode_blue_action,
     encode_blue_action,
 )
@@ -295,6 +296,9 @@ class TestDifferentialWithCybORG:
             use_blue_decoy_type_choices=jnp.array(True),
         )
         new_state = process_blue_with_duration(jax_state, const, blue_idx, action_idx)
+        # DeployDecoy has duration=2; tick through pending action to execution
+        assert int(new_state.blue_pending_ticks[blue_idx]) == 1
+        new_state = process_blue_with_duration(new_state, const, blue_idx, BLUE_SLEEP)
 
         assert str(cy_obs.success).upper() == "FALSE"
         assert before_decoys == after_decoys

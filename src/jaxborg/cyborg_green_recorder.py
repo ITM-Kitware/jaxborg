@@ -147,7 +147,8 @@ class GreenRecorder:
             agent.np_random = recorder
             self._agent_recorders[name] = recorder
 
-            hostname = state.ip_addresses.get(agent.own_ip)
+            own_ip = getattr(agent, "own_ip", None)
+            hostname = state.ip_addresses.get(own_ip) if own_ip is not None else None
             if hostname and hostname in mappings.hostname_to_idx:
                 host_idx = mappings.hostname_to_idx[hostname]
                 self._agent_to_host_idx[name] = host_idx

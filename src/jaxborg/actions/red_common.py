@@ -272,10 +272,22 @@ def apply_red_session_check(
         jnp.int32(-1),
     )
     next_idx = jnp.clip(next_anchor, 0, state.red_sessions.shape[1] - 1)
+    # When CybORG PID allocation diverges from JAX, the forced PID may not
+    # appear in JAX's session_pids row even though session 0 is still alive.
+    # Accept the current primary PID when the forced PID confirms it.
+    forced_confirms_current_pid = (
+        (forced_primary_pid != UNKNOWN_PRIMARY_PID)
+        & (forced_primary_pid == current_primary_pid)
+        & (next_anchor >= 0)
+        & (next_anchor == anchor)
+    )
     current_pid_matches_next_anchor = (
         (next_anchor >= 0)
         & (next_anchor == anchor)
-        & pid_row_contains(state.red_session_pids[agent_id, next_idx], current_primary_pid)
+        & (
+            pid_row_contains(state.red_session_pids[agent_id, next_idx], current_primary_pid)
+            | forced_confirms_current_pid
+        )
     )
     # CybORG's _choose_new_primary_session picks a random session via
     # np_random.choice(all_sessions).  Match this by picking a random

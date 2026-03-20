@@ -13,6 +13,7 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
     SUBNET_IDS,
 )
 from jaxborg.observations import JAX_ID_TO_CYBORG_POS, get_blue_obs
@@ -199,8 +200,8 @@ class TestHostEvents:
         state = jax_state.replace(host_activity_detected=detected)
 
         obs = np.array(get_blue_obs(state, jax_const, 0))
-        conn_start = 1 + 3 * NUM_SUBNETS + OBS_HOSTS_PER_SUBNET
-        conn_vec = obs[conn_start : conn_start + OBS_HOSTS_PER_SUBNET]
+        conn_start = 1 + 3 * NUM_SUBNETS + OBS_VECTOR_HOSTS_PER_SUBNET
+        conn_vec = obs[conn_start : conn_start + OBS_VECTOR_HOSTS_PER_SUBNET]
         assert conn_vec[0] == 1.0, "first host should show network connection"
 
     def test_inactive_host_slots_zero(self, jax_const, jax_state):

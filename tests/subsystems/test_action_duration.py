@@ -36,7 +36,7 @@ class TestDurationLookupRed:
 
 class TestDurationLookupBlue:
     def test_duration_lookup_blue(self):
-        expected = [1, 1, 2, 3, 5, 1, 1, 1]
+        expected = [1, 1, 2, 3, 5, 2, 1, 1]
         for i, val in enumerate(expected):
             assert int(BLUE_ACTION_DURATIONS[i]) == val, (
                 f"BLUE_ACTION_DURATIONS[{i}] = {int(BLUE_ACTION_DURATIONS[i])}, expected {val}"
@@ -306,10 +306,15 @@ class TestSessionBindingFollowsUpdatedAnchor:
             pytest.skip("No scan target in same subnet")
 
         # Set up initial state with host_a as the abstract anchor session
+        pid_a = jnp.int32(100)
         state = state.replace(
             red_sessions=state.red_sessions.at[agent_id, host_a].set(True),
             red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host_a].set(True),
+            red_session_count=state.red_session_count.at[agent_id, host_a].set(1),
+            red_session_pids=state.red_session_pids.at[agent_id, host_a, 0].set(pid_a),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, host_a, 0].set(pid_a),
             red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_a)),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(pid_a),
             red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
         )
 
@@ -325,15 +330,23 @@ class TestSessionBindingFollowsUpdatedAnchor:
         )
 
         # Simulate anchor changing to host_b (as RedSessionCheck would do)
+        pid_b = jnp.int32(200)
         s1 = s1.replace(
             red_sessions=s1.red_sessions.at[agent_id, host_b].set(True),
             red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_b].set(True),
+            red_session_count=s1.red_session_count.at[agent_id, host_b].set(1),
+            red_session_pids=s1.red_session_pids.at[agent_id, host_b, 0].set(pid_b),
+            red_session_abstract_pids=s1.red_session_abstract_pids.at[agent_id, host_b, 0].set(pid_b),
             red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
+            red_primary_pid=s1.red_primary_pid.at[agent_id].set(pid_b),
         )
         # Remove session from host_a so the stale binding would fail
         s1 = s1.replace(
             red_sessions=s1.red_sessions.at[agent_id, host_a].set(False),
             red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_a].set(False),
+            red_session_count=s1.red_session_count.at[agent_id, host_a].set(0),
+            red_session_pids=s1.red_session_pids.at[agent_id, host_a, 0].set(jnp.int32(-1)),
+            red_session_abstract_pids=s1.red_session_abstract_pids.at[agent_id, host_a, 0].set(jnp.int32(-1)),
         )
 
         # Enable detection random sync so we can verify consumption
@@ -1020,7 +1033,7 @@ class TestDurationDifferential:
         assert jax_ticks_per_step[4] == 0, f"Step 4: expected ticks=0 (executed), got {jax_ticks_per_step[4]}"
 
     def test_blue_decoy_ticks_match_cyborg(self):
-        """Submit Blue Decoy, verify CybORG and JAX both execute it in one step."""
+        """Submit Blue Decoy (duration=2), verify tick countdown and execution match CybORG."""
         pytest.importorskip("CybORG")
         from CybORG.Agents import SleepAgent
 
@@ -1045,16 +1058,30 @@ class TestDurationDifferential:
         blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
         blue_actions[0] = encode_blue_action("DeployDecoy", target, 0, const=harness.jax_const)
 
+        # Step 1: submit decoy (duration=2), should be pending after this step
         result = harness.full_step(blue_actions=blue_actions)
         step_errors = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
 
         cy_ticks = _get_cyborg_remaining_ticks(controller, "blue_agent_0")
         jax_ticks = int(harness.jax_state.blue_pending_ticks[0])
 
-        assert not step_errors, f"Blue decoy parity errors: {step_errors[:3]}"
-        assert cy_ticks == 0, f"CybORG decoy should execute immediately, got remaining_ticks={cy_ticks}"
+        assert not step_errors, f"Blue decoy step 1 parity errors: {step_errors[:3]}"
+        assert cy_ticks == 1, f"Step 1: CybORG remaining_ticks should be 1, got {cy_ticks}"
         assert jax_ticks == cy_ticks, (
-            f"Blue decoy duration mismatch: CybORG remaining_ticks={cy_ticks}, JAX pending_ticks={jax_ticks}"
+            f"Step 1 duration mismatch: CybORG remaining_ticks={cy_ticks}, JAX pending_ticks={jax_ticks}"
+        )
+
+        # Step 2: decoy executes (all agents sleep, pending action completes)
+        result2 = harness.full_step()
+        step_errors2 = [d for d in result2.diffs if d.field_name in _ERROR_FIELDS]
+
+        cy_ticks2 = _get_cyborg_remaining_ticks(controller, "blue_agent_0")
+        jax_ticks2 = int(harness.jax_state.blue_pending_ticks[0])
+
+        assert not step_errors2, f"Blue decoy step 2 parity errors: {step_errors2[:3]}"
+        assert cy_ticks2 == 0, f"Step 2: CybORG remaining_ticks should be 0, got {cy_ticks2}"
+        assert jax_ticks2 == cy_ticks2, (
+            f"Step 2 duration mismatch: CybORG remaining_ticks={cy_ticks2}, JAX pending_ticks={jax_ticks2}"
         )
 
     def test_multi_seed_tick_parity(self):
