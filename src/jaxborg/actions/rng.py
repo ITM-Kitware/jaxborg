@@ -85,6 +85,28 @@ def sample_red_privesc_choice(const: CC4Const, time, agent_id, key, num_sessions
     return jax.lax.cond(const.use_red_privesc_choices, from_precomputed, from_rng, None)
 
 
+def sample_red_session_check_choice(const: CC4Const, time, agent_id, key, num_sessions_on_host):
+    """Return session-check within-host slot index in [0, num_sessions_on_host).
+
+    CybORG's RedSessionCheck picks a random session via np_random.choice(all_sessions).
+    The harness remaps this to a within-host slot index so JAX picks the same
+    session on the promoted host.  Uses precomputed CybORG choice if available,
+    else JAX RNG (uniform over sessions on the chosen host).
+    """
+
+    def from_precomputed(_):
+        return jnp.clip(
+            const.red_session_check_choices[time, agent_id],
+            0,
+            jnp.maximum(num_sessions_on_host - 1, 0),
+        )
+
+    def from_rng(_):
+        return jax.random.randint(key, (), minval=0, maxval=jnp.maximum(num_sessions_on_host, 1), dtype=jnp.int32)
+
+    return jax.lax.cond(const.use_red_session_check_choices, from_precomputed, from_rng, None)
+
+
 def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility):
     """Return a compatible decoy type index, selected randomly from available types.
 

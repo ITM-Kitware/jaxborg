@@ -12,11 +12,11 @@ from jaxborg.actions.pids import (
     allocate_host_pid_from_delta,
     append_pid_to_row,
     append_process_event,
-    first_valid_pid,
     move_pid_to_row_end,
+    nth_valid_pid,
     pid_row_contains,
 )
-from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta
+from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta, sample_red_session_check_choice
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -277,9 +277,17 @@ def apply_red_session_check(
         & (next_anchor == anchor)
         & pid_row_contains(state.red_session_pids[agent_id, next_idx], current_primary_pid)
     )
+    # CybORG's _choose_new_primary_session picks a random session via
+    # np_random.choice(all_sessions).  Match this by picking a random
+    # session on the chosen host (uniform) rather than always first_valid_pid.
+    session_check_key = jax.random.fold_in(key, jnp.int32(7723))
+    host_session_count = jnp.maximum(session_counts[next_idx], jnp.int32(1))
+    within_host_slot = sample_red_session_check_choice(
+        const, state.time, agent_id, session_check_key, host_session_count
+    )
     selected_primary_pid = jax.lax.cond(
         next_anchor >= 0,
-        lambda _: first_valid_pid(state.red_session_pids[agent_id, next_idx]),
+        lambda _: nth_valid_pid(state.red_session_pids[agent_id, next_idx], within_host_slot),
         lambda _: jnp.int32(-1),
         operand=None,
     )

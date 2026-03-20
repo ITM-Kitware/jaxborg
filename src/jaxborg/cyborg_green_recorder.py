@@ -76,6 +76,7 @@ class StepRandomSyncReport:
     red_pid_collisions: list[str] = field(default_factory=list)
     blue_decoy_pid_collisions: list[str] = field(default_factory=list)
     red_privesc_choices: dict[int, int] = field(default_factory=dict)
+    red_session_check_choices: dict[int, int] = field(default_factory=dict)
 
     @property
     def detection_sync_supported(self) -> bool:

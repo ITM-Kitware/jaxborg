@@ -80,7 +80,23 @@ def pid_row_contains(pid_row, pid):
 
 
 def remove_pid_from_row(pid_row, pid):
-    return jnp.where(pid_row == pid, -1, pid_row)
+    """Remove pid and compact: remaining entries slide left, -1s fill the tail.
+
+    CybORG's session dict preserves insertion order when entries are deleted.
+    Compacting ensures slot position continues to correspond to session creation
+    order, which is critical for privesc session selection (nth_valid_pid).
+    Without compaction, append_pid_to_row reuses gaps left by removal, breaking
+    the slot-order ↔ creation-order correspondence.
+    """
+    match = pid_row == pid
+    has_match = jnp.any(match)
+    # Valid PIDs that aren't being removed sort first (preserving original order)
+    is_valid_kept = (pid_row >= 0) & ~match
+    priority = (~is_valid_kept).astype(jnp.int32)
+    order = jnp.argsort(priority)  # JAX argsort is always stable
+    compacted = pid_row[order]
+    result = jnp.where(is_valid_kept[order], compacted, jnp.int32(-1))
+    return jnp.where(has_match & (pid >= 0), result, pid_row)
 
 
 def move_pid_to_row_end(pid_row, pid):

@@ -6,7 +6,7 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     count_valid_pids,
     first_valid_pid,
-    nth_valid_pid_sorted,
+    nth_valid_pid,
     recompute_host_max_pid,
 )
 from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memory_fields
@@ -85,7 +85,7 @@ def apply_privesc(
     )
 
     fallback_pid = first_valid_pid(target_pid_row)
-    tracked_pid = nth_valid_pid_sorted(target_pid_row, chosen_slot)
+    tracked_pid = nth_valid_pid(target_pid_row, chosen_slot)
     escalate_pid = jnp.where(tracked_pid_count == target_count, tracked_pid, fallback_pid)
     target_priv_pid_row = red_session_privileged_pids[agent_id, target_host]
     escalated_priv_pid_row = append_pid_to_row(target_priv_pid_row, escalate_pid)

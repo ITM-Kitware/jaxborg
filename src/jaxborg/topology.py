@@ -379,6 +379,8 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         use_blue_decoy_pid_deltas=jnp.array(False),
         red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_privesc_choices=jnp.array(False),
+        red_session_check_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_session_check_choices=jnp.array(False),
         blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_type_choices=jnp.array(False),
     )
@@ -805,6 +807,8 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         use_blue_decoy_pid_deltas=jnp.array(False),
         red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_privesc_choices=jnp.array(False),
+        red_session_check_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_session_check_choices=jnp.array(False),
         blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_type_choices=jnp.array(False),
     )
