@@ -1,8 +1,11 @@
+import os
+
 import numpy as np
 from CybORG.Shared.Enums import DecoyType
 
 from jaxborg.constants import (
     MAX_TRACKED_SUSPICIOUS_PIDS,
+    NUM_BLUE_AGENTS,
     NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,
@@ -13,6 +16,20 @@ from jaxborg.translate import CC4Mappings
 from tests.differential.harness import StateDiff, StateSnapshot
 
 _DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
+
+# CybORG FSM state string → JAX int mapping (matches fsm_red.py FSM_K..FSM_F)
+_FSM_STATE_MAP = {"K": 0, "KD": 1, "S": 2, "SD": 3, "U": 4, "UD": 5, "R": 6, "RD": 7, "F": 8}
+
+# When JAXBORG_STRICT_DETECTION=1, detection fields are errors instead of warnings.
+_STRICT_DETECTION = os.environ.get("JAXBORG_STRICT_DETECTION", "0") == "1"
+
+_DETECTION_FIELDS = {
+    "host_activity_detected",
+    "old_host_activity_detected",
+    "host_exploit_detected",
+    "old_host_exploit_detected",
+    "host_process_creation_pids",
+}
 
 _ERROR_FIELDS = {
     "identity_primary_host",
@@ -35,15 +52,13 @@ _ERROR_FIELDS = {
     "mission_phase",
     "rewards",
     "observation",
-}
+} | (_DETECTION_FIELDS if _STRICT_DETECTION else set())
 
 _WARNING_FIELDS = {
-    "host_activity_detected",
-    "old_host_activity_detected",
-    "host_exploit_detected",
-    "old_host_exploit_detected",
-    "host_process_creation_pids",
-}
+    "fsm_host_states",
+    "red_session_count",
+    "blue_suspicious_pids",
+} | (_DETECTION_FIELDS if not _STRICT_DETECTION else set())
 
 
 def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
@@ -516,6 +531,79 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
                 jax_blocked_set.add((src_name, dst_name))
     if cyborg_blocked != jax_blocked_set:
         diffs.append(StateDiff("blocked_zones", cyborg_blocked, jax_blocked_set))
+
+    # --- R1: FSM host states ---
+    jax_fsm = np.asarray(jax_state.fsm_host_states[:NUM_RED_AGENTS, :n])
+    cyborg_fsm = np.zeros((NUM_RED_AGENTS, n), dtype=np.int32)
+    for r in range(NUM_RED_AGENTS):
+        iface = controller.agent_interfaces.get(f"red_agent_{r}")
+        if iface is None:
+            continue
+        agent = getattr(iface, "agent", None)
+        if agent is None or not hasattr(agent, "host_states"):
+            continue
+        for _ip_str, info in agent.host_states.items():
+            hostname = info.get("hostname")
+            if hostname is None or hostname not in mappings.hostname_to_idx:
+                continue
+            hidx = mappings.hostname_to_idx[hostname]
+            state_str = info.get("state", "K")
+            cyborg_fsm[r, hidx] = _FSM_STATE_MAP.get(state_str, 0)
+
+    for r in range(NUM_RED_AGENTS):
+        fsm_mismatch = np.where(cyborg_fsm[r] != jax_fsm[r])[0]
+        for h in fsm_mismatch:
+            if cyborg_fsm[r, h] != 0 or jax_fsm[r, h] != 0:
+                diffs.append(
+                    StateDiff("fsm_host_states", int(cyborg_fsm[r, h]), int(jax_fsm[r, h]), f"red_{r}_host_{h}")
+                )
+
+    # --- R1: Red session counts ---
+    jax_session_count = np.asarray(jax_state.red_session_count[:NUM_RED_AGENTS, :n])
+    cyborg_session_count = np.zeros((NUM_RED_AGENTS, n), dtype=np.int32)
+    for agent_name, sessions in cyborg_state.sessions.items():
+        if not agent_name.startswith("red_agent_"):
+            continue
+        red_idx = int(agent_name.split("_")[-1])
+        if red_idx >= NUM_RED_AGENTS:
+            continue
+        for sess in sessions.values():
+            if sess.hostname in mappings.hostname_to_idx:
+                hidx = mappings.hostname_to_idx[sess.hostname]
+                cyborg_session_count[red_idx, hidx] += 1
+
+    for r in range(NUM_RED_AGENTS):
+        count_mismatch = np.where(cyborg_session_count[r] != jax_session_count[r])[0]
+        for h in count_mismatch:
+            diffs.append(
+                StateDiff(
+                    "red_session_count",
+                    int(cyborg_session_count[r, h]),
+                    int(jax_session_count[r, h]),
+                    f"red_{r}_host_{h}",
+                )
+            )
+
+    # --- R1: Blue suspicious PIDs ---
+    jax_sus = np.asarray(jax_state.blue_suspicious_pids[:NUM_BLUE_AGENTS, :n, :MAX_TRACKED_SUSPICIOUS_PIDS])
+    for b in range(NUM_BLUE_AGENTS):
+        blue_sessions = cyborg_state.sessions.get(f"blue_agent_{b}", {})
+        cyborg_sus_by_host: dict[int, set[int]] = {}
+        for blue_sess in blue_sessions.values():
+            sus_pids = getattr(blue_sess, "sus_pids", {})
+            for hostname, pid_list in sus_pids.items():
+                if hostname not in mappings.hostname_to_idx:
+                    continue
+                hidx = mappings.hostname_to_idx[hostname]
+                if hidx not in cyborg_sus_by_host:
+                    cyborg_sus_by_host[hidx] = set()
+                cyborg_sus_by_host[hidx].update(int(p) for p in pid_list)
+
+        for h in range(n):
+            cy_set = cyborg_sus_by_host.get(h, set())
+            jax_set = {int(x) for x in jax_sus[b, h] if x >= 0}
+            if cy_set != jax_set:
+                diffs.append(StateDiff("blue_suspicious_pids", sorted(cy_set), sorted(jax_set), f"blue_{b}_host_{h}"))
 
     return diffs
 
