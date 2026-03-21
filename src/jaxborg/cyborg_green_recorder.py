@@ -188,7 +188,15 @@ class GreenRecorder:
                                     f"{int(red_pid_deltas[ridx])} and {delta}"
                                 )
                             red_pid_deltas[ridx] = delta
-                if agent_name is not None and agent_name.startswith("blue_agent_") and action_type == "DeployDecoy":
+                if (
+                    agent_name is not None
+                    and agent_name.startswith("blue_agent_")
+                    and action_type
+                    in (
+                        "DeployDecoy",
+                        "Remove",
+                    )
+                ):
                     bidx = int(agent_name.split("_")[-1])
                     if 0 <= bidx < NUM_BLUE_AGENTS:
                         delta = _extract_create_pid_delta(calls)

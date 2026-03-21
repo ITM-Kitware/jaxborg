@@ -1,8 +1,13 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import pid_row_contains, recompute_host_max_pid, remove_pid_from_row
+from jaxborg.actions.pids import (
+    pid_row_contains,
+    recompute_host_max_pid,
+    remove_pid_from_row,
+)
 from jaxborg.actions.red_common import sync_scan_memory_fields
+from jaxborg.actions.rng import sample_blue_decoy_pid_delta
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -183,12 +188,79 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         state.host_compromised.at[target_host].set(remaining_max_priv),
         state.host_compromised,
     )
+
+    # CybORG's StopProcess.kill_process respawns service processes: when a
+    # killed PID belongs to a service (e.g. a decoy), the process is
+    # removed and re-created with a new PID via host.create_pid(). This
+    # lowers host_max_pid (because the old high PID is gone) and the
+    # respawned process gets a new, potentially lower PID.  Mirror this by
+    # detecting suspicious PIDs that match decoy process PIDs and
+    # respawning them.
+    any_decoy_respawned = jnp.array(False)
+    host_decoy_process_pids = state.host_decoy_process_pids
+
+    def _check_decoy_respawn(slot, carry):
+        decoy_pids_carry, any_respawned = carry
+        sus_pid = suspicious_pid_row[slot]
+        has_pid = sus_pid >= 0
+        is_decoy = jnp.any(decoy_pids_carry[target_host] == sus_pid) & has_pid & covers_host
+        # Only respawn if the PID is NOT a red session (CybORG's StopProcess
+        # kills the process regardless, but only respawns services).
+        is_red_session = jnp.any(
+            jax.vmap(pid_row_contains, in_axes=(0, None))(new_session_pids[:, target_host, :], sus_pid)
+        )
+        should_respawn = is_decoy & ~is_red_session
+        # Remove old PID from decoy tracking
+        matching_slot = jnp.argmax(decoy_pids_carry[target_host] == sus_pid)
+        cleared = decoy_pids_carry.at[target_host, matching_slot].set(
+            jnp.where(should_respawn, jnp.int32(-1), decoy_pids_carry[target_host, matching_slot])
+        )
+        decoy_pids_carry = jnp.where(should_respawn, cleared, decoy_pids_carry)
+        any_respawned = any_respawned | should_respawn
+        return decoy_pids_carry, any_respawned
+
+    host_decoy_process_pids, any_decoy_respawned = jax.lax.fori_loop(
+        0, slot_limit, _check_decoy_respawn, (host_decoy_process_pids, any_decoy_respawned)
+    )
+
     # Recompute host_max_pid from remaining processes. CybORG's
     # Host.create_pid() uses max(current processes) which decreases when
-    # processes are removed.
-    recomputed_max = recompute_host_max_pid(state, const, target_host, new_session_pids)
+    # processes are removed.  When a decoy was respawned, recompute from
+    # scratch using the UPDATED decoy PIDs (old ones removed).
+    max_red = jnp.max(jnp.where(new_session_pids[:, target_host, :] >= 0, new_session_pids[:, target_host, :], 0))
+    base_max_no_decoy = jnp.maximum(const.host_initial_max_pid[target_host], max_red)
+    max_decoy_updated = jnp.max(
+        jnp.where(host_decoy_process_pids[target_host] >= 0, host_decoy_process_pids[target_host], 0)
+    )
+    recomputed_max_after_decoy_kill = jnp.maximum(base_max_no_decoy, max_decoy_updated)
+    # Standard recompute (includes original decoy PIDs) for non-decoy-respawn case.
+    recomputed_max_standard = recompute_host_max_pid(state, const, target_host, new_session_pids)
+    recomputed_max = jnp.where(any_decoy_respawned, recomputed_max_after_decoy_kill, recomputed_max_standard)
+
+    # Respawn killed decoys with new PIDs (matching CybORG's service respawn
+    # in StopProcess.kill_process).
+    pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id)
+    respawn_pid = recomputed_max + pid_delta
+    # Find the first cleared decoy slot and assign the respawn PID.
+    cleared_slots = host_decoy_process_pids[target_host] < 0
+    original_slots = state.host_decoy_process_pids[target_host] >= 0
+    needs_respawn = cleared_slots & original_slots
+    has_respawn_slot = jnp.any(needs_respawn)
+    respawn_slot = jnp.argmax(needs_respawn)
+    host_decoy_process_pids = jnp.where(
+        any_decoy_respawned & has_respawn_slot,
+        host_decoy_process_pids.at[target_host, respawn_slot].set(respawn_pid),
+        host_decoy_process_pids,
+    )
+    # Update max to include respawned PID.
+    recomputed_max = jnp.where(
+        any_decoy_respawned & has_respawn_slot,
+        jnp.maximum(recomputed_max, respawn_pid),
+        recomputed_max,
+    )
+
     host_max_pid = jnp.where(
-        covers_host & any_removed,
+        covers_host & (any_removed | any_decoy_respawned),
         state.host_max_pid.at[target_host].set(recomputed_max),
         state.host_max_pid,
     )
@@ -280,6 +352,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         red_scan_source_pid=new_scan_source_pid,
         host_compromised=new_host_compromised,
         host_max_pid=host_max_pid,
+        host_decoy_process_pids=host_decoy_process_pids,
         host_suspicious_process=new_suspicious_process,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,

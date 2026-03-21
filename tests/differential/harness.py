@@ -880,6 +880,23 @@ class CC4DifferentialHarness:
         forced_primary_pids_pre = _extract_primary_pids(cy_state)
         pre_service_map = _capture_service_process_map(cy_state)
 
+        # Snapshot session PID order per (agent, host) before the step.
+        # CybORG's PrivilegeEscalate iterates sessions via dict values(),
+        # so preserving dict iteration order captures the choice domain.
+        self._pre_step_session_pids = {}
+        for agent_name, sessions in cy_state.sessions.items():
+            if not agent_name.startswith("red_agent_"):
+                continue
+            ridx = int(agent_name.split("_")[-1])
+            if ridx >= NUM_RED_AGENTS:
+                continue
+            by_host: dict[int, list[int]] = {}
+            for sess in sessions.values():
+                hidx = self.mappings.hostname_to_idx.get(sess.hostname)
+                if hidx is not None:
+                    by_host.setdefault(hidx, []).append(int(sess.pid))
+            self._pre_step_session_pids[ridx] = by_host
+
         controller.step(cyborg_actions)
 
         # Sync CybORG end-turn RedSessionCheck primary-session host choices for next-step anchor parity.
@@ -1246,9 +1263,15 @@ class CC4DifferentialHarness:
                 continue
             if action_type == ACTION_TYPE_PRIVESC:
                 if not usage.random_calls and not usage.integer_ranges and len(usage.choice_sizes) == 1:
-                    # Sync the privesc session choice index so JAX picks the same session
+                    # Sync the privesc session choice index so JAX picks the same session.
+                    # CybORG's np_random.choice iterates sessions by dict key order
+                    # (session IDs), but JAX's nth_valid_pid picks from the PID row
+                    # (insertion order). Convert the CybORG index to JAX PID position.
                     if usage.choice_indices:
-                        random_sync_report.red_privesc_choices[usage.agent_idx] = usage.choice_indices[0]
+                        slot = self._compute_privesc_within_host_slot(
+                            usage.agent_idx, action_idx, usage.choice_indices[0]
+                        )
+                        random_sync_report.red_privesc_choices[usage.agent_idx] = slot
                     continue
                 random_sync_report.unsupported_random_actions.append(
                     f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
@@ -1285,6 +1308,60 @@ class CC4DifferentialHarness:
             if p >= 0:
                 valid_before += 1
         return 0  # PID not found (created during this step), fallback
+
+    def _compute_privesc_within_host_slot(self, agent_idx: int, action_idx: int, choice_index: int) -> int:
+        """Convert CybORG's privesc choice index to JAX's PID row position.
+
+        CybORG's PrivilegeEscalate calls ``np_random.choice(sessions)``
+        where *sessions* is ordered by dict-values iteration.  JAX's
+        ``nth_valid_pid`` picks from the PID row (insertion order).  These
+        orderings can differ, so we find the PID CybORG actually chose and
+        look up its position in JAX's PID row.
+
+        We identify the chosen PID from CybORG's executed action: after
+        ``controller.step``, the PrivilegeEscalate action object stores the
+        concrete EscalateAction as ``sub_action`` whose ``target_session``
+        gives us the session ID.  From that we retrieve the PID.
+        """
+        _, _, target_host_jax = decode_red_action(action_idx, agent_idx, self.jax_const)
+        target_host_jax = int(target_host_jax)
+
+        # Try to find the PID CybORG actually chose via the executed action.
+        controller = self.cyborg_env.environment_controller
+        agent_name = f"red_agent_{agent_idx}"
+        chosen_pid = None
+
+        executed = controller.action.get(agent_name, [])
+        for act in executed:
+            if type(act).__name__ == "PrivilegeEscalate":
+                sub = getattr(act, "sub_action", None)
+                if sub is not None:
+                    target_sid = getattr(sub, "target_session", None)
+                    if target_sid is not None:
+                        cy_sessions = controller.state.sessions.get(agent_name, {})
+                        sess = cy_sessions.get(target_sid)
+                        if sess is not None:
+                            chosen_pid = int(sess.pid)
+                break
+
+        if chosen_pid is None:
+            # Fallback: use pre-step session snapshot (dict iteration order)
+            pre_pids = self._pre_step_session_pids.get(agent_idx, {}).get(target_host_jax, [])
+            if choice_index < len(pre_pids):
+                chosen_pid = pre_pids[choice_index]
+            else:
+                return choice_index
+
+        # Find this PID's position in JAX's PID row
+        pid_row = self.jax_state.red_session_pids[agent_idx, target_host_jax]
+        valid_before = 0
+        for i in range(pid_row.shape[0]):
+            p = int(pid_row[i])
+            if p == chosen_pid:
+                return valid_before
+            if p >= 0:
+                valid_before += 1
+        return choice_index  # PID not found, fallback
 
     def _effective_red_action_for_sync(self, agent_idx: int, proposed_action: int) -> int:
         if bool(self.jax_state.red_pending_ticks[agent_idx] > 0):
