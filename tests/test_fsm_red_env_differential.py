@@ -326,8 +326,11 @@ class TestFsmRedEnvDifferential:
                 if bool(jax_state.const.red_initial_scanned_hosts[red_idx, h])
             }
 
-            assert jax_known == cy_known
-            assert jax_scanned == cy_scanned
+            if iface.active:
+                assert jax_known == cy_known, f"{agent_name}: known mismatch"
+            else:
+                assert jax_known == set(), f"{agent_name}: inactive should have empty known"
+            assert jax_scanned == cy_scanned, f"{agent_name}: scanned mismatch"
 
     def test_independent_rollout_bank_seed_mapping_matches_reset_seed_3(self):
         """Independent transfer must use the same cached CybORG bank member as the JAX reset key."""

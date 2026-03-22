@@ -176,6 +176,7 @@ class TestRedStartHosts:
 
 class TestObsHostMap:
     def test_obs_host_map_valid(self, const):
+        router_slot = OBS_HOSTS_PER_SUBNET - 1
         for sid in range(NUM_SUBNETS):
             for slot in range(OBS_HOSTS_PER_SUBNET):
                 h = int(const.obs_host_map[sid, slot])
@@ -185,6 +186,8 @@ class TestObsHostMap:
                 assert int(const.host_subnet[h]) == sid, f"obs[{sid},{slot}]={h} wrong subnet"
                 if slot < MAX_SERVER_HOSTS:
                     assert bool(const.host_is_server[h]), f"obs[{sid},{slot}]={h} expected server"
+                elif slot == router_slot:
+                    assert bool(const.host_is_router[h]), f"obs[{sid},{slot}]={h} expected router"
                 else:
                     assert bool(const.host_is_user[h]), f"obs[{sid},{slot}]={h} expected user"
 
