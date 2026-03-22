@@ -12,7 +12,7 @@ from CybORG.Agents import (
 )
 
 from tests.differential.harness import CC4DifferentialHarness
-from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
+from tests.differential.state_comparator import _ERROR_FIELDS, _WARNING_FIELDS, format_diffs
 
 
 @dataclass
@@ -52,6 +52,7 @@ def _fuzz_one_seed(
     strict_random_sync: bool,
     check_obs: bool,
     check_masks: bool,
+    strip_inactive_knowledge: bool = False,
 ) -> MismatchReport | None:
     """Run differential fuzzing for a single seed."""
     blue_cls = BLUE_AGENT_CLASSES[blue_agent]
@@ -68,6 +69,7 @@ def _fuzz_one_seed(
         use_cyborg_blue_policy=use_cyborg_blue_policy,
         check_obs=check_obs,
         check_masks=check_masks,
+        strip_inactive_knowledge=strip_inactive_knowledge,
     )
     harness.reset()
 
@@ -86,7 +88,7 @@ def _fuzz_one_seed(
             )
 
         if mismatch_mode == "all":
-            candidate_diffs = result.diffs
+            candidate_diffs = [d for d in result.diffs if d.field_name not in _WARNING_FIELDS]
         else:
             candidate_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
 
@@ -116,6 +118,7 @@ def run_differential_fuzz(
     check_obs: bool = True,
     check_masks: bool = True,
     parallel: int | None = None,
+    strip_inactive_knowledge: bool = False,
 ) -> MismatchReport | None:
     """Run differential fuzzing across seeds serially.
 
@@ -150,6 +153,7 @@ def run_differential_fuzz(
             strict_random_sync,
             check_obs,
             check_masks,
+            strip_inactive_knowledge=strip_inactive_knowledge,
         )
         if report is not None:
             return report

@@ -6,7 +6,7 @@ from tests.differential.state_comparator import compare_fast
 
 class TestFsmParity:
     def test_fsm_states_match_at_reset(self):
-        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
+        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True, strip_inactive_knowledge=True)
         harness.reset()
 
         diffs = compare_fast(harness.cyborg_env, harness.jax_state, harness.jax_const, harness.mappings)
@@ -19,12 +19,8 @@ class TestFsmParity:
             msg = f"FSM divergences at reset ({len(fsm_diffs)} diffs):\n" + "\n".join(lines)
             pytest.fail(msg)
 
-    @pytest.mark.xfail(
-        reason="Start-host mapping mismatch for late-activating red agents (red_4/red_5)",
-        strict=False,
-    )
     def test_fsm_states_tracked_through_episode(self):
-        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
+        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True, strip_inactive_knowledge=True)
         harness.reset()
 
         fsm_divergences = []
@@ -44,7 +40,7 @@ class TestFsmParity:
             pytest.fail(msg)
 
     def test_session_counts_tracked(self):
-        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
+        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True, strip_inactive_knowledge=True)
         harness.reset()
 
         session_divergences = []
@@ -63,7 +59,7 @@ class TestFsmParity:
             pytest.fail(msg)
 
     def test_suspicious_pids_tracked(self):
-        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
+        harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True, strip_inactive_knowledge=True)
         harness.reset()
 
         pids_divergences = []

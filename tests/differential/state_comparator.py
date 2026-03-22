@@ -558,15 +558,16 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             hidx = mappings.hostname_to_idx[hostname]
             state_str = info.get("state", "K")
             cyborg_fsm[r, hidx] = _FSM_STATE_MAP.get(state_str, 0)
-        # CybORG's FSM agent starts with empty host_states; the start host
-        # is only set to 'U' after the first get_action() processes the
-        # initial observation.  JAX initialises FSM_U on the start host at
-        # reset.  Synthesise the post-first-observation state so the
-        # comparison is fair before any steps have been taken.
+        # CybORG's FSM agent starts with empty host_states; the first
+        # get_action() assigns 'U' to every host visible in the initial
+        # observation.  For agents active at reset this is the start host;
+        # for late-activating agents it is the host where the first session
+        # was reassigned.  Use CybORG's actual session locations so the
+        # synthesis works for both cases.
         if not agent.host_states and getattr(iface, "active", False):
-            start_hidx = int(jax_const.red_start_hosts[r])
-            if 0 <= start_hidx < n:
-                cyborg_fsm[r, start_hidx] = _FSM_STATE_MAP["U"]
+            for sess in cyborg_state.sessions.get(f"red_agent_{r}", {}).values():
+                if sess.hostname in mappings.hostname_to_idx:
+                    cyborg_fsm[r, mappings.hostname_to_idx[sess.hostname]] = _FSM_STATE_MAP["U"]
 
     for r in range(NUM_RED_AGENTS):
         fsm_mismatch = np.where(cyborg_fsm[r] != jax_fsm[r])[0]

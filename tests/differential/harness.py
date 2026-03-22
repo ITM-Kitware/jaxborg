@@ -270,6 +270,7 @@ class CC4DifferentialHarness:
         sync_green_rng=True,
         strict_random_sync=False,
         use_cyborg_blue_policy=False,
+        strip_inactive_knowledge=False,
     ):
         self.seed = seed
         self.max_steps = max_steps
@@ -282,6 +283,7 @@ class CC4DifferentialHarness:
         self.sync_green_rng = sync_green_rng
         self.strict_random_sync = strict_random_sync
         self.use_cyborg_blue_policy = use_cyborg_blue_policy
+        self.strip_inactive_knowledge = strip_inactive_knowledge
         self.cyborg_env = None
         self.jax_state = None
         self.jax_const = None
@@ -656,6 +658,25 @@ class CC4DifferentialHarness:
             red_next_abstract_rank=start_next_abstract_rank,
             red_agent_active=red_agent_active,
         )
+
+        # Mirror _strip_inactive_red_reset_knowledge (FsmRedCC4Env) when using
+        # native FSM action selection.  Without this, late-activating agents
+        # carry topology-seeded discovery that CybORG's FSM agent does not have.
+        # Translated-action replay tests must NOT strip (they need the richer
+        # knowledge from the controller action space).
+        if self.strip_inactive_knowledge:
+            inactive = ~red_agent_active
+            self.jax_state = self.jax_state.replace(
+                red_discovered_hosts=jnp.where(inactive[:, None], False, self.jax_state.red_discovered_hosts),
+                red_scanned_hosts=jnp.where(inactive[:, None], False, self.jax_state.red_scanned_hosts),
+                red_scanned_source_hosts=jnp.where(
+                    inactive[:, None, None], False, self.jax_state.red_scanned_source_hosts
+                ),
+                red_scan_source_pid=jnp.where(inactive[:, None], jnp.int32(-1), self.jax_state.red_scan_source_pid),
+                red_scan_anchor_host=jnp.where(inactive, jnp.int32(-1), self.jax_state.red_scan_anchor_host),
+                red_primary_pid=jnp.where(inactive, jnp.int32(-1), self.jax_state.red_primary_pid),
+            )
+
         self._assert_pid_capacity("reset")
 
         self.rng_key = jax.random.PRNGKey(self.seed)
