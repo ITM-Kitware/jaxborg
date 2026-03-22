@@ -21,6 +21,7 @@ _DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
 _FSM_STATE_MAP = {"K": 0, "KD": 1, "S": 2, "SD": 3, "U": 4, "UD": 5, "R": 6, "RD": 7, "F": 8}
 
 # When JAXBORG_STRICT_DETECTION=1, detection fields are errors instead of warnings.
+# Detection diffs still appear with random blue agents (Monitor action timing).
 _STRICT_DETECTION = os.environ.get("JAXBORG_STRICT_DETECTION", "0") == "1"
 
 _DETECTION_FIELDS = {
