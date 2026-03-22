@@ -295,7 +295,7 @@ def snapshots_match(cyborg: StateSnapshot, jax: StateSnapshot) -> bool:
     return len(compare_snapshots(cyborg, jax)) == 0
 
 
-def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
+def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[StateDiff]:
     """Array-based comparison — bulk-transfers JAX arrays to numpy instead of per-element access."""
     n = mappings.num_hosts
     diffs = []

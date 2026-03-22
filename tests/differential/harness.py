@@ -289,6 +289,7 @@ class CC4DifferentialHarness:
         self.jax_const = None
         self.mappings = None
         self.rng_key = None
+        self.red_initially_active = None
         self.green_recorder = None
         self._blue_wrapper = None
         self._blue_unsupported_pending = {}
@@ -661,6 +662,7 @@ class CC4DifferentialHarness:
             red_next_abstract_rank=start_next_abstract_rank,
             red_agent_active=red_agent_active,
         )
+        self.red_initially_active = red_agent_active
 
         # Mirror _strip_inactive_red_reset_knowledge (FsmRedCC4Env) when using
         # native FSM action selection.  Without this, late-activating agents
