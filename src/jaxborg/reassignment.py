@@ -142,10 +142,20 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_session_privileged_pids = red_session_privileged_pids.at[dst].set(dst_priv_rows)
 
     red_sessions = red_session_count > 0
-    # Activate red agents that now have sessions (CybORG's different_subnet_agent_reassignment)
-    red_agent_active = state.red_agent_active | jnp.any(red_sessions, axis=1)
+    newly_active = ~state.red_agent_active & jnp.any(red_sessions, axis=1)
+    red_agent_active = state.red_agent_active | newly_active
     # Any host with an active red session must be discoverable by that red agent.
     red_discovered = red_discovered | red_sessions
+    # Newly activated agents also discover their start host — CybORG pre-seeds
+    # aspace.ip_address with the start host at reset, and it persists through
+    # activation.
+    for r in range(NUM_RED_AGENTS):
+        start_h = const.red_start_hosts[r]
+        red_discovered = jnp.where(
+            newly_active[r],
+            red_discovered.at[r, start_h].set(True),
+            red_discovered,
+        )
     red_session_is_abstract = jnp.any(red_session_abstract_pids >= 0, axis=2) & red_sessions
     red_privilege = jnp.where(
         jnp.any(red_session_privileged_pids >= 0, axis=2),
