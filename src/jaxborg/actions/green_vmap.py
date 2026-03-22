@@ -289,6 +289,12 @@ def apply_green_agents_vmapped(
         red_idx = decisions.red_agent_idx[slot]
         delta = decisions.pid_delta[slot]
 
+        # Re-validate against current carry_state (vmapped decisions used stale
+        # state — another green agent may have already created a session on this
+        # host or for this red agent since the decisions were computed).
+        any_red_on_host_now = jnp.any(carry_state.red_sessions[:, h])
+        valid = valid & ~any_red_on_host_now
+
         # Allocate PID
         new_pid = carry_state.host_max_pid[h] + delta
 

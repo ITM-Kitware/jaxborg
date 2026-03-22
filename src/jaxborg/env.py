@@ -135,6 +135,8 @@ def apply_all_actions_typed(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     execution_order: jnp.ndarray,
+    *,
+    use_green_vmap: bool = True,
 ) -> CC4State:
     """Apply one CybORG step using typed loops (no cond dispatch).
 
@@ -162,8 +164,20 @@ def apply_all_actions_typed(
     state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, blue_step, state)
 
     # --- Phase 2: Green agents ---
-    from jaxborg.actions.green_vmap import apply_green_agents_vmapped
-    state = apply_green_agents_vmapped(state, const, key_green)
+    # Use vmapped green in pure/training mode (faster, training-correct).
+    # Fall back to sequential fori_loop for cyborg_bank mode (exact parity).
+    if use_green_vmap:
+        from jaxborg.actions.green_vmap import apply_green_agents_vmapped
+        state = apply_green_agents_vmapped(state, const, key_green)
+    else:
+        from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
+        green_host_order = _ordered_green_hosts(const)
+
+        def green_step(i, carry_state):
+            host_idx = green_host_order[i]
+            return _apply_single_green(carry_state, const, host_idx, green_keys[host_idx])
+
+        state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
     # --- Phase 3: Red agents ---
     def red_step(r, carry_state):
@@ -527,6 +541,7 @@ class CC4Env(MultiAgentEnv):
             state, const, blue_action_arr, red_action_arr,
             key_green, red_keys, no_forced, no_forced_pids,
             execution_order,
+            use_green_vmap=(self.topology_mode == "pure"),
         )
 
         reward_breakdown = compute_reward_breakdown(
