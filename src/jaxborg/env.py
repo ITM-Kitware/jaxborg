@@ -306,11 +306,13 @@ class CC4Env(MultiAgentEnv):
         topology_mode: str = "pure",
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
+        training_mode: bool = False,
     ):
         self.num_steps = num_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
+        self.training_mode = training_mode
         self._const_bank = None
         self._green_random_bank = None
         self._red_policy_random_bank = None
@@ -337,7 +339,7 @@ class CC4Env(MultiAgentEnv):
 
     def _select_const(self, key: chex.PRNGKey) -> CC4Const:
         if self._const_bank is None:
-            return build_topology(key, num_steps=self.num_steps)
+            return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
 
         bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return jax.tree.map(lambda x: x[bank_idx], self._const_bank)

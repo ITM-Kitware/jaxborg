@@ -620,7 +620,7 @@ def _compute_allowed_subnet_pairs(allowed_per_mphase) -> np.ndarray:
     return pairs
 
 
-def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
+def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> CC4Const:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
@@ -794,22 +794,53 @@ def build_topology(key: jax.Array, num_steps: int = 500) -> CC4Const:
         comms_policy=_COMMS_POLICY,
         max_steps=num_steps,
         num_hosts=num_hosts,
-        # Precomputed RNG arrays (defaults: disabled / zeros)
-        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
+        # Precomputed RNG arrays (defaults: disabled / zeros).
+        # In training_mode, use minimal (1,...) shapes to reduce PyTree size and
+        # XLA trace complexity.  The use_* flags are always False here, so the
+        # full-size arrays are never read at runtime — but XLA still traces both
+        # branches of each jax.lax.cond and includes the array shapes in the
+        # HLO program.  Smaller shapes → smaller HLO → faster compile + possibly
+        # smaller GPU kernels.
+        green_randoms=jnp.zeros(
+            (1, 1, 1) if training_mode else (MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS),
+            dtype=jnp.float32,
+        ),
         use_green_randoms=jnp.array(False),
-        red_policy_randoms=jnp.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
+        red_policy_randoms=jnp.full(
+            (1, 1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
+            0.5,
+            dtype=jnp.float32,
+        ),
         use_red_policy_randoms=jnp.array(False),
-        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
+        detection_randoms=jnp.zeros(
+            (1,) if training_mode else (MAX_DETECTION_RANDOMS,),
+            dtype=jnp.float32,
+        ),
         use_detection_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        red_pid_deltas=jnp.zeros(
+            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
+            dtype=jnp.int32,
+        ),
         use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        blue_decoy_pid_deltas=jnp.zeros(
+            (1, 1) if training_mode else (MAX_STEPS, NUM_BLUE_AGENTS),
+            dtype=jnp.int32,
+        ),
         use_blue_decoy_pid_deltas=jnp.array(False),
-        red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        red_privesc_choices=jnp.zeros(
+            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
+            dtype=jnp.int32,
+        ),
         use_red_privesc_choices=jnp.array(False),
-        red_session_check_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        red_session_check_choices=jnp.zeros(
+            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
+            dtype=jnp.int32,
+        ),
         use_red_session_check_choices=jnp.array(False),
-        blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
+        blue_decoy_type_choices=jnp.zeros(
+            (1, 1) if training_mode else (MAX_STEPS, NUM_BLUE_AGENTS),
+            dtype=jnp.int32,
+        ),
         use_blue_decoy_type_choices=jnp.array(False),
     )
 
