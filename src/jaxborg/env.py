@@ -378,14 +378,12 @@ class CC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
-        typed_loops: bool = False,
     ):
         self.num_steps = num_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
         self.training_mode = training_mode
-        self.typed_loops = typed_loops
         self._const_bank = None
         self._green_random_bank = None
         self._red_policy_random_bank = None
@@ -524,18 +522,12 @@ class CC4Env(MultiAgentEnv):
         no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         no_forced_pids = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        if self.typed_loops:
-            execution_order = _cyborg_priority_execution_order(blue_action_arr)
-            state = apply_all_actions_typed(
-                state, const, blue_action_arr, red_action_arr,
-                key_green, red_keys, no_forced, no_forced_pids,
-                execution_order,
-            )
-        else:
-            state = apply_all_actions(
-                state, const, blue_action_arr, red_action_arr,
-                key_green, red_keys, no_forced, no_forced_pids,
-            )
+        execution_order = _cyborg_priority_execution_order(blue_action_arr)
+        state = apply_all_actions_typed(
+            state, const, blue_action_arr, red_action_arr,
+            key_green, red_keys, no_forced, no_forced_pids,
+            execution_order,
+        )
 
         reward_breakdown = compute_reward_breakdown(
             state,

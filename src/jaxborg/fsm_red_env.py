@@ -33,7 +33,6 @@ class FsmRedCC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
-        typed_loops: bool = False,
     ):
         self._env = CC4Env(
             num_steps=num_steps,
@@ -41,7 +40,6 @@ class FsmRedCC4Env(MultiAgentEnv):
             topology_bank_size=topology_bank_size,
             sync_red_policy_bank=sync_red_policy_bank,
             training_mode=training_mode,
-            typed_loops=typed_loops,
         )
         self.agents = list(self._env.blue_agents)
 
