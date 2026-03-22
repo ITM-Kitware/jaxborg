@@ -204,6 +204,15 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_scan_source_pid = jnp.where(full_clear, jnp.int32(-1), scan_synced.red_scan_source_pid)
     host_suspicious_process = jnp.any(red_suspicious_process_count > 0, axis=0)
 
+    # Deactivate agents that lost all sessions (CybORG line 901-902).
+    # Agent 0 stays active (initial agent, never deactivated in CC4).
+    has_sessions_after = jnp.any(red_sessions, axis=1)
+    lost_all = red_agent_active & ~has_sessions_after
+    red_agent_active = red_agent_active & ~lost_all
+    red_agent_active = red_agent_active.at[0].set(True)
+    # Clear discovery and FSM for deactivated agents
+    red_discovered = jnp.where(lost_all[:, None], False, red_discovered)
+
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
