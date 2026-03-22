@@ -64,6 +64,7 @@ class CC4Const:
     # --- Precomputed RNG arrays (read-only during stepping, set at reset) ---
     green_randoms: chex.Array  # (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) float — precomputed green agent randoms
     use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
+    green_agents_active: chex.Array  # scalar bool — False = skip green actions (SleepAgent parity)
     red_policy_randoms: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS, 3) float — precomputed FSM choice tokens
     use_red_policy_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
     detection_randoms: chex.Array  # (MAX_DETECTION_RANDOMS,) float — precomputed sequence
@@ -191,6 +192,7 @@ def create_initial_const() -> CC4Const:
         num_hosts=jnp.int32(0),
         green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
+        green_agents_active=jnp.array(True),
         red_policy_randoms=jnp.full(
             (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
             0.5,

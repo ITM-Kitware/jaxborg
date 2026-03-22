@@ -440,6 +440,9 @@ class CC4DifferentialHarness:
 
         self.jax_const = build_const_from_cyborg(self.cyborg_env)
         self.mappings = build_mappings_from_cyborg(self.cyborg_env)
+        # Disable green actions when CybORG uses SleepAgent for green
+        if self.green_cls is SleepAgent:
+            self.jax_const = self.jax_const.replace(green_agents_active=jnp.array(False))
         cyborg_state = self.cyborg_env.environment_controller.state
         controller = self.cyborg_env.environment_controller
 

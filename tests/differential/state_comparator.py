@@ -1,5 +1,3 @@
-import os
-
 import numpy as np
 from CybORG.Shared.Enums import DecoyType
 
@@ -20,10 +18,8 @@ _DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
 # CybORG FSM state string → JAX int mapping (matches fsm_red.py FSM_K..FSM_F)
 _FSM_STATE_MAP = {"K": 0, "KD": 1, "S": 2, "SD": 3, "U": 4, "UD": 5, "R": 6, "RD": 7, "F": 8}
 
-# When JAXBORG_STRICT_DETECTION=1, detection fields are errors instead of warnings.
-# Detection diffs still appear with random blue agents (Monitor action timing).
-_STRICT_DETECTION = os.environ.get("JAXBORG_STRICT_DETECTION", "0") == "1"
-
+# Detection fields promoted to errors — all tests pass clean with
+# green_agents_active gating fixing the SleepAgent parity gap.
 _DETECTION_FIELDS = {
     "host_activity_detected",
     "old_host_activity_detected",
@@ -53,13 +49,13 @@ _ERROR_FIELDS = {
     "mission_phase",
     "rewards",
     "observation",
-} | (_DETECTION_FIELDS if _STRICT_DETECTION else set())
+} | _DETECTION_FIELDS
 
 _WARNING_FIELDS = {
     "fsm_host_states",
     "red_session_count",
     "blue_suspicious_pids",
-} | (_DETECTION_FIELDS if not _STRICT_DETECTION else set())
+}
 
 
 def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:

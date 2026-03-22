@@ -366,6 +366,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         comms_policy=jnp.array(_build_comms_policy()),
         max_steps=500,
         num_hosts=jnp.int32(num_hosts),
+        green_agents_active=jnp.array(True),
         # Precomputed RNG arrays (defaults: disabled / zeros)
         green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
         use_green_randoms=jnp.array(False),
@@ -794,6 +795,7 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
         comms_policy=_COMMS_POLICY,
         max_steps=num_steps,
         num_hosts=num_hosts,
+        green_agents_active=jnp.array(True),
         # Precomputed RNG arrays (defaults: disabled / zeros).
         # In training_mode, use minimal (1,...) shapes to reduce PyTree size and
         # XLA trace complexity.  The use_* flags are always False here, so the

@@ -433,7 +433,7 @@ def apply_green_agent_action(
     key: jax.Array,
 ) -> CC4State:
     """Apply one green host action if that host owns an active green agent."""
-    is_active = const.green_agent_active[host_idx]
+    is_active = const.green_agent_active[host_idx] & const.green_agents_active
     new_state = _apply_single_green(state, const, host_idx, key)
     return jax.tree.map(
         lambda new, old: jnp.where(is_active, new, old),
