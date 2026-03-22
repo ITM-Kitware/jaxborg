@@ -164,12 +164,15 @@ def apply_all_actions_typed(
     # --- Phase 2: Green agents (active hosts only, ordered) ---
     # _ordered_green_hosts sorts active hosts first by green_agent_host index.
     # Only iterate over const.num_green_agents active hosts (dynamic bound).
-    from jaxborg.actions.green import _ordered_green_hosts
+    # Call _apply_single_green directly — skips the is_active check and
+    # jnp.where tree_map in apply_green_agent_action since all hosts in
+    # the active-only loop are guaranteed active.
+    from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
     green_host_order = _ordered_green_hosts(const)
 
     def green_step(i, carry_state):
         host_idx = green_host_order[i]
-        return apply_green_agent_action(carry_state, const, host_idx, green_keys[host_idx])
+        return _apply_single_green(carry_state, const, host_idx, green_keys[host_idx])
 
     state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
