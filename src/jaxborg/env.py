@@ -149,36 +149,72 @@ def apply_all_actions_typed(
     """
     green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
 
-    # --- Phase 1: Blue agents (traffic-control first, then others) ---
-    is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
-    blue_order = jnp.arange(NUM_BLUE_AGENTS, dtype=jnp.int32)
-    blue_priority = jnp.where(is_traffic, 0, 1)
-    blue_order = blue_order[jnp.argsort(blue_priority, stable=True)]
+    # --- Phase 1: Blue agents (vmapped, non-overlapping hosts) ---
+    # Blue agents have non-overlapping host assignments, so they can be
+    # processed in parallel from the same initial state. Each produces an
+    # independent modified state; merge via diff accumulation.
+    # Traffic priority doesn't matter between blue agents (only blue→green).
+    blue_ids = jnp.arange(NUM_BLUE_AGENTS, dtype=jnp.int32)
+    blue_acts = blue_actions
 
-    def blue_step(i, carry_state):
-        b = blue_order[i]
-        return process_blue_with_duration(carry_state, const, b, blue_actions[b])
+    def _process_one_blue(agent_id):
+        return process_blue_with_duration(state, const, agent_id, blue_acts[agent_id])
 
-    state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, blue_step, state)
+    batched_blue_states = jax.vmap(_process_one_blue)(blue_ids)
+
+    # Merge: sum diffs for numeric, OR changes for bool.
+    # Non-overlapping host assignments guarantee at most one agent modifies
+    # any given position, so sum-of-diffs is exact.
+    def _merge_blue(orig, batched):
+        if orig.dtype == jnp.bool_:
+            changes = batched ^ orig[None, ...]
+            return orig | changes.any(axis=0)
+        else:
+            diffs = batched.astype(jnp.int32) - orig.astype(jnp.int32)[None, ...]
+            return (orig.astype(jnp.int32) + diffs.sum(axis=0)).astype(orig.dtype)
+
+    state = jax.tree.map(_merge_blue, state, batched_blue_states)
 
     # --- Phase 2: Green agents ---
     from jaxborg.actions.green_vmap import apply_green_agents_vmapped
     state = apply_green_agents_vmapped(state, const, key_green)
 
-    # --- Phase 3: Red agents ---
-    def red_step(r, carry_state):
+    # --- Phase 3: Red agents (vmapped) ---
+    # Red agents have per-agent state rows (non-overlapping writes to
+    # red_sessions[agent_id], red_privilege[agent_id], etc.).
+    # Shared per-host fields (host_compromised, host_max_pid) are only
+    # increased by red actions (exploit/privesc), so max-merge is correct.
+    red_ids = jnp.arange(NUM_RED_AGENTS, dtype=jnp.int32)
+
+    def _process_one_red(agent_id):
         return process_red_with_duration(
-            carry_state,
+            state,
             const,
-            r,
-            red_actions[r],
-            red_keys[r],
-            forced_primary_host=forced_primary_hosts[r],
-            forced_primary_pid=forced_primary_pids[r],
+            agent_id,
+            red_actions[agent_id],
+            red_keys[agent_id],
+            forced_primary_host=forced_primary_hosts[agent_id],
+            forced_primary_pid=forced_primary_pids[agent_id],
             run_session_check=False,
         )
 
-    state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)
+    batched_red_states = jax.vmap(_process_one_red)(red_ids)
+
+    # Merge: for per-agent indexed fields, sum-of-diffs is exact since each
+    # agent only modifies its own row. For shared per-host fields, red actions
+    # only increase values (set compromise, add sessions, allocate PIDs), so
+    # element-wise max across agents is correct.
+    def _merge_red(orig, batched):
+        if orig.dtype == jnp.bool_:
+            changes = batched ^ orig[None, ...]
+            return orig | changes.any(axis=0)
+        else:
+            # Max merge: correct for monotonically-increasing red operations
+            # (compromise levels, PIDs, activity flags) and for per-agent rows
+            # where only one agent modifies each position.
+            return jnp.max(batched, axis=0)
+
+    state = jax.tree.map(_merge_red, state, batched_red_states)
 
     # --- Post-step processing ---
     state = reassign_cross_subnet_sessions(state, const)
