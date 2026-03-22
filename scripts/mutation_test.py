@@ -34,7 +34,7 @@ MUTATIONS: list[MutationDef] = [
         name="exploit_skip_session_creation",
         description="SSH exploit succeeds but does not create a session",
         module="jaxborg.actions.red_exploit",
-        target_fn="apply_red_exploit_ssh",
+        target_fn="apply_exploit_ssh",
         patch_code=textwrap.dedent("""\
             # Mutation: return state unchanged (no session creation)
             def mutant(state, const, agent_id, target_host, key):
@@ -83,7 +83,7 @@ MUTATIONS: list[MutationDef] = [
         name="discover_always_fails",
         description="Red DiscoverRemoteSystems never discovers hosts",
         module="jaxborg.actions.red_discover",
-        target_fn="apply_red_discover",
+        target_fn="apply_discover",
         patch_code=textwrap.dedent("""\
             def mutant(state, const, agent_id, target_subnet, key):
                 return state
@@ -121,7 +121,7 @@ MUTATIONS: list[MutationDef] = [
         name="scan_marks_wrong_host",
         description="Scan marks host 0 as scanned instead of the target",
         module="jaxborg.actions.red_scan",
-        target_fn="apply_red_scan",
+        target_fn="apply_scan",
         patch_code=textwrap.dedent("""\
             import functools
             _orig = __orig_fn__
