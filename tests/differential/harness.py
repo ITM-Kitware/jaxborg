@@ -671,8 +671,11 @@ class CC4DifferentialHarness:
         # knowledge from the controller action space).
         if self.strip_inactive_knowledge:
             inactive = ~red_agent_active
+            # Strip scan state for inactive agents, but KEEP discovery —
+            # CybORG's action_space.ip_address pre-populates the start host
+            # IP for all agents including inactive ones, and topology.py
+            # correctly extracts this at build time.
             self.jax_state = self.jax_state.replace(
-                red_discovered_hosts=jnp.where(inactive[:, None], False, self.jax_state.red_discovered_hosts),
                 red_scanned_hosts=jnp.where(inactive[:, None], False, self.jax_state.red_scanned_hosts),
                 red_scanned_source_hosts=jnp.where(
                     inactive[:, None, None], False, self.jax_state.red_scanned_source_hosts
