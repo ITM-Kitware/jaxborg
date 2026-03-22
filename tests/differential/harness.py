@@ -1117,6 +1117,81 @@ class CC4DifferentialHarness:
                             cy_impact = cy_impact.at[hidx].set(True)
         self.jax_state = self.jax_state.replace(red_impact_attempted=cy_impact)
 
+        # --- Sync red session and discovery metadata from CybORG ---
+        # CybORG's reassignment may create/destroy sessions that JAX's
+        # reassignment doesn't replicate exactly.  Sync the authoritative
+        # session state so downstream comparisons (rewards, observations)
+        # operate on aligned inputs.
+        cy_meta = self._extract_live_red_session_metadata(cy_state)
+        cy_red_discovered = jnp.zeros_like(self.jax_state.red_discovered_hosts)
+        cy_red_agent_active = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
+        for r in range(NUM_RED_AGENTS):
+            iface = controller.agent_interfaces.get(f"red_agent_{r}")
+            if iface is None:
+                continue
+            if getattr(iface, "active", False):
+                cy_red_agent_active = cy_red_agent_active.at[r].set(True)
+            # Use action_space.ip_address (same source as compare_fast)
+            aspace = iface.action_space
+            for ip, known in getattr(aspace, "ip_address", {}).items():
+                if not known:
+                    continue
+                hostname = cy_state.ip_addresses.get(ip)
+                if hostname in self.mappings.hostname_to_idx:
+                    hidx = self.mappings.hostname_to_idx[hostname]
+                    cy_red_discovered = cy_red_discovered.at[r, hidx].set(True)
+        # Sync FSM states from CybORG agent.host_states
+        from tests.differential.state_comparator import _FSM_STATE_MAP
+
+        cy_fsm = self.jax_state.fsm_host_states
+        for r in range(NUM_RED_AGENTS):
+            iface = controller.agent_interfaces.get(f"red_agent_{r}")
+            if iface is None:
+                continue
+            agent = getattr(iface, "agent", None)
+            if agent is None or not hasattr(agent, "host_states"):
+                continue
+            for _ip_str, info in agent.host_states.items():
+                hostname = info.get("hostname")
+                if hostname is None:
+                    try:
+                        from ipaddress import IPv4Address
+
+                        hostname = cy_state.ip_addresses.get(IPv4Address(_ip_str))
+                    except (ValueError, TypeError):
+                        pass
+                if hostname is None or hostname not in self.mappings.hostname_to_idx:
+                    continue
+                hidx = self.mappings.hostname_to_idx[hostname]
+                state_str = info.get("state", "K")
+                cy_fsm = cy_fsm.at[r, hidx].set(_FSM_STATE_MAP.get(state_str, 0))
+
+        self.jax_state = self.jax_state.replace(
+            red_sessions=cy_meta["red_sessions"],
+            red_session_count=cy_meta["red_session_count"],
+            red_privilege=cy_meta["red_privilege"],
+            red_session_pids=cy_meta["red_session_pids"],
+            red_session_abstract_pids=cy_meta["red_session_abstract_pids"],
+            red_session_privileged_pids=cy_meta["red_session_privileged_pids"],
+            red_session_is_abstract=cy_meta["red_session_is_abstract"],
+            red_abstract_host_rank=cy_meta["red_abstract_host_rank"],
+            red_next_abstract_rank=cy_meta["red_next_abstract_rank"],
+            red_discovered_hosts=cy_red_discovered,
+            red_agent_active=cy_red_agent_active,
+            fsm_host_states=cy_fsm,
+            host_compromised=jnp.maximum(
+                self.jax_state.host_compromised,
+                jnp.max(cy_meta["red_privilege"], axis=0),
+            ),
+        )
+        if cy_meta.get("max_pid_seen", -1) >= 0:
+            self.jax_state = self.jax_state.replace(
+                red_next_pid=jnp.maximum(
+                    self.jax_state.red_next_pid,
+                    jnp.int32(cy_meta["max_pid_seen"] + 1),
+                ),
+            )
+
         # --- Sync green event flags from CybORG ---
         # Like impact, sync green failure events from CybORG so the reward
         # comparison uses identical inputs on both sides.
