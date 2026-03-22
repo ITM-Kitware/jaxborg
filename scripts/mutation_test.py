@@ -153,13 +153,16 @@ exec_globals = {{"__orig_fn__": __orig_fn__}}
 exec('''{patch_code}''', exec_globals)
 mutant_fn = exec_globals["mutant"]
 
-# Patch and run the fuzzer
+# Patch and run the fuzzer with random blue agent for better coverage
 with patch.object(mod, "{target_fn}", mutant_fn):
     from tests.differential.fuzzer import run_differential_fuzz
     report = run_differential_fuzz(
         seeds=range({seeds}),
         max_steps_per_seed={steps},
         mismatch_mode="error",
+        blue_agent="random",
+        blue_action_source="cyborg_policy",
+        strip_inactive_knowledge=True,
     )
     if report is not None:
         print(f"CAUGHT at seed={{report.seed}} step={{report.step}}: {{report.field_name}}")
