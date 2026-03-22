@@ -285,8 +285,20 @@ def _apply_single_green(
         state.host_compromised.at[host_idx].set(jnp.maximum(state.host_compromised[host_idx], COMPROMISE_USER)),
         state.host_compromised,
     )
+    # CybORG green phishing creates a regular session (not session 0).
+    # Session 0 is only set by RedSessionCheck.  Only set the anchor here
+    # when the agent has NO existing sessions (fresh activation via green
+    # phishing).  When the anchor is -1 because blue Restore just killed
+    # the session, RedSessionCheck will promote a new primary later.
+    agent_has_no_sessions = ~jnp.any(state.red_sessions[red_agent_idx])
+    should_set_anchor = (
+        phish_creates_session
+        & (red_agent >= 0)
+        & (state.red_scan_anchor_host[red_agent_idx] < 0)
+        & agent_has_no_sessions
+    )
     red_scan_anchor_host = jnp.where(
-        phish_creates_session & (red_agent >= 0) & (state.red_scan_anchor_host[red_agent_idx] < 0),
+        should_set_anchor,
         state.red_scan_anchor_host.at[red_agent_idx].set(host_idx),
         state.red_scan_anchor_host,
     )

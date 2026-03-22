@@ -4,7 +4,7 @@ from tests.differential.fuzzer import run_differential_fuzz
 
 pytestmark = pytest.mark.slow
 
-STRICT_RANDOM_BLUE_SEEDS = list(range(200))
+STRICT_RANDOM_BLUE_SEEDS = list(range(1000))
 STRICT_RANDOM_BLUE_STEPS = 500
 
 
