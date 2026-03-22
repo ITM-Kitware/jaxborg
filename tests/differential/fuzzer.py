@@ -12,7 +12,7 @@ from CybORG.Agents import (
 )
 
 from tests.differential.harness import CC4DifferentialHarness
-from tests.differential.state_comparator import _ERROR_FIELDS, _WARNING_FIELDS, format_diffs
+from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
 
 @dataclass
@@ -88,7 +88,7 @@ def _fuzz_one_seed(
             )
 
         if mismatch_mode == "all":
-            candidate_diffs = [d for d in result.diffs if d.field_name not in _WARNING_FIELDS]
+            candidate_diffs = result.diffs
         else:
             candidate_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
 
