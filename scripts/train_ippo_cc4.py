@@ -232,6 +232,7 @@ def make_train(config):
         topology_mode=config.get("TOPOLOGY_MODE", "pure"),
         topology_bank_size=config.get("TOPOLOGY_BANK_SIZE", 0),
         training_mode=bool(config.get("TRAINING_MODE", False)),
+        typed_loops=bool(config.get("TYPED_LOOPS", False)),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents  # 5

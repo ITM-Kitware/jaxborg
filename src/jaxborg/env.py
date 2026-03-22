@@ -125,6 +125,79 @@ def apply_all_actions_in_order(
     return state
 
 
+def apply_all_actions_typed(
+    state: CC4State,
+    const: CC4Const,
+    blue_actions: jnp.ndarray,
+    red_actions: jnp.ndarray,
+    key_green: chex.PRNGKey,
+    red_keys: jnp.ndarray,
+    forced_primary_hosts: jnp.ndarray,
+    forced_primary_pids: jnp.ndarray,
+    execution_order: jnp.ndarray,
+) -> CC4State:
+    """Apply one CybORG step using typed loops (no cond dispatch).
+
+    Splits the monolithic fori_loop into 3 typed phases matching CybORG's
+    execution order: traffic-control blue → other blue → green → red.
+    Each loop body handles only its own action type, eliminating the 3-level
+    nested jax.lax.cond that forces XLA to evaluate all 3 branches per iteration.
+
+    Execution order correctness: CybORG sorts by priority (traffic=1, else=99)
+    then by insertion order (blue 0-4, green hosts, red 0-5). After traffic-control
+    blue agents, the order is always: remaining blue → green → red.
+    """
+    green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
+
+    # --- Phase 1: Blue agents (traffic-control first, then others) ---
+    is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
+    blue_order = jnp.arange(NUM_BLUE_AGENTS, dtype=jnp.int32)
+    blue_priority = jnp.where(is_traffic, 0, 1)
+    blue_order = blue_order[jnp.argsort(blue_priority, stable=True)]
+
+    def blue_step(i, carry_state):
+        b = blue_order[i]
+        return process_blue_with_duration(carry_state, const, b, blue_actions[b])
+
+    state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, blue_step, state)
+
+    # --- Phase 2: Green agents (active hosts only, ordered) ---
+    # _ordered_green_hosts sorts active hosts first by green_agent_host index.
+    # Only iterate over const.num_green_agents active hosts (dynamic bound).
+    from jaxborg.actions.green import _ordered_green_hosts
+    green_host_order = _ordered_green_hosts(const)
+
+    def green_step(i, carry_state):
+        host_idx = green_host_order[i]
+        return apply_green_agent_action(carry_state, const, host_idx, green_keys[host_idx])
+
+    state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
+
+    # --- Phase 3: Red agents ---
+    def red_step(r, carry_state):
+        return process_red_with_duration(
+            carry_state,
+            const,
+            r,
+            red_actions[r],
+            red_keys[r],
+            forced_primary_host=forced_primary_hosts[r],
+            forced_primary_pid=forced_primary_pids[r],
+            run_session_check=False,
+        )
+
+    state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)
+
+    # --- Post-step processing (same as original) ---
+    state = reassign_cross_subnet_sessions(state, const)
+    for b in range(NUM_BLUE_AGENTS):
+        state = apply_blue_monitor(state, const, b)
+    for r in range(NUM_RED_AGENTS):
+        session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
+        state = apply_red_session_check(state, const, r, session_check_key)
+    return state
+
+
 def apply_all_actions(
     state: CC4State,
     const: CC4Const,
@@ -307,12 +380,14 @@ class CC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        typed_loops: bool = False,
     ):
         self.num_steps = num_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
         self.training_mode = training_mode
+        self.typed_loops = typed_loops
         self._const_bank = None
         self._green_random_bank = None
         self._red_policy_random_bank = None
@@ -451,16 +526,18 @@ class CC4Env(MultiAgentEnv):
         no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         no_forced_pids = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        state = apply_all_actions(
-            state,
-            const,
-            blue_action_arr,
-            red_action_arr,
-            key_green,
-            red_keys,
-            no_forced,
-            no_forced_pids,
-        )
+        if self.typed_loops:
+            execution_order = _cyborg_priority_execution_order(blue_action_arr)
+            state = apply_all_actions_typed(
+                state, const, blue_action_arr, red_action_arr,
+                key_green, red_keys, no_forced, no_forced_pids,
+                execution_order,
+            )
+        else:
+            state = apply_all_actions(
+                state, const, blue_action_arr, red_action_arr,
+                key_green, red_keys, no_forced, no_forced_pids,
+            )
 
         reward_breakdown = compute_reward_breakdown(
             state,
