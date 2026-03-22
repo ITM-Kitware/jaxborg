@@ -308,8 +308,11 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
             red_start_hosts[red_idx] = min(known_hosts_by_red[red_idx])
         if _red_agent_initially_active[red_idx]:
             red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
-        for hidx in known_hosts_by_red[red_idx]:
-            red_initial_discovered_hosts[red_idx, hidx] = True
+            for hidx in known_hosts_by_red[red_idx]:
+                red_initial_discovered_hosts[red_idx, hidx] = True
+        # Inactive agents: DON'T pre-seed discovery from aspace.ip_address.
+        # CybORG's FSM starts with empty host_states; the pre-populated IP
+        # doesn't enter host_states until the agent processes an observation.
         for hidx in scanned_hosts_by_red[red_idx]:
             red_initial_scanned_hosts[red_idx, hidx] = True
     host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)

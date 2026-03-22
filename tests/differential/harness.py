@@ -489,10 +489,13 @@ class CC4DifferentialHarness:
             if known_hosts_by_red[r]:
                 red_start_hosts = red_start_hosts.at[r].set(min(known_hosts_by_red[r]))
 
-            for hidx in known_hosts_by_red[r]:
-                red_initial_discovered = red_initial_discovered.at[r, hidx].set(True)
-            for hidx in scanned_hosts_by_red[r]:
-                red_initial_scanned = red_initial_scanned.at[r, hidx].set(True)
+            # Only seed discovery for active agents. Inactive agents' aspace IPs
+            # don't enter the FSM's host_states until the agent processes an obs.
+            if bool(red_agent_active[r]):
+                for hidx in known_hosts_by_red[r]:
+                    red_initial_discovered = red_initial_discovered.at[r, hidx].set(True)
+                for hidx in scanned_hosts_by_red[r]:
+                    red_initial_scanned = red_initial_scanned.at[r, hidx].set(True)
 
         self.jax_const = self.jax_const.replace(
             red_start_hosts=red_start_hosts,

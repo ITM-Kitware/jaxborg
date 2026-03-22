@@ -397,14 +397,22 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[
         iface = controller.agent_interfaces.get(f"red_agent_{r}")
         if iface is None:
             continue
+        # Use aspace.ip_address for active agents (matches JAX's action-level
+        # discovery). Skip inactive agents — their pre-populated start host
+        # IP doesn't correspond to any FSM knowledge.
+        if not getattr(iface, "active", False):
+            continue
         aspace = iface.action_space
-
         for ip, known in getattr(aspace, "ip_address", {}).items():
             if not known:
                 continue
             hostname = cyborg_state.ip_addresses.get(ip)
             if hostname in mappings.hostname_to_idx:
                 cyborg_discovered[r, mappings.hostname_to_idx[hostname]] = True
+        # Also mark session hosts as discovered
+        for sess in cyborg_state.sessions.get(f"red_agent_{r}", {}).values():
+            if sess.hostname in mappings.hostname_to_idx:
+                cyborg_discovered[r, mappings.hostname_to_idx[sess.hostname]] = True
 
     # Compare with vectorized ops
     if cyborg_phase != jax_phase:
