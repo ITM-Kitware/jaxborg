@@ -544,11 +544,29 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings) -> list[StateDiff]:
             continue
         for _ip_str, info in agent.host_states.items():
             hostname = info.get("hostname")
+            if hostname is None:
+                # DiscoverRemoteSystems reveals IPs without hostnames;
+                # resolve via CybORG's IP→hostname mapping.
+                try:
+                    from ipaddress import IPv4Address
+
+                    hostname = cyborg_state.ip_addresses.get(IPv4Address(_ip_str))
+                except (ValueError, TypeError):
+                    pass
             if hostname is None or hostname not in mappings.hostname_to_idx:
                 continue
             hidx = mappings.hostname_to_idx[hostname]
             state_str = info.get("state", "K")
             cyborg_fsm[r, hidx] = _FSM_STATE_MAP.get(state_str, 0)
+        # CybORG's FSM agent starts with empty host_states; the start host
+        # is only set to 'U' after the first get_action() processes the
+        # initial observation.  JAX initialises FSM_U on the start host at
+        # reset.  Synthesise the post-first-observation state so the
+        # comparison is fair before any steps have been taken.
+        if not agent.host_states and getattr(iface, "active", False):
+            start_hidx = int(jax_const.red_start_hosts[r])
+            if 0 <= start_hidx < n:
+                cyborg_fsm[r, start_hidx] = _FSM_STATE_MAP["U"]
 
     for r in range(NUM_RED_AGENTS):
         fsm_mismatch = np.where(cyborg_fsm[r] != jax_fsm[r])[0]

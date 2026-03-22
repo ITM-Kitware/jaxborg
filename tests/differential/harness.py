@@ -841,6 +841,12 @@ class CC4DifferentialHarness:
         self.jax_state = _jit_advance_and_clear(self.jax_state, self.jax_const)
         if use_fsm:
             self.jax_state = _jit_fsm_red_apply_delayed_update(self.jax_state)
+            # Mirror CybORG's normal flow: get_action() processes the previous
+            # observation before selecting the next action.  Since the harness
+            # provides actions externally (bypassing get_action()), we drive
+            # the FSM agents explicitly so host_states stays accurate for the
+            # comparator.
+            self._drive_cyborg_fsm_agents()
 
         state_before = self.jax_state
 
@@ -1449,6 +1455,36 @@ class CC4DifferentialHarness:
         if call_idx != len(random_calls):
             return None
         return detected
+
+    def _drive_cyborg_fsm_agents(self):
+        """Drive CybORG's FSM red agents to process their last observation.
+
+        CybORG's FSM agent updates host_states inside get_action(), which is
+        skipped when the harness provides actions externally.  This replicates
+        the state-update portion of get_action() so that the comparator can
+        read accurate host_states.
+        """
+        controller = self.cyborg_env.environment_controller
+        for r in range(NUM_RED_AGENTS):
+            agent_name = f"red_agent_{r}"
+            iface = controller.agent_interfaces.get(agent_name)
+            if iface is None or not getattr(iface, "active", False):
+                continue
+            agent = getattr(iface, "agent", None)
+            if agent is None or not hasattr(agent, "host_states"):
+                continue
+            obs_set = controller.observation.get(agent_name)
+            if obs_set is None:
+                continue
+            obs = obs_set.get_combined_observation()
+            # Copy the data dict so pop() doesn't corrupt the stored observation
+            obs_dict = dict(obs.data)
+            success = obs_dict.pop("success", None)
+            action = obs_dict.pop("action", None)
+            agent._host_state_transition(action, success)
+            agent._process_new_observations(obs_dict)
+            agent._session_removal_state_change(obs_dict)
+            agent.step += 1
 
     def _assert_duration_parity(self, controller):
         """Assert JAX and CybORG agree on which agents are busy (action in progress).

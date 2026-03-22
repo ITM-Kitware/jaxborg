@@ -5,7 +5,6 @@ from tests.differential.state_comparator import compare_fast
 
 
 class TestFsmParity:
-    @pytest.mark.xfail(reason="Known FSM init divergence: red_0_host_18 cyborg=K jax=U", strict=False)
     def test_fsm_states_match_at_reset(self):
         harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
         harness.reset()
@@ -20,7 +19,10 @@ class TestFsmParity:
             msg = f"FSM divergences at reset ({len(fsm_diffs)} diffs):\n" + "\n".join(lines)
             pytest.fail(msg)
 
-    @pytest.mark.xfail(reason="Known FSM tracking divergence propagating from init", strict=False)
+    @pytest.mark.xfail(
+        reason="Start-host mapping mismatch for late-activating red agents (red_4/red_5)",
+        strict=False,
+    )
     def test_fsm_states_tracked_through_episode(self):
         harness = CC4DifferentialHarness(seed=42, max_steps=30, sync_green_rng=True)
         harness.reset()
