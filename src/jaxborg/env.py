@@ -188,13 +188,19 @@ def apply_all_actions_typed(
 
     state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)
 
-    # --- Post-step processing (same as original) ---
+    # --- Post-step processing ---
     state = reassign_cross_subnet_sessions(state, const)
-    for b in range(NUM_BLUE_AGENTS):
-        state = apply_blue_monitor(state, const, b)
-    for r in range(NUM_RED_AGENTS):
+
+    def monitor_step(b, carry_state):
+        return apply_blue_monitor(carry_state, const, b)
+
+    state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, monitor_step, state)
+
+    def session_check_step(r, carry_state):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
-        state = apply_red_session_check(state, const, r, session_check_key)
+        return apply_red_session_check(carry_state, const, r, session_check_key)
+
+    state = jax.lax.fori_loop(0, NUM_RED_AGENTS, session_check_step, state)
     return state
 
 
