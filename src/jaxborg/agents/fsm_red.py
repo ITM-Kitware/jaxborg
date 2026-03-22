@@ -211,7 +211,14 @@ def fsm_red_get_action_and_info(
     discovered = state.red_discovered_hosts[agent_id]
     active = const.host_active
 
-    eligible = discovered & active & (fsm_states != FSM_F)
+    # CybORG's FSM only acts on hosts in host_states (explicitly observed).
+    # In JAX, FSM_K=0 is the array default for unobserved hosts. Hosts that
+    # enter the FSM via init (FSM_U) or discover (K→KD) have state > 0.
+    # Gate eligibility on fsm_states > 0 to exclude unobserved topology-
+    # seeded hosts while allowing legitimately-discovered K hosts (which
+    # transition to KD after discover succeeds).
+    fsm_known = fsm_states > 0
+    eligible = discovered & active & fsm_known & (fsm_states != FSM_F)
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
     time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_policy_randoms.shape[0] - 1))
