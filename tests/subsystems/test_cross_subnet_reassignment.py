@@ -8,7 +8,7 @@ from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import encode_red_action
-from jaxborg.agents.fsm_red import FSM_KD, FSM_S, FSM_SD, FSM_U
+from jaxborg.agents.fsm_red import FSM_K, FSM_KD, FSM_S, FSM_SD, FSM_U
 from jaxborg.constants import COMPROMISE_USER, NUM_RED_AGENTS, NUM_SUBNETS
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.state import create_initial_state
@@ -742,5 +742,39 @@ class TestReassignmentPreservesFsmState:
 
         after = reassign_cross_subnet_sessions(state, const)
         assert bool(after.red_sessions[dest_agent, target_idx])
-        # For new hosts, U is acceptable (FSM will sync at next step)
+        # Newly activated agent: hosts enter as U (CybORG step 0 behavior)
         assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_U
+
+    def test_reassignment_sets_k_for_new_host_on_already_active_agent(self):
+        """Host NOT yet in FSM on an ALREADY-ACTIVE agent gets K on reassignment.
+
+        CybORG's _process_new_observations assigns 'K' (not 'U') when step > 0.
+        Only newly activated agents (step 0) get 'U'.
+        """
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        # dest_agent is ALREADY active (has sessions elsewhere)
+        other_host = 0  # some other host
+        state = state.replace(
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True)
+                .at[dest_agent, other_host].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1)
+                .at[dest_agent, other_host].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            red_agent_active=state.red_agent_active.at[dest_agent].set(True),
+            # Host NOT entered in dest agent's FSM
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, target_idx].set(False),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        # Already-active agent: hosts enter as K (CybORG step > 0 behavior)
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_K
+        # Must be marked as entered in FSM
+        assert bool(after.fsm_host_entered[dest_agent, target_idx])

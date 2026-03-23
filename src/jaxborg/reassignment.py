@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.agents.fsm_red import FSM_R, FSM_RD, FSM_U, FSM_UD
+from jaxborg.agents.fsm_red import FSM_R, FSM_U
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_PRIVILEGED,
@@ -169,28 +169,23 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
 
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
     current_fsm = state.fsm_host_states
-    # CybORG's FSM (FiniteStateRedAgent.host_states) is NOT modified by
-    # session reassignment — the agent's own actions drive FSM transitions
-    # via _host_state_transition, and new hosts enter as K through
-    # _process_new_observations.  Only set FSM for hosts not yet tracked
-    # (fsm_host_entered=False); already-tracked hosts keep their state.
+    # CybORG's _process_new_observations assigns FSM state based on step:
+    #   step 0 (newly activated agent): 'U' (or 'R' for privileged)
+    #   step > 0 (already-active agent): 'K'
+    # Only set FSM for hosts not yet tracked (fsm_host_entered=False);
+    # already-tracked hosts keep their current state.
     not_yet_entered = ~state.fsm_host_entered
-    discovered_decoy = (current_fsm == FSM_UD) | (current_fsm == FSM_RD)
+    is_new_agent = newly_active[:, None]  # (NUM_RED_AGENTS, 1)
     privileged_session = reassigned_hosts & (red_privilege >= COMPROMISE_PRIVILEGED)
-    user_session = reassigned_hosts & ~privileged_session
+    # Newly activated agents: hosts enter as U/R (CybORG step 0 behavior)
     fsm_with_sessions = jnp.where(
-        privileged_session & not_yet_entered,
-        jnp.where(discovered_decoy, FSM_RD, FSM_R),
+        reassigned_hosts & not_yet_entered & is_new_agent,
+        jnp.where(privileged_session, jnp.int32(FSM_R), jnp.int32(FSM_U)),
         current_fsm,
     )
-    uncompromised_state = (
-        (current_fsm != FSM_U) & (current_fsm != FSM_UD) & (current_fsm != FSM_R) & (current_fsm != FSM_RD)
-    )
-    fsm_with_sessions = jnp.where(
-        user_session & uncompromised_state & not_yet_entered,
-        jnp.where(discovered_decoy, FSM_UD, FSM_U),
-        fsm_with_sessions,
-    )
+    # Already-active agents: hosts enter as K (CybORG step > 0 behavior).
+    # FSM_K is the default, so no explicit state change needed — just
+    # fsm_host_entered must be set (handled below).
     red_scan_anchor_host = recompute_scan_anchor_hosts(
         state.red_scan_anchor_host,
         red_sessions,
@@ -248,7 +243,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # Mark reassigned hosts as entered in the FSM — CybORG's FSM agent
     # will observe these hosts in its next observation and add them to
     # host_states.  Also preserve existing entries.
-    fsm_host_entered = state.fsm_host_entered | (fsm_with_sessions > 0)
+    fsm_host_entered = state.fsm_host_entered | reassigned_hosts
 
     return state.replace(
         red_sessions=red_sessions,
