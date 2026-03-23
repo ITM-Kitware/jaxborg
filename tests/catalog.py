@@ -358,6 +358,41 @@ def update_l4_tost(equivalent: bool, margin: float, mean_diff: float, episodes: 
     _save_status(status)
 
 
+VERIFICATION_STATUS_PATH = Path(__file__).parent.parent / ".agent_handoff" / "verification_status.json"
+
+_VERIFICATION_LEVELS = ("l1", "l2", "l3", "l4")
+_DEFAULT_VERIFICATION = {
+    lvl: {"status": "unknown", "iterations": 0} for lvl in _VERIFICATION_LEVELS
+}
+
+
+def load_verification_status() -> dict:
+    """Load the Karten loop verification status."""
+    if VERIFICATION_STATUS_PATH.exists():
+        return json.loads(VERIFICATION_STATUS_PATH.read_text())
+    return dict(_DEFAULT_VERIFICATION)
+
+
+def update_verification_status(level: str, status: str, **details) -> None:
+    """Update verification status for a level."""
+    data = load_verification_status()
+    entry = data.setdefault(level, {"status": "unknown", "iterations": 0})
+    entry["status"] = status
+    entry["iterations"] = entry.get("iterations", 0) + 1
+    entry.update(details)
+    VERIFICATION_STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    VERIFICATION_STATUS_PATH.write_text(json.dumps(data, indent=2))
+
+
+def get_current_level() -> str | None:
+    """Return the lowest non-passing verification level, or None if all pass."""
+    data = load_verification_status()
+    for lvl in _VERIFICATION_LEVELS:
+        if data.get(lvl, {}).get("status") != "passing":
+            return lvl
+    return None
+
+
 def print_coverage_summary() -> None:
     """Print hierarchical verification coverage summary."""
     summary = coverage_summary()

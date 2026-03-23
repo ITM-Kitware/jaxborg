@@ -914,8 +914,11 @@ class CC4DifferentialHarness:
                 )
 
         cy_state = controller.state
-        forced_primary_hosts_pre = _extract_primary_hosts(cy_state, self.mappings)
-        forced_primary_pids_pre = _extract_primary_pids(cy_state)
+        # Match production path: no forced primary hosts/pids.
+        # JAX tracks session identity internally via red_scan_anchor_host.
+        from jaxborg.actions.duration import UNKNOWN_PRIMARY_HOST
+        forced_primary_hosts_pre = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
+        forced_primary_pids_pre = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
         pre_service_map = _capture_service_process_map(cy_state)
 
         # Snapshot session PID order per (agent, host) before the step.
@@ -937,32 +940,7 @@ class CC4DifferentialHarness:
 
         controller.step(cyborg_actions)
 
-        # Sync CybORG end-turn RedSessionCheck primary-session host choices for next-step anchor parity.
         forced_primary_hosts_post = _extract_primary_hosts(cy_state, self.mappings)
-        abstract_host_rank = jnp.full(
-            (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS),
-            jnp.int32(ABSTRACT_RANK_NONE),
-            dtype=jnp.int32,
-        )
-        next_abstract_rank = jnp.zeros((NUM_RED_AGENTS,), dtype=jnp.int32)
-        for r in range(NUM_RED_AGENTS):
-            sessions = cy_state.sessions.get(f"red_agent_{r}", {})
-            for sid, sess in sessions.items():
-                if type(sess).__name__ != "RedAbstractSession":
-                    continue
-                host_idx = self.mappings.hostname_to_idx.get(sess.hostname)
-                if host_idx is None:
-                    continue
-                abstract_host_rank = abstract_host_rank.at[r, host_idx].set(
-                    jnp.minimum(abstract_host_rank[r, host_idx], jnp.int32(sid))
-                )
-                next_abstract_rank = next_abstract_rank.at[r].set(
-                    jnp.maximum(next_abstract_rank[r], jnp.int32(sid + 1))
-                )
-        self.jax_state = self.jax_state.replace(
-            red_abstract_host_rank=abstract_host_rank,
-            red_next_abstract_rank=next_abstract_rank,
-        )
 
         changed_services_by_host = {}
         post_service_map = _capture_service_process_map(cy_state)
@@ -1070,12 +1048,6 @@ class CC4DifferentialHarness:
                 )
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
-        primary_abstract_flags = _extract_primary_is_abstract(cy_state)
-        self.jax_state = self.jax_state.replace(
-            red_scan_anchor_host=forced_primary_hosts_post,
-            red_primary_is_abstract=primary_abstract_flags,
-            red_primary_pid=_extract_primary_pids(cy_state),
-        )
 
         # --- FSM state updates (shared with FsmRedCC4Env) ---
         if use_fsm:
@@ -1098,67 +1070,12 @@ class CC4DifferentialHarness:
         self.jax_state = self.jax_state.replace(time=self.jax_state.time + 1)
         self._assert_pid_capacity("full_step")
 
-        # --- Sync Impact-attempted from CybORG ---
-        # CybORG randomly shuffles same-priority actions, so red Impact
-        # may execute before blue Remove (session alive → succeeds).
-        # JAX always runs blue first, so Impact may fail if blue killed
-        # the session.  Sync the flag from CybORG's actual outcomes.
-        #
-        # CybORG's BlueRewardMachine uses ``success`` (truthy check, NOT
-        # ``success == True``) for Impact.  Because TernaryEnum.FALSE has
-        # value 3, **all** TernaryEnum values are truthy, so Impact is
-        # rewarded whenever the agent has any active session — regardless
-        # of the observation success field.
-        cy_impact = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
-        for agent_name, actions_list in controller.action.items():
-            if "red" not in agent_name:
-                continue
-            for act in actions_list:
-                if type(act).__name__ == "Impact":
-                    hidx = self.mappings.hostname_to_idx.get(getattr(act, "hostname", None))
-                    if hidx is not None:
-                        agent_sessions = cy_state.sessions.get(agent_name, {})
-                        has_active = any(s.active for s in agent_sessions.values())
-                        if has_active:
-                            cy_impact = cy_impact.at[hidx].set(True)
-        self.jax_state = self.jax_state.replace(red_impact_attempted=cy_impact)
+        # Category A sync REMOVED: red_impact_attempted
+        # JAX computes this from its own state. If it diverges, that's a
+        # real bug to fix, not something to paper over.
 
-        # --- Sync green event flags from CybORG ---
-        # Like impact, sync green failure events from CybORG so the reward
-        # comparison uses identical inputs on both sides.
-        cy_green_lwf = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
-        cy_green_asf = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.bool_)
-        for agent_name, actions_list in controller.action.items():
-            if "green" not in agent_name:
-                continue
-            if not actions_list:
-                continue
-            action = actions_list[0]
-            action_cls = type(action).__name__
-            if action_cls not in ("GreenLocalWork", "GreenAccessService"):
-                continue
-            agent_sessions = cy_state.sessions.get(agent_name, {})
-            if not any(s.active for s in agent_sessions.values()):
-                continue
-            if not _cy_obs_failed(controller, agent_name):
-                continue
-            ip_addr = getattr(action, "ip_address", None)
-            if ip_addr is None:
-                continue
-            hostname = cy_state.ip_addresses.get(ip_addr)
-            if hostname is None:
-                continue
-            hidx = self.mappings.hostname_to_idx.get(hostname)
-            if hidx is None:
-                continue
-            if action_cls == "GreenLocalWork":
-                cy_green_lwf[hidx] = True
-            elif action_cls == "GreenAccessService":
-                cy_green_asf[hidx] = True
-        self.jax_state = self.jax_state.replace(
-            green_lwf_this_step=jnp.array(cy_green_lwf),
-            green_asf_this_step=jnp.array(cy_green_asf),
-        )
+        # Category A sync REMOVED: green_lwf_this_step / green_asf_this_step
+        # JAX computes green failure events from its own green action logic.
 
         # --- Reward comparison ---
         jax_reward = float(

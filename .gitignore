@@ -10,3 +10,5 @@ build/
 jaxborg-exp/
 .bank_cache/
 mlruns/
+.agent_handoff/
+.jax_cache/
