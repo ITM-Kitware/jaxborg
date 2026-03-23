@@ -54,6 +54,11 @@ _ERROR_FIELDS = {
     "fsm_host_states",
     "red_session_count",
     "blue_suspicious_pids",
+    # Newly added high-value comparisons
+    "red_agent_active",
+    "red_session_is_abstract",
+    "host_decoy_reliability",
+    "blue_pending_busy",
 }
 
 _WARNING_FIELDS: set[str] = set()
@@ -643,6 +648,70 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[
             jax_set = {int(x) for x in jax_sus[b, h] if x >= 0}
             if cy_set != jax_set:
                 diffs.append(StateDiff("blue_suspicious_pids", sorted(cy_set), sorted(jax_set), f"blue_{b}_host_{h}"))
+
+    # --- Red agent active ---
+    jax_active = np.asarray(jax_state.red_agent_active[:NUM_RED_AGENTS])
+    for r in range(NUM_RED_AGENTS):
+        iface = controller.agent_interfaces.get(f"red_agent_{r}")
+        cy_active = bool(iface.active) if iface else False
+        if cy_active != bool(jax_active[r]):
+            diffs.append(StateDiff("red_agent_active", cy_active, bool(jax_active[r]), f"red_agent_{r}"))
+
+    # --- Red session is_abstract ---
+    from CybORG.Shared.Session import RedAbstractSession
+
+    jax_is_abstract = np.asarray(jax_state.red_session_is_abstract[:NUM_RED_AGENTS, :n])
+    for r in range(NUM_RED_AGENTS):
+        cyborg_abstract = np.zeros(n, dtype=np.bool_)
+        for sess in cyborg_state.sessions.get(f"red_agent_{r}", {}).values():
+            if sess.hostname in mappings.hostname_to_idx:
+                hidx = mappings.hostname_to_idx[sess.hostname]
+                if isinstance(sess, RedAbstractSession):
+                    cyborg_abstract[hidx] = True
+        mismatch = np.where(cyborg_abstract != jax_is_abstract[r])[0]
+        for h in mismatch:
+            diffs.append(
+                StateDiff(
+                    "red_session_is_abstract",
+                    bool(cyborg_abstract[h]),
+                    bool(jax_is_abstract[r, h]),
+                    f"red_{r}_host_{h}",
+                )
+            )
+
+    # --- Host decoy reliability ---
+    jax_decoy_rel = np.asarray(jax_state.host_decoy_reliability[:n, :NUM_DECOY_TYPES])
+    cyborg_decoy_rel = np.full((n, NUM_DECOY_TYPES), 100, dtype=np.int32)
+    for hostname, host in cyborg_state.hosts.items():
+        if hostname not in mappings.hostname_to_idx:
+            continue
+        hidx = mappings.hostname_to_idx[hostname]
+        for svc_name, svc in host.services.items():
+            svc_str = str(svc_name).split(".")[-1].lower()
+            didx = _DECOY_SVC_TO_IDX.get(svc_str)
+            if didx is None:
+                continue
+            pid = svc.process if hasattr(svc, "process") else svc.get("process")
+            if pid is None:
+                continue
+            proc = host.get_process(pid)
+            if proc is not None and proc.decoy_type & DecoyType.EXPLOIT:
+                cyborg_decoy_rel[hidx, didx] = int(svc.get_service_reliability())
+    for h in range(n):
+        if not np.array_equal(cyborg_decoy_rel[h], jax_decoy_rel[h]):
+            cd = tuple(int(x) for x in cyborg_decoy_rel[h])
+            jd = tuple(int(x) for x in jax_decoy_rel[h])
+            diffs.append(StateDiff("host_decoy_reliability", cd, jd, f"host_{h}"))
+
+    # --- Blue pending action/ticks ---
+    jax_blue_pending_ticks = np.asarray(jax_state.blue_pending_ticks[:NUM_BLUE_AGENTS])
+    for b in range(NUM_BLUE_AGENTS):
+        agent_name = f"blue_agent_{b}"
+        cy_pending = controller.actions_in_progress.get(agent_name)
+        cy_busy = cy_pending is not None
+        jax_busy = bool(jax_blue_pending_ticks[b] > 0)
+        if cy_busy != jax_busy:
+            diffs.append(StateDiff("blue_pending_busy", cy_busy, jax_busy, agent_name))
 
     return diffs
 
