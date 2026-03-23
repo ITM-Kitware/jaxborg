@@ -168,9 +168,11 @@ def apply_all_actions_typed(
     # Fall back to sequential fori_loop for cyborg_bank mode (exact parity).
     if use_green_vmap:
         from jaxborg.actions.green_vmap import apply_green_agents_vmapped
+
         state = apply_green_agents_vmapped(state, const, key_green)
     else:
         from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
+
         green_host_order = _ordered_green_hosts(const)
 
         def green_step(i, carry_state):
@@ -272,6 +274,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     red_session_pids = state.red_session_pids
     red_session_abstract_pids = state.red_session_abstract_pids
     red_next_pid = state.red_next_pid
+    fsm_host_entered = state.fsm_host_entered
 
     # Only red_agent_0 is active at reset; others activate via session reassignment
     red_agent_active = state.red_agent_active.at[0].set(True)
@@ -342,6 +345,11 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             fsm_states.at[r].set(fsm_red_init_states(const, r)),
             fsm_states,
         )
+        fsm_host_entered = jnp.where(
+            is_active,
+            fsm_host_entered.at[r, start_host].set(True),
+            fsm_host_entered,
+        )
         red_scan_anchor_host = jnp.where(
             is_active,
             red_scan_anchor_host.at[r].set(start_host),
@@ -373,6 +381,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         red_primary_pid=red_primary_pid,
         host_compromised=host_compromised,
         fsm_host_states=fsm_states,
+        fsm_host_entered=fsm_host_entered,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,
@@ -538,8 +547,14 @@ class CC4Env(MultiAgentEnv):
 
         execution_order = _cyborg_priority_execution_order(blue_action_arr)
         state = apply_all_actions_typed(
-            state, const, blue_action_arr, red_action_arr,
-            key_green, red_keys, no_forced, no_forced_pids,
+            state,
+            const,
+            blue_action_arr,
+            red_action_arr,
+            key_green,
+            red_keys,
+            no_forced,
+            no_forced_pids,
             execution_order,
             use_green_vmap=(self.topology_mode == "pure"),
         )

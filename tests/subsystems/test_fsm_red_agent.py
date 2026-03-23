@@ -548,10 +548,12 @@ class TestFsmGetAction:
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
         fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
+        entered = state.fsm_host_entered.at[0, start_host].set(True)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
             fsm_host_states=fsm,
+            fsm_host_entered=entered,
         )
         key = jax.random.PRNGKey(42)
         action = int(fsm_red_get_action(state, jax_const, 0, key))
@@ -563,10 +565,12 @@ class TestFsmGetAction:
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
         fsm = state.fsm_host_states.at[0, start_host].set(FSM_F)
+        entered = state.fsm_host_entered.at[0, start_host].set(True)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
             fsm_host_states=fsm,
+            fsm_host_entered=entered,
         )
         key = jax.random.PRNGKey(0)
         action = int(fsm_red_get_action(state, jax_const, 0, key))
@@ -578,10 +582,12 @@ class TestFsmGetAction:
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
         fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
+        entered = state.fsm_host_entered.at[0, start_host].set(True)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
             fsm_host_states=fsm,
+            fsm_host_entered=entered,
         )
         key = jax.random.PRNGKey(42)
         jitted = jax.jit(fsm_red_get_action, static_argnums=(2,))
@@ -594,10 +600,12 @@ class TestFsmGetAction:
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
         fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
+        entered = state.fsm_host_entered.at[0, start_host].set(True)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
             fsm_host_states=fsm,
+            fsm_host_entered=entered,
         )
 
         actions = set()

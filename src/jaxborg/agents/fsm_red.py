@@ -212,11 +212,10 @@ def fsm_red_get_action_and_info(
     active = const.host_active
 
     # CybORG's FSM only acts on hosts in host_states (explicitly observed).
-    # In JAX, FSM_K=0 is the array default for unobserved hosts.  We gate
-    # eligibility on fsm_states > 0 to exclude unobserved hosts; newly
-    # discovered hosts are set to KD by the post-step update to enter the
-    # eligible set.
-    fsm_known = fsm_states > 0
+    # fsm_host_entered tracks which hosts have entered the FSM, equivalent
+    # to CybORG's host_states dict membership.  Newly discovered hosts
+    # enter as K (not KD) matching CybORG's _process_new_observations.
+    fsm_known = state.fsm_host_entered[agent_id]
     eligible = discovered & active & fsm_known & (fsm_states != FSM_F)
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
@@ -530,14 +529,16 @@ def _compute_post_step_fsm_states(
         )
         exec_flag = jnp.bool_(True) if executed_flags is None else executed_flags[r]
         skip = ~eligible_flags[r] | ~exec_flag | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
-        # Use state_after for discover mask: newly discovered hosts need
-        # the K→KD transition so they become eligible (fsm_states > 0).
+        # Use state_before for discover mask: CybORG's _host_state_transition
+        # runs BEFORE _process_new_observations, so newly discovered hosts
+        # are NOT in host_states during the transition.  They enter as K
+        # (not KD) via _process_new_observations afterwards.
         updated = fsm_red_update_state(
             fsm_states,
             const,
             r,
             target_hosts[r],
-            state_after.red_discovered_hosts[r],
+            state_before.red_discovered_hosts[r],
             target_subnets[r],
             fsm_actions[r],
             success,

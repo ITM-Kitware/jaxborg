@@ -643,6 +643,11 @@ class CC4DifferentialHarness:
                         start_blue_suspicious_pids = start_blue_suspicious_pids.at[b, hidx, slot].set(int(pid))
                         slot += 1
 
+        # fsm_host_entered tracks which hosts have entered the FSM (CybORG's
+        # host_states dict).  At reset, only active agents' start hosts have
+        # non-zero FSM states.
+        fsm_host_entered = fsm_states > 0
+
         self.jax_state = self.jax_state.replace(
             red_sessions=start_sessions,
             red_session_count=start_session_count,
@@ -660,6 +665,7 @@ class CC4DifferentialHarness:
             red_primary_pid=start_primary_pid,
             host_compromised=host_compromised,
             fsm_host_states=fsm_states,
+            fsm_host_entered=fsm_host_entered,
             red_session_is_abstract=start_abstract,
             red_abstract_host_rank=start_abstract_rank,
             red_next_abstract_rank=start_next_abstract_rank,

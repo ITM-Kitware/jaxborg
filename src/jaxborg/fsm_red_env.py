@@ -73,6 +73,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             red_scan_anchor_host=jnp.where(inactive, jnp.int32(-1), state.red_scan_anchor_host),
             red_primary_is_abstract=jnp.where(inactive, True, state.red_primary_is_abstract),
             red_primary_pid=jnp.where(inactive, jnp.int32(-1), state.red_primary_pid),
+            fsm_host_entered=jnp.where(inactive[:, None], False, state.fsm_host_entered),
         )
         return CC4EnvState(state=state, const=env_state.const)
 

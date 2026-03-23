@@ -119,6 +119,7 @@ class CC4State:
     messages: chex.Array  # (NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH) float
 
     fsm_host_states: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — FSM state per red agent per host
+    fsm_host_entered: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool — host entered FSM
     red_fsm_delayed_states: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — hidden FSM state to apply next step
     red_fsm_delayed_pending: chex.Array  # scalar bool — apply delayed FSM state at next step start
 
@@ -248,6 +249,7 @@ def create_initial_state() -> CC4State:
         blocked_zones=jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_),
         messages=jnp.zeros((NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        fsm_host_entered=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_fsm_delayed_states=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_fsm_delayed_pending=jnp.array(False),
         red_session_sandboxed=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),

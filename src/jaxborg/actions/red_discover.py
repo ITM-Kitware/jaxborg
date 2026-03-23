@@ -23,6 +23,12 @@ def apply_discover(
     new_discovered = state.red_discovered_hosts[agent_id] | newly_discovered
     red_discovered_hosts = state.red_discovered_hosts.at[agent_id].set(new_discovered)
 
+    # Mark action-discovered hosts as entered in the FSM.  This mirrors
+    # CybORG's _process_new_observations adding observed hosts to
+    # host_states after the discover action's observation is returned.
+    fsm_host_entered = state.fsm_host_entered.at[agent_id].set(state.fsm_host_entered[agent_id] | newly_discovered)
+
     return state.replace(
         red_discovered_hosts=red_discovered_hosts,
+        fsm_host_entered=fsm_host_entered,
     )

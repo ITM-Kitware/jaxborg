@@ -239,6 +239,11 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # CybORG's aspace.ip_address retains known IPs across deactivation/
     # re-activation cycles, so discovery must persist too.
 
+    # Mark reassigned hosts as entered in the FSM — CybORG's FSM agent
+    # will observe these hosts in its next observation and add them to
+    # host_states.  Also preserve existing entries.
+    fsm_host_entered = state.fsm_host_entered | (fsm_with_sessions > 0)
+
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -257,6 +262,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         fsm_host_states=fsm_with_sessions,
+        fsm_host_entered=fsm_host_entered,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_pending_source_host=state.red_pending_source_host,
