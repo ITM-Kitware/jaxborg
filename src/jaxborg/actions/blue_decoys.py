@@ -51,6 +51,19 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
         state.host_decoy_reliability.at[target_host, decoy_type].set(100),
         state.host_decoy_reliability,
     )
+    # CybORG's DecoyAction creates a new process without removing the old one
+    # when redeploying the same decoy type.  The old process becomes an orphan
+    # in host.processes, contributing to create_pid()'s max() calculation.
+    # Track the max orphaned PID so recompute_host_max_pid stays correct.
+    old_pid = state.host_decoy_process_pids[target_host, decoy_type]
+    has_old = old_pid >= 0
+    host_orphaned_decoy_max_pid = jnp.where(
+        can_deploy & has_old,
+        state.host_orphaned_decoy_max_pid.at[target_host].set(
+            jnp.maximum(state.host_orphaned_decoy_max_pid[target_host], old_pid)
+        ),
+        state.host_orphaned_decoy_max_pid,
+    )
     host_decoy_process_pids = jnp.where(
         can_deploy,
         state.host_decoy_process_pids.at[target_host, decoy_type].set(new_pid),
@@ -65,5 +78,6 @@ def apply_blue_decoy(state: CC4State, const: CC4Const, agent_id: int, target_hos
         host_decoys=host_decoys,
         host_decoy_reliability=host_decoy_reliability,
         host_decoy_process_pids=host_decoy_process_pids,
+        host_orphaned_decoy_max_pid=host_orphaned_decoy_max_pid,
         host_max_pid=host_max_pid,
     )

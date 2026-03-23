@@ -60,7 +60,13 @@ def recompute_host_max_pid(state, const, target_host, session_pids):
     CybORG's Host.create_pid() uses max(all current process PIDs). When a
     process is removed (by blue Remove, red Withdraw, etc.), the max can
     decrease. This recomputes from: initial service PIDs, remaining red
-    session PIDs, and blue decoy process PIDs.
+    session PIDs, blue decoy process PIDs, and orphaned decoy PIDs.
+
+    CybORG leaks old decoy processes when the same decoy type is redeployed
+    (DecoyAction creates a new process without removing the old one). These
+    orphaned processes persist in host.processes and contribute to
+    create_pid()'s max() calculation.  host_orphaned_decoy_max_pid tracks
+    the running max of these orphaned PIDs.
 
     Args:
         session_pids: The *updated* red_session_pids array (after removal).
@@ -72,7 +78,9 @@ def recompute_host_max_pid(state, const, target_host, session_pids):
     # Max across blue decoy process PIDs on this host
     decoy_pids = state.host_decoy_process_pids[target_host]
     max_decoy = jnp.max(jnp.where(decoy_pids >= 0, decoy_pids, jnp.int32(0)))
-    return jnp.maximum(jnp.maximum(initial_max, max_red), max_decoy)
+    # Orphaned decoy processes from redeployment
+    max_orphan = state.host_orphaned_decoy_max_pid[target_host]
+    return jnp.maximum(jnp.maximum(jnp.maximum(initial_max, max_red), max_decoy), max_orphan)
 
 
 def pid_row_contains(pid_row, pid):

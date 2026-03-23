@@ -232,7 +232,8 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     max_decoy_updated = jnp.max(
         jnp.where(host_decoy_process_pids[target_host] >= 0, host_decoy_process_pids[target_host], 0)
     )
-    recomputed_max_after_decoy_kill = jnp.maximum(base_max_no_decoy, max_decoy_updated)
+    max_orphan = state.host_orphaned_decoy_max_pid[target_host]
+    recomputed_max_after_decoy_kill = jnp.maximum(jnp.maximum(base_max_no_decoy, max_decoy_updated), max_orphan)
     # Standard recompute (includes original decoy PIDs) for non-decoy-respawn case.
     recomputed_max_standard = recompute_host_max_pid(state, const, target_host, new_session_pids)
     recomputed_max = jnp.where(any_decoy_respawned, recomputed_max_after_decoy_kill, recomputed_max_standard)

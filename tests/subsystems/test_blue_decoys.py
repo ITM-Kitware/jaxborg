@@ -206,6 +206,65 @@ class TestDecoyViaDispatch:
         assert bool(new_state.host_decoys[target].any())
 
 
+class TestDecoyRedeploymentOrphanPid:
+    """Regression: redeploying the same decoy type leaves an orphaned process
+    in CybORG (old PID stays in host.processes).  JAX must track the orphan
+    so recompute_host_max_pid includes it after blue Remove kills the decoy."""
+
+    def test_redeploy_same_type_tracks_orphan_max_pid(self, jax_const):
+        """Redeploying vsftpd twice creates an orphan; recompute_host_max_pid
+        must return a value >= the orphan PID."""
+        from jaxborg.actions.pids import recompute_host_max_pid
+
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        blue_idx = _find_blue_for_host(jax_const, target)
+        assert blue_idx is not None
+
+        # First deployment
+        state = apply_blue_decoy(state, jax_const, blue_idx, target, VSFTPD_IDX)
+        first_pid = int(state.host_decoy_process_pids[target, VSFTPD_IDX])
+        assert first_pid >= 0
+        assert int(state.host_orphaned_decoy_max_pid[target]) == 0
+
+        # Advance time so second deployment gets a different PID delta
+        state = state.replace(time=state.time + 1)
+
+        # Second deployment of same type — first PID becomes orphaned
+        state = apply_blue_decoy(state, jax_const, blue_idx, target, VSFTPD_IDX)
+        second_pid = int(state.host_decoy_process_pids[target, VSFTPD_IDX])
+        assert second_pid > first_pid
+        assert int(state.host_orphaned_decoy_max_pid[target]) == first_pid
+
+        # Simulate blue_remove killing the decoy: clear the active decoy PID
+        # and recompute. The orphan PID must still be accounted for.
+        cleared_decoy_pids = state.host_decoy_process_pids.at[target, VSFTPD_IDX].set(-1)
+        state = state.replace(host_decoy_process_pids=cleared_decoy_pids)
+        recomputed = int(recompute_host_max_pid(state, jax_const, target, state.red_session_pids))
+        assert recomputed >= first_pid, f"recompute_host_max_pid={recomputed} should be >= orphan PID {first_pid}"
+
+    def test_restore_clears_orphan_max_pid(self, jax_const):
+        """Blue restore resets the host — orphaned decoy PIDs must be cleared."""
+        from jaxborg.actions.blue_restore import apply_blue_restore
+
+        state = _make_jax_state(jax_const)
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        blue_idx = _find_blue_for_host(jax_const, target)
+        assert blue_idx is not None
+
+        # Deploy, advance, redeploy to create orphan
+        state = apply_blue_decoy(state, jax_const, blue_idx, target, VSFTPD_IDX)
+        state = state.replace(time=state.time + 1)
+        state = apply_blue_decoy(state, jax_const, blue_idx, target, VSFTPD_IDX)
+        assert int(state.host_orphaned_decoy_max_pid[target]) > 0
+
+        # Restore clears everything
+        state = apply_blue_restore(state, jax_const, blue_idx, target)
+        assert int(state.host_orphaned_decoy_max_pid[target]) == 0
+
+
 class TestBlueActionOrder:
     def test_action_order_is_analyse_remove_restore_decoy(self):
         from jaxborg.actions.encoding import (
