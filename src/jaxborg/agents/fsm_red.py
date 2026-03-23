@@ -528,7 +528,15 @@ def _compute_post_step_fsm_states(
             fsm_actions[r],
         )
         exec_flag = jnp.bool_(True) if executed_flags is None else executed_flags[r]
-        skip = ~eligible_flags[r] | ~exec_flag | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
+        # CybORG processes FSM transitions inside get_action() at the NEXT
+        # step.  If the agent is inactive at step end, get_action() is skipped
+        # and the transition is never applied — the FSM freezes.
+        skip = (
+            ~eligible_flags[r]
+            | ~exec_flag
+            | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
+            | ~state_after.red_agent_active[r]
+        )
         # Use state_before for discover mask: CybORG's _host_state_transition
         # runs BEFORE _process_new_observations, so newly discovered hosts
         # are NOT in host_states during the transition.  They enter as K
@@ -545,11 +553,16 @@ def _compute_post_step_fsm_states(
         )
         fsm_states = jnp.where(skip, fsm_states, updated)
 
+    # Session-loss recovery: roll back compromise state to KD for hosts
+    # where the agent no longer has a session.  Gate on state_after activity
+    # because CybORG's _session_removal_state_change runs inside get_action()
+    # at the NEXT step — skipped when the agent is inactive.
     for r in range(NUM_RED_AGENTS):
         agent_fsm = fsm_states[r]
         has_session = state_after.red_sessions[r]
+        is_active = state_after.red_agent_active[r]
         was_compromised = (agent_fsm == FSM_U) | (agent_fsm == FSM_UD) | (agent_fsm == FSM_R) | (agent_fsm == FSM_RD)
-        lost_session = was_compromised & ~has_session
+        lost_session = was_compromised & ~has_session & is_active
         fsm_states = fsm_states.at[r].set(jnp.where(lost_session, FSM_KD, agent_fsm))
 
     return fsm_states

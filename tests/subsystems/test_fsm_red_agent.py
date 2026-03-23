@@ -34,6 +34,7 @@ from jaxborg.agents.fsm_red import (
     PROBABILITY_MATRIX,
     TRANSITION_FAILURE,
     TRANSITION_SUCCESS,
+    _compute_post_step_fsm_states,
     _pick_discover_subnet,
     _pick_exploit_action,
     determine_fsm_success,
@@ -459,8 +460,12 @@ class TestFsmScanRescanSuccess:
         )
 
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(target), jnp.int32(0),
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(target),
+            jnp.int32(0),
             FSM_ACT_AGGRESSIVE_SCAN,
         )
         assert bool(success), "Re-scan should count as success when scan action succeeded"
@@ -479,8 +484,12 @@ class TestFsmScanRescanSuccess:
         )
 
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(target), jnp.int32(0),
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(target),
+            jnp.int32(0),
             FSM_ACT_STEALTH_SCAN,
         )
         assert bool(success), "Re-scan should count as success when scan action succeeded"
@@ -498,8 +507,12 @@ class TestFsmScanRescanSuccess:
         )
 
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(target), jnp.int32(0),
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(target),
+            jnp.int32(0),
             FSM_ACT_AGGRESSIVE_SCAN,
         )
         assert bool(success), "Fresh scan should count as success"
@@ -514,8 +527,12 @@ class TestFsmScanRescanSuccess:
         after = base  # red_scan_success stays False
 
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(target), jnp.int32(0),
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(target),
+            jnp.int32(0),
             FSM_ACT_AGGRESSIVE_SCAN,
         )
         assert not bool(success), "Failed scan should not count as success"
@@ -533,8 +550,12 @@ class TestFsmScanRescanSuccess:
         after = before
 
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(target), jnp.int32(0),
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(target),
+            jnp.int32(0),
             FSM_ACT_AGGRESSIVE_SCAN,
         )
         assert not bool(success), "Failed scan with prior memory should not be false positive"
@@ -543,6 +564,7 @@ class TestFsmScanRescanSuccess:
 def _make_trivial_const():
     """Build a minimal CC4Const for unit tests that don't need full topology."""
     from jaxborg.topology import build_topology
+
     return build_topology(jnp.array([42, 0], dtype=jnp.uint32), num_steps=10)
 
 
@@ -947,3 +969,188 @@ class TestRedAgentActivation:
             assert int(jax_fsm[hidx]) == FSM_K, (
                 f"JAX host {hidx} should be FSM_K={FSM_K} at reset, got {int(jax_fsm[hidx])}"
             )
+
+
+class TestInactiveAgentFsmFreeze:
+    """CybORG freezes FSM state for inactive agents — JAX must match.
+
+    When an agent loses all sessions and becomes inactive, CybORG's
+    get_action() is skipped, so _host_state_transition and
+    _session_removal_state_change never run.  The FSM is frozen until
+    the agent reactivates.
+    """
+
+    def _make_state_pair(self, agent_id, host, fsm_state, *, active, has_session):
+        """Build (state_before, state_after) for a single-agent scenario."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+        fsm = base.fsm_host_states.at[agent_id, host].set(fsm_state)
+        sessions = base.red_sessions.at[agent_id, host].set(has_session)
+        active_arr = base.red_agent_active.at[agent_id].set(active)
+        state = base.replace(
+            fsm_host_states=fsm,
+            red_sessions=sessions,
+            red_agent_active=active_arr,
+        )
+        return state, state, const
+
+    def test_inactive_agent_session_loss_no_downgrade(self):
+        """Inactive agent with lost sessions: FSM should NOT downgrade to KD."""
+        agent, host = 1, 5
+        state_before, state_after, const = self._make_state_pair(
+            agent,
+            host,
+            FSM_R,
+            active=False,
+            has_session=False,
+        )
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(0)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+
+        result = _compute_post_step_fsm_states(
+            state_before,
+            state_after,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        assert int(result[agent, host]) == FSM_R, (
+            f"Inactive agent FSM should stay frozen at R, got {int(result[agent, host])}"
+        )
+
+    def test_inactive_agent_RD_session_loss_no_downgrade(self):
+        """Inactive agent at RD with lost sessions: FSM should stay at RD."""
+        agent, host = 2, 10
+        state_before, state_after, const = self._make_state_pair(
+            agent,
+            host,
+            FSM_RD,
+            active=False,
+            has_session=False,
+        )
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(0)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+
+        result = _compute_post_step_fsm_states(
+            state_before,
+            state_after,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        assert int(result[agent, host]) == FSM_RD, (
+            f"Inactive agent FSM should stay frozen at RD, got {int(result[agent, host])}"
+        )
+
+    def test_active_agent_session_loss_downgrades(self):
+        """Active agent with lost sessions: FSM SHOULD downgrade to KD."""
+        agent, host = 1, 5
+        state_before, state_after, const = self._make_state_pair(
+            agent,
+            host,
+            FSM_R,
+            active=True,
+            has_session=False,
+        )
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(0)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+
+        result = _compute_post_step_fsm_states(
+            state_before,
+            state_after,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        assert int(result[agent, host]) == FSM_KD, (
+            f"Active agent with lost session should downgrade to KD, got {int(result[agent, host])}"
+        )
+
+    def test_active_agent_with_session_keeps_state(self):
+        """Active agent that still has a session: FSM should NOT change."""
+        agent, host = 1, 5
+        state_before, state_after, const = self._make_state_pair(
+            agent,
+            host,
+            FSM_R,
+            active=True,
+            has_session=True,
+        )
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(0)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+
+        result = _compute_post_step_fsm_states(
+            state_before,
+            state_after,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        assert int(result[agent, host]) == FSM_R, (
+            f"Active agent with session should keep R, got {int(result[agent, host])}"
+        )
+
+    def test_inactive_agent_action_transition_skipped(self):
+        """Inactive agent's action transition should NOT be applied.
+
+        Even if the agent was eligible and its action executed, if the agent
+        is inactive in state_after, the FSM transition should be skipped
+        (CybORG's get_action() is not called for inactive agents).
+        """
+        agent, host = 0, 5
+        const = _make_trivial_const()
+        base = create_initial_state()
+        # Agent has scanned host (S) and exploit succeeds (session gained)
+        fsm = base.fsm_host_states.at[agent, host].set(FSM_S)
+        sessions_before = base.red_session_count
+        sessions_after = sessions_before.at[agent, host].set(1)
+        state_before = base.replace(
+            fsm_host_states=fsm,
+            red_agent_active=base.red_agent_active.at[agent].set(True),
+        )
+        state_after = base.replace(
+            fsm_host_states=fsm,
+            red_session_count=sessions_after,
+            red_sessions=base.red_sessions.at[agent, host].set(True),
+            # Agent becomes inactive by step end (e.g., sessions reassigned away)
+            red_agent_active=base.red_agent_active.at[agent].set(False),
+        )
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_hosts[agent] = jnp.int32(host)
+        target_subnets = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(0)] * NUM_RED_AGENTS
+        fsm_actions[agent] = jnp.int32(FSM_ACT_EXPLOIT)
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+        eligible[agent] = jnp.bool_(True)
+        executed = jnp.ones(NUM_RED_AGENTS, dtype=jnp.bool_)
+
+        result = _compute_post_step_fsm_states(
+            state_before,
+            state_after,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+            executed_flags=executed,
+        )
+        # Exploit succeeded (S→U) but agent is inactive → transition frozen
+        assert int(result[agent, host]) == FSM_S, (
+            f"Inactive agent should not transition S→U, got {int(result[agent, host])}"
+        )
