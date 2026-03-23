@@ -541,12 +541,18 @@ def _compute_post_step_fsm_states(
         # runs BEFORE _process_new_observations, so newly discovered hosts
         # are NOT in host_states during the transition.  They enter as K
         # (not KD) via _process_new_observations afterwards.
+        #
+        # Filter by fsm_host_entered to match CybORG's host_states membership:
+        # red_discovered_hosts may include pre-seeded topology hosts or
+        # info-linked hosts that haven't been observed by the FSM agent yet.
+        # CybORG's _host_state_transition only iterates over host_states keys.
+        discovered_for_fsm = state_before.red_discovered_hosts[r] & state_before.fsm_host_entered[r]
         updated = fsm_red_update_state(
             fsm_states,
             const,
             r,
             target_hosts[r],
-            state_before.red_discovered_hosts[r],
+            discovered_for_fsm,
             target_subnets[r],
             fsm_actions[r],
             success,

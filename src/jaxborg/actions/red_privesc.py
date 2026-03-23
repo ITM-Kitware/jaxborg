@@ -116,6 +116,16 @@ def apply_privesc(
         state.red_discovered_hosts.at[agent_id].set(discovered_with_info),
         state.red_discovered_hosts,
     )
+    # CybORG's _process_new_observations adds info-linked hosts to host_states
+    # when the privesc observation is processed.  Mirror this by marking them
+    # as entered in the FSM so the discover mask stays aligned.
+    entered_row = state.fsm_host_entered[agent_id]
+    entered_with_info = entered_row | const.host_info_links[target_host]
+    fsm_host_entered = jnp.where(
+        success,
+        state.fsm_host_entered.at[agent_id].set(entered_with_info),
+        state.fsm_host_entered,
+    )
 
     activity = jnp.where(
         success,
@@ -166,4 +176,5 @@ def apply_privesc(
         host_max_pid=host_max_pid,
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
+        fsm_host_entered=fsm_host_entered,
     )

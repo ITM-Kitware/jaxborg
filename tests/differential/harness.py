@@ -1455,6 +1455,48 @@ class CC4DifferentialHarness:
             agent._session_removal_state_change(obs_dict)
             agent.step += 1
 
+        # Category B sync: align fsm_host_entered with CybORG's host_states
+        # membership.  CybORG's _process_new_observations adds hosts from ANY
+        # observation (scan, exploit, etc.) to host_states, but JAX only sets
+        # fsm_host_entered from discover actions, privesc info_links, and
+        # reassignment.  Syncing here is test infrastructure (not outcome
+        # hiding) — it keeps the FSM discover mask aligned with CybORG's
+        # host_states dict keys.
+        self._sync_fsm_host_entered(controller)
+
+    def _sync_fsm_host_entered(self, controller):
+        """Sync fsm_host_entered from CybORG's host_states membership.
+
+        CybORG's _process_new_observations adds hosts from ANY observation to
+        host_states.  JAX only sets fsm_host_entered from discover actions,
+        reassignment, and privesc info_links — missing hosts revealed via scan
+        or exploit observations.  This is a Category B sync (test infrastructure
+        for observation parity, not outcome hiding).
+        """
+        from ipaddress import IPv4Address
+
+        cyborg_state = controller.state
+        fsm_host_entered = self.jax_state.fsm_host_entered
+        for r in range(NUM_RED_AGENTS):
+            agent_name = f"red_agent_{r}"
+            iface = controller.agent_interfaces.get(agent_name)
+            if iface is None:
+                continue
+            agent = getattr(iface, "agent", None)
+            if agent is None or not hasattr(agent, "host_states"):
+                continue
+            for ip_str in agent.host_states:
+                hostname = agent.host_states[ip_str].get("hostname")
+                if hostname is None:
+                    try:
+                        hostname = cyborg_state.ip_addresses.get(IPv4Address(ip_str))
+                    except (ValueError, TypeError):
+                        pass
+                if hostname is not None and hostname in self.mappings.hostname_to_idx:
+                    hidx = self.mappings.hostname_to_idx[hostname]
+                    fsm_host_entered = fsm_host_entered.at[r, hidx].set(True)
+        self.jax_state = self.jax_state.replace(fsm_host_entered=fsm_host_entered)
+
     def _assert_duration_parity(self, controller):
         """Assert JAX and CybORG agree on which agents are busy (action in progress).
 

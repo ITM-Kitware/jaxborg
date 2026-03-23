@@ -1154,3 +1154,110 @@ class TestInactiveAgentFsmFreeze:
         assert int(result[agent, host]) == FSM_S, (
             f"Inactive agent should not transition S→U, got {int(result[agent, host])}"
         )
+
+
+class TestDiscoverMaskFsmHostEnteredFilter:
+    """Discover transitions must only apply to hosts in fsm_host_entered.
+
+    CybORG's _host_state_transition iterates over host_states.keys() when
+    applying discover transitions.  Hosts in red_discovered_hosts but not
+    in host_states (e.g., pre-seeded topology discovery) must NOT receive
+    the K→KD transition.  fsm_host_entered tracks host_states membership.
+    """
+
+    def test_discovered_but_not_entered_host_stays_K(self):
+        """Host in red_discovered_hosts but NOT in fsm_host_entered must not transition."""
+        agent = 0
+        const = _make_trivial_const()
+        base = create_initial_state()
+
+        # Find two active hosts in the same subnet
+        subnet0 = int(const.host_subnet[int(const.red_start_hosts[0])])
+        hosts_in_subnet = [
+            h for h in range(GLOBAL_MAX_HOSTS) if bool(const.host_active[h]) and int(const.host_subnet[h]) == subnet0
+        ]
+        assert len(hosts_in_subnet) >= 2, "Need at least 2 hosts in start subnet"
+        entered_host = hosts_in_subnet[0]
+        not_entered_host = hosts_in_subnet[1]
+
+        # entered_host is in both discovered and entered (normal flow)
+        # not_entered_host is discovered but NOT entered (pre-seeded gap)
+        discovered = base.red_discovered_hosts
+        discovered = discovered.at[agent, entered_host].set(True)
+        discovered = discovered.at[agent, not_entered_host].set(True)
+        entered = base.fsm_host_entered.at[agent, entered_host].set(True)
+        fsm = base.fsm_host_states  # all K
+        active = base.red_agent_active.at[agent].set(True)
+
+        state = base.replace(
+            red_discovered_hosts=discovered,
+            fsm_host_entered=entered,
+            fsm_host_states=fsm,
+            red_agent_active=active,
+        )
+
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(subnet0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(FSM_ACT_DISCOVER)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+        eligible[agent] = jnp.bool_(True)
+
+        result = _compute_post_step_fsm_states(
+            state,
+            state,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        # entered_host should transition K→KD
+        assert int(result[agent, entered_host]) == FSM_KD, (
+            f"Entered host should transition K→KD, got {int(result[agent, entered_host])}"
+        )
+        # not_entered_host should stay K (not in fsm_host_entered)
+        assert int(result[agent, not_entered_host]) == FSM_K, (
+            f"Not-entered host should stay K, got {int(result[agent, not_entered_host])}"
+        )
+
+    def test_S_host_not_entered_stays_S_on_discover(self):
+        """Host at S but not in fsm_host_entered must not get S→SD discover transition."""
+        agent = 0
+        const = _make_trivial_const()
+        base = create_initial_state()
+
+        subnet0 = int(const.host_subnet[int(const.red_start_hosts[0])])
+        hosts_in_subnet = [
+            h for h in range(GLOBAL_MAX_HOSTS) if bool(const.host_active[h]) and int(const.host_subnet[h]) == subnet0
+        ]
+        assert len(hosts_in_subnet) >= 1
+        host = hosts_in_subnet[0]
+
+        # Host is at S, discovered, but NOT entered
+        discovered = base.red_discovered_hosts.at[agent, host].set(True)
+        fsm = base.fsm_host_states.at[agent, host].set(FSM_S)
+        active = base.red_agent_active.at[agent].set(True)
+        # fsm_host_entered stays False for this host
+
+        state = base.replace(
+            red_discovered_hosts=discovered,
+            fsm_host_states=fsm,
+            red_agent_active=active,
+        )
+
+        target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
+        target_subnets = [jnp.int32(subnet0)] * NUM_RED_AGENTS
+        fsm_actions = [jnp.int32(FSM_ACT_DISCOVER)] * NUM_RED_AGENTS
+        eligible = [jnp.bool_(False)] * NUM_RED_AGENTS
+        eligible[agent] = jnp.bool_(True)
+
+        result = _compute_post_step_fsm_states(
+            state,
+            state,
+            const,
+            target_hosts,
+            target_subnets,
+            fsm_actions,
+            eligible,
+        )
+        assert int(result[agent, host]) == FSM_S, f"Not-entered host at S should stay S, got {int(result[agent, host])}"

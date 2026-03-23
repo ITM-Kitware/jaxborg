@@ -177,6 +177,25 @@ class TestApplyPrivesc:
         new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
         assert bool(new_state.red_discovered_hosts[0, linked_host])
 
+    def test_privesc_sets_fsm_host_entered_for_info_links(self, jax_const):
+        target = _find_exploitable_host(jax_const)
+        if target is None:
+            pytest.skip("No exploitable host found")
+
+        nh = int(jax_const.num_hosts)
+        linked_host = next((h for h in range(nh) if h != target and jax_const.host_active[h]), None)
+        if linked_host is None:
+            pytest.skip("No linked host candidate found")
+
+        host_info_links = jnp.zeros_like(jax_const.host_info_links).at[target, linked_host].set(True)
+        const = jax_const.replace(host_info_links=host_info_links)
+        state = _setup_exploited_state(const, target)
+        assert not bool(state.fsm_host_entered[0, linked_host])
+
+        action_idx = encode_red_action("PrivilegeEscalate", target, 0)
+        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        assert bool(new_state.fsm_host_entered[0, linked_host])
+
     def test_privesc_does_not_affect_other_agents(self, jax_const, exploited_host):
         state, target = exploited_host
         action_idx = encode_red_action("PrivilegeEscalate", target, 0)
