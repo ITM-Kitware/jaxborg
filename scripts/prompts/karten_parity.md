@@ -26,7 +26,7 @@ export CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu
 uv run pytest tests/ -v -x -n auto             # all tests, parallel, stop on first failure
 uv run pytest tests/subsystems/ -v -x -n auto  # L1 property tests
 uv run pytest tests/differential/ -v -x -n auto # L2 interaction tests
-uv run pytest tests/l3_independent/ -v -x -n auto # L3 independent tests
+uv run pytest tests/l3/ -v -x -n auto # L3 independent tests
 uv run ruff check --fix . && uv run ruff format .   # lint
 ```
 
@@ -36,7 +36,7 @@ We follow a 4-level hierarchical verification approach:
 
 - **L1 Property**: Individual component tests in isolation (tests/subsystems/)
 - **L2 Interaction**: Cross-module differential tests (tests/differential/)
-- **L3 Rollout**: Full episode comparison, 20 seeds x 500 steps (tests/l3_independent/)
+- **L3 Rollout**: Full episode comparison, 50 seeds x 500 steps, random blue (tests/l3/)
 - **L4 Transfer**: Train in JAX, evaluate in CybORG (TOST equivalence)
 
 Failures at higher levels trigger root-cause analysis and new L1/L2 regressions.

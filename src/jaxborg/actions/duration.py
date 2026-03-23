@@ -155,16 +155,17 @@ def process_red_with_duration(
     anchor_source_host = bound_source_host
     # CybORG binds scan actions to session 0 (a session ID), not a fixed host.
     # When RedSessionCheck promotes a new session to slot 0 between queuing and
-    # execution, CybORG follows the updated session.  We only re-evaluate when
-    # the forced_primary_host (CybORG's actual session 0) is still valid -- this
-    # distinguishes RedSessionCheck promotion (session 0 moved) from blue
-    # restore (session 0 destroyed, action fails).
+    # execution, CybORG follows the updated session.  When forced_primary_host
+    # is available (Category A sync), use it directly.  Otherwise, follow the
+    # live anchor host — this tracks session 0's current location after any
+    # RedSessionCheck promotions.  If session 0 was destroyed (blue Restore),
+    # the anchor will be invalid (-1) and the scan correctly fails.
     execution_source_host = jnp.where(
         is_busy & (pending_source_kind == PENDING_SOURCE_KIND_SESSION_BINDING),
         jnp.where(
             primary_snapshot_known,
             jnp.where(forced_source_valid, forced_primary_host, jnp.int32(-1)),
-            effective_source_binding_host,
+            anchor_source_host,
         ),
         effective_source_binding_host,
     )

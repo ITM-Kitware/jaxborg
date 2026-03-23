@@ -54,12 +54,12 @@ the harness. Impact, green events, session identity, and abstract rank
 are computed by JAX independently — not copied from CybORG. RNG syncs
 (Category B) remain active. 20 seeds x 500 steps.
 
-Test command: uv run pytest tests/l3_independent/ -v -x -n auto"
+Test command: uv run pytest tests/l3/ -v -x -n auto"
 )
 declare -A LEVEL_COMMANDS=(
     [l1]="uv run pytest tests/subsystems/ -v -x -n auto"
     [l2]="uv run pytest tests/differential/ -v -x -n auto"
-    [l3]="uv run pytest tests/l3_independent/ -v -x -n auto"
+    [l3]="uv run pytest tests/l3/ -v -x -n auto"
 )
 
 # --- Helper Functions ---

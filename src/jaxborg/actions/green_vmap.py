@@ -48,6 +48,7 @@ MAX_PHISHING_PER_STEP = 8
 
 class GreenDecision(NamedTuple):
     """Per-host green agent decision outputs (vmappable)."""
+
     host_idx: jnp.int32
     local_work_failed: jnp.bool_
     local_fp: jnp.bool_
@@ -305,7 +306,8 @@ def apply_green_agents_vmapped(
         next_rank = carry_state.red_next_abstract_rank[red_idx]
         assigned_rank = jnp.where(
             abstract_rank_before < jnp.int32(ABSTRACT_RANK_NONE),
-            abstract_rank_before, next_rank,
+            abstract_rank_before,
+            next_rank,
         )
 
         # PID rows
@@ -314,11 +316,7 @@ def apply_green_agents_vmapped(
 
         # Anchor
         agent_has_no_sessions = ~jnp.any(carry_state.red_sessions[red_idx])
-        should_set_anchor = (
-            valid
-            & (carry_state.red_scan_anchor_host[red_idx] < 0)
-            & agent_has_no_sessions
-        )
+        should_set_anchor = valid & (carry_state.red_scan_anchor_host[red_idx] < 0) & agent_has_no_sessions
 
         new_state = carry_state.replace(
             red_sessions=carry_state.red_sessions.at[red_idx, h].set(True),
@@ -326,16 +324,12 @@ def apply_green_agents_vmapped(
             red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(True),
             red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(assigned_rank),
             red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(next_rank + 1),
-            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(
-                append_pid_to_row(pid_row, new_pid)
-            ),
+            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(append_pid_to_row(pid_row, new_pid)),
             red_session_abstract_pids=carry_state.red_session_abstract_pids.at[red_idx, h].set(
                 append_pid_to_row(abstract_row, new_pid)
             ),
             red_next_pid=jnp.maximum(carry_state.red_next_pid, new_pid + 1),
-            host_max_pid=carry_state.host_max_pid.at[h].set(
-                jnp.maximum(carry_state.host_max_pid[h], new_pid)
-            ),
+            host_max_pid=carry_state.host_max_pid.at[h].set(jnp.maximum(carry_state.host_max_pid[h], new_pid)),
             red_privilege=carry_state.red_privilege.at[red_idx, h].set(
                 jnp.maximum(carry_state.red_privilege[red_idx, h], COMPROMISE_USER)
             ),
@@ -351,7 +345,8 @@ def apply_green_agents_vmapped(
 
         return jax.tree.map(
             lambda new, old: jnp.where(valid, new, old),
-            new_state, carry_state,
+            new_state,
+            carry_state,
         )
 
     state = jax.lax.fori_loop(0, MAX_PHISHING_PER_STEP, _apply_phishing, state)

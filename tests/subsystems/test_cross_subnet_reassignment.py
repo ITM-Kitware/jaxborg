@@ -760,10 +760,11 @@ class TestReassignmentPreservesFsmState:
         # dest_agent is ALREADY active (has sessions elsewhere)
         other_host = 0  # some other host
         state = state.replace(
-            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True)
-                .at[dest_agent, other_host].set(True),
-            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1)
-                .at[dest_agent, other_host].set(1),
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True).at[dest_agent, other_host].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx]
+            .set(1)
+            .at[dest_agent, other_host]
+            .set(1),
             red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
             red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
             host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),

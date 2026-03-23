@@ -10,6 +10,7 @@ from jaxborg.actions.encoding import (
     RED_EXPLOIT_SSH_START,
     RED_PRIVESC_START,
     RED_SLEEP,
+    RED_STEALTH_SCAN_START,
     encode_blue_action,
 )
 from jaxborg.actions.red_common import apply_red_session_check
@@ -1211,3 +1212,114 @@ class TestDurationDifferential:
             assert not errors, f"Parity errors at seed={seed}: {errors}"
 
         assert total_deferred > 0, "No deferred actions across 3 seeds × 20 steps — duration not exercised"
+
+
+class TestSessionBindingScanFollowsAnchor:
+    """Regression: when a pending stealth scan was initiated from host A (session
+    binding), but session 0 moved to host B via RedSessionCheck, the scan should
+    follow session 0 to host B — matching CybORG's DiscoverNetworkServices which
+    uses self.session=0 (always the current session 0, not a fixed host).
+
+    Before the fix, JAX kept the stale bound host A as the source.  When host A
+    no longer had a session, the scan silently failed, producing a
+    red_scanned_hosts divergence.
+    """
+
+    def test_stealth_scan_follows_anchor_after_session_check(self, env_and_state):
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+        agent_id = 0
+
+        import numpy as np
+
+        # Find the existing abstract session host for agent 0.
+        abstract_mask = (
+            np.array(state.red_sessions[agent_id])
+            & np.array(const.host_active)
+            & np.array(state.red_session_is_abstract[agent_id])
+        )
+        abstract_hosts = np.where(abstract_mask)[0]
+        assert len(abstract_hosts) >= 1, "Agent 0 must have at least 1 abstract session"
+        host_a = int(abstract_hosts[0])
+
+        # Pick a second active host to give agent 0 an abstract session on.
+        # Must be in an allowed subnet for agent 0.
+        allowed_subnets = np.array(const.red_agent_subnets[agent_id])
+        host_subnet = np.array(const.host_subnet)
+        host_active = np.array(const.host_active)
+        candidates = np.where(
+            host_active
+            & np.array([allowed_subnets[host_subnet[h]] for h in range(GLOBAL_MAX_HOSTS)])
+            & ~np.array(state.red_sessions[agent_id])
+        )[0]
+        assert len(candidates) > 0, "Need a free host in agent 0's allowed subnets"
+        host_b = int(candidates[0])
+
+        # Create an abstract session on host_b for agent 0.
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id, host_b].set(True),
+            red_session_count=state.red_session_count.at[agent_id, host_b].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host_b].set(True),
+            red_session_pids=state.red_session_pids.at[agent_id, host_b, 0].set(jnp.int32(9999)),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[agent_id, host_b, 0].set(jnp.int32(9999)),
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, host_b].set(True),
+        )
+
+        # Pick an active host as scan target (distinct from both source hosts)
+        # and pre-discover it.
+        target = None
+        for h in range(GLOBAL_MAX_HOSTS):
+            if host_active[h] and h != host_a and h != host_b:
+                target = h
+                break
+        assert target is not None, "Need a third active host as scan target"
+        state = state.replace(
+            red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target].set(True),
+        )
+
+        # Set anchor to host_a — this is where session 0 currently lives.
+        state = state.replace(
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_a)),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(True),
+        )
+
+        # Initiate a stealth scan (duration=3) targeting `target`.
+        stealth_scan_action = RED_STEALTH_SCAN_START + target
+        key = jax.random.PRNGKey(99)
+        process_jit = jax.jit(process_red_with_duration, static_argnums=(2,))
+
+        s1 = process_jit(state, const, agent_id, stealth_scan_action, key)
+        assert int(s1.red_pending_ticks[agent_id]) == 2, "Stealth scan has duration 3 → 2 ticks remaining"
+
+        # Simulate session 0 moving from host_a to host_b:
+        # - Remove session from host_a
+        # - Keep session on host_b
+        # - Update anchor to host_b
+        s1 = s1.replace(
+            red_sessions=s1.red_sessions.at[agent_id, host_a].set(False),
+            red_session_count=s1.red_session_count.at[agent_id, host_a].set(0),
+            red_session_is_abstract=s1.red_session_is_abstract.at[agent_id, host_a].set(False),
+            red_session_pids=s1.red_session_pids.at[agent_id, host_a].set(-1),
+            red_session_abstract_pids=s1.red_session_abstract_pids.at[agent_id, host_a].set(-1),
+            red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
+        )
+
+        # Tick down: 2 → 1
+        s2 = process_jit(s1, const, agent_id, RED_SLEEP, key)
+        assert int(s2.red_pending_ticks[agent_id]) == 1
+
+        # Tick down: 1 → 0 (scan executes)
+        s3 = process_jit(s2, const, agent_id, RED_SLEEP, key)
+        assert int(s3.red_pending_ticks[agent_id]) == 0
+
+        # The scan should have used host_b (live anchor), not host_a (stale).
+        # Check that the target is now in the scanned set.
+        target_scanned = bool(s3.red_scanned_hosts[agent_id, target])
+        scan_success = bool(s3.red_scan_success[agent_id])
+
+        assert target_scanned, (
+            f"Stealth scan of host {target} from host_b={host_b} should succeed "
+            f"(session 0 moved from host_a={host_a} to host_b={host_b})"
+        )
+        assert scan_success, "red_scan_success should be True"
