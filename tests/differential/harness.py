@@ -212,6 +212,7 @@ def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf):
 def _jit_advance_and_clear(state, const):
     state = advance_mission_phase(state, const)
     return state.replace(
+        red_scan_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_activity_this_step=_ZERO_INT_HOSTS,
         green_lwf_this_step=_ZERO_BOOL_HOSTS,
         green_asf_this_step=_ZERO_BOOL_HOSTS,

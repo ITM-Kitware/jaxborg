@@ -107,6 +107,7 @@ class CC4State:
     red_primary_is_abstract: chex.Array  # (NUM_RED_AGENTS,) bool — session-0 equiv is abstract
     red_primary_pid: chex.Array  # (NUM_RED_AGENTS,) int32 — session-0 equiv PID, -1 if absent
 
+    red_scan_success: chex.Array  # (NUM_RED_AGENTS,) bool — scan action succeeded this step (for FSM)
     red_activity_this_step: chex.Array  # (GLOBAL_MAX_HOSTS,) int — 0=None, 1=Scan, 2=Exploit
     host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — network_connections current
     old_host_activity_detected: chex.Array  # (GLOBAL_MAX_HOSTS,) bool — network_connections aged
@@ -239,6 +240,7 @@ def create_initial_state() -> CC4State:
         red_scan_anchor_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_primary_is_abstract=jnp.ones(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_primary_pid=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
+        red_scan_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
         red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
         host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         old_host_activity_detected=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),

@@ -78,9 +78,15 @@ def apply_scan_unified(
         state.red_scan_source_pid,
     )
 
+    red_scan_success = jnp.where(
+        success,
+        state.red_scan_success.at[agent_id].set(True),
+        state.red_scan_success,
+    )
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
         red_scan_source_pid=red_scan_source_pid,
+        red_scan_success=red_scan_success,
         red_activity_this_step=activity,
         host_activity_detected=scan_detected,
     )

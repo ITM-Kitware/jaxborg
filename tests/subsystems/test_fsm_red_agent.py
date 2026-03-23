@@ -21,6 +21,7 @@ from jaxborg.agents.fsm_red import (
     FSM_ACT_EXPLOIT,
     FSM_ACT_IMPACT,
     FSM_ACT_PRIVESC,
+    FSM_ACT_STEALTH_SCAN,
     FSM_ACT_WITHDRAW,
     FSM_F,
     FSM_K,
@@ -430,6 +431,119 @@ class TestFsmSuccessDetection:
                 FSM_ACT_DISCOVER,
             )
         )
+
+
+class TestFsmScanRescanSuccess:
+    """Regression: re-scanning an already-scanned host must count as success.
+
+    CybORG always reports scan success when the action executes (agent has
+    session, target reachable), regardless of whether the host was previously
+    scanned.  JAX's determine_fsm_success used a delta check on
+    red_scanned_hosts that returned False for re-scans because the field was
+    already True.  This caused KD → KD (failure) instead of KD → SD (success),
+    producing systematic FSM divergence across many L3 seeds.
+    """
+
+    def test_rescan_aggressive_counts_as_success(self):
+        """Aggressive re-scan on already-scanned host → success via red_scan_success flag."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+
+        target = 5
+        before = base.replace(
+            red_scanned_hosts=base.red_scanned_hosts.at[0, target].set(True),
+        )
+        # Re-scan: scanned stays True, but scan action sets red_scan_success
+        after = before.replace(
+            red_scan_success=before.red_scan_success.at[0].set(True),
+        )
+
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(target), jnp.int32(0),
+            FSM_ACT_AGGRESSIVE_SCAN,
+        )
+        assert bool(success), "Re-scan should count as success when scan action succeeded"
+
+    def test_rescan_stealth_counts_as_success(self):
+        """Stealth re-scan on already-scanned host → success via red_scan_success flag."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+
+        target = 5
+        before = base.replace(
+            red_scanned_hosts=base.red_scanned_hosts.at[0, target].set(True),
+        )
+        after = before.replace(
+            red_scan_success=before.red_scan_success.at[0].set(True),
+        )
+
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(target), jnp.int32(0),
+            FSM_ACT_STEALTH_SCAN,
+        )
+        assert bool(success), "Re-scan should count as success when scan action succeeded"
+
+    def test_fresh_scan_still_detected(self):
+        """A fresh scan (not previously scanned) still works via red_scan_success."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+
+        target = 5
+        before = base
+        after = base.replace(
+            red_scanned_hosts=base.red_scanned_hosts.at[0, target].set(True),
+            red_scan_success=base.red_scan_success.at[0].set(True),
+        )
+
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(target), jnp.int32(0),
+            FSM_ACT_AGGRESSIVE_SCAN,
+        )
+        assert bool(success), "Fresh scan should count as success"
+
+    def test_failed_scan_still_failure(self):
+        """A failed scan (red_scan_success not set) → failure."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+
+        target = 5
+        before = base
+        after = base  # red_scan_success stays False
+
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(target), jnp.int32(0),
+            FSM_ACT_AGGRESSIVE_SCAN,
+        )
+        assert not bool(success), "Failed scan should not count as success"
+
+    def test_failed_scan_with_prior_memory_still_failure(self):
+        """Scan fails but old scan memory valid → still failure (no false positive)."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+
+        target = 5
+        before = base.replace(
+            red_scanned_hosts=base.red_scanned_hosts.at[0, target].set(True),
+        )
+        # Scan failed: red_scan_success NOT set, but scanned_hosts still True
+        after = before
+
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(target), jnp.int32(0),
+            FSM_ACT_AGGRESSIVE_SCAN,
+        )
+        assert not bool(success), "Failed scan with prior memory should not be false positive"
+
+
+def _make_trivial_const():
+    """Build a minimal CC4Const for unit tests that don't need full topology."""
+    from jaxborg.topology import build_topology
+    return build_topology(jnp.array([42, 0], dtype=jnp.uint32), num_steps=10)
 
 
 class TestFsmGetAction:

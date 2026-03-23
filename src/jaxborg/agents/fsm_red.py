@@ -405,14 +405,14 @@ def determine_fsm_success(
             lambda: jnp.any(
                 state_after.red_discovered_hosts[agent_id] & const.host_active & (const.host_subnet == target_subnet)
             ),
-            lambda: (
-                state_after.red_scanned_hosts[agent_id, target_host]
-                & ~state_before.red_scanned_hosts[agent_id, target_host]
-            ),
-            lambda: (
-                state_after.red_scanned_hosts[agent_id, target_host]
-                & ~state_before.red_scanned_hosts[agent_id, target_host]
-            ),
+            # CybORG reports scan success when the action executes (session
+            # available, target reachable), regardless of prior scan state.
+            # A re-scan on an already-scanned host succeeds in CybORG but the
+            # delta check (after & ~before) returns False because
+            # red_scanned_hosts was already True.  Use the per-step scan
+            # success flag set by the scan action module.
+            lambda: state_after.red_scan_success[agent_id],
+            lambda: state_after.red_scan_success[agent_id],
             lambda: jnp.bool_(True),
             lambda: (
                 state_after.red_session_count[agent_id, target_host]
