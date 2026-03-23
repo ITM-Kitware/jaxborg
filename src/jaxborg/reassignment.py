@@ -210,8 +210,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     lost_all = red_agent_active & ~has_sessions_after
     red_agent_active = red_agent_active & ~lost_all
     red_agent_active = red_agent_active.at[0].set(True)
-    # Clear discovery and FSM for deactivated agents
-    red_discovered = jnp.where(lost_all[:, None], False, red_discovered)
+    # NOTE: Do NOT clear red_discovered for deactivated agents.
+    # CybORG's aspace.ip_address retains known IPs across deactivation/
+    # re-activation cycles, so discovery must persist too.
 
     return state.replace(
         red_sessions=red_sessions,

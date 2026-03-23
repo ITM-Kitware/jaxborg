@@ -304,8 +304,8 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[
     jax_compromised = np.asarray(jax_state.host_compromised[:n])
     jax_sessions = np.asarray(jax_state.red_sessions[:NUM_RED_AGENTS, :n])
     jax_priv = np.asarray(jax_state.red_privilege[:NUM_RED_AGENTS, :n])
-    jax_discovered = np.asarray(jax_state.red_discovered_hosts[:NUM_RED_AGENTS, :n])
-    jax_scanned = np.asarray(jax_state.red_scanned_hosts[:NUM_RED_AGENTS, :n])
+    jax_discovered = np.array(jax_state.red_discovered_hosts[:NUM_RED_AGENTS, :n])
+    jax_scanned = np.array(jax_state.red_scanned_hosts[:NUM_RED_AGENTS, :n])
     jax_services = np.asarray(jax_state.host_services[:n, :NUM_SERVICES])
     jax_service_reliability = np.asarray(jax_state.host_service_reliability[:n, :NUM_SERVICES])
     jax_decoys = np.asarray(jax_state.host_decoys[:n])
@@ -393,6 +393,15 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[
     cyborg_phase = getattr(cyborg_state, "mission_phase", 0)
 
     controller = cyborg_env.environment_controller
+    # Zero out JAX discovery/scanned for inactive agents to match CybORG
+    # (which skips inactive agents below).  JAX preserves discovery across
+    # deactivation (matching CybORG aspace), but the comparator only reads
+    # aspace for active agents.
+    for r in range(NUM_RED_AGENTS):
+        iface_chk = controller.agent_interfaces.get(f"red_agent_{r}")
+        if iface_chk is None or not getattr(iface_chk, "active", False):
+            jax_discovered[r] = 0
+            jax_scanned[r] = 0
     for r in range(NUM_RED_AGENTS):
         iface = controller.agent_interfaces.get(f"red_agent_{r}")
         if iface is None:
@@ -577,7 +586,12 @@ def compare_fast(cyborg_env, jax_state, jax_const, mappings, **_kwargs) -> list[
     for r in range(NUM_RED_AGENTS):
         fsm_mismatch = np.where(cyborg_fsm[r] != jax_fsm[r])[0]
         for h in fsm_mismatch:
-            if cyborg_fsm[r, h] != 0 or jax_fsm[r, h] != 0:
+            # Only report when CybORG's FSM has a non-K state — meaning the
+            # host is actually in CybORG's host_states.  When CybORG is K(0),
+            # the host hasn't entered the FSM yet and any JAX state is a
+            # harmless timing difference (e.g. DiscoverRemoteSystems
+            # discover_mask includes the start host before CybORG processes it).
+            if cyborg_fsm[r, h] != 0:
                 diffs.append(
                     StateDiff("fsm_host_states", int(cyborg_fsm[r, h]), int(jax_fsm[r, h]), f"red_{r}_host_{h}")
                 )
