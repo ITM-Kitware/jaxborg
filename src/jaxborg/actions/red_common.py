@@ -349,7 +349,9 @@ def apply_red_session_check(
     next_primary_is_abstract = jax.lax.cond(
         next_anchor >= 0,
         lambda _: pid_row_contains(red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
-        lambda _: state.red_primary_is_abstract[agent_id],
+        # CybORG defaults to True when session 0 is absent.  A stale False
+        # left by blue Restore/Remove must not persist once all sessions are gone.
+        lambda _: jnp.bool_(True),
         operand=None,
     )
     promoted_abstract_primary = (

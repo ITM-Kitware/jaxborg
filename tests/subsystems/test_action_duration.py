@@ -975,6 +975,34 @@ class TestSessionCheckPreservesAbstractForInactiveAgents:
             "when agent has no sessions (CybORG defaults to True for absent session-0)"
         )
 
+    def test_stale_false_abstract_resets_to_true_when_no_sessions(self, env_and_state):
+        """Regression: when blue Restore/Remove kills all sessions and sets
+        red_primary_is_abstract=False, session_check must reset it to True
+        (matching CybORG's default when session 0 is absent)."""
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+        key = jax.random.PRNGKey(42)
+
+        agent_id = 2
+        # Simulate post-blue-action state: no sessions, abstract=False, anchor=-1
+        state = state.replace(
+            red_sessions=state.red_sessions.at[agent_id].set(False),
+            red_primary_is_abstract=state.red_primary_is_abstract.at[agent_id].set(False),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(-1),
+            red_primary_pid=state.red_primary_pid.at[agent_id].set(-1),
+        )
+        assert not bool(jnp.any(state.red_sessions[agent_id]))
+        assert not bool(state.red_primary_is_abstract[agent_id])
+
+        new_state = apply_red_session_check(state, const, agent_id, key)
+
+        assert bool(new_state.red_primary_is_abstract[agent_id]), (
+            "apply_red_session_check must reset red_primary_is_abstract to True "
+            "when agent has no sessions — CybORG defaults to True for absent session-0. "
+            "A stale False from blue Restore/Remove must not persist."
+        )
+
 
 class TestReassignmentSetsPrimaryPidForNewlyActiveAgents:
     """Regression: reassign_cross_subnet_sessions must set red_primary_pid
