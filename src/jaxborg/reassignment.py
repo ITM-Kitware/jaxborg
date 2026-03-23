@@ -108,6 +108,8 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             dst_abstract_rows = red_session_abstract_pids[dst]
 
             def _move_abstract_slot(slot, rows):
+                # CybORG converts ALL reassigned sessions to RedAbstractSession,
+                # so copy from src_pid_rows (all PIDs), not just abstract ones.
                 incoming_pid = src_pid_rows[:, slot]
                 return jax.vmap(
                     lambda row, pid, do_assign: jnp.where(

@@ -212,11 +212,10 @@ def fsm_red_get_action_and_info(
     active = const.host_active
 
     # CybORG's FSM only acts on hosts in host_states (explicitly observed).
-    # In JAX, FSM_K=0 is the array default for unobserved hosts. Hosts that
-    # enter the FSM via init (FSM_U) or discover (K→KD) have state > 0.
-    # Gate eligibility on fsm_states > 0 to exclude unobserved topology-
-    # seeded hosts while allowing legitimately-discovered K hosts (which
-    # transition to KD after discover succeeds).
+    # In JAX, FSM_K=0 is the array default for unobserved hosts.  We gate
+    # eligibility on fsm_states > 0 to exclude unobserved hosts; newly
+    # discovered hosts are set to KD by the post-step update to enter the
+    # eligible set.
     fsm_known = fsm_states > 0
     eligible = discovered & active & fsm_known & (fsm_states != FSM_F)
 

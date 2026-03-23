@@ -26,7 +26,7 @@ from jaxborg.actions.encoding import (
     decode_red_action,
     encode_red_action,
 )
-from jaxborg.agents.fsm_red import FSM_K, FSM_KD, FSM_S, FSM_SD
+from jaxborg.agents.fsm_red import FSM_K, FSM_S
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     COMPROMISE_NONE,
@@ -180,7 +180,13 @@ class TestDiscoverDeceptionEncoding:
 
 
 class TestApplyDiscoverDeception:
-    def test_detects_decoy_transitions_fsm(self, jax_const, jax_state_with_discovered):
+    def test_detects_decoy_no_fsm_transition(self, jax_const, jax_state_with_discovered):
+        """CybORG's DiscoverDeception does NOT change FSM state (column 3: S→S).
+
+        FSM transitions are handled by _host_state_transition via the
+        success/failure matrices, and DiscoverDeception's column keeps the
+        current state on both success and failure.
+        """
         state = jax_state_with_discovered
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
@@ -203,7 +209,7 @@ class TestApplyDiscoverDeception:
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
-        assert int(new_state.fsm_host_states[0, target]) == FSM_SD
+        assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
     def test_no_decoys_no_transition(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
@@ -249,7 +255,7 @@ class TestApplyDiscoverDeception:
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
-        assert int(new_state.fsm_host_states[0, target]) == FSM_SD
+        assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
     def test_failed_discover_deception_does_not_consume_detection_randoms(self, jax_const, jax_state_with_discovered):
         state = create_initial_state()
@@ -336,7 +342,7 @@ class TestApplyDiscoverDeception:
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
-        assert int(new_state.fsm_host_states[0, target]) == FSM_SD
+        assert int(new_state.fsm_host_states[0, target]) == FSM_S
         assert int(new_state.detection_random_index) == 2
 
     def test_jit_compatible(self, jax_const, jax_state_with_discovered):
@@ -362,7 +368,7 @@ class TestApplyDiscoverDeception:
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
         new_state = jitted(state, const, 0, action_idx, jax.random.PRNGKey(0))
-        assert int(new_state.fsm_host_states[0, target]) == FSM_KD
+        assert int(new_state.fsm_host_states[0, target]) == FSM_K
 
 
 class TestDegradeEncoding:
