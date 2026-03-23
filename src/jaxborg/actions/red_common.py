@@ -190,12 +190,17 @@ def recompute_scan_anchor_hosts(
     red_sessions: chex.Array,
     red_session_is_abstract: chex.Array,
     host_active: chex.Array,
+    red_abstract_host_rank: chex.Array | None = None,
 ) -> chex.Array:
     """Recompute scan anchor hosts after session reassignment.
 
     Keeps valid anchors, invalidates stale ones, and promotes a new anchor
     for agents that gained sessions (e.g. via green phishing reassignment)
     but have no valid anchor yet.
+
+    When ``red_abstract_host_rank`` is provided, the fallback prefers the
+    host with the lowest rank (ident=0 in CybORG), matching CybORG's
+    ``add_session`` order during ``different_subnet_agent_reassignment``.
     """
     del red_session_is_abstract
     anchor_idx = jnp.clip(prior_anchor_hosts, 0, red_sessions.shape[1] - 1)
@@ -206,8 +211,16 @@ def recompute_scan_anchor_hosts(
     )
     active_sessions = red_sessions & host_active[None, :]
     has_any_sessions = jnp.any(active_sessions, axis=1)
-    # Pick the first active session host as fallback anchor for newly activated agents
-    fallback_hosts = jnp.argmax(active_sessions.astype(jnp.int32), axis=1).astype(jnp.int32)
+    # Prefer the host with the lowest abstract rank (ident=0 = CybORG primary).
+    # Fall back to lowest host index when no rank data is available.
+    fallback_by_idx = jnp.argmax(active_sessions.astype(jnp.int32), axis=1).astype(jnp.int32)
+    if red_abstract_host_rank is not None:
+        rank_scores = jnp.where(active_sessions, red_abstract_host_rank, jnp.int32(ABSTRACT_RANK_NONE))
+        has_ranked = jnp.any(active_sessions & (red_abstract_host_rank < jnp.int32(ABSTRACT_RANK_NONE)), axis=1)
+        fallback_by_rank = jnp.argmin(rank_scores, axis=1).astype(jnp.int32)
+        fallback_hosts = jnp.where(has_ranked, fallback_by_rank, fallback_by_idx)
+    else:
+        fallback_hosts = fallback_by_idx
     needs_promotion = has_any_sessions & ~anchor_valid
     return jnp.where(
         anchor_valid,

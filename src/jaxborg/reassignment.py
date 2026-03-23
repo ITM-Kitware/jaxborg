@@ -191,6 +191,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_sessions,
         red_session_is_abstract,
         const.host_active,
+        red_abstract_host_rank,
     )
 
     # Set red_primary_pid for newly activated agents so the post-step

@@ -779,3 +779,66 @@ class TestReassignmentPreservesFsmState:
         assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_K
         # Must be marked as entered in FSM
         assert bool(after.fsm_host_entered[dest_agent, target_idx])
+
+
+class TestReassignmentAnchorUsesRank:
+    """Regression: when a newly activated agent receives sessions on multiple
+    hosts simultaneously, the scan anchor must be set to the host with the
+    lowest abstract rank (ident=0) — matching CybORG's add_session order.
+
+    Before the fix, recompute_scan_anchor_hosts used jnp.argmax (lowest host
+    index) as fallback, which doesn't match CybORG's ident=0 assignment when
+    the lowest-index host isn't the first one reassigned.
+    """
+
+    def test_anchor_prefers_lowest_rank_host(self):
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        # Test the anchor selection directly:
+        # Set up dest_agent as newly activated with sessions on two hosts,
+        # host_lo (low index) with rank=1 and host_hi (high index) with rank=0.
+        # The anchor should pick host_hi (lowest rank), not host_lo (lowest index).
+        # Both hosts must be in dest_agent's allowed subnets so reassignment
+        # doesn't move them away.
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+
+        allowed_subnets = np.array(const.red_agent_subnets[dest_agent])
+        host_lo = None
+        host_hi = None
+        for h in range(int(const.num_hosts)):
+            sub = int(const.host_subnet[h])
+            if bool(const.host_active[h]) and not bool(const.host_is_router[h]) and allowed_subnets[sub]:
+                if host_lo is None:
+                    host_lo = h
+                elif host_hi is None and h > host_lo:
+                    host_hi = h
+                    break
+        assert host_lo is not None and host_hi is not None, (
+            f"Need 2 active non-router hosts in dest_agent={dest_agent}'s allowed subnets"
+        )
+
+        state = state.replace(
+            red_sessions=state.red_sessions.at[dest_agent, host_lo].set(True).at[dest_agent, host_hi].set(True),
+            red_session_count=state.red_session_count.at[dest_agent, host_lo].set(1).at[dest_agent, host_hi].set(1),
+            red_session_is_abstract=state.red_session_is_abstract.at[dest_agent, host_lo]
+            .set(True)
+            .at[dest_agent, host_hi]
+            .set(True),
+            # host_hi has rank 0 (ident=0, CybORG primary), host_lo has rank 1
+            red_abstract_host_rank=state.red_abstract_host_rank.at[dest_agent, host_hi]
+            .set(0)
+            .at[dest_agent, host_lo]
+            .set(1),
+            red_agent_active=state.red_agent_active.at[dest_agent].set(True),
+            red_scan_anchor_host=state.red_scan_anchor_host.at[dest_agent].set(jnp.int32(-1)),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        anchor = int(after.red_scan_anchor_host[dest_agent])
+        assert anchor == host_hi, (
+            f"Anchor should be host_hi={host_hi} (rank=0) but got host_lo={host_lo} (rank=1). "
+            f"recompute_scan_anchor_hosts must prefer lowest rank, not lowest index."
+        )
