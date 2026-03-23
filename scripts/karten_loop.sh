@@ -237,6 +237,16 @@ spawn_agent() {
     ) 2>&1 | tee "${HANDOFF_DIR}/agent_output_${iter}.txt"
 
     echo "=== Agent finished ==="
+
+    # Check if agent hit rate limit
+    if grep -qi "hit your limit\|rate.limit\|resets.*America" "${HANDOFF_DIR}/agent_output_${iter}.txt" 2>/dev/null; then
+        echo ""
+        echo "!!! Agent hit API rate limit — pausing loop"
+        echo "$(date -Iseconds) | iter=${iter} | ${level} | RATE LIMITED — pausing" \
+            >> "${HANDOFF_DIR}/loop_log.txt"
+        echo "!!! Waiting 60 minutes before retrying..."
+        sleep 3600
+    fi
 }
 
 # --- Main Loop ---
