@@ -990,12 +990,18 @@ class CC4DifferentialHarness:
             red_privesc_choice_row = self.jax_const.red_privesc_choices.at[self.jax_state.time].set(
                 jnp.array(privesc_row, dtype=jnp.int32)
             )
-            # Sync session-check within-host slot indices from CybORG
+            # Sync session-check within-host slot indices and host from CybORG
             sc_row = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
             for ridx, slot_idx in random_sync_report.red_session_check_choices.items():
                 sc_row[ridx] = slot_idx
             red_sc_choice_row = self.jax_const.red_session_check_choices.at[self.jax_state.time].set(
                 jnp.array(sc_row, dtype=jnp.int32)
+            )
+            sc_host_row = np.full(NUM_RED_AGENTS, -1, dtype=np.int32)
+            for ridx, host_idx in random_sync_report.red_session_check_hosts.items():
+                sc_host_row[ridx] = host_idx
+            red_sc_host_row = self.jax_const.red_session_check_hosts.at[self.jax_state.time].set(
+                jnp.array(sc_host_row, dtype=jnp.int32)
             )
             self.jax_const = self.jax_const.replace(
                 green_randoms=green_randoms,
@@ -1005,6 +1011,7 @@ class CC4DifferentialHarness:
                 use_detection_randoms=jnp.array(using_detection_sync),
                 red_privesc_choices=red_privesc_choice_row,
                 red_session_check_choices=red_sc_choice_row,
+                red_session_check_hosts=red_sc_host_row,
             )
             self.jax_state = self.jax_state.replace(
                 detection_random_index=jnp.array(0, dtype=jnp.int32),
@@ -1203,8 +1210,10 @@ class CC4DifferentialHarness:
                     # and promoted the chosen session to ident 0.  Find that session's
                     # position in JAX's per-host PID row so nth_valid_pid picks it.
                     if usage.choice_indices:
-                        slot = self._compute_session_check_within_host_slot(usage.agent_idx)
+                        slot, host_idx = self._compute_session_check_within_host_slot(usage.agent_idx)
                         random_sync_report.red_session_check_choices[usage.agent_idx] = slot
+                        if host_idx >= 0:
+                            random_sync_report.red_session_check_hosts[usage.agent_idx] = host_idx
                     continue
                 random_sync_report.unsupported_random_actions.append(
                     f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
@@ -1240,31 +1249,33 @@ class CC4DifferentialHarness:
 
         random_sync_report.detection_randoms = synced_randoms
 
-    def _compute_session_check_within_host_slot(self, agent_idx: int) -> int:
+    def _compute_session_check_within_host_slot(self, agent_idx: int) -> tuple[int, int]:
         """Find the promoted session 0's position in JAX's PID row on its host.
 
         After CybORG's RedSessionCheck, session 0 is the newly promoted session.
         We find its PID and look up its position in JAX's pre-step PID row so
         that ``nth_valid_pid`` in JAX's session check picks the same session.
+
+        Returns (within_host_slot, host_idx).
         """
         cy_state = self.cyborg_env.environment_controller.state
         sessions = cy_state.sessions.get(f"red_agent_{agent_idx}", {})
         session_0 = sessions.get(0)
         if session_0 is None:
-            return 0
+            return 0, -1
         host_idx = self.mappings.hostname_to_idx.get(session_0.hostname)
         if host_idx is None:
-            return 0
+            return 0, -1
         promoted_pid = int(session_0.pid)
         pid_row = self.jax_state.red_session_pids[agent_idx, host_idx]
         valid_before = 0
         for i in range(pid_row.shape[0]):
             p = int(pid_row[i])
             if p == promoted_pid:
-                return valid_before
+                return valid_before, host_idx
             if p >= 0:
                 valid_before += 1
-        return 0  # PID not found (created during this step), fallback
+        return 0, host_idx  # PID not found (created during this step), fallback
 
     def _compute_privesc_within_host_slot(self, agent_idx: int, action_idx: int, choice_index: int) -> int:
         """Convert CybORG's privesc choice index to JAX's PID row position.

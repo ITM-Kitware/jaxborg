@@ -76,6 +76,7 @@ class CC4Const:
     red_privesc_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed privesc session choice index
     use_red_privesc_choices: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
     red_session_check_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — session-check slot
+    red_session_check_hosts: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — session-check host (-1=unset)
     use_red_session_check_choices: chex.Array  # scalar bool — use precomputed session-check
     blue_decoy_type_choices: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed decoy type index
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
@@ -208,6 +209,7 @@ def create_initial_const() -> CC4Const:
         red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_privesc_choices=jnp.array(False),
         red_session_check_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        red_session_check_hosts=jnp.full((MAX_STEPS, NUM_RED_AGENTS), -1, dtype=jnp.int32),
         use_red_session_check_choices=jnp.array(False),
         blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_type_choices=jnp.array(False),

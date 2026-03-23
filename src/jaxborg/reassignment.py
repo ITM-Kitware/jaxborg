@@ -8,7 +8,7 @@ host's subnet.
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.agents.fsm_red import FSM_R, FSM_RD, FSM_U, FSM_UD
@@ -189,6 +189,29 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_session_is_abstract,
         const.host_active,
     )
+
+    # Set red_primary_pid for newly activated agents so the post-step
+    # apply_red_session_check sees a valid primary and doesn't re-sample.
+    # CybORG's add_session assigns ident=0 to the first session, and
+    # RedSessionCheck.execute sees session 0 exists → no RNG consumed.
+    red_primary_pid = state.red_primary_pid
+    red_primary_is_abstract = state.red_primary_is_abstract
+    for r in range(NUM_RED_AGENTS):
+        anchor_h = red_scan_anchor_host[r]
+        anchor_h_idx = jnp.clip(anchor_h, 0, red_session_pids.shape[1] - 1)
+        pid_at_anchor = first_valid_pid(red_session_pids[r, anchor_h_idx])
+        is_abstract_at_anchor = jnp.any(red_session_abstract_pids[r, anchor_h_idx] >= 0)
+        red_primary_pid = jnp.where(
+            newly_active[r] & (anchor_h >= 0) & (pid_at_anchor >= 0),
+            red_primary_pid.at[r].set(pid_at_anchor),
+            red_primary_pid,
+        )
+        red_primary_is_abstract = jnp.where(
+            newly_active[r] & (anchor_h >= 0),
+            red_primary_is_abstract.at[r].set(is_abstract_at_anchor),
+            red_primary_is_abstract,
+        )
+
     full_clear = (~has_any_sessions_now)[:, None]
     source_matrix = scan_sources(state)
     scan_synced = sync_scan_memory_fields(
@@ -227,6 +250,8 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
+        red_primary_pid=red_primary_pid,
+        red_primary_is_abstract=red_primary_is_abstract,
         host_compromised=host_compromised,
         host_suspicious_process=host_suspicious_process,
         fsm_host_states=fsm_with_sessions,

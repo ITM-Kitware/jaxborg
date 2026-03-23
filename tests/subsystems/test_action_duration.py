@@ -976,6 +976,50 @@ class TestSessionCheckPreservesAbstractForInactiveAgents:
         )
 
 
+class TestReassignmentSetsPrimaryPidForNewlyActiveAgents:
+    """Regression: reassign_cross_subnet_sessions must set red_primary_pid
+    for newly activated agents so apply_red_session_check does not spuriously
+    re-sample the primary host."""
+
+    def test_newly_active_agent_gets_primary_pid(self, env_and_state):
+        from jaxborg.actions.pids import append_pid_to_row
+        from jaxborg.reassignment import reassign_cross_subnet_sessions
+
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+
+        # Agent 1 is initially inactive. Give agent 0 a session on agent 1's subnet
+        # so reassignment activates agent 1.
+        agent_1_subnet_hosts = jnp.where(const.red_agent_subnets[1, const.host_subnet], size=GLOBAL_MAX_HOSTS)[0]
+        target_host = int(agent_1_subnet_hosts[0])
+        if not bool(const.host_active[target_host]):
+            pytest.skip("No active host in agent 1's subnet")
+
+        test_pid = jnp.int32(5000)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, target_host].set(True),
+            red_session_count=state.red_session_count.at[0, target_host].set(1),
+            red_session_pids=state.red_session_pids.at[0, target_host].set(
+                append_pid_to_row(state.red_session_pids[0, target_host], test_pid)
+            ),
+            red_session_abstract_pids=state.red_session_abstract_pids.at[0, target_host].set(
+                append_pid_to_row(state.red_session_abstract_pids[0, target_host], test_pid)
+            ),
+        )
+
+        new_state = reassign_cross_subnet_sessions(state, const)
+
+        # Agent 1 should now be active with a valid primary PID
+        assert bool(new_state.red_agent_active[1]), "Agent 1 should be activated"
+        assert int(new_state.red_primary_pid[1]) >= 0, (
+            "red_primary_pid must be set for newly activated agents to prevent "
+            "spurious re-sampling in apply_red_session_check"
+        )
+        anchor = int(new_state.red_scan_anchor_host[1])
+        assert anchor >= 0, "Anchor must be set for newly activated agent"
+
+
 class TestDurationDifferential:
     """Differential tests verifying JAX duration tracking matches CybORG.
 

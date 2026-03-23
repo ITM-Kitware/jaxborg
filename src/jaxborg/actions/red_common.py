@@ -264,7 +264,18 @@ def apply_red_session_check(
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
     forced_pid_valid = forced_valid & pid_row_contains(state.red_session_pids[agent_id, forced_idx], forced_primary_pid)
-    sampled = select_new_primary_session_host(session_counts, const.host_active, key)
+    # When CybORG session-check host is synced, use it instead of JAX RNG
+    # sampling. CybORG's _choose_new_primary_session picks uniformly from all
+    # sessions via np_random.choice — this is an RNG sync (Category B).
+    synced_host = jax.lax.cond(
+        const.use_red_session_check_choices,
+        lambda: const.red_session_check_hosts[state.time, agent_id],
+        lambda: jnp.int32(-1),
+    )
+    synced_host_idx = jnp.clip(synced_host, 0, state.red_sessions.shape[1] - 1)
+    synced_host_valid = (synced_host >= 0) & (session_counts[synced_host_idx] > 0) & const.host_active[synced_host_idx]
+    rng_sampled = select_new_primary_session_host(session_counts, const.host_active, key)
+    sampled = jnp.where(synced_host_valid, synced_host, rng_sampled)
     promoted = jnp.where(needs_primary, sampled, anchor)
     next_anchor = jnp.where(
         has_any_sessions,
