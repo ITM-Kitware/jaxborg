@@ -953,6 +953,29 @@ class TestSessionCheckToleratesPrimaryPidRowLag:
         assert int(new_state.red_primary_pid[agent_id]) == int(primary_pid)
 
 
+class TestSessionCheckPreservesAbstractForInactiveAgents:
+    """Regression: apply_red_session_check must preserve red_primary_is_abstract=True
+    for agents with no sessions, matching CybORG's default when no session-0 exists."""
+
+    def test_inactive_agent_keeps_abstract_true(self, env_and_state):
+        _, _, env_state = env_and_state
+        state = env_state.state
+        const = env_state.const
+        key = jax.random.PRNGKey(99)
+
+        # Pick an agent with no sessions (inactive at reset — agents 1-5)
+        agent_id = 1
+        assert not bool(jnp.any(state.red_sessions[agent_id])), "Agent should have no sessions"
+        assert bool(state.red_primary_is_abstract[agent_id]), "Initial abstract flag should be True"
+
+        new_state = apply_red_session_check(state, const, agent_id, key)
+
+        assert bool(new_state.red_primary_is_abstract[agent_id]), (
+            "apply_red_session_check must preserve red_primary_is_abstract=True "
+            "when agent has no sessions (CybORG defaults to True for absent session-0)"
+        )
+
+
 class TestDurationDifferential:
     """Differential tests verifying JAX duration tracking matches CybORG.
 

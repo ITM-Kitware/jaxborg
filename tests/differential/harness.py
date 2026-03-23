@@ -917,6 +917,7 @@ class CC4DifferentialHarness:
         # Match production path: no forced primary hosts/pids.
         # JAX tracks session identity internally via red_scan_anchor_host.
         from jaxborg.actions.duration import UNKNOWN_PRIMARY_HOST
+
         forced_primary_hosts_pre = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         forced_primary_pids_pre = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
         pre_service_map = _capture_service_process_map(cy_state)
