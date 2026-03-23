@@ -414,10 +414,11 @@ def determine_fsm_success(
             lambda: state_after.red_scan_success[agent_id],
             lambda: state_after.red_scan_success[agent_id],
             lambda: jnp.bool_(True),
-            lambda: (
-                state_after.red_session_count[agent_id, target_host]
-                > state_before.red_session_count[agent_id, target_host]
-            ),
+            # Use pre-reassignment success flag: CybORG's FSM processes the
+            # action's success BEFORE sessions are reassigned.  Checking
+            # session_count post-reassignment gives False when the session was
+            # immediately moved to another agent.
+            lambda: state_after.red_exploit_success[agent_id],
             lambda: (
                 state_after.red_privilege[agent_id, target_host] > state_before.red_privilege[agent_id, target_host]
             ),

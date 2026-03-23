@@ -710,6 +710,11 @@ def apply_exploit_success(
         state.host_process_creation_pids,
     )
 
+    red_exploit_success = jnp.where(
+        success,
+        state.red_exploit_success.at[agent_id].set(True),
+        state.red_exploit_success,
+    )
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -723,4 +728,5 @@ def apply_exploit_success(
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
         host_process_creation_pids=host_process_creation_pids,
+        red_exploit_success=red_exploit_success,
     )

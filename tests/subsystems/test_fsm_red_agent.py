@@ -357,8 +357,10 @@ class TestFsmSuccessDetection:
             red_sessions=base.red_sessions.at[0, target_host].set(True),
             red_session_count=base.red_session_count.at[0, target_host].set(1),
         )
+        # Use red_exploit_success flag (set pre-reassignment) instead of
+        # session_count delta, since reassignment can move the session away.
         after = before.replace(
-            red_session_count=before.red_session_count.at[0, target_host].set(2),
+            red_exploit_success=before.red_exploit_success.at[0].set(True),
         )
 
         assert bool(

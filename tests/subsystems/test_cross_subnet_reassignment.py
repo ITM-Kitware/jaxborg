@@ -8,6 +8,7 @@ from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import encode_red_action
+from jaxborg.agents.fsm_red import FSM_KD, FSM_S, FSM_SD, FSM_U
 from jaxborg.constants import COMPROMISE_USER, NUM_RED_AGENTS, NUM_SUBNETS
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.state import create_initial_state
@@ -641,3 +642,105 @@ def test_cross_subnet_reassignment_sums_transferred_suspicious_counts_per_sessio
     expected = len(cy_dest_pid_sessions)
     assert int(jax_after.red_session_count[dest_agent, target_idx]) == expected
     assert int(jax_after.red_suspicious_process_count[dest_agent, target_idx]) == expected
+
+
+class TestReassignmentPreservesFsmState:
+    """CybORG's FSM (FiniteStateRedAgent.host_states) is NOT modified by
+    session reassignment.  The FSM state only changes through the agent's own
+    actions or session-loss recovery.  JAX must match this behaviour."""
+
+    def test_reassignment_preserves_sd_state(self):
+        """Host at FSM_SD must stay SD after reassignment, not become U."""
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        # Dest agent already has host in FSM at SD (scanned + decoy found)
+        state = state.replace(
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            # Dest agent already tracks this host in FSM at SD
+            fsm_host_states=state.fsm_host_states.at[dest_agent, target_idx].set(FSM_SD),
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, target_idx].set(True),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+
+        # Session should be reassigned to dest
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        # FSM must stay at SD, NOT become U or UD
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_SD, (
+            f"FSM should stay SD after reassignment, got {int(after.fsm_host_states[dest_agent, target_idx])}"
+        )
+
+    def test_reassignment_preserves_s_state(self):
+        """Host at FSM_S must stay S after reassignment."""
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            fsm_host_states=state.fsm_host_states.at[dest_agent, target_idx].set(FSM_S),
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, target_idx].set(True),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_S
+
+    def test_reassignment_preserves_kd_state(self):
+        """Host at FSM_KD must stay KD after reassignment."""
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            fsm_host_states=state.fsm_host_states.at[dest_agent, target_idx].set(FSM_KD),
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, target_idx].set(True),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_KD
+
+    def test_reassignment_sets_u_for_new_host_not_in_fsm(self):
+        """Host NOT yet in FSM (entered=False) gets U on user-session reassignment."""
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            # Host NOT entered in dest agent's FSM
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, target_idx].set(False),
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        # For new hosts, U is acceptable (FSM will sync at next step)
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_U

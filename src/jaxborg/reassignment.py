@@ -169,11 +169,17 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
 
     has_any_sessions_now = jnp.any(red_sessions, axis=1)
     current_fsm = state.fsm_host_states
+    # CybORG's FSM (FiniteStateRedAgent.host_states) is NOT modified by
+    # session reassignment — the agent's own actions drive FSM transitions
+    # via _host_state_transition, and new hosts enter as K through
+    # _process_new_observations.  Only set FSM for hosts not yet tracked
+    # (fsm_host_entered=False); already-tracked hosts keep their state.
+    not_yet_entered = ~state.fsm_host_entered
     discovered_decoy = (current_fsm == FSM_UD) | (current_fsm == FSM_RD)
     privileged_session = reassigned_hosts & (red_privilege >= COMPROMISE_PRIVILEGED)
     user_session = reassigned_hosts & ~privileged_session
     fsm_with_sessions = jnp.where(
-        privileged_session,
+        privileged_session & not_yet_entered,
         jnp.where(discovered_decoy, FSM_RD, FSM_R),
         current_fsm,
     )
@@ -181,7 +187,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         (current_fsm != FSM_U) & (current_fsm != FSM_UD) & (current_fsm != FSM_R) & (current_fsm != FSM_RD)
     )
     fsm_with_sessions = jnp.where(
-        user_session & uncompromised_state,
+        user_session & uncompromised_state & not_yet_entered,
         jnp.where(discovered_decoy, FSM_UD, FSM_U),
         fsm_with_sessions,
     )

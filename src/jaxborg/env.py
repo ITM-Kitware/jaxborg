@@ -535,6 +535,7 @@ class CC4Env(MultiAgentEnv):
 
         state = state.replace(
             red_scan_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
+            red_exploit_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
             red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
             green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
             green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
