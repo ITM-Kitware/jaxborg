@@ -547,7 +547,7 @@ class TestFsmGetAction:
         start_host = int(jax_const.red_start_hosts[0])
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
-        fsm = state.fsm_host_states.at[0, start_host].set(FSM_K)
+        fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
@@ -577,7 +577,7 @@ class TestFsmGetAction:
         start_host = int(jax_const.red_start_hosts[0])
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
-        fsm = state.fsm_host_states.at[0, start_host].set(FSM_K)
+        fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,
@@ -593,7 +593,7 @@ class TestFsmGetAction:
         start_host = int(jax_const.red_start_hosts[0])
         discovered = state.red_discovered_hosts.at[0, start_host].set(True)
         sessions = state.red_sessions.at[0, start_host].set(True)
-        fsm = state.fsm_host_states.at[0, start_host].set(FSM_K)
+        fsm = state.fsm_host_states.at[0, start_host].set(FSM_KD)
         state = state.replace(
             red_discovered_hosts=discovered,
             red_sessions=sessions,

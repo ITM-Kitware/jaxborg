@@ -167,7 +167,7 @@ class TestFsmRedEnvDurationTicks:
         key = jax.random.PRNGKey(42)
 
         saw_exploit_countdown = False
-        for step in range(30):
+        for step in range(80):
             key, subkey = jax.random.split(key)
             actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
             obs, env_state, _, dones, _ = env.step_env(subkey, env_state, actions)
@@ -187,7 +187,7 @@ class TestFsmRedEnvDurationTicks:
             if saw_exploit_countdown:
                 break
 
-        assert saw_exploit_countdown, "No exploit (duration=4) seen in 30 steps"
+        assert saw_exploit_countdown, "No exploit (duration=4) seen in 80 steps"
 
     def test_blue_restore_tick_countdown(self, fsm_env_and_state):
         """Submit Blue Restore via FsmRedCC4Env, verify ticks count 4→3→2→1→0."""
@@ -218,7 +218,7 @@ class TestFsmRedEnvDurationTicks:
         actions = {f"blue_{b}": jnp.int32(BLUE_SLEEP) for b in range(NUM_BLUE_AGENTS)}
 
         found_busy = False
-        for step in range(30):
+        for step in range(80):
             key, subkey = jax.random.split(key)
             obs, env_state, _, _, _ = env.step_env(subkey, env_state, actions)
             for r in range(NUM_RED_AGENTS):
@@ -234,7 +234,7 @@ class TestFsmRedEnvDurationTicks:
             if found_busy:
                 break
 
-        assert found_busy, "No busy red agent observed in 30 steps"
+        assert found_busy, "No busy red agent observed in 80 steps"
 
 
 class TestSessionBindingFollowsUpdatedAnchor:

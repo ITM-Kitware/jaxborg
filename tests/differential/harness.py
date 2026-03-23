@@ -1093,6 +1093,7 @@ class CC4DifferentialHarness:
         from tests.differential.state_comparator import StateDiff, compare_fast
 
         primary_pid_post = _extract_primary_pids(cy_state)
+        primary_abstract_flags = _extract_primary_is_abstract(cy_state)
         diffs = self._compare_red_identity(
             controller,
             forced_primary_hosts_post,

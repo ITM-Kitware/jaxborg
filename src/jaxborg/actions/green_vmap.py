@@ -16,7 +16,6 @@ import jax.numpy as jnp
 
 from jaxborg.actions.pids import (
     PROCESS_EVENT_NO_PID,
-    allocate_host_pid_from_delta,
     append_pid_to_row,
     append_process_event,
 )
@@ -26,8 +25,6 @@ from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
-    MAX_SERVER_HOSTS,
-    MAX_USER_HOSTS,
     NUM_DECOY_TYPES,
     NUM_RED_AGENTS,
     NUM_SERVICES,

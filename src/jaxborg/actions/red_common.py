@@ -338,7 +338,7 @@ def apply_red_session_check(
     next_primary_is_abstract = jax.lax.cond(
         next_anchor >= 0,
         lambda _: pid_row_contains(red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
-        lambda _: jnp.array(False),
+        lambda _: state.red_primary_is_abstract[agent_id],
         operand=None,
     )
     promoted_abstract_primary = (

@@ -21,7 +21,6 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
-
 L3I_SEEDS = range(20)
 L3I_STEPS = 500
 
