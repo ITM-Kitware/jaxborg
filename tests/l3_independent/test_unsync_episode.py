@@ -16,13 +16,17 @@ the harness itself no longer papers over deterministic logic gaps.
 """
 
 import pytest
-from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, cc4BlueRandomAgent
 
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
-L3I_SEEDS = range(20)
+L3I_SEEDS = list(range(1000))
 L3I_STEPS = 500
+
+
+def _seed_id(seed):
+    return f"seed_{seed:02d}"
 
 
 def _run_episode(seed, max_steps):
@@ -30,11 +34,12 @@ def _run_episode(seed, max_steps):
     harness = CC4DifferentialHarness(
         seed=seed,
         max_steps=max_steps,
-        blue_cls=SleepAgent,
+        blue_cls=cc4BlueRandomAgent,
         green_cls=EnterpriseGreenAgent,
         red_cls=FiniteStateRedAgent,
         sync_green_rng=True,
         strict_random_sync=False,
+        use_cyborg_blue_policy=True,
     )
     harness.reset()
 
@@ -54,7 +59,7 @@ def _run_episode(seed, max_steps):
 
 
 class TestL3Independent:
-    """Full episode rollout with no Category A syncs.
+    """Full episode rollout with random blue, no Category A syncs.
 
     If these fail, the Karten loop agent should:
     1. Identify which field diverged and at which step
@@ -62,6 +67,6 @@ class TestL3Independent:
     3. Fix the JAX logic
     """
 
-    @pytest.mark.parametrize("seed", L3I_SEEDS)
+    @pytest.mark.parametrize("seed", L3I_SEEDS, ids=_seed_id)
     def test_episode(self, seed):
         _run_episode(seed=seed, max_steps=L3I_STEPS)
