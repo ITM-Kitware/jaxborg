@@ -124,7 +124,7 @@ def _make_inference_fn(policy, params, policy_kind):
 # --- Test ---
 
 CHECKPOINT_PATH = _get_checkpoint_path()
-SEEDS = list(range(10))
+SEEDS = list(range(100))
 STEPS = 500
 
 skip_reason = None
@@ -132,7 +132,7 @@ if CHECKPOINT_PATH is None:
     skip_reason = "No checkpoint found. Set BLUE_CHECKPOINT=/path/to/checkpoint.pkl"
 
 
-def _run_trained_episode(seed, max_steps, checkpoint_path):
+def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
     """Run a single episode with the trained policy driving blue actions."""
     policy, params, kind = _load_policy(checkpoint_path)
     inference_fn = _make_inference_fn(policy, params, kind)
@@ -166,7 +166,11 @@ def _run_trained_episode(seed, max_steps, checkpoint_path):
         # Step both envs with the same blue actions
         result = harness.full_step(blue_actions=actions)
 
-        error_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
+        # mismatch_mode="all" treats warnings as errors
+        if strict:
+            error_diffs = result.diffs
+        else:
+            error_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
         if error_diffs:
             d = error_diffs[0]
             detail = format_diffs(result.diffs)
@@ -191,3 +195,12 @@ class TestTrainedBluePolicy:
     @pytest.mark.parametrize("seed", SEEDS, ids=[f"seed_{s:02d}" for s in SEEDS])
     def test_episode(self, seed):
         _run_trained_episode(seed=seed, max_steps=STEPS, checkpoint_path=CHECKPOINT_PATH)
+
+
+@pytest.mark.skipif(skip_reason is not None, reason=skip_reason or "")
+class TestTrainedBluePolicyStrict:
+    """Same as above but warnings are treated as errors (mismatch_mode=all)."""
+
+    @pytest.mark.parametrize("seed", list(range(10)), ids=[f"seed_{s:02d}" for s in range(10)])
+    def test_episode_strict(self, seed):
+        _run_trained_episode(seed=seed, max_steps=STEPS, checkpoint_path=CHECKPOINT_PATH, strict=True)

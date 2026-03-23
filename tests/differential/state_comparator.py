@@ -49,13 +49,14 @@ _ERROR_FIELDS = {
     "mission_phase",
     "rewards",
     "observation",
-} | _DETECTION_FIELDS
-
-_WARNING_FIELDS = {
+} | _DETECTION_FIELDS | {
+    # Promoted from WARNING — verified clean across 100+ seeds with trained policy
     "fsm_host_states",
     "red_session_count",
     "blue_suspicious_pids",
 }
+
+_WARNING_FIELDS: set[str] = set()
 
 
 def extract_cyborg_snapshot(cyborg_env, mappings: CC4Mappings) -> StateSnapshot:
