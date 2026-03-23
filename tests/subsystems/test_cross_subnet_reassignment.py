@@ -781,6 +781,48 @@ class TestReassignmentPreservesFsmState:
         assert bool(after.fsm_host_entered[dest_agent, target_idx])
 
 
+class TestReactivatedAgentFsmState:
+    """Regression: when an agent is REACTIVATED (was active, lost all sessions,
+    then received new sessions), CybORG's step counter never resets.  So
+    _process_new_observations runs with step > 0, assigning 'K' (not 'U') to
+    newly observed hosts.  JAX must match this by distinguishing first-time
+    activation (U) from reactivation (K)."""
+
+    def test_reactivated_agent_gets_k_not_u(self):
+        """Reactivated agent must assign FSM_K to new hosts, not FSM_U."""
+        const, mappings = _cached_const_and_mappings(seed=0)
+        source_agent = 5
+        target_idx, dest_agent = _find_reassignment_case(const, source_agent)
+        assert target_idx is not None
+
+        # Pick a host that was previously in the FSM (from prior activation)
+        prior_host = 0
+
+        state = create_initial_state().replace(host_services=jnp.array(const.initial_services))
+        state = state.replace(
+            # Source agent has a session on target (will be reassigned to dest)
+            red_sessions=state.red_sessions.at[source_agent, target_idx].set(True),
+            red_session_count=state.red_session_count.at[source_agent, target_idx].set(1),
+            red_privilege=state.red_privilege.at[source_agent, target_idx].set(COMPROMISE_USER),
+            red_discovered_hosts=state.red_discovered_hosts.at[source_agent, target_idx].set(True),
+            host_compromised=state.host_compromised.at[target_idx].set(COMPROMISE_USER),
+            # dest_agent was PREVIOUSLY active but is now INACTIVE (lost all sessions)
+            red_agent_active=state.red_agent_active.at[dest_agent].set(False),
+            # Prior activation left FSM entries — proves agent has been active before
+            fsm_host_entered=state.fsm_host_entered.at[dest_agent, prior_host].set(True),
+            fsm_host_states=state.fsm_host_states.at[dest_agent, prior_host].set(FSM_KD),
+            # target_idx NOT yet in dest's FSM (fsm_host_entered default False)
+        )
+
+        after = reassign_cross_subnet_sessions(state, const)
+        assert bool(after.red_sessions[dest_agent, target_idx])
+        # Reactivated agent: hosts enter as K (CybORG step > 0), NOT U
+        assert int(after.fsm_host_states[dest_agent, target_idx]) == FSM_K, (
+            f"Reactivated agent should get FSM_K, got {int(after.fsm_host_states[dest_agent, target_idx])}"
+        )
+        assert bool(after.fsm_host_entered[dest_agent, target_idx])
+
+
 class TestReassignmentAnchorUsesRank:
     """Regression: when a newly activated agent receives sessions on multiple
     hosts simultaneously, the scan anchor must be set to the host with the

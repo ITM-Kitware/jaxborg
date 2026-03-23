@@ -175,15 +175,20 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # Only set FSM for hosts not yet tracked (fsm_host_entered=False);
     # already-tracked hosts keep their current state.
     not_yet_entered = ~state.fsm_host_entered
-    is_new_agent = newly_active[:, None]  # (NUM_RED_AGENTS, 1)
+    # CybORG's step counter never resets — once an agent has acted (step > 0),
+    # all subsequently observed hosts enter as 'K', even after deactivation and
+    # reactivation.  Distinguish first-time activation (no prior FSM entries →
+    # step 0 → U/R) from reactivation (prior entries exist → step > 0 → K).
+    has_been_active_before = jnp.any(state.fsm_host_entered, axis=1)  # (NUM_RED_AGENTS,)
+    is_first_activation = (newly_active & ~has_been_active_before)[:, None]
     privileged_session = reassigned_hosts & (red_privilege >= COMPROMISE_PRIVILEGED)
-    # Newly activated agents: hosts enter as U/R (CybORG step 0 behavior)
+    # First-time activated agents: hosts enter as U/R (CybORG step 0 behavior)
     fsm_with_sessions = jnp.where(
-        reassigned_hosts & not_yet_entered & is_new_agent,
+        reassigned_hosts & not_yet_entered & is_first_activation,
         jnp.where(privileged_session, jnp.int32(FSM_R), jnp.int32(FSM_U)),
         current_fsm,
     )
-    # Already-active agents: hosts enter as K (CybORG step > 0 behavior).
+    # Already-active or reactivated agents: hosts enter as K (CybORG step > 0).
     # FSM_K is the default, so no explicit state change needed — just
     # fsm_host_entered must be set (handled below).
     red_scan_anchor_host = recompute_scan_anchor_hosts(
