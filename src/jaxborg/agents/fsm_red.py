@@ -402,9 +402,13 @@ def determine_fsm_success(
     return jax.lax.switch(
         fsm_action,
         [
-            lambda: jnp.any(
-                state_after.red_discovered_hosts[agent_id] & const.host_active & (const.host_subnet == target_subnet)
-            ),
+            # CybORG reports discover success when the action executes (valid
+            # source session exists), regardless of whether new hosts are found.
+            # The old check (any discovered hosts in subnet) was wrong: it
+            # returned True even when the action failed because the agent had
+            # already-known hosts from prior steps.  Use the per-step flag set
+            # by apply_discover, mirroring the scan/exploit pattern.
+            lambda: state_after.red_discover_success[agent_id],
             # CybORG reports scan success when the action executes (session
             # available, target reachable), regardless of prior scan state.
             # A re-scan on an already-scanned host succeeds in CybORG but the

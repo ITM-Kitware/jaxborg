@@ -421,7 +421,9 @@ class TestFsmSuccessDetection:
         base = create_initial_state()
         discovered = base.red_discovered_hosts.at[0, host_indices].set(True)
         before = base.replace(red_discovered_hosts=discovered)
-        after = before
+        after = before.replace(
+            red_discover_success=before.red_discover_success.at[0].set(True),
+        )
 
         assert bool(
             determine_fsm_success(
@@ -561,6 +563,53 @@ class TestFsmScanRescanSuccess:
             FSM_ACT_AGGRESSIVE_SCAN,
         )
         assert not bool(success), "Failed scan with prior memory should not be false positive"
+
+
+class TestFsmDiscoverSuccessFlag:
+    """Regression: discover success must use red_discover_success flag.
+
+    CybORG reports discover success when the action executes (agent has a valid
+    source session).  The old JAX check tested whether ANY discovered hosts
+    existed in the target subnet, which returned True even when the discover
+    action FAILED (no session) because previously-discovered hosts were still
+    in red_discovered_hosts.  This caused S→SD (success) instead of S→S
+    (failure), producing FSM divergence in L3 tests (seed 12 step 121, etc.).
+    """
+
+    def test_discover_success_when_action_executes(self):
+        """Discover action with valid session → success via red_discover_success."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+        target_subnet = jnp.int32(0)
+        before = base.replace(
+            red_sessions=base.red_sessions.at[0, 5].set(True),
+        )
+        after = before.replace(
+            red_discover_success=before.red_discover_success.at[0].set(True),
+            red_discovered_hosts=before.red_discovered_hosts.at[0, 5].set(True),
+        )
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(5), target_subnet, FSM_ACT_DISCOVER,
+        )
+        assert bool(success), "Discover with valid session should succeed"
+
+    def test_discover_failure_despite_prior_hosts(self):
+        """Discover action without session → failure, even with prior hosts in subnet."""
+        base = create_initial_state()
+        const = _make_trivial_const()
+        target_subnet = jnp.int32(0)
+        # Agent already discovered hosts in the subnet from a prior step
+        before = base.replace(
+            red_discovered_hosts=base.red_discovered_hosts.at[0, 5].set(True),
+        )
+        # Discover fails: no session, red_discover_success stays False
+        after = before  # no change — action failed
+        success = determine_fsm_success(
+            before, after, const, 0,
+            jnp.int32(5), target_subnet, FSM_ACT_DISCOVER,
+        )
+        assert not bool(success), "Failed discover should not be success just because prior hosts exist"
 
 
 def _make_trivial_const():
@@ -1197,6 +1246,10 @@ class TestDiscoverMaskFsmHostEnteredFilter:
             fsm_host_states=fsm,
             red_agent_active=active,
         )
+        # The discover action executed successfully (agent had valid session)
+        state_after = state.replace(
+            red_discover_success=state.red_discover_success.at[agent].set(True),
+        )
 
         target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
         target_subnets = [jnp.int32(subnet0)] * NUM_RED_AGENTS
@@ -1206,7 +1259,7 @@ class TestDiscoverMaskFsmHostEnteredFilter:
 
         result = _compute_post_step_fsm_states(
             state,
-            state,
+            state_after,
             const,
             target_hosts,
             target_subnets,
@@ -1246,6 +1299,11 @@ class TestDiscoverMaskFsmHostEnteredFilter:
             fsm_host_states=fsm,
             red_agent_active=active,
         )
+        # Discover action executed successfully — the filter should be
+        # fsm_host_entered, not success.
+        state_after = state.replace(
+            red_discover_success=state.red_discover_success.at[agent].set(True),
+        )
 
         target_hosts = [jnp.int32(0)] * NUM_RED_AGENTS
         target_subnets = [jnp.int32(subnet0)] * NUM_RED_AGENTS
@@ -1255,7 +1313,7 @@ class TestDiscoverMaskFsmHostEnteredFilter:
 
         result = _compute_post_step_fsm_states(
             state,
-            state,
+            state_after,
             const,
             target_hosts,
             target_subnets,

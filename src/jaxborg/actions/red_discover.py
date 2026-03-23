@@ -28,7 +28,10 @@ def apply_discover(
     # host_states after the discover action's observation is returned.
     fsm_host_entered = state.fsm_host_entered.at[agent_id].set(state.fsm_host_entered[agent_id] | newly_discovered)
 
+    red_discover_success = state.red_discover_success.at[agent_id].set(can_reach)
+
     return state.replace(
         red_discovered_hosts=red_discovered_hosts,
         fsm_host_entered=fsm_host_entered,
+        red_discover_success=red_discover_success,
     )
