@@ -19,6 +19,7 @@ os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 import json
 import pickle
 import time
+from functools import partial
 from typing import NamedTuple
 
 import distrax
@@ -276,7 +277,7 @@ def make_train(config):
             tx=tx,
         )
 
-    @jax.jit
+    @partial(jax.jit, donate_argnums=(0, 1, 2, 3))
     def _collect_and_update(train_state, env_state, obs, rng):
         """Scan NUM_STEPS env steps, compute GAE, run PPO epochs — all JIT'd."""
 

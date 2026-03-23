@@ -38,24 +38,18 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     aged_host_exploit_detected = jnp.where(covers, False, host_exploit_detected)
     host_suspicious_process = state.host_suspicious_process | newly_detected
 
-    def _ingest_host(h, blue_suspicious_pids):
-        event_row = state.host_process_creation_pids[h]
-        suspicious_row = blue_suspicious_pids[agent_id, h]
-
+    def _ingest_one_host(suspicious_row, event_row, covered):
         def _append_slot(slot, pid_row):
             return append_pid_to_row_allow_duplicates(pid_row, event_row[slot])
-
         updated_row = jax.lax.fori_loop(0, MAX_TRACKED_SUSPICIOUS_PIDS, _append_slot, suspicious_row)
-        updated_row = jnp.where(covers[h], updated_row, suspicious_row)
-        blue_suspicious_pids = blue_suspicious_pids.at[agent_id, h].set(updated_row)
-        return blue_suspicious_pids
+        return jnp.where(covered, updated_row, suspicious_row)
 
-    blue_suspicious_pids = jax.lax.fori_loop(
-        0,
-        state.host_process_creation_pids.shape[0],
-        _ingest_host,
-        state.blue_suspicious_pids,
+    updated_agent_rows = jax.vmap(_ingest_one_host)(
+        state.blue_suspicious_pids[agent_id],
+        state.host_process_creation_pids,
+        covers,
     )
+    blue_suspicious_pids = state.blue_suspicious_pids.at[agent_id].set(updated_agent_rows)
 
     cleared_events = jnp.where(covers[:, None], -1, state.host_process_creation_pids)
     return state.replace(
