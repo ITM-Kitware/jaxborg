@@ -223,12 +223,21 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     # Override anchor for newly activated agents: use the first host transferred
     # during reassignment.  This matches CybORG's add_session order where the
     # first session from the lowest-numbered source agent becomes ident=0.
+    # The rank-based fallback in recompute_scan_anchor_hosts can pick the wrong
+    # host when sessions from different source agents have incomparable ranks
+    # (e.g. source 0's next_rank=3, source 4's next_rank=0 — the lower-numbered
+    # source should win regardless of rank values).  first_reassign_anchor tracks
+    # exactly which host CybORG would assign ident=0 to.
     newly_active = ~state.red_agent_active & jnp.any(red_sessions, axis=1)
-    # NOTE: first_reassign_anchor is available for future use but NOT applied
-    # as an override here.  The rank-based selection in recompute_scan_anchor_hosts
-    # is correct when the execution order is synced (ranks reflect CybORG's
-    # creation order).  Overriding can cause regressions when green recording
-    # gaps make JAX's session set differ from CybORG's.
+    for r in range(NUM_RED_AGENTS):
+        override = first_reassign_anchor[r]
+        override_idx = jnp.clip(override, 0, red_sessions.shape[1] - 1)
+        has_valid_override = newly_active[r] & (override >= 0) & red_sessions[r, override_idx]
+        red_scan_anchor_host = jnp.where(
+            has_valid_override,
+            red_scan_anchor_host.at[r].set(override),
+            red_scan_anchor_host,
+        )
 
     # Set red_primary_pid for newly activated agents so the post-step
     # apply_red_session_check sees a valid primary and doesn't re-sample.

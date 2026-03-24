@@ -207,7 +207,14 @@ def _apply_single_green(
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
-    red_agent = _find_phishing_red_agent(state, const, host_idx, k_phish_src)
+    red_agent_rng = _find_phishing_red_agent(state, const, host_idx, k_phish_src)
+    # Field 5 encodes the CybORG-chosen phishing source red agent (agent_idx + 1,
+    # so 0.0 = no precomputed source).  Use it in differential mode to match
+    # CybORG's np_random.choice(red_agents) which picks the source agent randomly
+    # from all reachable agents — the random fallback differs between JAX/CybORG.
+    precomputed_src = jnp.int32(const.green_randoms[t, host_idx, 5]) - 1
+    has_precomputed_src = const.use_green_randoms & (precomputed_src >= 0)
+    red_agent = jnp.where(has_precomputed_src, precomputed_src, red_agent_rng)
     any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
     phish_creates_session = do_phish & (red_agent >= 0) & ~any_red_on_host
     red_agent_idx = jnp.maximum(red_agent, 0)

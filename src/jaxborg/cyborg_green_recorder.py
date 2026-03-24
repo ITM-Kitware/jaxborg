@@ -376,8 +376,9 @@ def _map_local_work_calls(fields, host_idx, calls, host=None):
         [2] random() -> FP roll
         [3] random() -> phishing roll
         Any further calls are from PhishingEmail sub-action.
-        If a session is created:
-            [n] integers(1, 10) -> host.create_pid delta
+        If phishing fires:
+            [n] choice(red_agents) -> phishing source red agent (field 5)
+            [n+1] integers(1, 10) -> host.create_pid delta (field 7)
     """
     if len(calls) < 2:
         return
@@ -398,6 +399,26 @@ def _map_local_work_calls(fields, host_idx, calls, host=None):
         fields[host_idx, 3] = random_calls[0]
     if len(random_calls) >= 2:
         fields[host_idx, 4] = random_calls[1]
+
+    # Extract phishing source red agent from PhishingEmail's choice call.
+    # PhishingEmail._create_new_session calls state.np_random.choice(red_agents)
+    # where red_agents is a list of (agentname, hostname) tuples.  The choice
+    # result is a numpy ndarray (e.g. ['red_agent_0', 'hostname']).  The call
+    # appears after the FP/phishing random() calls in the trailing span.
+    for call in trailing:
+        if call[0] != "choice":
+            continue
+        # call[3] is the chosen element — a numpy ndarray or tuple.
+        chosen = call[3]
+        try:
+            agent_name = str(chosen[0]) if hasattr(chosen, "__len__") else str(chosen)
+        except (IndexError, TypeError):
+            agent_name = ""
+        if agent_name.startswith("red_agent_"):
+            agent_idx = int(agent_name.split("_")[-1])
+            # Encode as agent_idx + 1 so that 0.0 = no phishing source.
+            fields[host_idx, 5] = float(agent_idx + 1)
+        break
 
     for call in trailing:
         if call[0] != "integers":
