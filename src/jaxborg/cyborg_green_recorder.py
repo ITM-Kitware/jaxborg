@@ -78,6 +78,8 @@ class StepRandomSyncReport:
     red_privesc_choices: dict[int, int] = field(default_factory=dict)
     red_session_check_choices: dict[int, int] = field(default_factory=dict)
     red_session_check_hosts: dict[int, int] = field(default_factory=dict)
+    green_execution_order: list[int] = field(default_factory=list)
+    full_execution_order: list[int] = field(default_factory=list)
 
     @property
     def detection_sync_supported(self) -> bool:
@@ -174,6 +176,42 @@ class GreenRecorder:
         red_pid_deltas = np.zeros((NUM_RED_AGENTS,), dtype=np.int32)
         blue_decoy_pid_deltas = np.zeros((NUM_BLUE_AGENTS,), dtype=np.int32)
         report = StepRandomSyncReport()
+
+        # Capture CybORG's FULL execution order (all agents in slot-index form).
+        # CybORG shuffles all same-priority actions each step.  Green agents are
+        # slot NUM_BLUE_AGENTS + host_idx, red agents are NUM_BLUE_AGENTS +
+        # GLOBAL_MAX_HOSTS + agent_idx, blue agents are agent_idx.
+        green_exec_order = []
+        full_exec_order = []
+        seen_slots = set()
+        for agent_name, _at, _s, _e in self._action_log:
+            if not agent_name:
+                continue
+            if agent_name.startswith("green_agent_"):
+                hidx = self._agent_to_host_idx.get(agent_name)
+                if hidx is not None:
+                    if hidx not in green_exec_order:
+                        green_exec_order.append(hidx)
+                    slot = NUM_BLUE_AGENTS + hidx
+                    if slot not in seen_slots:
+                        full_exec_order.append(slot)
+                        seen_slots.add(slot)
+            elif agent_name.startswith("red_agent_"):
+                ridx = int(agent_name.split("_")[-1])
+                if 0 <= ridx < NUM_RED_AGENTS:
+                    slot = NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS + ridx
+                    if slot not in seen_slots:
+                        full_exec_order.append(slot)
+                        seen_slots.add(slot)
+            elif agent_name.startswith("blue_agent_"):
+                bidx = int(agent_name.split("_")[-1])
+                if 0 <= bidx < NUM_BLUE_AGENTS:
+                    slot = bidx
+                    if slot not in seen_slots:
+                        full_exec_order.append(slot)
+                        seen_slots.add(slot)
+        report.green_execution_order = green_exec_order
+        report.full_execution_order = full_exec_order
 
         for agent_name, action_type, start, end in self._action_log:
             calls = self._state_recorder.log[start:end]

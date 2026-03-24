@@ -237,6 +237,15 @@ def apply_all_actions(
         forced_primary_pids: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_PID` for no override
     """
     execution_order = _cyborg_priority_execution_order(blue_actions)
+    # When CybORG execution order is synced (differential testing), use the
+    # full action order captured from CybORG's priority-based shuffle.  This
+    # ensures session creation order within a single source agent matches
+    # CybORG's shuffled order.
+    execution_order = jnp.where(
+        const.use_green_host_order,
+        const.green_host_order[state.time],
+        execution_order,
+    )
     return apply_all_actions_in_order(
         state,
         const,

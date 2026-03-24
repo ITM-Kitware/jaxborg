@@ -43,6 +43,10 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_session_privileged_pids = state.red_session_privileged_pids
     red_discovered = state.red_discovered_hosts
     reassigned_hosts = jnp.zeros_like(state.red_sessions, dtype=jnp.bool_)
+    # Track the first host transferred to each dst agent during reassignment.
+    # CybORG iterates source agents in order (0, 1, ...); the first source that
+    # transfers a session determines the primary (session 0) for the destination.
+    first_reassign_anchor = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
 
     for src in range(NUM_RED_AGENTS):
         src_mask = needs_reassign[src]
@@ -82,6 +86,24 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_privilege = red_privilege.at[dst].set(jnp.maximum(red_privilege[dst], moved_privilege))
             red_discovered = red_discovered.at[dst].set(jnp.where(dst_mask, True, red_discovered[dst]))
             reassigned_hosts = reassigned_hosts.at[dst].set(reassigned_hosts[dst] | dst_mask)
+            # Track first-transferred host from the first source agent.
+            # CybORG iterates sources 0..5, sessions by ident.  Within a
+            # source, the session with the lowest ident goes first; abstract
+            # ranks mirror creation order (lower rank = created earlier =
+            # lower ident), so argmin(rank) picks the correct host.
+            any_moved = jnp.any(dst_mask)
+            rank_scores = jnp.where(dst_mask, src_abstract_rank, jnp.int32(ABSTRACT_RANK_NONE))
+            has_ranked = jnp.any(dst_mask & (src_abstract_rank < jnp.int32(ABSTRACT_RANK_NONE)))
+            first_host_from_src = jnp.where(
+                has_ranked,
+                jnp.argmin(rank_scores).astype(jnp.int32),
+                jnp.argmax(dst_mask.astype(jnp.int32)).astype(jnp.int32),
+            )
+            first_reassign_anchor = jnp.where(
+                any_moved & (first_reassign_anchor[dst] < 0),
+                first_reassign_anchor.at[dst].set(first_host_from_src),
+                first_reassign_anchor,
+            )
             red_session_is_abstract = red_session_is_abstract.at[dst].set(red_session_is_abstract[dst] | dst_mask)
             moved_ranks = jnp.where(dst_mask, src_abstract_rank, jnp.int32(ABSTRACT_RANK_NONE))
             merged_ranks = jnp.minimum(red_abstract_host_rank[dst], moved_ranks)
@@ -198,6 +220,15 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         const.host_active,
         red_abstract_host_rank,
     )
+    # Override anchor for newly activated agents: use the first host transferred
+    # during reassignment.  This matches CybORG's add_session order where the
+    # first session from the lowest-numbered source agent becomes ident=0.
+    newly_active = ~state.red_agent_active & jnp.any(red_sessions, axis=1)
+    # NOTE: first_reassign_anchor is available for future use but NOT applied
+    # as an override here.  The rank-based selection in recompute_scan_anchor_hosts
+    # is correct when the execution order is synced (ranks reflect CybORG's
+    # creation order).  Overriding can cause regressions when green recording
+    # gaps make JAX's session set differ from CybORG's.
 
     # Set red_primary_pid for newly activated agents so the post-step
     # apply_red_session_check sees a valid primary and doesn't re-sample.

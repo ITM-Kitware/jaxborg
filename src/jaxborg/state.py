@@ -19,6 +19,7 @@ from jaxborg.constants import (
     NUM_SERVICES,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
+    TOTAL_ACTION_ACTOR_SLOTS,
 )
 
 
@@ -80,6 +81,8 @@ class CC4Const:
     use_red_session_check_choices: chex.Array  # scalar bool — use precomputed session-check
     blue_decoy_type_choices: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS) int32 — precomputed decoy type index
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
+    green_host_order: chex.Array  # (MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS) int32 — per-step full execution order
+    use_green_host_order: chex.Array  # scalar bool — True = use CybORG-synced order, False = default order
 
 
 @struct.dataclass
@@ -218,6 +221,8 @@ def create_initial_const() -> CC4Const:
         use_red_session_check_choices=jnp.array(False),
         blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
         use_blue_decoy_type_choices=jnp.array(False),
+        green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
+        use_green_host_order=jnp.array(False),
     )
 
 

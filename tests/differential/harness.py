@@ -710,6 +710,7 @@ class CC4DifferentialHarness:
                 use_green_randoms=jnp.array(True),
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
+                use_green_host_order=jnp.array(True),
             )
             self.jax_const = self.jax_const.replace(
                 use_red_privesc_choices=jnp.array(True),
@@ -1012,6 +1013,25 @@ class CC4DifferentialHarness:
             red_sc_host_row = self.jax_const.red_session_check_hosts.at[self.jax_state.time].set(
                 jnp.array(sc_host_row, dtype=jnp.int32)
             )
+            # Sync CybORG's full action execution order so JAX processes all
+            # agents (blue, green, red) in CybORG's shuffled priority order.
+            from jaxborg.env import TOTAL_ACTION_ACTOR_SLOTS
+
+            full_exec = random_sync_report.full_execution_order
+            if full_exec:
+                # Build complete execution order: CybORG-observed slots first,
+                # then any remaining slots that weren't logged.
+                seen = set(full_exec)
+                remaining = [s for s in range(TOTAL_ACTION_ACTOR_SLOTS) if s not in seen]
+                full_order = np.array(full_exec + remaining, dtype=np.int32)
+                if len(full_order) < TOTAL_ACTION_ACTOR_SLOTS:
+                    full_order = np.pad(full_order, (0, TOTAL_ACTION_ACTOR_SLOTS - len(full_order)), constant_values=0)
+                green_host_order_row = self.jax_const.green_host_order.at[self.jax_state.time].set(
+                    jnp.array(full_order[:TOTAL_ACTION_ACTOR_SLOTS], dtype=jnp.int32)
+                )
+            else:
+                green_host_order_row = self.jax_const.green_host_order
+
             self.jax_const = self.jax_const.replace(
                 green_randoms=green_randoms,
                 red_pid_deltas=red_pid_delta_row,
@@ -1021,6 +1041,7 @@ class CC4DifferentialHarness:
                 red_privesc_choices=red_privesc_choice_row,
                 red_session_check_choices=red_sc_choice_row,
                 red_session_check_hosts=red_sc_host_row,
+                green_host_order=green_host_order_row,
             )
             self.jax_state = self.jax_state.replace(
                 detection_random_index=jnp.array(0, dtype=jnp.int32),
