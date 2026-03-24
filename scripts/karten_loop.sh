@@ -20,6 +20,10 @@ MAX_ITER="${MAX_ITER:-50}"
 FUZZ_SEEDS="${FUZZ_SEEDS:-20}"
 FUZZ_STEPS="${FUZZ_STEPS:-500}"
 
+# Trained-policy checkpoint for L3/L4 (auto-discover or set via env)
+BLUE_CHECKPOINT="${BLUE_CHECKPOINT:-$(find /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp -name 'checkpoint_*.pkl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)}"
+export BLUE_CHECKPOINT
+
 # CPU-only — keep GPUs free for training
 export CUDA_VISIBLE_DEVICES=""
 export JAX_PLATFORMS=cpu
@@ -32,11 +36,12 @@ export JAX_COMPILATION_CACHE_DIR="${WORKTREE}/.jax_cache"
 mkdir -p "${HANDOFF_DIR}/history"
 
 # --- Level Definitions ---
-LEVELS=("l1" "l2" "l3")
+LEVELS=("l1" "l2" "l3" "l4")
 declare -A LEVEL_NAMES=(
     [l1]="L1 Property Tests"
     [l2]="L2 Interaction Tests"
-    [l3]="L3 Rollout (no Category A syncs)"
+    [l3]="L3 Rollout (trained policy + random blue)"
+    [l4]="L4 Cross-Backend Transfer (TOST)"
 )
 declare -A LEVEL_DESCRIPTIONS=(
     [l1]="Individual component tests in isolation. Each subsystem (topology, red actions,
@@ -49,17 +54,26 @@ together — action sequencing, state propagation across modules, harness
 infrastructure validation. Short traces (2-74 steps).
 
 Test command: uv run pytest tests/differential/ -v -x -n auto"
-    [l3]="Full episode rollout with Category A (deterministic) syncs REMOVED from
-the harness. Impact, green events, session identity, and abstract rank
-are computed by JAX independently — not copied from CybORG. RNG syncs
-(Category B) remain active. 20 seeds x 500 steps.
+    [l3]="Full episode rollout comparison. Includes:
+- Random blue (50 seeds x 500 steps): tests/l3/test_full_episode_fuzzing.py
+- Trained IPPO policy (100 seeds x 500 steps): tests/l3/test_trained_blue_policy.py
+The trained policy exercises realistic action sequences (heavy Restore, targeted
+Monitor/Remove) that random blue never does, catching action-combination bugs.
+Requires BLUE_CHECKPOINT env var.
 
-Test command: uv run pytest tests/l3/ -v -x -n auto"
+Test command: BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
+    [l4]="Cross-backend policy transfer evaluation. Runs the JAXborg-trained policy in
+both JAXborg and CybORG independently, computes TOST equivalence.
+A failing L4 feeds back into targeted L1/L2/L3 tests.
+
+Eval command: uv run python scripts/eval_transfer.py \\
+  --checkpoint ${BLUE_CHECKPOINT} --episodes 10 --stochastic --seed 42"
 )
 declare -A LEVEL_COMMANDS=(
     [l1]="uv run pytest tests/subsystems/ -v -x -n auto"
     [l2]="uv run pytest tests/differential/ -v -x -n auto"
-    [l3]="uv run pytest tests/l3/ -v -x -n auto"
+    [l3]="BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
+    [l4]="uv run python scripts/eval_transfer.py --checkpoint ${BLUE_CHECKPOINT} --episodes 10 --stochastic --seed 42"
 )
 
 # --- Helper Functions ---
@@ -208,6 +222,16 @@ run_tests() {
     (cd "$WORKTREE" && eval "$cmd") > "${HANDOFF_DIR}/test_output.txt" 2>&1
     local exit_code=$?
     set -e
+
+    # L4 is an eval script — check TOST verdict in output instead of exit code
+    if [[ "$level" == "l4" ]]; then
+        if grep -q "EQUIVALENT" "${HANDOFF_DIR}/test_output.txt" && \
+           ! grep -q "NOT EQUIVALENT" "${HANDOFF_DIR}/test_output.txt"; then
+            exit_code=0
+        else
+            exit_code=1
+        fi
+    fi
 
     # Show summary
     if [[ $exit_code -eq 0 ]]; then
