@@ -1256,6 +1256,7 @@ def tost_equivalence(
     ref_rewards: np.ndarray,
     margin: float,
     alpha: float = 0.05,
+    paired: bool = False,
 ) -> dict:
     """Two One-Sided Tests for equivalence of mean episode rewards.
 
@@ -1267,20 +1268,37 @@ def tost_equivalence(
         ref_rewards: Per-episode mean rewards from the reference backend (CybORG).
         margin: Environment-specific equivalence margin (Delta).
         alpha: Significance level (default 0.05).
+        paired: If True, use paired-sample TOST (for matched/synced rollouts where
+            episodes are 1:1 paired). Computes per-episode differences first, then
+            runs a one-sample TOST on the differences. Required when perf and ref
+            come from the same synced episode (e.g. matched transfer mode).
 
     Returns:
-        Dict with keys: equivalent, p_upper, p_lower, mean_diff, margin, ci_lower, ci_upper.
+        Dict with keys: equivalent, p_upper, p_lower, mean_diff, margin, ci_lower, ci_upper, paired.
     """
     from scipy import stats
 
-    n_perf, n_ref = len(perf_rewards), len(ref_rewards)
-    mean_diff = float(np.mean(perf_rewards) - np.mean(ref_rewards))
-
-    # Pooled standard error (Welch's t-test style)
-    se = float(np.sqrt(np.var(perf_rewards, ddof=1) / n_perf + np.var(ref_rewards, ddof=1) / n_ref))
+    if paired:
+        if len(perf_rewards) != len(ref_rewards):
+            raise ValueError(f"Paired TOST requires equal-length arrays, got {len(perf_rewards)} vs {len(ref_rewards)}")
+        diffs = np.asarray(perf_rewards) - np.asarray(ref_rewards)
+        n = len(diffs)
+        mean_diff = float(np.mean(diffs))
+        se = float(np.std(diffs, ddof=1) / np.sqrt(n)) if n > 1 else 0.0
+        df = n - 1
+    else:
+        n_perf, n_ref = len(perf_rewards), len(ref_rewards)
+        mean_diff = float(np.mean(perf_rewards) - np.mean(ref_rewards))
+        se = float(np.sqrt(np.var(perf_rewards, ddof=1) / n_perf + np.var(ref_rewards, ddof=1) / n_ref))
+        # Welch-Satterthwaite degrees of freedom
+        s1, s2 = np.var(perf_rewards, ddof=1), np.var(ref_rewards, ddof=1)
+        n_perf_f, n_ref_f = float(n_perf), float(n_ref)
+        nu_num = (s1 / n_perf_f + s2 / n_ref_f) ** 2
+        nu_den = (s1 / n_perf_f) ** 2 / (n_perf_f - 1) + (s2 / n_ref_f) ** 2 / (n_ref_f - 1)
+        df = nu_num / nu_den if nu_den > 0 else min(n_perf, n_ref) - 1
 
     if se < 1e-12:
-        # Identical distributions
+        # Identical distributions (or all paired differences are zero)
         return {
             "equivalent": True,
             "p_upper": 0.0,
@@ -1289,13 +1307,8 @@ def tost_equivalence(
             "margin": margin,
             "ci_lower": mean_diff,
             "ci_upper": mean_diff,
+            "paired": paired,
         }
-
-    # Welch-Satterthwaite degrees of freedom
-    s1, s2 = np.var(perf_rewards, ddof=1), np.var(ref_rewards, ddof=1)
-    nu_num = (s1 / n_perf + s2 / n_ref) ** 2
-    nu_den = (s1 / n_perf) ** 2 / (n_perf - 1) + (s2 / n_ref) ** 2 / (n_ref - 1)
-    df = nu_num / nu_den if nu_den > 0 else min(n_perf, n_ref) - 1
 
     # Upper test: H0 says diff >= margin, reject if diff is sufficiently below margin
     t_upper = (mean_diff - margin) / se
@@ -1320,6 +1333,7 @@ def tost_equivalence(
         "margin": margin,
         "ci_lower": ci_lower,
         "ci_upper": ci_upper,
+        "paired": paired,
     }
 
 
@@ -1328,13 +1342,16 @@ def print_tost_report(
     cyborg_rewards: np.ndarray,
     margin: float = 5.0,
     alpha: float = 0.05,
+    paired: bool = False,
 ):
     """Print TOST equivalence report for cross-backend transfer validation."""
-    result = tost_equivalence(jax_rewards, cyborg_rewards, margin, alpha)
+    result = tost_equivalence(jax_rewards, cyborg_rewards, margin, alpha, paired=paired)
 
+    test_type = "PAIRED" if paired else "INDEPENDENT"
     print("\n" + "=" * 70)
-    print("L4 CROSS-BACKEND EQUIVALENCE (TOST)")
+    print(f"L4 CROSS-BACKEND EQUIVALENCE (TOST, {test_type})")
     print("=" * 70)
+    print(f"  Test type:            {test_type.lower()} samples")
     print(f"  Margin (Delta):       +/-{result['margin']:.1f}")
     print(f"  Significance level:   alpha={alpha}")
     print(f"  JAXborg episodes:     {len(jax_rewards)}")
@@ -1644,6 +1661,8 @@ def main():
         print(f"Saved mode split report: {out_path}")
         return
 
+    is_matched = not args.independent_rollouts
+
     if args.independent_rollouts:
         print("\n" + "=" * 70)
         print("INDEPENDENT ROLLOUTS")
@@ -1710,7 +1729,7 @@ def main():
 
     # L4 TOST equivalence test (always run with >= 2 episodes)
     if len(jax_rewards) >= 2 and len(cyborg_rewards) >= 2:
-        tost_result = print_tost_report(jax_rewards, cyborg_rewards)
+        tost_result = print_tost_report(jax_rewards, cyborg_rewards, paired=is_matched)
         # Save TOST result alongside other outputs
         tost_path = EXP_DIR / "tost_result.json"
         tost_path.parent.mkdir(parents=True, exist_ok=True)
