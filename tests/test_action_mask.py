@@ -58,7 +58,10 @@ class TestHostBasedActions:
                     assert not mask[action_idx], f"sid={sid} slot={slot} should be masked"
 
     def test_empty_obs_slots_masked(self):
-        """Slots where obs_host_map == GLOBAL_MAX_HOSTS are masked."""
+        """Slots where obs_host_map == GLOBAL_MAX_HOSTS are masked.
+        Router slots (slot == OBS_HOSTS_PER_SUBNET - 1) are also masked,
+        matching CybORG's BlueFlatWrapper which excludes routers.
+        """
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
         mask = compute_blue_action_mask(const, 0)
         agent_subnets = np.array(const.blue_agent_subnets[0])
@@ -70,8 +73,9 @@ class TestHostBasedActions:
                 h = int(const.obs_host_map[sid, slot])
                 flat_slot = sid * OBS_HOSTS_PER_SUBNET + slot
                 action_idx = BLUE_ANALYSE_START + flat_slot
-                if h == GLOBAL_MAX_HOSTS:
-                    assert not mask[action_idx], f"Empty slot sid={sid} slot={slot} should be masked"
+                is_router = slot == OBS_HOSTS_PER_SUBNET - 1
+                if h == GLOBAL_MAX_HOSTS or is_router:
+                    assert not mask[action_idx], f"Slot sid={sid} slot={slot} should be masked"
                 else:
                     assert mask[action_idx], f"Valid host sid={sid} slot={slot} should be unmasked"
 

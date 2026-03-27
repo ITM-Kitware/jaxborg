@@ -88,16 +88,16 @@ def apply_red_action(
     return jax.lax.switch(branch_idx, branches, state)
 
 
-def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int) -> CC4State:
+def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int, key=None) -> CC4State:
     action_type, target_host, decoy_type, src_subnet, dst_subnet = decode_blue_action(action_idx, agent_id, const)
 
     branches = [
         lambda s: s,  # 0: Sleep
         lambda s: apply_blue_monitor(s, const, agent_id),
         lambda s: apply_blue_analyse(s, const, agent_id, target_host),
-        lambda s: apply_blue_remove(s, const, agent_id, target_host),
+        lambda s: apply_blue_remove(s, const, agent_id, target_host, key),
         lambda s: apply_blue_restore(s, const, agent_id, target_host),
-        lambda s: apply_blue_decoy(s, const, agent_id, target_host, decoy_type),
+        lambda s: apply_blue_decoy(s, const, agent_id, target_host, decoy_type, key),
         lambda s: apply_block_traffic(s, const, agent_id, src_subnet, dst_subnet),
         lambda s: apply_allow_traffic(s, const, agent_id, src_subnet, dst_subnet),
     ]

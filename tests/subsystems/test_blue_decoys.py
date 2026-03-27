@@ -22,6 +22,7 @@ from jaxborg.actions.encoding import (
 from jaxborg.actions.pids import host_current_max_pid
 from jaxborg.constants import (
     DECOY_IDS,
+    DECOY_NAMES,
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
 )
@@ -274,6 +275,161 @@ class TestBlueActionOrder:
         )
 
         assert BLUE_ANALYSE_START < BLUE_REMOVE_START < BLUE_RESTORE_START < BLUE_DECOY_START
+
+
+class TestDecoyCompatibilityMask:
+    """Verify JAX compatibility mask matches CybORG per-factory is_host_compatible."""
+
+    def test_vsftpd_compatibility_matches_cyborg(self):
+        """JAX must check port 21 + Linux for Vsftpd, not hardcode True."""
+        from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
+
+        from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
+
+        cyborg_env = _make_cyborg_env()
+        const = build_const_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+        factory = VsftpdDecoyFactory()
+
+        jax_state = _make_jax_state(const)
+
+        mismatches = []
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]):
+                continue
+            hostname = sorted_hosts[h]
+            cyborg_compat = factory.is_host_compatible(cy_state.hosts[hostname])
+            jax_mask = host_decoy_compatibility_mask(jax_state.host_services[h], jax_state.host_decoys[h])
+            jax_compat = bool(jax_mask[VSFTPD_IDX])
+            if jax_compat != cyborg_compat:
+                mismatches.append((hostname, cyborg_compat, jax_compat))
+
+        assert mismatches == [], f"Vsftpd compatibility mismatch on {len(mismatches)} hosts: " + ", ".join(
+            f"{h} (cyborg={c}, jax={j})" for h, c, j in mismatches[:5]
+        )
+
+    def test_all_factories_compatibility_matches_cyborg(self):
+        """JAX compatibility mask must match CybORG for all 4 decoy factories."""
+        from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import ApacheDecoyFactory
+        from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import HarakaDecoyFactory
+        from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyTomcat import TomcatDecoyFactory
+        from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
+
+        from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
+
+        factories = [HarakaDecoyFactory(), ApacheDecoyFactory(), TomcatDecoyFactory(), VsftpdDecoyFactory()]
+
+        cyborg_env = _make_cyborg_env()
+        const = build_const_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        jax_state = _make_jax_state(const)
+
+        mismatches = []
+        for h in range(int(const.num_hosts)):
+            if not bool(const.host_active[h]):
+                continue
+            hostname = sorted_hosts[h]
+            jax_mask = host_decoy_compatibility_mask(jax_state.host_services[h], jax_state.host_decoys[h])
+            for decoy_idx, factory in enumerate(factories):
+                cyborg_compat = factory.is_host_compatible(cy_state.hosts[hostname])
+                jax_compat = bool(jax_mask[decoy_idx])
+                if jax_compat != cyborg_compat:
+                    mismatches.append((hostname, type(factory).__name__, cyborg_compat, jax_compat))
+
+        assert mismatches == [], f"{len(mismatches)} compatibility mismatches: " + ", ".join(
+            f"{h}/{f} (cyborg={c}, jax={j})" for h, f, c, j in mismatches[:10]
+        )
+
+
+class TestDecoyTypeSelectionParity:
+    """Verify that DeployDecoy produces the same decoy type in JAX and CybORG
+    WITHOUT relying on the harness's use_blue_decoy_type_choices sync.
+
+    The harness records CybORG's choice and injects it via
+    use_blue_decoy_type_choices.  The fallback RNG (used in standalone mode)
+    is stochastic per-episode and will NOT match CybORG without sync.
+    These tests verify that the precomputed sync path produces correct results,
+    and that the fallback path selects a valid compatible type.
+    """
+
+    @pytest.mark.parametrize("seed", [0, 5, 10, 15, 20, 25, 30, 42])
+    def test_deploy_decoy_type_matches_cyborg_via_sync(self, seed):
+        """Precomputed decoy type sync produces the same type CybORG chose."""
+        sg = EnterpriseScenarioGenerator(
+            blue_agent_class=SleepAgent,
+            green_agent_class=SleepAgent,
+            red_agent_class=SleepAgent,
+            steps=500,
+        )
+        cyborg_env = CybORG(scenario_generator=sg, seed=seed)
+        const = build_const_from_cyborg(cyborg_env)
+        cy_state = cyborg_env.environment_controller.state
+        sorted_hosts = sorted(cy_state.hosts.keys())
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+        hostname = sorted_hosts[target]
+
+        # CybORG: execute DeployDecoy
+        before_services = set(cy_state.hosts[hostname].services.keys())
+        cy_action = DeployDecoy(session=0, agent=f"blue_agent_{blue_idx}", hostname=hostname)
+        cy_obs = cy_action.execute(cy_state)
+        assert str(cy_obs.success).upper() == "TRUE"
+        after_services = set(cy_state.hosts[hostname].services.keys())
+        added = after_services - before_services
+        assert len(added) == 1
+        service_to_decoy = {"haraka": HARAKA_IDX, "apache2": APACHE_IDX, "tomcat": TOMCAT_IDX, "vsftpd": VSFTPD_IDX}
+        cyborg_decoy_type = service_to_decoy[next(iter(added))]
+
+        # JAX: execute DeployDecoy WITH decoy type sync (precomputed path)
+        jax_state = _make_jax_state(const)
+        after_max = max(p.pid for p in cy_state.hosts[hostname].processes)
+        before_max = const.host_initial_max_pid[target]
+        pid_delta = int(after_max - before_max)
+        const_for_test = const.replace(
+            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx].set(pid_delta),
+            use_blue_decoy_pid_deltas=jnp.array(True),
+            blue_decoy_type_choices=const.blue_decoy_type_choices.at[0, blue_idx].set(cyborg_decoy_type),
+            use_blue_decoy_type_choices=jnp.array(True),
+        )
+        new_state = apply_blue_decoy(jax_state, const_for_test, blue_idx, target, jnp.int32(-1))
+
+        jax_decoy_placed = np.array(new_state.host_decoys[target])
+        jax_types_placed = np.where(jax_decoy_placed)[0]
+        assert len(jax_types_placed) == 1, f"Expected exactly 1 decoy placed, got {jax_types_placed}"
+        jax_decoy_type = int(jax_types_placed[0])
+
+        assert jax_decoy_type == cyborg_decoy_type, (
+            f"Decoy type mismatch (seed={seed}): JAX placed {DECOY_NAMES[jax_decoy_type]} "
+            f"(idx {jax_decoy_type}), CybORG placed {DECOY_NAMES[cyborg_decoy_type]} "
+            f"(idx {cyborg_decoy_type})."
+        )
+
+    def test_fallback_rng_selects_valid_compatible_type(self):
+        """Fallback RNG (no precomputed sync) selects a compatible decoy type."""
+        import jax
+
+        cyborg_env = _make_cyborg_env()
+        const = build_const_from_cyborg(cyborg_env)
+        jax_state = _make_jax_state(const)
+
+        target = _find_host_in_subnet(const, "RESTRICTED_ZONE_A")
+        assert target is not None
+        blue_idx = _find_blue_for_host(const, target)
+        assert blue_idx is not None
+
+        # Use stochastic key — different keys should produce valid results
+        for seed in [0, 42, 123]:
+            key = jax.random.PRNGKey(seed)
+            new_state = apply_blue_decoy(jax_state, const, blue_idx, target, jnp.int32(-1), key)
+            jax_decoy_placed = np.array(new_state.host_decoys[target])
+            jax_types_placed = np.where(jax_decoy_placed)[0]
+            assert len(jax_types_placed) == 1, f"Expected exactly 1 decoy (seed={seed}), got {jax_types_placed}"
 
 
 class TestDifferentialWithCybORG:

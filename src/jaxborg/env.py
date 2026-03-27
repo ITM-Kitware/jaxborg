@@ -81,8 +81,11 @@ def apply_all_actions_in_order(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     execution_order: jnp.ndarray,
+    blue_keys: jnp.ndarray = None,
 ) -> CC4State:
     """Apply one CybORG step using an explicit chosen-action execution order."""
+    if blue_keys is None:
+        blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
     green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
 
     def step_actor(step_idx, carry_state):
@@ -96,7 +99,7 @@ def apply_all_actions_in_order(
 
         return jax.lax.cond(
             is_blue,
-            lambda s: process_blue_with_duration(s, const, blue_id, blue_actions[blue_id]),
+            lambda s: process_blue_with_duration(s, const, blue_id, blue_actions[blue_id], blue_keys[blue_id]),
             lambda s: jax.lax.cond(
                 is_green,
                 lambda gs: apply_green_agent_action(gs, const, green_host, green_keys[green_host]),
@@ -135,6 +138,7 @@ def apply_all_actions_typed(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     execution_order: jnp.ndarray,
+    blue_keys: jnp.ndarray = None,
     *,
     use_green_vmap: bool = True,
 ) -> CC4State:
@@ -157,9 +161,12 @@ def apply_all_actions_typed(
     blue_priority = jnp.where(is_traffic, 0, 1)
     blue_order = blue_order[jnp.argsort(blue_priority, stable=True)]
 
+    if blue_keys is None:
+        blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
+
     def blue_step(i, carry_state):
         b = blue_order[i]
-        return process_blue_with_duration(carry_state, const, b, blue_actions[b])
+        return process_blue_with_duration(carry_state, const, b, blue_actions[b], blue_keys[b])
 
     state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, blue_step, state)
 
@@ -221,6 +228,7 @@ def apply_all_actions(
     red_keys: jnp.ndarray,
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
+    blue_keys: jnp.ndarray = None,
 ) -> CC4State:
     """Apply all agent actions in CybORG's deterministic priority order.
 
@@ -256,6 +264,7 @@ def apply_all_actions(
         forced_primary_hosts,
         forced_primary_pids,
         execution_order,
+        blue_keys,
     )
 
 
@@ -537,8 +546,9 @@ class CC4Env(MultiAgentEnv):
         state = env_state.state
         const = env_state.const
 
-        key, key_green, key_red = jax.random.split(key, 3)
+        key, key_green, key_red, key_blue = jax.random.split(key, 4)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
+        blue_keys = jax.random.split(key_blue, NUM_BLUE_AGENTS)
 
         state = advance_mission_phase(state, const)
 
@@ -568,6 +578,7 @@ class CC4Env(MultiAgentEnv):
             no_forced,
             no_forced_pids,
             execution_order,
+            blue_keys,
             use_green_vmap=(self.topology_mode == "pure"),
         )
 

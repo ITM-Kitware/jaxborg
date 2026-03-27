@@ -7,6 +7,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_DECOY_TYPES,
     NUM_SUBNETS,
+    OBS_HOSTS_PER_SUBNET,
     SERVICE_IDS,
 )
 from jaxborg.state import CC4Const, CC4State
@@ -49,6 +50,13 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     obs_valid = const.obs_host_map < GLOBAL_MAX_HOSTS
     agent_subnets = const.blue_agent_subnets[agent_id]
     slot_valid_flat = (obs_valid & agent_subnets[:, None]).reshape(-1)
+
+    # Exclude router slots — CybORG's BlueFlatWrapper excludes routers from the
+    # action space.  The router is always at position OBS_HOSTS_PER_SUBNET - 1
+    # within each subnet.
+    router_slot_mask = jnp.arange(OBS_HOSTS_PER_SUBNET) != (OBS_HOSTS_PER_SUBNET - 1)
+    router_slot_mask = jnp.tile(router_slot_mask, NUM_SUBNETS)  # (ACTION_HOST_SLOTS,)
+    slot_valid_flat = slot_valid_flat & router_slot_mask
 
     safe_host_idx = jnp.where(obs_valid, const.obs_host_map, 0)
     if state is None:

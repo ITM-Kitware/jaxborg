@@ -267,6 +267,7 @@ def process_blue_with_duration(
     const: CC4Const,
     agent_id: int,
     action_idx: int,
+    key=None,
 ) -> CC4State:
     is_busy = state.blue_pending_ticks[agent_id] > 0
 
@@ -281,7 +282,7 @@ def process_blue_with_duration(
 
     new_state = jax.lax.cond(
         should_execute,
-        lambda s: apply_blue_action(s, const, agent_id, effective_action),
+        lambda s: apply_blue_action(s, const, agent_id, effective_action, key),
         lambda s: s,
         state,
     )

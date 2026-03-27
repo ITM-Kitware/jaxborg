@@ -19,7 +19,7 @@ from jaxborg.constants import (
 from jaxborg.state import CC4Const, CC4State
 
 
-def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_host: int) -> CC4State:
+def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_host: int, key=None) -> CC4State:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
     suspicious_pid_row = state.blue_suspicious_pids[agent_id, target_host]
 
@@ -240,7 +240,9 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
     # Respawn killed decoys with new PIDs (matching CybORG's service respawn
     # in StopProcess.kill_process).
-    pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id)
+    if key is None:
+        key = jax.random.PRNGKey(0)
+    pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id, key)
     respawn_pid = recomputed_max + pid_delta
     # Find the first cleared decoy slot and assign the respawn PID.
     cleared_slots = host_decoy_process_pids[target_host] < 0
