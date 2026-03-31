@@ -20,7 +20,9 @@
 #   TOPOLOGY_MODE       - topology mode for training (default: bank)
 
 set -euo pipefail
-cd "$(dirname "$0")/.."
+# Resolve repo root from this script's real path (works under sbatch/srun too)
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+cd "$SCRIPT_DIR/.."
 
 # Ensure Ctrl+C kills child processes (uv/python/JAX)
 trap 'echo ""; echo "Interrupted. Killing children..."; kill 0; exit 130' INT TERM
