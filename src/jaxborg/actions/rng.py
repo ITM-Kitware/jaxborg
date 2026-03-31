@@ -31,7 +31,9 @@ def sample_green_random(const: CC4Const, time, host_idx, field_idx, key, *, int_
 
         def from_precomputed(_):
             v = const.green_randoms[time, host_idx, field_idx]
-            return jnp.floor(v * int_range).astype(jnp.int32)
+            # Clamp to [0, int_range-1] — tokens can be exactly 1.0 for
+            # fields that encode a direct index (e.g. service token).
+            return jnp.minimum(jnp.floor(v * int_range).astype(jnp.int32), jnp.maximum(int_range - 1, 0))
 
         def from_rng(_):
             return jax.random.randint(key, (), 0, jnp.maximum(int_range, 1))

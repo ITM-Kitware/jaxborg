@@ -460,7 +460,14 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     observations = {
         agent: wrapper.observation_change(agent, obs[agent]) for agent in wrapper.possible_agents if agent in obs
     }
-    rewards = {agent: sum(rews[agent].values()) for agent in wrapper.possible_agents if agent in rews}
+    # Use only BlueRewardMachine, excluding action_cost.  CybORG adds an
+    # action_cost component (e.g. Restore costs -1) that JAX does not model.
+    # The differential harness also uses only BlueRewardMachine.
+    rewards = {
+        agent: rews[agent].get("BlueRewardMachine", sum(rews[agent].values()))
+        for agent in wrapper.possible_agents
+        if agent in rews
+    }
     terminated = {agent: bool(dones[agent]) for agent in wrapper.possible_agents if agent in dones}
     truncated = terminated.copy()
     info = {agent: {"action_mask": wrapper.get_action_space(agent)["mask"]} for agent in wrapper.possible_agents}

@@ -430,8 +430,12 @@ class CC4Env(MultiAgentEnv):
         self._red_policy_random_bank = None
         if topology_mode == "cyborg_bank":
             self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
-            self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+            # Green random bank encodes CybORG's specific green agent decisions
+            # for a reference trajectory.  These tokens become stale (selecting
+            # inactive services) when blue/red actions diverge from the recording,
+            # producing spurious LWF failures.  Only load for differential sync.
             if sync_red_policy_bank:
+                self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
                 self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
         elif topology_mode != "pure":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
