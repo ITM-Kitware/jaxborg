@@ -1,22 +1,23 @@
 #!/usr/bin/env bash
-# Train→Eval→Debug loop for policy transfer gap fixing.
+# Train→Eval→Verify loop for L4 cross-backend policy transfer (Karten et al.).
 #
 # Each iteration:
-#   1. Train IPPO from scratch (200K steps)
-#   2. Eval trained policy on JAXborg + CybORG (10 episodes)
-#   3. Run baselines for context
-#   4. Feed diagnosis to claude -p to investigate and fix
-#   5. Run tests to validate fix
-#   6. Commit and repeat
+#   1. Train IPPO in JAXborg
+#   2. Eval trained policy independently in JAXborg + CybORG (runs TOST)
+#   3. Feed full eval output to claude -p to review/diagnose
+#   4. If claude finds issues → fix, run tests, commit, retrain
+#   5. If claude confirms TOST passes and everything looks good → done
 #
 # Usage:
-#   bash scripts/transfer_loop.sh
+#   srun --gres=gpu:1 --mem=64G bash scripts/transfer_loop.sh
 #
 # Environment variables:
-#   MAX_ROUNDS          - number of train→fix iterations (default: 10)
-#   TRAIN_TIMESTEPS     - training timesteps per round (default: 200000)
+#   MAX_ROUNDS          - train→verify iterations (default: 10)
+#   TRAIN_TIMESTEPS     - training timesteps per round (default: 5000000)
+#   TRAIN_NUM_ENVS      - parallel envs for training (default: 1024)
 #   EVAL_EPISODES       - eval episodes per round (default: 10)
 #   MAX_FIX_ATTEMPTS    - claude retries per round (default: 3)
+#   TOPOLOGY_MODE       - topology mode for training (default: bank)
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -25,10 +26,11 @@ cd "$(dirname "$0")/.."
 trap 'echo ""; echo "Interrupted. Killing children..."; kill 0; exit 130' INT TERM
 
 MAX_ROUNDS="${MAX_ROUNDS:-10}"
-TRAIN_TIMESTEPS="${TRAIN_TIMESTEPS:-100000}"
-TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-16}"
+TRAIN_TIMESTEPS="${TRAIN_TIMESTEPS:-5000000}"
+TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-1024}"
 EVAL_EPISODES="${EVAL_EPISODES:-10}"
 MAX_FIX_ATTEMPTS="${MAX_FIX_ATTEMPTS:-3}"
+TOPOLOGY_MODE="${TOPOLOGY_MODE:-bank}"
 
 EXP_DIR="${JAXBORG_EXP_DIR:-$(pwd)/jaxborg-exp}"
 
@@ -48,10 +50,11 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
 
     # --- 1. Train from scratch ---
     echo ""
-    echo "--- Step 1: Training IPPO ($TRAIN_TIMESTEPS steps) ---"
+    echo "--- Step 1: Training IPPO ($TRAIN_TIMESTEPS steps, $TRAIN_NUM_ENVS envs, topology=$TOPOLOGY_MODE) ---"
     uv run python scripts/train_ippo_cc4.py \
         TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
         NUM_ENVS="$TRAIN_NUM_ENVS" \
+        TOPOLOGY_MODE="$TOPOLOGY_MODE" \
         SEED="$round" \
         hydra.run.dir="$ROUND_DIR/hydra" \
         hydra.job.chdir=True
@@ -67,9 +70,9 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     cp "$TRAIN_SRC/metrics.jsonl" "$ROUND_DIR/metrics.jsonl" 2>/dev/null || true
     cp "$TRAIN_SRC/config.json" "$ROUND_DIR/config.json" 2>/dev/null || true
 
-    # --- 2. Eval on JAXborg + CybORG ---
+    # --- 2. Eval on JAXborg + CybORG (includes TOST) ---
     echo ""
-    echo "--- Step 2: Evaluating transfer ($EVAL_EPISODES episodes) ---"
+    echo "--- Step 2: Evaluating transfer ($EVAL_EPISODES episodes, independent) ---"
     EVAL_OUTPUT=$(uv run python scripts/eval_transfer.py \
         --checkpoint "$CHECKPOINT" \
         --episodes "$EVAL_EPISODES" \
@@ -77,95 +80,128 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
         --seed "$round" 2>&1) || true
 
     echo "$EVAL_OUTPUT"
-
     echo "$EVAL_OUTPUT" > "$ROUND_DIR/eval_output.txt"
 
-    # --- 3. Feed to claude for diagnosis and fix ---
+    # --- 3. Send full eval to claude for review ---
     echo ""
-    echo "--- Step 3: Claude diagnosis and fix ---"
+    echo "--- Step 3: Claude review (round $round) ---"
 
     ATTEMPT=0
-    FIXED=false
+    RESOLVED=false
 
     while [ $ATTEMPT -lt $MAX_FIX_ATTEMPTS ]; do
         ATTEMPT=$((ATTEMPT + 1))
-        echo "--- Fix attempt $ATTEMPT/$MAX_FIX_ATTEMPTS ---"
+        echo "--- Review attempt $ATTEMPT/$MAX_FIX_ATTEMPTS ---"
 
-        claude -p "You are debugging policy transfer gaps in JAXborg (JAX port of CybORG CC4).
+        CLAUDE_OUTPUT=$(claude -p "You are verifying and debugging L4 cross-backend policy transfer for JAXborg (JAX port of CybORG CC4).
 Working directory: $(pwd)
 
 ## Context
 
-A policy was just trained via IPPO in JAXborg for $TRAIN_TIMESTEPS steps (round $round),
-then evaluated on both JAXborg and CybORG. The eval output is below.
+Round $round of the Karten verification loop. A policy was trained via IPPO in
+JAXborg for $TRAIN_TIMESTEPS steps, then evaluated independently in both JAXborg
+and CybORG. The full eval output (including TOST equivalence test) is below.
 
-## Eval Output
+## Full Eval Output
 
 $EVAL_OUTPUT
 
 ## Your Task
 
-Analyze the transfer gap between JAXborg and CybORG reward/behavior.
-The gap means either:
-1. **Observation gap** — JAXborg obs encoding differs from CybORG BlueFlatWrapper obs
-2. **Reward gap** — JAXborg reward computation differs from CybORG
-3. **Dynamics gap** — JAXborg state transitions differ (action effects, green agents, red FSM)
-4. **Action masking gap** — JAXborg action masks differ from CybORG valid actions
-5. **Action translation gap** — jax_blue_to_cyborg in translate.py maps incorrectly
+Review the ENTIRE eval output. Check:
 
-## Investigation Steps
+1. **TOST result** — did the equivalence test pass (p<0.05 within margin)?
+2. **Reward gap** — JAXborg mean vs CybORG mean. Is it directional or noise?
+3. **Action distributions** — are the same action types used at similar rates?
+4. **Baselines** — do sleep/random baselines look reasonable in both?
+5. **Training quality** — did the policy actually learn (reward >> sleep baseline)?
+6. **Any anomalies** — unexpected patterns, NaN, crashes, suspicious numbers?
 
-1. Read the eval output carefully. Focus on:
-   - Reward gap (JAXborg mean vs CybORG mean)
-   - Action distribution differences (which action types are over/under-used?)
-   - Trajectory shape (does CybORG get worse at a specific phase?)
-2. If the reward gap is large, diagnose WHY the same policy produces different rewards.
-   - Run scripts/diagnose_reward_parity.py to compare step-by-step rewards with sleep policy.
-   - Check if obs encodings match: compare JAXborg obs vs CybORG BlueFlatWrapper obs for the same state.
-   - Check action masking: are the same actions valid in both?
-3. Read relevant source:
-   - CybORG source: .venv/lib/python3.11/site-packages/CybORG/
-   - JAXborg source: src/jaxborg/
-   - Translation: src/jaxborg/translate.py
-   - Observations: src/jaxborg/observations.py
-   - Rewards: src/jaxborg/rewards.py
-4. Write an explicit differential test that reproduces the specific gap.
-5. Fix the JAXborg code (not harness workarounds).
-6. Run: uv run pytest tests/ -v -x
-7. Commit with a clear message.
+## Decision
+
+If TOST passes AND everything looks healthy:
+- Write 'VERDICT: PASS' on its own line
+- Summarize why you're confident in the equivalence
+
+If TOST fails OR you find issues:
+- Write 'VERDICT: FAIL' on its own line
+- Diagnose the specific gap (obs? reward? dynamics? masking?)
+- Read relevant source code to understand the root cause
+- Write a differential test that reproduces the gap
+- Fix the JAXborg code
+- Run: uv run pytest tests/ -v -x
+- Run: uv run ruff check --fix . && uv run ruff format .
+- Commit with a clear message
+
+## Key Files
+
+- CybORG source: .venv/lib/python3.11/site-packages/CybORG/
+- JAXborg source: src/jaxborg/
+- Translation: src/jaxborg/translate.py
+- Observations: src/jaxborg/observations.py
+- Rewards: src/jaxborg/rewards.py
+- Diagnostics: scripts/diagnose_*.py
+- CYBORG_DIFFERENCES.md — known intentional divergences
 
 ## Rules
 
-- One gap at a time. Fix the most impactful issue first.
-- Every fix needs a differential test.
-- Do not change CybORG or harness to hide gaps.
-- Prefer functional programming.
-- Run ruff: uv run ruff check --fix . && uv run ruff format .
+- Review everything, not just one number
+- One gap at a time if fixing — most impactful first
+- Every fix needs a differential test
+- Do not change CybORG source or hide gaps with harness syncs
+- Run ruff before committing
 " \
-            --allowedTools "Read,Edit,Write,Bash(uv run*),Bash(git add*),Bash(git commit*),Bash(git status*),Bash(git diff*),Bash(git log*),Bash(ls*),Bash(python3*),Grep,Glob"
+            --allowedTools "Read,Edit,Write,Bash(uv run*),Bash(git add*),Bash(git commit*),Bash(git status*),Bash(git diff*),Bash(git log*),Bash(ls*),Bash(python3*),Bash(CUDA_VISIBLE_DEVICES*),Grep,Glob" 2>&1) || true
 
-        # Validate: run tests
-        echo "--- Validating fix (tests) ---"
-        if uv run pytest tests/ -v -x --timeout=120 2>&1 | tail -20; then
-            FIXED=true
+        echo "$CLAUDE_OUTPUT" > "$ROUND_DIR/claude_review_${ATTEMPT}.txt"
+
+        # Check verdict
+        if echo "$CLAUDE_OUTPUT" | grep -q "VERDICT: PASS"; then
+            echo ""
+            echo "================================================================"
+            echo "  TOST PASSED — L4 equivalence confirmed (round $round)"
+            echo "================================================================"
+            echo "$CLAUDE_OUTPUT" | grep -A 20 "VERDICT: PASS" | head -25
+            RESOLVED=true
             break
+        fi
+
+        if echo "$CLAUDE_OUTPUT" | grep -q "VERDICT: FAIL"; then
+            echo "Claude found issues, checking if fix was committed..."
+            # Validate: run tests after fix
+            echo "--- Validating fix (tests) ---"
+            if uv run pytest tests/ -v -x --timeout=120 2>&1 | tail -20; then
+                echo "Tests pass after fix. Will retrain next round."
+                RESOLVED=true
+                break
+            else
+                echo "Tests failed on attempt $ATTEMPT"
+            fi
         else
-            echo "Tests failed on attempt $ATTEMPT"
+            echo "No clear verdict from claude. Retrying..."
         fi
     done
 
-    if [ "$FIXED" = false ]; then
+    if [ "$RESOLVED" = true ]; then
+        # Check if it was a PASS (done!) or FAIL (need retrain)
+        if echo "$CLAUDE_OUTPUT" | grep -q "VERDICT: PASS"; then
+            echo ""
+            echo "L4 cross-backend transfer verified. Done!"
+            exit 0
+        fi
         echo ""
-        echo "FAILED to fix transfer gap after $MAX_FIX_ATTEMPTS attempts in round $round."
-        echo "Stopping. Review $ROUND_DIR/eval_output.txt and fix manually."
+        echo "Round $round: fix applied. Retraining in next round..."
+    else
+        echo ""
+        echo "FAILED to resolve after $MAX_FIX_ATTEMPTS attempts in round $round."
+        echo "Review $ROUND_DIR/ and fix manually."
         exit 1
     fi
-
-    echo ""
-    echo "Round $round complete. Fix committed. Proceeding to next training run."
 done
 
 echo ""
 echo "================================================================"
-echo "  Transfer Loop Complete ($MAX_ROUNDS rounds)"
+echo "  Transfer Loop Complete ($MAX_ROUNDS rounds without TOST pass)"
+echo "  Review results in $EXP_DIR/transfer_loop/"
 echo "================================================================"
+exit 1
