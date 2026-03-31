@@ -64,7 +64,7 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
         TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
         NUM_ENVS="$TRAIN_NUM_ENVS" \
         TOPOLOGY_MODE="$TOPOLOGY_MODE" \
-        TOPOLOGY_BANK_SIZE=32 \
+        +TOPOLOGY_BANK_SIZE=32 \
         SEED="$round" \
         hydra.run.dir="$ROUND_DIR/hydra" \
         hydra.job.chdir=True
