@@ -1,13 +1,5 @@
 {
   "1": "passing",
-  "2": "passing",
-  "3": "passing",
-  "4": "passing",
-  "5": "passing",
-  "6": "passing",
-  "7": "passing",
-  "8": "passing",
-  "9": "passing",
   "10": "passing",
   "11": "passing",
   "12": "passing",
@@ -18,7 +10,21 @@
   "17": "passing",
   "18": "passing",
   "19": "passing",
+  "2": "passing",
   "20": "passing",
   "21": "passing",
-  "22": "passing"
+  "22": "passing",
+  "3": "passing",
+  "4": "passing",
+  "5": "passing",
+  "6": "passing",
+  "7": "passing",
+  "8": "passing",
+  "9": "passing",
+  "l4_tost": {
+    "equivalent": true,
+    "margin": 5.0,
+    "mean_diff": 0.0,
+    "episodes": 10
+  }
 }

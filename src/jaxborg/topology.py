@@ -391,6 +391,7 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
         use_blue_decoy_type_choices=jnp.array(False),
         green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
         use_green_host_order=jnp.array(False),
+        cyborg_random_exploit_source=jnp.array(False),
     )
 
 
@@ -861,6 +862,7 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
             dtype=jnp.int32,
         ),
         use_green_host_order=jnp.array(False),
+        cyborg_random_exploit_source=jnp.array(False),
     )
 
 

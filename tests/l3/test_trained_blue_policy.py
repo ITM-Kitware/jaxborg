@@ -17,10 +17,8 @@ import pickle
 import sys
 from pathlib import Path
 
-import distrax
 import jax
 import jax.numpy as jnp
-import numpy as np
 import pytest
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 
@@ -75,8 +73,8 @@ def _get_checkpoint_path() -> Path | None:
 
 def _load_policy(checkpoint_path: Path):
     """Load policy and params from checkpoint. Returns (policy, params, kind)."""
-    from train_ippo_cc4 import ActorCritic
     from eval_transfer import LegacyActor
+    from train_ippo_cc4 import ActorCritic
 
     with open(checkpoint_path, "rb") as f:
         ckpt = pickle.load(f)

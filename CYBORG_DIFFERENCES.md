@@ -7,7 +7,7 @@ list focused on remaining work.
 
 1. CybORG PID memory is unbounded, while JAX PID identity storage is bounded by
    fixed capacities (`MAX_TRACKED_SESSION_PIDS` and `MAX_TRACKED_SUSPICIOUS_PIDS`,
-   currently 64 each). This affects:
+   currently 16 each). This affects:
    - Red session PID identity memory (`red_session_pids`)
    - Blue suspicious PID memory (`blue_suspicious_pids`)
    Differential harness/test setup now fail fast on overflow instead of silently truncating,
@@ -54,6 +54,56 @@ JAXborg matches by only triggering ASF on blocked traffic.
 would crash. In practice there are always reachable servers.
 
 - CybORG: `Simulator/Actions/GreenActions/GreenAccessService.py:112`
+
+## Intentional Divergences (JAXborg is more correct)
+
+These are cases where JAXborg deliberately does NOT replicate a CybORG behavior
+because the CybORG behavior is buggy/inefficient and matching it would hurt training.
+
+### Exploit source-session selection
+
+CybORG's `FiniteStateRedAgent` picks a **random session ID** from the action space
+when creating `ExploitRemoteService`. Scan results (`ports` dict) are stored
+**per-session** — only the session that performed the scan has the target's port
+data. When green phishing adds extra sessions to a source host, the FSM may
+randomly pick a phishing session (empty `ports`) instead of the scanning session,
+causing the exploit to fail (`self.ip_address not in session.ports`).
+
+JAXborg uses **deterministic anchor-based source selection**
+(`select_scan_execution_source_host`) and a per-(agent, target, source) scan
+ownership matrix (`red_scanned_source_hosts`). This always finds the correct
+source host regardless of how many other sessions exist.
+
+**Impact:** With green agents active, CybORG's red agents waste exploit turns
+picking wrong sessions, slowing red progression. JAXborg's red spreads ~15%
+faster to unique hosts (68 vs 60 unique (agent,host) pairs) and reaches ROOT on
+~35% more hosts (67 vs 50 ROOT pairs) over 500 steps with blue=Sleep. This
+produces a systematic ~1900-point reward gap (JAX worse = harder environment for
+blue) that shrinks to ~300 points with a trained blue policy.
+
+With green disabled (red-only), the gap is ≈ 0 — confirming the divergence is
+purely from the green-phishing ↔ exploit-session interaction.
+
+**Parity flag:** `FsmRedCC4Env(cyborg_random_exploit_source=True)` adds a
+probabilistic exploit penalty based on session distribution. The exact
+CybORG mechanism is still under investigation — the simple model
+over-corrects, suggesting CybORG's FSM action_space may only expose
+session 0 (abstract) rather than all sessions.
+
+- CybORG: `Actions/AbstractActions/ExploitRemoteService.py:175` (`session.ports` check)
+- CybORG: `Agents/SimpleAgents/FiniteStateRedAgent.py:330` (session selection)
+- JAXborg: `src/jaxborg/actions/red_common.py:150` (`exploit_common_preconditions` + `cyborg_random_exploit_source` flag)
+
+### action_cost not modeled
+
+CybORG's `SimulationController` adds an `action_cost` reward component that sums
+`action.cost` for each blue agent (e.g., Restore costs −1). JAXborg does not model
+this component — it uses only `BlueRewardMachine` for rewards. The eval pipeline
+(`scripts/eval_transfer.py`) extracts only `BlueRewardMachine` from CybORG rewards
+to match.
+
+- CybORG: `Simulator/SimulationController.py:310–311`
+- JAXborg: `src/jaxborg/rewards.py` (no action_cost term)
 
 ## Additional Open Differences
 

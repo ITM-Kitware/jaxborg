@@ -18,15 +18,13 @@ import numpy as np
 import pytest
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
-
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from torch.distributions import Categorical
 
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.translate import cyborg_blue_to_jax
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
-
 
 # --- CybORG PPO Agent (matches train_cleanrl_ppo.py) ---
 

@@ -145,6 +145,7 @@ def exploit_common_preconditions(
     const: CC4Const,
     agent_id: int,
     target_host: chex.Array,
+    key: chex.Array = None,
 ) -> chex.Array:
     is_active = const.host_active[target_host]
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
@@ -155,7 +156,26 @@ def exploit_common_preconditions(
     target_subnet = const.host_subnet[target_host]
     can_reach = can_reach_subnet_from_source_host(state, const, source_host, target_subnet)
     is_abstract = source_host >= 0
-    return is_active & owns_target_scan & can_reach & is_abstract
+    base = is_active & owns_target_scan & can_reach & is_abstract
+
+    if key is None:
+        return base
+
+    # CybORG parity mode: CybORG's FSM picks a random session ID from ALL the
+    # agent's sessions (across all hosts).  Only sessions on the scanning source
+    # host have ports for the target.  If the random pick lands on a session on
+    # a different host, ExploitRemoteService fails (ip not in session.ports).
+    #
+    # Model this as: total_sessions across all hosts vs sessions on the correct
+    # source host.  P(success) = sessions_on_source / total_sessions.
+    session_counts = effective_session_counts(state)
+    agent_counts = session_counts[agent_id]  # (GLOBAL_MAX_HOSTS,)
+    total_sessions = jnp.maximum(jnp.sum(agent_counts), jnp.int32(1))
+    source_sessions = jnp.where(source_host >= 0, agent_counts[source_idx], jnp.int32(0))
+    # Roll uniform [0, total) — success if roll < source_sessions.
+    cyborg_roll = jax.random.randint(key, (), 0, total_sessions)
+    cyborg_ok = cyborg_roll < source_sessions
+    return jnp.where(const.cyborg_random_exploit_source, base & cyborg_ok, base)
 
 
 def select_scan_source_host(
