@@ -161,21 +161,23 @@ def exploit_common_preconditions(
     if key is None:
         return base
 
-    # CybORG parity mode: CybORG's FSM picks a random session ID from ALL the
-    # agent's sessions (across all hosts).  Only sessions on the scanning source
-    # host have ports for the target.  If the random pick lands on a session on
-    # a different host, ExploitRemoteService fails (ip not in session.ports).
+    # CybORG session-selection model: CybORG's FSM picks a random session ID
+    # from server_session (the action-space session dict).  server_session only
+    # contains RedAbstractSession-type sessions (primary + phishing) — concrete
+    # exploit sessions (SSH, RED_REVERSE_SHELL) are filtered out by
+    # ActionSpace.update() because their session_type is not in SESSION_TYPES.
+    # Additionally, _filter_obs strips sessions on hosts outside the agent's
+    # allowed_subnets.
     #
-    # Model this as: total_sessions across all hosts vs sessions on the correct
-    # source host.  P(success) = sessions_on_source / total_sessions.
-    session_counts = effective_session_counts(state)
-    agent_counts = session_counts[agent_id]  # (GLOBAL_MAX_HOSTS,)
-    total_sessions = jnp.maximum(jnp.sum(agent_counts), jnp.int32(1))
-    source_sessions = jnp.where(source_host >= 0, agent_counts[source_idx], jnp.int32(0))
-    # Roll uniform [0, total) — success if roll < source_sessions.
-    cyborg_roll = jax.random.randint(key, (), 0, total_sessions)
-    cyborg_ok = cyborg_roll < source_sessions
-    return jnp.where(const.cyborg_random_exploit_source, base & cyborg_ok, base)
+    # Only the ONE session that scanned the target has ports for that target.
+    # Model: P(success) = 1 / N, where N = abstract sessions in allowed subnets.
+    abstract_counts = state.red_abstract_session_count[agent_id]  # (GLOBAL_MAX_HOSTS,)
+    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]  # (GLOBAL_MAX_HOSTS,) bool
+    visible_sessions = jnp.maximum(jnp.sum(abstract_counts * allowed_hosts), jnp.int32(1))
+    # Roll uniform [0, visible) — success only if roll == 0 (1-in-N chance).
+    cyborg_roll = jax.random.randint(key, (), 0, visible_sessions)
+    cyborg_ok = cyborg_roll == 0
+    return base & cyborg_ok
 
 
 def select_scan_source_host(

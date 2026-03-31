@@ -26,6 +26,11 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         session_counts.at[:, target_host].set(0),
         session_counts,
     )
+    red_abstract_session_count = jnp.where(
+        covers_host,
+        state.red_abstract_session_count.at[:, target_host].set(0),
+        state.red_abstract_session_count,
+    )
 
     red_privilege = jnp.where(
         covers_host,
@@ -176,6 +181,7 @@ def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_h
         host_compromised=host_compromised,
         red_sessions=red_sessions,
         red_session_count=red_session_count,
+        red_abstract_session_count=red_abstract_session_count,
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_session_privileged_pids=red_session_privileged_pids,

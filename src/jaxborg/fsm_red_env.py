@@ -33,7 +33,6 @@ class FsmRedCC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
-        cyborg_random_exploit_source: bool = False,
     ):
         self._env = CC4Env(
             num_steps=num_steps,
@@ -42,7 +41,6 @@ class FsmRedCC4Env(MultiAgentEnv):
             sync_red_policy_bank=sync_red_policy_bank,
             training_mode=training_mode,
         )
-        self._cyborg_random_exploit_source = cyborg_random_exploit_source
         self.agents = list(self._env.blue_agents)
 
         super().__init__(num_agents=NUM_BLUE_AGENTS)
@@ -53,12 +51,6 @@ class FsmRedCC4Env(MultiAgentEnv):
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
         obs, env_state = self._env.reset(key)
-        if self._cyborg_random_exploit_source:
-            env_state = env_state.replace(
-                const=env_state.const.replace(
-                    cyborg_random_exploit_source=jnp.array(True),
-                )
-            )
         env_state = self._strip_inactive_red_reset_knowledge(env_state)
         blue_obs = {a: obs[a] for a in self.agents}
         return blue_obs, env_state

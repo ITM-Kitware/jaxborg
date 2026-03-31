@@ -31,6 +31,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     def _remove_slot(slot, carry):
         (
             new_session_count,
+            new_abstract_session_count,
             new_suspicious_count,
             new_privilege,
             new_session_pids,
@@ -106,6 +107,17 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
             jnp.int32(ABSTRACT_RANK_NONE),
         )
 
+        # Check if the removed PID was abstract
+        removed_was_abstract = removed_one & jnp.any(matched_abstract_pid_row == sus_pid)
+        abstract_count_before = new_abstract_session_count[matched_red, target_host]
+        abstract_count_after = jnp.where(
+            removed_was_abstract, jnp.maximum(abstract_count_before - 1, 0), abstract_count_before
+        )
+        new_abstract_session_count = jnp.where(
+            removed_was_abstract,
+            new_abstract_session_count.at[matched_red, target_host].set(abstract_count_after),
+            new_abstract_session_count,
+        )
         new_session_count = jnp.where(
             removed_one,
             new_session_count.at[matched_red, target_host].set(count_after),
@@ -148,6 +160,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         )
         return (
             new_session_count,
+            new_abstract_session_count,
             new_suspicious_count,
             new_privilege,
             new_session_pids,
@@ -160,6 +173,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
     init = (
         session_count_before,
+        state.red_abstract_session_count,
         state.red_suspicious_process_count,
         state.red_privilege,
         state.red_session_pids,
@@ -171,6 +185,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     )
     (
         new_session_count,
+        new_abstract_session_count,
         new_suspicious_count,
         new_privilege,
         new_session_pids,
@@ -344,6 +359,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     return state.replace(
         red_sessions=new_sessions,
         red_session_count=new_session_count,
+        red_abstract_session_count=new_abstract_session_count,
         red_session_pids=new_session_pids,
         red_session_abstract_pids=new_session_abstract_pids,
         red_session_privileged_pids=new_session_privileged_pids,

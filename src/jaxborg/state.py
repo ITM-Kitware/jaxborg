@@ -83,7 +83,7 @@ class CC4Const:
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
     green_host_order: chex.Array  # (MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS) int32 — per-step full execution order
     use_green_host_order: chex.Array  # scalar bool — True = use CybORG-synced order, False = default order
-    cyborg_random_exploit_source: chex.Array  # scalar bool — True = random session source (CybORG parity)
+
 
 
 @struct.dataclass
@@ -101,6 +101,8 @@ class CC4State:
 
     red_sessions: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
     red_session_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — exact session multiplicity
+    # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int32 — only RedAbstractSession-type (primary+phishing)
+    red_abstract_session_count: chex.Array
     red_suspicious_process_count: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — known suspicious user pids
     red_privilege: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) int — 0/1/2
     red_discovered_hosts: chex.Array  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS) bool
@@ -224,7 +226,7 @@ def create_initial_const() -> CC4Const:
         use_blue_decoy_type_choices=jnp.array(False),
         green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
         use_green_host_order=jnp.array(False),
-        cyborg_random_exploit_source=jnp.array(False),
+
     )
 
 
@@ -241,6 +243,7 @@ def create_initial_state() -> CC4State:
         ot_service_stopped=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
         red_sessions=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
         red_session_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
+        red_abstract_session_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_suspicious_process_count=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_privilege=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32),
         red_discovered_hosts=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),

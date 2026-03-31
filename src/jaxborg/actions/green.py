@@ -232,6 +232,14 @@ def _apply_single_green(
         session_counts.at[red_agent_idx, host_idx].set(new_count_for_agent),
         session_counts,
     )
+    abstract_counts = state.red_abstract_session_count
+    had_abstract = jnp.where(red_agent >= 0, abstract_counts[red_agent_idx, host_idx], 0)
+    new_abstract = had_abstract + phish_creates_session.astype(jnp.int32)
+    red_abstract_session_count = jnp.where(
+        phish_creates_session,
+        abstract_counts.at[red_agent_idx, host_idx].set(new_abstract),
+        abstract_counts,
+    )
     red_session_is_abstract = jnp.where(
         phish_creates_session,
         state.red_session_is_abstract.at[red_agent_idx, host_idx].set(True),
@@ -392,6 +400,7 @@ def _apply_single_green(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
+        red_abstract_session_count=red_abstract_session_count,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,

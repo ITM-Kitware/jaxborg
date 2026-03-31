@@ -29,6 +29,11 @@ def apply_withdraw(
         session_counts.at[agent_id, target_host].set(0),
         session_counts,
     )
+    red_abstract_session_count = jnp.where(
+        success,
+        state.red_abstract_session_count.at[agent_id, target_host].set(0),
+        state.red_abstract_session_count,
+    )
     red_suspicious_process_count = jnp.where(
         success,
         state.red_suspicious_process_count.at[agent_id, target_host].set(0),
@@ -134,6 +139,7 @@ def apply_withdraw(
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
+        red_abstract_session_count=red_abstract_session_count,
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_session_privileged_pids=red_session_privileged_pids,

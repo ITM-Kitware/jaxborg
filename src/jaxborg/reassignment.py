@@ -34,6 +34,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     needs_reassign = (session_counts > 0) & ~allowed & const.host_active[None, :]
 
     red_session_count = session_counts
+    red_abstract_session_count = state.red_abstract_session_count
     red_suspicious_process_count = state.red_suspicious_process_count
     red_privilege = state.red_privilege
     red_session_is_abstract = state.red_session_is_abstract
@@ -58,7 +59,9 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         src_abstract = red_session_is_abstract[src]
         src_abstract_rank = red_abstract_host_rank[src]
 
+        src_abstract_counts = red_abstract_session_count[src]
         red_session_count = red_session_count.at[src].set(jnp.where(src_mask, 0, src_counts))
+        red_abstract_session_count = red_abstract_session_count.at[src].set(jnp.where(src_mask, 0, src_abstract_counts))
         red_suspicious_process_count = red_suspicious_process_count.at[src].set(jnp.where(src_mask, 0, src_suspicious))
         red_privilege = red_privilege.at[src].set(jnp.where(src_mask, 0, src_privilege))
         red_session_is_abstract = red_session_is_abstract.at[src].set(jnp.where(src_mask, False, src_abstract))
@@ -79,7 +82,11 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             moved_suspicious = jnp.where(dst_mask, src_suspicious, 0)
             moved_privilege = jnp.where(dst_mask, src_privilege, 0)
 
+            moved_abstract = jnp.where(dst_mask, src_abstract_counts, 0)
             red_session_count = red_session_count.at[dst].set(red_session_count[dst] + moved_counts)
+            red_abstract_session_count = red_abstract_session_count.at[dst].set(
+                red_abstract_session_count[dst] + moved_abstract
+            )
             red_suspicious_process_count = red_suspicious_process_count.at[dst].set(
                 red_suspicious_process_count[dst] + moved_suspicious
             )
@@ -294,6 +301,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
+        red_abstract_session_count=red_abstract_session_count,
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_session_privileged_pids=red_session_privileged_pids,

@@ -390,6 +390,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
+        red_abstract_session_count=red_session_count,  # at reset, all sessions are abstract (primary)
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,

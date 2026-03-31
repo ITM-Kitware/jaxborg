@@ -321,6 +321,9 @@ def apply_green_agents_vmapped(
         new_state = carry_state.replace(
             red_sessions=carry_state.red_sessions.at[red_idx, h].set(True),
             red_session_count=session_counts.at[red_idx, h].set(new_count),
+            red_abstract_session_count=carry_state.red_abstract_session_count.at[red_idx, h].set(
+                carry_state.red_abstract_session_count[red_idx, h] + 1
+            ),
             red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(True),
             red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(assigned_rank),
             red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(next_rank + 1),

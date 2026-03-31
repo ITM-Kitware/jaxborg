@@ -62,37 +62,40 @@ because the CybORG behavior is buggy/inefficient and matching it would hurt trai
 
 ### Exploit source-session selection
 
-CybORG's `FiniteStateRedAgent` picks a **random session ID** from the action space
-when creating `ExploitRemoteService`. Scan results (`ports` dict) are stored
-**per-session** — only the session that performed the scan has the target's port
-data. When green phishing adds extra sessions to a source host, the FSM may
-randomly pick a phishing session (empty `ports`) instead of the scanning session,
-causing the exploit to fail (`self.ip_address not in session.ports`).
+CybORG's `FiniteStateRedAgent` picks a **random session ID** from `server_session`
+(the action-space session dict) when creating `ExploitRemoteService`. This is an
+implementation quirk: the `session` parameter falls through to the generic
+`np_random.choice(options)` path (no special handling like `hostname` or
+`ip_address` get). Scan results (`ports` dict) are stored **per-session** — only
+the session that performed the scan has the target's port data. When the FSM picks
+a session that didn't scan the target, the exploit fails with
+`self.ip_address not in session.ports`. The effect only manifests when green
+phishing is active (adding extra abstract sessions to `server_session`).
+
+**Key mechanism:** `server_session` only contains `RedAbstractSession`-type sessions
+(primary + green phishing). Concrete exploit sessions (SSH, RED_REVERSE_SHELL) have
+session types not in `SESSION_TYPES`, so `ActionSpace.update()` never adds them.
+Additionally, `_filter_obs` strips sessions on hosts outside the agent's
+`allowed_subnets`. This keeps `server_session` small (~3-5 entries at step 500)
+despite 10-15+ total active sessions. CybORG exploit failure rate is ~73%.
 
 JAXborg uses **deterministic anchor-based source selection**
 (`select_scan_execution_source_host`) and a per-(agent, target, source) scan
 ownership matrix (`red_scanned_source_hosts`). This always finds the correct
 source host regardless of how many other sessions exist.
 
-**Impact:** With green agents active, CybORG's red agents waste exploit turns
-picking wrong sessions, slowing red progression. JAXborg's red spreads ~15%
-faster to unique hosts (68 vs 60 unique (agent,host) pairs) and reaches ROOT on
-~35% more hosts (67 vs 50 ROOT pairs) over 500 steps with blue=Sleep. This
-produces a systematic ~1900-point reward gap (JAX worse = harder environment for
-blue) that shrinks to ~300 points with a trained blue policy.
-
-With green disabled (red-only), the gap is ≈ 0 — confirming the divergence is
-purely from the green-phishing ↔ exploit-session interaction.
-
-**Parity flag:** `FsmRedCC4Env(cyborg_random_exploit_source=True)` adds a
-probabilistic exploit penalty based on session distribution. The exact
-CybORG mechanism is still under investigation — the simple model
-over-corrects, suggesting CybORG's FSM action_space may only expose
-session 0 (abstract) rather than all sessions.
+**Parity model (always on):** JAXborg models this by adding a probabilistic
+exploit failure: `P(success) = 1 / N` where N = abstract sessions in allowed
+subnets (tracked via `red_abstract_session_count`). Baseline dynamics gap is
+≈ 0 (±200 pts over 10 episodes, blue=Sleep).
 
 - CybORG: `Actions/AbstractActions/ExploitRemoteService.py:175` (`session.ports` check)
 - CybORG: `Agents/SimpleAgents/FiniteStateRedAgent.py:330` (session selection)
-- JAXborg: `src/jaxborg/actions/red_common.py:150` (`exploit_common_preconditions` + `cyborg_random_exploit_source` flag)
+- CybORG: `Shared/ActionSpace.py:208-211` (`SESSION_TYPES` filter)
+- CybORG: `Simulator/SimulationController.py:1054-1066` (`_filter_obs` by allowed subnets)
+- CybORG: `Actions/ConcreteActions/RedSessionCheck.py:58-65` (end-turn reports all sessions)
+- JAXborg: `src/jaxborg/actions/red_common.py` (`exploit_common_preconditions`)
+- JAXborg: `src/jaxborg/state.py` (`red_abstract_session_count`)
 
 ### action_cost not modeled
 
