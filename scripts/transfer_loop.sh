@@ -20,9 +20,16 @@
 #   TOPOLOGY_MODE       - topology mode for training (default: bank)
 
 set -euo pipefail
-# Resolve repo root from this script's real path (works under sbatch/srun too)
-SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-cd "$SCRIPT_DIR/.."
+# Resolve repo root. Under sbatch, BASH_SOURCE points to spool dir, so
+# prefer JAXBORG_ROOT env var or SLURM_SUBMIT_DIR, falling back to script path.
+if [ -n "${JAXBORG_ROOT:-}" ]; then
+    cd "$JAXBORG_ROOT"
+elif [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
+    cd "$SLURM_SUBMIT_DIR"
+else
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    cd "$SCRIPT_DIR/.."
+fi
 
 # Ensure Ctrl+C kills child processes (uv/python/JAX)
 trap 'echo ""; echo "Interrupted. Killing children..."; kill 0; exit 130' INT TERM
