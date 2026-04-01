@@ -69,13 +69,13 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
         hydra.run.dir="$ROUND_DIR/hydra" \
         hydra.job.chdir=True
 
-    # Training writes to EXP_DIR/ippo_cc4/; archive to per-round dir
-    TRAIN_SRC="$EXP_DIR/ippo_cc4"
-    CHECKPOINT="$TRAIN_SRC/checkpoint_final.pkl"
-    if [ ! -f "$CHECKPOINT" ]; then
-        echo "ERROR: No checkpoint at $CHECKPOINT after training"
+    # Training writes to EXP_DIR/ippo_cc4_{timestamp}/; find latest checkpoint
+    CHECKPOINT=$(ls -t "$EXP_DIR"/ippo_cc4*/checkpoint_final.pkl 2>/dev/null | head -1)
+    if [ -z "$CHECKPOINT" ]; then
+        echo "ERROR: No checkpoint found in $EXP_DIR/ippo_cc4*/"
         exit 1
     fi
+    TRAIN_SRC="$(dirname "$CHECKPOINT")"
     cp "$CHECKPOINT" "$ROUND_DIR/checkpoint_final.pkl"
     cp "$TRAIN_SRC/metrics.jsonl" "$ROUND_DIR/metrics.jsonl" 2>/dev/null || true
     cp "$TRAIN_SRC/config.json" "$ROUND_DIR/config.json" 2>/dev/null || true
