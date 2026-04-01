@@ -2,7 +2,7 @@
 
 ## Project Context
 
-You are working in **${WORKTREE}** on the **parity-debug** branch.
+You are working in **${WORKTREE}**.
 
 JAXborg is a JAX port of CybORG CAGE Challenge 4 — a multi-agent cybersecurity
 simulation (9 subnets, ~80 hosts, 5 blue agents, 6 red agents, 3 mission phases).
@@ -46,12 +46,14 @@ We follow a 4-level hierarchical verification approach:
 Failures at higher levels trigger root-cause analysis and new L1/L2 regressions.
 The iterative cycle drives convergence — not any single pass.
 
-### Current State (as of 2026-03-24)
+### Current State (as of 2026-04-01)
 
-**L1/L2**: Clean (782 + 21 pass).
+**L1**: Clean (776 subsystem tests pass).
+**L2**: 42 pass, 6 fail (pre-existing failures in test_fsm_red_env_differential.py).
 **L3 random-blue**: Clean (50/50 pass).
 **L3 trained-policy**: 99/100 pass. One remaining failure (seed_62, step 23) due to a **green recorder gap**.
-**L4**: Matched-state transfer shows 0 gap. Independent eval gap is ~891 pts (methodology + compounding divergence).
+**L4**: TOST shows +2858pt gap (JAXborg better). Baseline dynamics (blue=Sleep) gap ≈ 0.
+The L4 gap is directional and systematic — trained policy transfers poorly.
 
 ### Recent Fix: Execution Order Sync (commit 1920924)
 
