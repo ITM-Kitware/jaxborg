@@ -20,11 +20,19 @@ MAX_ITER="${MAX_ITER:-50}"
 FUZZ_SEEDS="${FUZZ_SEEDS:-20}"
 FUZZ_STEPS="${FUZZ_STEPS:-500}"
 
+# L4 training config
+TRAIN_TIMESTEPS="${TRAIN_TIMESTEPS:-5000000}"
+TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-1024}"
+TOPOLOGY_MODE="${TOPOLOGY_MODE:-cyborg_bank}"
+TOPOLOGY_BANK_SIZE="${TOPOLOGY_BANK_SIZE:-32}"
+EVAL_EPISODES="${EVAL_EPISODES:-10}"
+EXP_DIR="${JAXBORG_EXP_DIR:-${WORKTREE}/jaxborg-exp}"
+
 # Trained-policy checkpoint for L3/L4 (auto-discover or set via env)
-BLUE_CHECKPOINT="${BLUE_CHECKPOINT:-$(find /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp -name 'checkpoint_*.pkl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)}"
+BLUE_CHECKPOINT="${BLUE_CHECKPOINT:-$(find "${EXP_DIR}" -name 'checkpoint_final.pkl' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)}"
 export BLUE_CHECKPOINT
 
-# CPU-only — keep GPUs free for training
+# CPU-only for L1-L3 — L4 uses srun for GPU
 export CUDA_VISIBLE_DEVICES=""
 export JAX_PLATFORMS=cpu
 
@@ -62,18 +70,17 @@ Monitor/Remove) that random blue never does, catching action-combination bugs.
 Requires BLUE_CHECKPOINT env var.
 
 Test command: BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
-    [l4]="Cross-backend policy transfer evaluation. Runs the JAXborg-trained policy in
-both JAXborg and CybORG independently, computes TOST equivalence.
+    [l4]="Cross-backend policy transfer (TOST). Trains a fresh IPPO policy in JAXborg
+via slurm (GPU), then evaluates it independently in both JAXborg and CybORG.
 A failing L4 feeds back into targeted L1/L2/L3 tests.
 
-Eval command: uv run python scripts/eval_transfer.py \\
-  --checkpoint ${BLUE_CHECKPOINT} --episodes 10 --stochastic --seed 42"
+Steps: (1) train via srun --gres=gpu:1, (2) eval_transfer.py --independent-rollouts"
 )
 declare -A LEVEL_COMMANDS=(
     [l1]="uv run pytest tests/subsystems/ -v -x -n auto"
     [l2]="uv run pytest tests/differential/ -v -x -n auto"
     [l3]="BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
-    [l4]="uv run python scripts/eval_transfer.py --checkpoint ${BLUE_CHECKPOINT} --episodes 10 --stochastic --seed 42"
+    [l4]="RUN_L4_TRAINING"
 )
 
 # --- Helper Functions ---
@@ -210,27 +217,89 @@ build_prompt() {
     echo "$prompt"
 }
 
+run_l4_train_and_eval() {
+    # Step 1: Train fresh IPPO policy via srun (GPU)
+    local round_dir="${EXP_DIR}/karten_l4/round_$(date +%Y%m%d_%H%M)"
+    mkdir -p "$round_dir"
+
+    echo "  L4 Step 1: Training IPPO (${TRAIN_TIMESTEPS} steps, ${TRAIN_NUM_ENVS} envs)..."
+    local train_seed=$((RANDOM % 1000))
+
+    # Unset CPU-only vars for GPU training
+    (
+        unset CUDA_VISIBLE_DEVICES JAX_PLATFORMS
+        export JAX_ENABLE_COMPILATION_CACHE=1
+        export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
+        export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
+        srun --gres=gpu:1 --mem=64G --partition=community \
+            uv run python scripts/train_ippo_cc4.py \
+                TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
+                NUM_ENVS="$TRAIN_NUM_ENVS" \
+                TOPOLOGY_MODE="$TOPOLOGY_MODE" \
+                +TOPOLOGY_BANK_SIZE="$TOPOLOGY_BANK_SIZE" \
+                SEED="$train_seed" \
+                hydra.run.dir="$round_dir/hydra" \
+                hydra.job.chdir=True
+    ) >> "${HANDOFF_DIR}/test_output.txt" 2>&1
+
+    # Find latest checkpoint
+    local checkpoint
+    checkpoint=$(ls -t "${EXP_DIR}"/ippo_cc4*/checkpoint_final.pkl 2>/dev/null | head -1)
+    if [[ -z "$checkpoint" ]]; then
+        echo "ERROR: No checkpoint found after training" >> "${HANDOFF_DIR}/test_output.txt"
+        return 1
+    fi
+    cp "$checkpoint" "$round_dir/checkpoint_final.pkl"
+    BLUE_CHECKPOINT="$checkpoint"
+    export BLUE_CHECKPOINT
+    echo "  Checkpoint: $checkpoint"
+
+    # Step 2: Eval transfer (needs GPU for JAX rollouts)
+    echo "  L4 Step 2: Evaluating transfer (${EVAL_EPISODES} episodes, independent)..."
+    (
+        unset CUDA_VISIBLE_DEVICES JAX_PLATFORMS
+        export JAX_ENABLE_COMPILATION_CACHE=1
+        export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
+        export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
+        srun --gres=gpu:1 --mem=64G --partition=community \
+            uv run python scripts/eval_transfer.py \
+                --checkpoint "$checkpoint" \
+                --episodes "$EVAL_EPISODES" \
+                --independent-rollouts \
+                --baselines \
+                --seed "$train_seed"
+    ) >> "${HANDOFF_DIR}/test_output.txt" 2>&1
+}
+
 run_tests() {
     local level="$1"
     local cmd="${LEVEL_COMMANDS[$level]}"
     echo "=== Running ${LEVEL_NAMES[$level]} ==="
-    echo "Command: $cmd"
-    echo ""
 
-    # Run tests, capture output
-    set +e
-    (cd "$WORKTREE" && eval "$cmd") > "${HANDOFF_DIR}/test_output.txt" 2>&1
-    local exit_code=$?
-    set -e
-
-    # L4 is an eval script — check TOST verdict in output instead of exit code
+    # L4 has special handling: train + eval via GPU
     if [[ "$level" == "l4" ]]; then
+        echo "Training + evaluating via slurm GPU..."
+        echo ""
+        > "${HANDOFF_DIR}/test_output.txt"
+        set +e
+        run_l4_train_and_eval
+        local exit_code=$?
+        set -e
+
+        # Check TOST verdict
         if grep -q "EQUIVALENT" "${HANDOFF_DIR}/test_output.txt" && \
            ! grep -q "NOT EQUIVALENT" "${HANDOFF_DIR}/test_output.txt"; then
             exit_code=0
         else
             exit_code=1
         fi
+    else
+        echo "Command: $cmd"
+        echo ""
+        set +e
+        (cd "$WORKTREE" && eval "$cmd") > "${HANDOFF_DIR}/test_output.txt" 2>&1
+        local exit_code=$?
+        set -e
     fi
 
     # Show summary
@@ -336,6 +405,16 @@ for lvl, info in data.items():
                 echo "!!! Review ${HANDOFF_DIR}/handoff.md for details"
                 echo "!!! Add targeted tests or refine the prompt, then re-run"
                 exit 2
+            fi
+
+            # L4 failure feedback: agent fixed code, reset L1-L3 to re-verify
+            # before retraining (paper's "feed back into earlier stages")
+            if [[ "$current_level" == "l4" ]]; then
+                echo ">>> L4 fix applied — resetting L1-L3 for re-verification"
+                for reset_lvl in l1 l2 l3; do
+                    update_status "$reset_lvl" "unknown"
+                done
+                unset LEVEL 2>/dev/null || true
             fi
         fi
 
