@@ -83,7 +83,8 @@ class CC4Const:
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
     green_host_order: chex.Array  # (MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS) int32 — per-step full execution order
     use_green_host_order: chex.Array  # scalar bool — True = use CybORG-synced order, False = default order
-
+    red_exploit_session_ok: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) bool — precomputed exploit session-ok
+    use_red_exploit_session_ok: chex.Array  # scalar bool — True = use precomputed session-selection result
 
 
 @struct.dataclass
@@ -226,7 +227,8 @@ def create_initial_const() -> CC4Const:
         use_blue_decoy_type_choices=jnp.array(False),
         green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
         use_green_host_order=jnp.array(False),
-
+        red_exploit_session_ok=jnp.ones((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.bool_),
+        use_red_exploit_session_ok=jnp.array(False),
     )
 
 
