@@ -84,18 +84,22 @@ JAXborg uses **deterministic anchor-based source selection**
 ownership matrix (`red_scanned_source_hosts`). This always finds the correct
 source host regardless of how many other sessions exist.
 
-**Parity model (always on):** JAXborg models this by adding a probabilistic
-exploit failure: `P(success) = 1 / N` where N = abstract sessions in allowed
-subnets (tracked via `red_abstract_session_count`). Baseline dynamics gap is
-≈ 0 (±200 pts over 10 episodes, blue=Sleep).
+**JAXborg replication:** JAXborg replicates CybORG's session selection at FSM
+action-creation time (matching CybORG's `get_action()` timing). It counts N =
+abstract sessions in allowed subnets (via `red_abstract_session_count`), then rolls
+1/N — exactly one of the N sessions holds scan data, so `P(success) = 1/N`.
+The result is stored in `red_pending_exploit_session_ok` and read at exploit
+execution time. In the differential harness, the outcome is synced from CybORG's
+actual `server_session` via the `red_exploit_session_ok` precomputed array.
 
 - CybORG: `Actions/AbstractActions/ExploitRemoteService.py:175` (`session.ports` check)
 - CybORG: `Agents/SimpleAgents/FiniteStateRedAgent.py:330` (session selection)
 - CybORG: `Shared/ActionSpace.py:208-211` (`SESSION_TYPES` filter)
 - CybORG: `Simulator/SimulationController.py:1054-1066` (`_filter_obs` by allowed subnets)
 - CybORG: `Actions/ConcreteActions/RedSessionCheck.py:58-65` (end-turn reports all sessions)
+- JAXborg: `src/jaxborg/agents/fsm_red.py` (`_compute_exploit_session_ok`)
 - JAXborg: `src/jaxborg/actions/red_common.py` (`exploit_common_preconditions`)
-- JAXborg: `src/jaxborg/state.py` (`red_abstract_session_count`)
+- JAXborg: `src/jaxborg/state.py` (`red_abstract_session_count`, `red_pending_exploit_session_ok`)
 
 ### action_cost not modeled
 

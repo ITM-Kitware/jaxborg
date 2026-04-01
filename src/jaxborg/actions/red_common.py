@@ -147,6 +147,17 @@ def exploit_common_preconditions(
     target_host: chex.Array,
     key: chex.Array = None,
 ) -> chex.Array:
+    """Check base preconditions + CybORG session-selection logic for exploits.
+
+    CybORG's FSM picks a random session ID from server_session (which only
+    contains RedAbstractSession-type sessions).  Only the session that scanned
+    the target has ports — so P(success) = 1/N where N = abstract sessions in
+    allowed subnets.
+
+    In the differential harness, the outcome is synced from CybORG's actual
+    server_session via the precomputed red_exploit_session_ok array in CC4Const.
+    In training, the 1/N roll is performed using JAX RNG.
+    """
     is_active = const.host_active[target_host]
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
     target_idx = jnp.clip(target_host, 0, state.red_scanned_hosts.shape[1] - 1)
@@ -161,23 +172,21 @@ def exploit_common_preconditions(
     if key is None:
         return base
 
-    # CybORG session-selection model: CybORG's FSM picks a random session ID
-    # from server_session (the action-space session dict).  server_session only
-    # contains RedAbstractSession-type sessions (primary + phishing) — concrete
-    # exploit sessions (SSH, RED_REVERSE_SHELL) are filtered out by
-    # ActionSpace.update() because their session_type is not in SESSION_TYPES.
-    # Additionally, _filter_obs strips sessions on hosts outside the agent's
-    # allowed_subnets.
-    #
-    # Only the ONE session that scanned the target has ports for that target.
-    # Model: P(success) = 1 / N, where N = abstract sessions in allowed subnets.
-    abstract_counts = state.red_abstract_session_count[agent_id]  # (GLOBAL_MAX_HOSTS,)
-    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]  # (GLOBAL_MAX_HOSTS,) bool
+    # Harness mode: use precomputed session-ok from CybORG's actual server_session.
+    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_exploit_session_ok.shape[0] - 1))
+    precomputed_ok = const.red_exploit_session_ok[time_idx, agent_id]
+
+    # Training mode: replicate CybORG's session selection logic.
+    # CybORG's FSM picks uniformly from server_session (abstract sessions in
+    # allowed subnets).  Only 1 of N sessions has scan data for the target.
+    abstract_counts = state.red_abstract_session_count[agent_id]
+    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]
     visible_sessions = jnp.maximum(jnp.sum(abstract_counts * allowed_hosts), jnp.int32(1))
-    # Roll uniform [0, visible) — success only if roll == 0 (1-in-N chance).
     cyborg_roll = jax.random.randint(key, (), 0, visible_sessions)
-    cyborg_ok = cyborg_roll == 0
-    return base & cyborg_ok
+    roll_ok = cyborg_roll == 0
+
+    session_ok = jnp.where(const.use_red_exploit_session_ok, precomputed_ok, roll_ok)
+    return base & session_ok
 
 
 def select_scan_source_host(

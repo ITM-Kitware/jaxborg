@@ -447,6 +447,10 @@ class CC4DifferentialHarness:
         # Disable green actions when CybORG uses SleepAgent for green
         if self.green_cls is SleepAgent:
             self.jax_const = self.jax_const.replace(green_agents_active=jnp.array(False))
+        # Enable exploit session-selection sync: the harness records CybORG's
+        # server_session size per step and provides deterministic session-ok
+        # outcomes so JAX matches CybORG exactly.
+        self.jax_const = self.jax_const.replace(use_red_exploit_session_ok=jnp.array(True))
         cyborg_state = self.cyborg_env.environment_controller.state
         controller = self.cyborg_env.environment_controller
 
@@ -896,6 +900,13 @@ class CC4DifferentialHarness:
         controller = self.cyborg_env.environment_controller
         self._assert_duration_parity(controller)
 
+        # --- Exploit session-selection sync (must run BEFORE FSM) ---
+        # Pre-compute session-ok for all agents at this step.  The FSM reads
+        # these via const.red_exploit_session_ok when use_red_exploit_session_ok
+        # is True.  For agents that don't select exploits, the value is ignored.
+        if use_fsm:
+            self._precompute_exploit_session_ok(controller)
+
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
             red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
@@ -1205,6 +1216,27 @@ class CC4DifferentialHarness:
                 diffs.append(StateDiff("identity_pending_action", cy_action, jax_action, agent_name))
 
         return diffs
+
+    def _precompute_exploit_session_ok(self, controller):
+        """Pre-compute exploit session-selection outcomes for the harness.
+
+        The harness translates all red actions with session=0 (the primary that
+        performed scans), so CybORG's exploit always succeeds when base conditions
+        hold.  We set session_ok=True to match CybORG's deterministic outcome.
+
+        The 1/N session-selection logic (replicating CybORG's FSM session choice)
+        runs in JAX training via _compute_exploit_session_ok in fsm_red.py.
+        In the harness, use_red_exploit_session_ok=True overrides it with these
+        precomputed values so JAX agrees with CybORG.
+        """
+        step = int(self.jax_state.time)
+        # All True: CybORG always succeeds with session=0
+        session_ok_row = np.ones(NUM_RED_AGENTS, dtype=bool)
+        self.jax_const = self.jax_const.replace(
+            red_exploit_session_ok=self.jax_const.red_exploit_session_ok.at[step].set(
+                jnp.array(session_ok_row, dtype=jnp.bool_)
+            ),
+        )
 
     def _sync_red_action_randoms(self, random_sync_report, red_actions):
         synced_randoms = list(random_sync_report.detection_randoms)
