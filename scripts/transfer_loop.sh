@@ -86,6 +86,7 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     EVAL_OUTPUT=$(uv run python scripts/eval_transfer.py \
         --checkpoint "$CHECKPOINT" \
         --episodes "$EVAL_EPISODES" \
+        --independent-rollouts \
         --baselines \
         --seed "$round" 2>&1) || true
 
