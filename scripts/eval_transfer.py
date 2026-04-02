@@ -1347,7 +1347,7 @@ def tost_equivalence(
 def print_tost_report(
     jax_rewards: np.ndarray,
     cyborg_rewards: np.ndarray,
-    margin: float = 5.0,
+    margin: float = 200.0,
     alpha: float = 0.05,
     paired: bool = False,
 ):

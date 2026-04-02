@@ -183,6 +183,41 @@ archive_handoff() {
     fi
 }
 
+build_verification_status() {
+    # Build dynamic status summary from verification_status.json and git log
+    python3 -c "
+import json, subprocess, os
+status_file = '${STATUS_FILE}'
+try:
+    with open(status_file) as f:
+        data = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    data = {}
+
+lines = []
+for lvl in ['l1', 'l2', 'l3', 'l4']:
+    info = data.get(lvl, {})
+    status = info.get('status', 'unknown')
+    iters = info.get('iterations', 0)
+    lines.append(f'**{lvl.upper()}**: {status} ({iters} iterations)')
+
+# Recent commits for context
+try:
+    log = subprocess.check_output(
+        ['git', 'log', '--oneline', '-5'],
+        cwd='${WORKTREE}', text=True, stderr=subprocess.DEVNULL
+    ).strip()
+    lines.append('')
+    lines.append('Recent commits:')
+    for line in log.split(chr(10)):
+        lines.append(f'- \`{line}\`')
+except Exception:
+    pass
+
+print(chr(10).join(lines))
+"
+}
+
 build_prompt() {
     local level="$1"
     local iter="$2"
@@ -201,6 +236,10 @@ build_prompt() {
         test_output=$(tail -150 "${HANDOFF_DIR}/test_output.txt")
     fi
 
+    # Build dynamic verification status
+    local verification_status
+    verification_status=$(build_verification_status)
+
     # Read template and interpolate
     local prompt
     prompt=$(cat "$PROMPT_TEMPLATE")
@@ -213,6 +252,7 @@ build_prompt() {
     prompt="${prompt//\$\{LEVEL_DESCRIPTION\}/$level_desc}"
     prompt="${prompt//\$\{TEST_OUTPUT\}/$test_output}"
     prompt="${prompt//\$\{HANDOFF_CONTENT\}/$handoff_content}"
+    prompt="${prompt//\$\{VERIFICATION_STATUS\}/$verification_status}"
 
     echo "$prompt"
 }
@@ -324,12 +364,26 @@ spawn_agent() {
     local prompt
     prompt=$(build_prompt "$level" "$iter")
 
-    # Invoke claude in non-interactive mode
-    (cd "$WORKTREE" && claude -p "$prompt" \
-        --allowedTools "Read,Edit,Write,Bash(uv run*),Bash(git add*),Bash(git commit*),Bash(git status*),Bash(git diff*),Bash(git log*),Bash(ls*),Bash(python3*),Bash(cat .agent_handoff*),Grep,Glob" \
-    ) 2>&1 | tee "${HANDOFF_DIR}/agent_output_${iter}.txt"
+    # Write prompt to temp file (too large for shell arg on some systems)
+    local prompt_file
+    prompt_file=$(mktemp "${HANDOFF_DIR}/prompt_XXXXXX.md")
+    echo "$prompt" > "$prompt_file"
 
-    echo "=== Agent finished ==="
+    # Invoke claude in non-interactive mode with 2-hour timeout.
+    # Broad tool permissions — the agent needs grep, find, python, etc.
+    timeout 7200 claude -p "$(cat "$prompt_file")" \
+        --allowedTools "Read,Edit,Write,Bash,Grep,Glob" \
+        2>&1 | tee "${HANDOFF_DIR}/agent_output_${iter}.txt"
+    local agent_exit=${PIPESTATUS[0]}
+    rm -f "$prompt_file"
+
+    echo "=== Agent finished (exit=$agent_exit) ==="
+
+    if [[ $agent_exit -eq 124 ]]; then
+        echo "!!! Agent timed out after 2 hours"
+        echo "$(date -Iseconds) | iter=${iter} | ${level} | TIMEOUT" \
+            >> "${HANDOFF_DIR}/loop_log.txt"
+    fi
 
     # Check if agent hit rate limit
     if grep -qi "hit your limit\|rate.limit\|resets.*America" "${HANDOFF_DIR}/agent_output_${iter}.txt" 2>/dev/null; then
@@ -414,6 +468,8 @@ for lvl, info in data.items():
                 for reset_lvl in l1 l2 l3; do
                     update_status "$reset_lvl" "unknown"
                 done
+                # L4 always trains fresh, so no checkpoint invalidation needed.
+                # L3 reuses old checkpoints (tests parity, not transfer).
                 unset LEVEL 2>/dev/null || true
             fi
         fi

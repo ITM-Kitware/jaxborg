@@ -56,10 +56,19 @@ def apply_scan(
         state.red_scan_source_pid,
     )
 
+    # CybORG's _process_new_observations adds hosts from ANY observation to
+    # host_states.  A successful scan reveals the target in the observation.
+    fsm_host_entered = jnp.where(
+        success,
+        state.fsm_host_entered.at[agent_id, target_host].set(True),
+        state.fsm_host_entered,
+    )
+
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
         red_scan_source_pid=red_scan_source_pid,
         red_activity_this_step=activity,
+        fsm_host_entered=fsm_host_entered,
     )
     next_state = sync_scan_memory_fields(next_state, const, source_matrix=source_matrix)
     return next_state
