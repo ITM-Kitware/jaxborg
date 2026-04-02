@@ -12,13 +12,13 @@ updates use flax.struct.dataclass with `state.replace()` and `array.at[idx].set(
 ### Key Files
 - `src/jaxborg/state.py` — CC4State/CC4Const definitions
 - `src/jaxborg/actions/` — per-action modules (red_exploit.py, blue_monitor.py, green.py, etc.)
-- `src/jaxborg/env.py` — apply_all_actions (training code path), execution order
+- `src/jaxborg/env.py` — apply_all_actions_typed (training path), apply_all_actions_in_order (harness path), execution order shuffling
 - `src/jaxborg/reassignment.py` — cross-subnet session reassignment after each step
 - `src/jaxborg/topology.py` — static topology construction
 - `src/jaxborg/cyborg_green_recorder.py` — records CybORG green/red/blue action events per step
 - `tests/differential/harness.py` — CC4DifferentialHarness (syncs CybORG events into JAX)
 - `tests/differential/state_comparator.py` — compare_fast, _ERROR_FIELDS classification
-- `tests/l3/test_trained_blue_policy.py` — L3 trained-policy differential test (100 seeds × 500 steps)
+- `tests/l3/` — L3 rollout tests (random blue + trained policy)
 - CybORG source: `.venv/lib/python3.11/site-packages/CybORG/`
 
 ### Commands
@@ -30,7 +30,7 @@ uv run pytest tests/subsystems/ -v -x -n auto   # L1 property tests
 uv run pytest tests/differential/ -v -x -n auto  # L2 interaction tests
 BLUE_CHECKPOINT=$BLUE_CHECKPOINT uv run pytest tests/l3/ -v -x -n auto  # L3 full rollout
 uv run python scripts/eval_transfer.py \
-  --checkpoint $BLUE_CHECKPOINT --episodes 10 --stochastic --seed 42  # L4 transfer eval
+  --checkpoint $BLUE_CHECKPOINT --episodes 30 --independent-rollouts --seed 42  # L4 transfer eval
 uv run ruff check --fix . && uv run ruff format .   # lint
 ```
 
@@ -41,61 +41,62 @@ We follow a 4-level hierarchical verification approach:
 - **L1 Property**: Individual component tests in isolation (tests/subsystems/)
 - **L2 Interaction**: Cross-module differential tests (tests/differential/)
 - **L3 Rollout**: Full episode comparison — random blue (50 seeds × 500 steps) AND trained IPPO policy (100 seeds × 500 steps)
-- **L4 Transfer**: Train in JAX, evaluate independently in both JAXborg + CybORG (TOST equivalence)
+- **L4 Transfer**: Train in JAX, evaluate independently in both JAXborg + CybORG (TOST equivalence, Δ=200)
 
 Failures at higher levels trigger root-cause analysis and new L1/L2 regressions.
 The iterative cycle drives convergence — not any single pass.
 
-### Current State (as of 2026-04-01)
+### Current Verification Status
 
-**L1**: Clean (776 subsystem tests pass).
-**L2**: 42 pass, 6 fail (pre-existing failures in test_fsm_red_env_differential.py).
-**L3 random-blue**: Clean (50/50 pass).
-**L3 trained-policy**: 99/100 pass. One remaining failure (seed_62, step 23) due to a **green recorder gap**.
-**L4**: TOST shows +2858pt gap (JAXborg better). Baseline dynamics (blue=Sleep) gap ≈ 0.
-The L4 gap is directional and systematic — trained policy transfers poorly.
+${VERIFICATION_STATUS}
 
-### Recent Fix: Execution Order Sync (commit 1920924)
+### Architecture Notes
 
-CybORG shuffles all same-priority actions randomly each step. JAX used a fixed
-host-index order. When the trained policy's heavy Restore actions kill red sessions,
-green phishing events create sessions in different order, causing wrong anchor host
-selection after cross-subnet reassignment (`identity_primary_host` mismatch).
+**Execution order**: `apply_all_actions_typed` (training path) shuffles blue/green/red
+agent execution order within each phase per step, matching CybORG's random shuffle
+of same-priority actions. The shuffle key is derived from `key_green` with distinct
+fold-in constants per phase.
 
-**Fix**: Record CybORG's full action execution order in `cyborg_green_recorder.py`,
-store in `CC4Const.green_host_order`, sync in the harness, use in `apply_all_actions`.
+**FSM host knowledge**: `fsm_host_entered` is updated from discover, scan, exploit,
+privesc, reassignment, and a post-step bulk `|= red_sessions`. This matches CybORG's
+`_process_new_observations` which adds ALL hosts from the observation to `host_states`.
+The harness asserts (not syncs) parity via `_assert_fsm_host_entered`.
 
-### Known Issue: Green Recorder Gap
-
-Some green phishing events in CybORG are not captured by the green recorder
-(`green_randoms` is all-zeros for the affected hosts). This causes JAX to not
-create the corresponding sessions, leading to different reassignment results.
-
-**Root cause hypothesis**: The recorder wraps `controller.execute_action` and
-maps green agent names to host indices via `_agent_to_host_idx`. Some green
-agents may not have their IP→hostname→host_idx mapping established at recorder
-install time, or the action's `agent` attribute is None for certain action types.
-
-**To investigate**: Check `_agent_to_host_idx` completeness in the recorder's
-`install()` method. Compare the number of mapped green agents to the number of
-active green agents in the topology. Look for green actions with agent=None in
-the action log.
+**Session selection**: CybORG's FSM picks a random session from `server_session`
+(P(success) = 1/N). In training, JAX replicates this with a 1/N roll in
+`exploit_common_preconditions()`. In the harness, `red_exploit_session_ok` is
+precomputed — currently always True because the harness bypasses CybORG's FSM
+session selection (translates with session=0). This is a known harness limitation,
+not a production code gap.
 
 ### The Sync Problem
 
-The differential harness has syncs that copy CybORG outcomes into JAX each step.
-These are classified into two categories:
+The differential harness syncs CybORG outcomes into JAX each step. Classification:
 
-**Category A — Deterministic syncs (BEING REMOVED):**
-These copy CybORG's computed results into JAX, hiding logic bugs.
-- `forced_primary_hosts/pids` — session identity
-- Various others already removed
-
-**Category B — RNG syncs (KEPT):**
-These synchronize CybORG's np_random with JAX's jax.random. Non-trivial to remove.
+**RNG syncs (KEPT — bridge different RNG implementations):**
 - `green_randoms`, `green_host_order` (execution order), `detection_randoms`
 - `red_privesc_choices`, `red_session_check_choices/hosts`
 - `red_pid_deltas`, `blue_decoy_pid_deltas`
+- `red_exploit_session_ok` (harness limitation — always True, see above)
+
+**Removed (JAX computes its own):**
+- `forced_primary_hosts/pids`, `red_impact_attempted`, `green_lwf/asf_this_step`
+
+**Assertions (verify parity, don't sync):**
+- `_assert_fsm_host_entered` — warns on mismatch, does not copy
+
+### Common Pitfalls
+
+- **Shape bugs in shuffles/permutations**: When shuffling arrays of length
+  `GLOBAL_MAX_HOSTS` that have inactive padding, only permute active entries.
+  A raw `jax.random.permutation(key, GLOBAL_MAX_HOSTS)` will mix active and
+  inactive indices — the `fori_loop` only processes `num_green_agents` entries,
+  so active hosts shuffled beyond that range silently disappear. Always verify
+  with a test that counts how many unique active agents actually execute.
+- **Duration parity**: CybORG sets `self.duration` in `__init__` before `execute()`.
+  Duration is committed at scheduling time regardless of success/failure.
+- **Post-step fsm_host_entered**: Must be updated AFTER reassignment and session
+  checks, before the next step's FSM action selection.
 
 ## Your Task: Fix ${LEVEL_NAME} Failures
 
@@ -119,6 +120,7 @@ ${HANDOFF_CONTENT}
    - Recording gap (green recorder doesn't capture an event, so JAX misses it)
    - Translation gap (action/state translation between CybORG↔JAX is wrong)
    - Harness gap (test infrastructure bug, not a real sim gap)
+   - Shape/index bug (silent data loss from array shape mismatches — see Common Pitfalls)
 3. **Write a failing regression test FIRST** — targeted L1 or L2 test that reproduces the gap
 4. **Read CybORG source** at `.venv/lib/python3.11/site-packages/CybORG/` to understand reference behavior
 5. **Fix the JAX code** (or the recorder, if it's a recording gap) — not CybORG
