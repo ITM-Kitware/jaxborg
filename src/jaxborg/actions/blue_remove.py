@@ -242,8 +242,16 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
     # Host.create_pid() uses max(current processes) which decreases when
     # processes are removed.  When a decoy was respawned, recompute from
     # scratch using the UPDATED decoy PIDs (old ones removed).
-    max_red = jnp.max(jnp.where(new_session_pids[:, target_host, :] >= 0, new_session_pids[:, target_host, :], 0))
-    base_max_no_decoy = jnp.maximum(const.host_initial_max_pid[target_host], max_red)
+    #
+    # For the respawn PID base, use PRE-removal session PIDs.  CybORG kills
+    # suspicious PIDs one at a time (Remove.execute loops over sus_pids);
+    # when a decoy is killed and respawned, the other session PIDs that
+    # haven't been killed yet are still in the process list, so create_pid()
+    # sees them in max(processes).  Using pre-removal PIDs matches this.
+    max_red_pre_removal = jnp.max(
+        jnp.where(state.red_session_pids[:, target_host, :] >= 0, state.red_session_pids[:, target_host, :], 0)
+    )
+    base_max_no_decoy = jnp.maximum(const.host_initial_max_pid[target_host], max_red_pre_removal)
     max_decoy_updated = jnp.max(
         jnp.where(host_decoy_process_pids[target_host] >= 0, host_decoy_process_pids[target_host], 0)
     )
