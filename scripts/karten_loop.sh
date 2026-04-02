@@ -79,7 +79,7 @@ Steps: (1) train via srun --gres=gpu:1, (2) eval_transfer.py --independent-rollo
 declare -A LEVEL_COMMANDS=(
     [l1]="uv run pytest tests/subsystems/ -v -x -n auto"
     [l2]="uv run pytest tests/differential/ -v -x -n auto"
-    [l3]="BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
+    [l3]='BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto'
     [l4]="RUN_L4_TRAINING"
 )
 
