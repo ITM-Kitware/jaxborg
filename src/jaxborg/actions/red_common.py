@@ -759,6 +759,14 @@ def apply_exploit_success(
         state.red_exploit_success.at[agent_id].set(True),
         state.red_exploit_success,
     )
+    # CybORG's _process_new_observations adds hosts from ANY observation to
+    # host_states.  A successful exploit reveals the target host in the
+    # observation, so the FSM should know about it.
+    fsm_host_entered = jnp.where(
+        success,
+        state.fsm_host_entered.at[agent_id, target_host].set(True),
+        state.fsm_host_entered,
+    )
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -773,4 +781,5 @@ def apply_exploit_success(
         red_activity_this_step=activity,
         host_process_creation_pids=host_process_creation_pids,
         red_exploit_success=red_exploit_success,
+        fsm_host_entered=fsm_host_entered,
     )

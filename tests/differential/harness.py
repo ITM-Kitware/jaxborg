@@ -1224,13 +1224,15 @@ class CC4DifferentialHarness:
         performed scans), so CybORG's exploit always succeeds when base conditions
         hold.  We set session_ok=True to match CybORG's deterministic outcome.
 
-        The 1/N session-selection logic (replicating CybORG's FSM session choice)
-        runs in JAX training via _compute_exploit_session_ok in fsm_red.py.
-        In the harness, use_red_exploit_session_ok=True overrides it with these
-        precomputed values so JAX agrees with CybORG.
+        NOTE: This is a known harness limitation.  In CybORG's natural flow, the
+        FSM picks a random session from server_session — P(success) = 1/N where
+        N = abstract sessions in allowed subnets.  The harness bypasses CybORG's
+        FSM session selection (using JAX's FSM instead), so it cannot observe the
+        natural failure rate.  The 1/N roll is replicated in training mode via
+        exploit_common_preconditions() in red_common.py — this harness sync only
+        applies to differential testing where both systems must agree.
         """
         step = int(self.jax_state.time)
-        # All True: CybORG always succeeds with session=0
         session_ok_row = np.ones(NUM_RED_AGENTS, dtype=bool)
         self.jax_const = self.jax_const.replace(
             red_exploit_session_ok=self.jax_const.red_exploit_session_ok.at[step].set(
@@ -1510,28 +1512,22 @@ class CC4DifferentialHarness:
             agent._session_removal_state_change(obs_dict)
             agent.step += 1
 
-        # Category B sync: align fsm_host_entered with CybORG's host_states
-        # membership.  CybORG's _process_new_observations adds hosts from ANY
-        # observation (scan, exploit, etc.) to host_states, but JAX only sets
-        # fsm_host_entered from discover actions, privesc info_links, and
-        # reassignment.  Syncing here is test infrastructure (not outcome
-        # hiding) — it keeps the FSM discover mask aligned with CybORG's
-        # host_states dict keys.
-        self._sync_fsm_host_entered(controller)
+        # Verify fsm_host_entered parity — JAX now updates fsm_host_entered
+        # from scan/exploit/discover/privesc/reassignment, matching CybORG's
+        # _process_new_observations.  Assert rather than sync.
+        self._assert_fsm_host_entered(controller)
 
-    def _sync_fsm_host_entered(self, controller):
-        """Sync fsm_host_entered from CybORG's host_states membership.
+    def _assert_fsm_host_entered(self, controller):
+        """Assert JAX's fsm_host_entered matches CybORG's host_states membership.
 
-        CybORG's _process_new_observations adds hosts from ANY observation to
-        host_states.  JAX only sets fsm_host_entered from discover actions,
-        reassignment, and privesc info_links — missing hosts revealed via scan
-        or exploit observations.  This is a Category B sync (test infrastructure
-        for observation parity, not outcome hiding).
+        JAX now updates fsm_host_entered from scan, exploit, discover, privesc,
+        and reassignment — matching CybORG's _process_new_observations behavior.
+        Any mismatch here indicates a remaining logic gap.
         """
         from ipaddress import IPv4Address
 
+        step = int(self.jax_state.time)
         cyborg_state = controller.state
-        fsm_host_entered = self.jax_state.fsm_host_entered
         for r in range(NUM_RED_AGENTS):
             agent_name = f"red_agent_{r}"
             iface = controller.agent_interfaces.get(agent_name)
@@ -1549,8 +1545,15 @@ class CC4DifferentialHarness:
                         pass
                 if hostname is not None and hostname in self.mappings.hostname_to_idx:
                     hidx = self.mappings.hostname_to_idx[hostname]
-                    fsm_host_entered = fsm_host_entered.at[r, hidx].set(True)
-        self.jax_state = self.jax_state.replace(fsm_host_entered=fsm_host_entered)
+                    if not bool(self.jax_state.fsm_host_entered[r, hidx]):
+                        import warnings
+
+                        warnings.warn(
+                            f"fsm_host_entered mismatch at step {step}: "
+                            f"{agent_name} knows {hostname} (idx={hidx}) "
+                            f"in CybORG but not in JAX",
+                            stacklevel=2,
+                        )
 
     def _assert_duration_parity(self, controller):
         """Assert JAX and CybORG agree on which agents are busy (action in progress).
