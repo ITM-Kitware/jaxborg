@@ -29,6 +29,8 @@ from jaxborg.actions.encoding import (
     BLUE_DECOY_END,
     BLUE_DECOY_START,
     BLUE_SLEEP,
+    RED_EXPLOIT_BLUEKEEP_END,
+    RED_EXPLOIT_SSH_START,
     RED_SLEEP,
     decode_red_action,
     encode_blue_action,
@@ -294,6 +296,7 @@ class CC4DifferentialHarness:
         self.rng_key = None
         self.red_initially_active = None
         self.green_recorder = None
+        self._exploit_session_ids = {}
         self._blue_wrapper = None
         self._blue_unsupported_pending = {}
         self.last_random_sync_report = None
@@ -900,13 +903,6 @@ class CC4DifferentialHarness:
         controller = self.cyborg_env.environment_controller
         self._assert_duration_parity(controller)
 
-        # --- Exploit session-selection sync (must run BEFORE FSM) ---
-        # Pre-compute session-ok for all agents at this step.  The FSM reads
-        # these via const.red_exploit_session_ok when use_red_exploit_session_ok
-        # is True.  For agents that don't select exploits, the value is ignored.
-        if use_fsm:
-            self._precompute_exploit_session_ok(controller)
-
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
             red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
@@ -924,10 +920,23 @@ class CC4DifferentialHarness:
             fsm_actions = [jnp.int32(0) for _ in range(NUM_RED_AGENTS)]
             eligible_flags = [jnp.bool_(False) for _ in range(NUM_RED_AGENTS)]
 
+        # --- Exploit session-selection sync (must run AFTER FSM) ---
+        # Compute session-ok for agents that just selected an exploit.  Write
+        # at the EXECUTION step (submission + duration - 1) so that
+        # exploit_common_preconditions reads the correct value when the action
+        # resolves after its duration countdown.
+        if use_fsm:
+            self._precompute_exploit_session_ok(controller, red_actions)
+
         # --- CybORG side ---
         cyborg_actions = {}
         for r, action_idx in red_actions.items():
-            cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(action_idx, r, self.mappings)
+            session_id = self._exploit_session_ids.get(r, 0)
+            is_exploit = RED_EXPLOIT_SSH_START <= action_idx < RED_EXPLOIT_BLUEKEEP_END
+            override = session_id if is_exploit else None
+            cyborg_actions[f"red_agent_{r}"] = jax_red_to_cyborg(
+                action_idx, r, self.mappings, session_override=override
+            )
         if blue_actions is not None:
             for b, action_idx in blue_actions.items():
                 cyborg_actions[f"blue_agent_{b}"] = jax_blue_to_cyborg(
@@ -1217,28 +1226,75 @@ class CC4DifferentialHarness:
 
         return diffs
 
-    def _precompute_exploit_session_ok(self, controller):
+    def _precompute_exploit_session_ok(self, controller, red_actions):
         """Pre-compute exploit session-selection outcomes for the harness.
 
-        The harness translates all red actions with session=0 (the primary that
-        performed scans), so CybORG's exploit always succeeds when base conditions
-        hold.  We set session_ok=True to match CybORG's deterministic outcome.
+        CybORG's FSM picks a random session from server_session (abstract sessions
+        in allowed subnets).  Only the session that scanned the target has ports —
+        so P(success) = 1/N where N = abstract sessions in allowed subnets.
 
-        NOTE: This is a known harness limitation.  In CybORG's natural flow, the
-        FSM picks a random session from server_session — P(success) = 1/N where
-        N = abstract sessions in allowed subnets.  The harness bypasses CybORG's
-        FSM session selection (using JAX's FSM instead), so it cannot observe the
-        natural failure rate.  The 1/N roll is replicated in training mode via
-        exploit_common_preconditions() in red_common.py — this harness sync only
-        applies to differential testing where both systems must agree.
+        We replicate this 1/N roll with a separate RNG and store both:
+        - session_ok: whether the chosen session is 0 (the scanning session)
+        - _exploit_session_ids: the chosen CybORG session ID per agent, so we can
+          pass it to jax_red_to_cyborg() and let CybORG fail naturally when the
+          wrong session is picked.
+
+        Must run AFTER FSM action selection so we know which agents submitted
+        exploits.  session_ok is written at the EXECUTION step (submission + 3
+        for exploit duration 4) so exploit_common_preconditions reads the correct
+        value when the deferred action resolves.
         """
+        from CybORG.Shared.Session import RedAbstractSession
+
         step = int(self.jax_state.time)
-        session_ok_row = np.ones(NUM_RED_AGENTS, dtype=bool)
-        self.jax_const = self.jax_const.replace(
-            red_exploit_session_ok=self.jax_const.red_exploit_session_ok.at[step].set(
-                jnp.array(session_ok_row, dtype=jnp.bool_)
-            ),
-        )
+        cy_state = controller.state
+        self._exploit_session_ids = {}
+
+        for r in range(NUM_RED_AGENTS):
+            action_idx = red_actions.get(r, RED_SLEEP)
+            is_exploit = RED_EXPLOIT_SSH_START <= action_idx < RED_EXPLOIT_BLUEKEEP_END
+            is_busy = int(self.jax_state.red_pending_ticks[r]) > 0
+
+            if not is_exploit or is_busy:
+                # Not submitting a new exploit — default to session 0.
+                self._exploit_session_ids[r] = 0
+                continue
+
+            agent_name = f"red_agent_{r}"
+            agent_sessions = cy_state.sessions.get(agent_name, {})
+
+            # Collect abstract session IDs on hosts in allowed subnets.
+            abstract_session_ids = []
+            for sess_id, sess in agent_sessions.items():
+                if not isinstance(sess, RedAbstractSession):
+                    continue
+                hidx = self.mappings.hostname_to_idx.get(sess.hostname)
+                if hidx is None:
+                    continue
+                subnet = int(self.jax_const.host_subnet[hidx])
+                if self.jax_const.red_agent_subnets[r, subnet]:
+                    abstract_session_ids.append(sess_id)
+
+            if len(abstract_session_ids) <= 1:
+                self._exploit_session_ids[r] = 0
+                continue
+
+            # 1/N roll with a separate RNG (never touch CybORG's np_random).
+            rng = np.random.RandomState(self.seed * 10000 + step * NUM_RED_AGENTS + r)
+            chosen_id = int(rng.choice(abstract_session_ids))
+            self._exploit_session_ids[r] = chosen_id
+            session_ok = chosen_id == 0
+
+            # Write at the EXECUTION step: exploit duration is 4, so the
+            # action resolves 3 steps after submission.
+            exec_step = step + 3
+            max_step = self.jax_const.red_exploit_session_ok.shape[0]
+            if exec_step < max_step:
+                self.jax_const = self.jax_const.replace(
+                    red_exploit_session_ok=self.jax_const.red_exploit_session_ok.at[exec_step, r].set(
+                        jnp.bool_(session_ok)
+                    ),
+                )
 
     def _sync_red_action_randoms(self, random_sync_report, red_actions):
         synced_randoms = list(random_sync_report.detection_randoms)

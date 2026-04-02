@@ -72,7 +72,6 @@ def _find_phishing_red_agent(state, const, host_idx, key):
     same_sorted = jnp.sort(jnp.where(same_valid, same_candidates, NUM_RED_AGENTS))
     same_subnet_agent = same_sorted[same_idx]
 
-    any_active = jnp.any(state.red_agent_active)
     active_agents = jnp.where(state.red_agent_active, jnp.arange(NUM_RED_AGENTS), NUM_RED_AGENTS)
     active_sorted = jnp.sort(active_agents)
     num_active = jnp.sum(state.red_agent_active)
@@ -218,8 +217,6 @@ def apply_green_agents_vmapped(
 
     # Pad host_order to GLOBAL_MAX_HOSTS for static vmap shape, mask later.
     active_hosts = green_host_order[:GLOBAL_MAX_HOSTS]
-    active_keys = green_keys  # indexed by host_idx inside
-
     # --- Phase 1: Vmap decisions over ALL host slots (masked) ---
     def decide_for_slot(slot_idx):
         host_idx = active_hosts[slot_idx]
@@ -276,7 +273,6 @@ def apply_green_agents_vmapped(
 
     # --- Phase 3: Sequential phishing (rare events) ---
     phish_mask = active_mask & decisions.phish_creates_session
-    phish_host_indices = jnp.where(phish_mask, host_indices, GLOBAL_MAX_HOSTS)
     phish_sorted_slots = jnp.argsort(~phish_mask)  # phishing slots first
     num_phish = jnp.sum(phish_mask)
 

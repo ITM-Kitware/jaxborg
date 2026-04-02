@@ -246,7 +246,7 @@ def cyborg_red_to_jax(action, agent_name: str, mappings: CC4Mappings) -> int:
     raise ValueError(f"Unknown CybORG red action class: {cls_name}")
 
 
-def jax_red_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
+def jax_red_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, session_override=None):
     from CybORG.Simulator.Actions import (
         AggressiveServiceDiscovery,
         DegradeServices,
@@ -261,7 +261,7 @@ def jax_red_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings):
     )
 
     agent_name = f"red_agent_{agent_id}"
-    session = 0
+    session = session_override if session_override is not None else 0
 
     if action_idx == RED_SLEEP:
         return Sleep()

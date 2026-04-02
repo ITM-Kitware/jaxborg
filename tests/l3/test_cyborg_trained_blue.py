@@ -8,7 +8,8 @@ through the harness.
 This tests the transfer direction: policy trained in CybORG, evaluated in both.
 
 Usage:
-    CYBORG_CHECKPOINT=/path/to/model_large_v7-singh-20m.pt uv run pytest tests/l3/test_cyborg_trained_blue.py -v -x -n auto
+    CYBORG_CHECKPOINT=/path/to/model_large_v7-singh-20m.pt uv run pytest \
+        tests/l3/test_cyborg_trained_blue.py -v -x -n auto
 """
 
 import os

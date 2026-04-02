@@ -69,7 +69,11 @@ def _install_patches():
             "session_exists": session_obj is not None,
             "session_host": getattr(session_obj, "hostname", None),
             "is_abstract": isinstance(session_obj, RedAbstractSession) if session_obj else False,
-            "has_ports": (self.ip_address in session_obj.ports) if session_obj and isinstance(session_obj, RedAbstractSession) else False,
+            "has_ports": (
+                (self.ip_address in session_obj.ports)
+                if session_obj and isinstance(session_obj, RedAbstractSession)
+                else False
+            ),
             "num_ports_keys": len(session_obj.ports) if session_obj and hasattr(session_obj, "ports") else 0,
             "total_agent_sessions": len(state.sessions.get(self.agent, {})),
         }
