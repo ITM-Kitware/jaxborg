@@ -20,6 +20,11 @@ MAX_ITER="${MAX_ITER:-50}"
 FUZZ_SEEDS="${FUZZ_SEEDS:-20}"
 FUZZ_STEPS="${FUZZ_STEPS:-500}"
 
+# Tag for slurm jobs submitted by this loop (used for cleanup).
+# Exported so spawned agents inherit it and can tag their own srun calls.
+KARTEN_JOB_TAG="karten-loop-$$"
+export KARTEN_JOB_TAG
+
 # L4 training config
 TRAIN_TIMESTEPS="${TRAIN_TIMESTEPS:-5000000}"
 TRAIN_NUM_ENVS="${TRAIN_NUM_ENVS:-1024}"
@@ -271,7 +276,7 @@ run_l4_train_and_eval() {
         export JAX_ENABLE_COMPILATION_CACHE=1
         export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
         export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-        srun --gres=gpu:1 --mem=64G --partition=community \
+        srun --gres=gpu:1 --mem=64G --partition=community --comment="${KARTEN_JOB_TAG}" \
             uv run python scripts/train_ippo_cc4.py \
                 TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
                 NUM_ENVS="$TRAIN_NUM_ENVS" \
@@ -301,7 +306,7 @@ run_l4_train_and_eval() {
         export JAX_ENABLE_COMPILATION_CACHE=1
         export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
         export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-        srun --gres=gpu:1 --mem=64G --partition=community \
+        srun --gres=gpu:1 --mem=64G --partition=community --comment="${KARTEN_JOB_TAG}" \
             uv run python scripts/eval_transfer.py \
                 --checkpoint "$checkpoint" \
                 --episodes "$EVAL_EPISODES" \
@@ -375,10 +380,6 @@ spawn_agent() {
     prompt_file=$(mktemp "${HANDOFF_DIR}/prompt_XXXXXX.md")
     echo "$prompt" > "$prompt_file"
 
-    # Snapshot our slurm jobs BEFORE agent runs, so we can clean up after
-    local jobs_before
-    jobs_before=$(squeue -u "$(whoami)" -h -o "%i" 2>/dev/null | sort)
-
     # Invoke claude in non-interactive mode with 2-hour timeout.
     # Broad tool permissions — the agent needs grep, find, python, etc.
     timeout 7200 claude -p "$(cat "$prompt_file")" \
@@ -389,13 +390,15 @@ spawn_agent() {
 
     echo "=== Agent finished (exit=$agent_exit) ==="
 
-    # Cancel any GPU jobs the agent left running (avoid holding GPUs)
-    local jobs_after new_jobs
-    jobs_after=$(squeue -u "$(whoami)" -h -o "%i" 2>/dev/null | sort)
-    new_jobs=$(comm -13 <(echo "$jobs_before") <(echo "$jobs_after"))
-    if [[ -n "$new_jobs" ]]; then
-        echo "  Cleaning up agent GPU jobs: $new_jobs"
-        echo "$new_jobs" | xargs -r scancel 2>/dev/null || true
+    # Cancel GPU jobs the agent left running.  Only target jobs tagged
+    # with our KARTEN_JOB_TAG comment so we never touch the user's own
+    # srun sessions in other terminals.
+    local stale_jobs
+    stale_jobs=$(squeue -u "$(whoami)" -h -o "%i %k" 2>/dev/null \
+        | grep "${KARTEN_JOB_TAG}" | awk '{print $1}')
+    if [[ -n "$stale_jobs" ]]; then
+        echo "  Cleaning up karten-tagged GPU jobs: $stale_jobs"
+        echo "$stale_jobs" | xargs -r scancel 2>/dev/null || true
     fi
 
     if [[ $agent_exit -eq 124 ]]; then

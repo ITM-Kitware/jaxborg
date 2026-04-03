@@ -143,6 +143,7 @@ If L4 TOST fails but L1-L3 pass:
 - Do NOT add new syncs to the harness to hide gaps
 - Do NOT modify CybORG source
 - Do NOT cancel any Slurm jobs
+- When submitting srun jobs, always add `--comment="$KARTEN_JOB_TAG"` so the loop can clean up after you
 - If stuck after 3 attempts on the same issue, write handoff with status: stuck
 - Run linting before committing: `uv run ruff check --fix . && uv run ruff format .`
 
