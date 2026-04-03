@@ -76,8 +76,9 @@ Requires BLUE_CHECKPOINT env var.
 
 Test command: BLUE_CHECKPOINT=${BLUE_CHECKPOINT} uv run pytest tests/l3/ -v -x -n auto"
     [l4]="Cross-backend policy transfer (TOST). Trains a fresh IPPO policy in JAXborg
-via slurm (GPU), then evaluates it independently in both JAXborg and CybORG.
-A failing L4 feeds back into targeted L1/L2/L3 tests.
+via slurm (GPU), then runs it fully independently in both JAXborg and CybORG —
+no sync of any kind (red, green, detection all independent). Compares population
+mean rewards via TOST. A failing L4 means a simulation bug.
 
 Steps: (1) train via srun --gres=gpu:1, (2) eval_transfer.py --independent-rollouts"
 )

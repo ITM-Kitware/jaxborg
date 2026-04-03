@@ -1801,19 +1801,15 @@ def main():
 
     if args.independent_rollouts:
         print("\n" + "=" * 70)
-        print("INDEPENDENT ROLLOUTS")
+        print("FULLY INDEPENDENT ROLLOUTS")
         print("=" * 70)
-        print("Blue actions are chosen independently in each env.")
-        print("Red stochastic choices are synced live from CybORG into JAX.")
-        print_independent_sync_caveat()
-        (
-            jax_actions,
-            jax_rewards,
-            jax_results,
-            cyborg_actions,
-            cyborg_rewards,
-            cyborg_actions_by_agent,
-        ) = rollout_independent_transfer_synced_red(
+        print("Each backend runs completely on its own — no sync of any kind.")
+        print("Same policy weights, matched topology seeds, independent everything else.")
+        print("Compare population means via TOST.\n")
+
+        # JAXborg rollouts
+        print("JAXborg:", flush=True)
+        jax_actions, jax_rewards, jax_results = rollout_jaxborg(
             policy,
             params,
             policy_kind,
@@ -1822,14 +1818,23 @@ def main():
             seed=args.seed,
             jax_topology_mode=args.jax_topology_mode,
             topology_bank_size=args.topology_bank_size,
-            cyborg_bank_match_size=args.cyborg_bank_match_size,
         )
-
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
         ]
         print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
+
+        # CybORG rollouts
+        print("\nCybORG:", flush=True)
+        cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
+            policy,
+            params,
+            policy_kind,
+            args.episodes,
+            deterministic,
+            seed=args.seed,
+        )
         print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
     else:
         mode_label = "STOCHASTIC" if not deterministic else "DETERMINISTIC"
