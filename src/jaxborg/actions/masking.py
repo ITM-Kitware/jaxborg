@@ -75,19 +75,7 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
 
     # Traffic: agent controls dst subnet, src != dst
     src_idx = jnp.arange(NUM_SUBNETS)
-    base_traffic = agent_subnets[None, :] & (src_idx[:, None] != jnp.arange(NUM_SUBNETS)[None, :])
-    block_traffic_flat = base_traffic.reshape(-1)
-
-    # AllowTraffic is only useful when the zone is actually blocked;
-    # otherwise it's a no-op (sets False → False).  Masking it out
-    # prevents the RL policy from collapsing into a no-op action sink.
-    if state is not None:
-        # blocked_zones is indexed [dst, src]; base_traffic is [src, dst].
-        # Transpose so indexing aligns, then flatten in the same order.
-        allow_traffic_flat = block_traffic_flat & state.blocked_zones.T.reshape(-1)
-    else:
-        # At reset nothing is blocked, so AllowTraffic is never useful.
-        allow_traffic_flat = jnp.zeros(NUM_SUBNETS * NUM_SUBNETS, dtype=jnp.bool_)
+    traffic_flat = (agent_subnets[None, :] & (src_idx[:, None] != jnp.arange(NUM_SUBNETS)[None, :])).reshape(-1)
 
     # Build mask as single concatenation: [sleep, monitor, analyse, remove, restore, decoys, block, allow]
     mask = jnp.concatenate(
@@ -97,8 +85,8 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
             slot_valid_flat,  # remove
             slot_valid_flat,  # restore
             decoy_mask,  # decoys (1 per host slot)
-            block_traffic_flat,  # block traffic
-            allow_traffic_flat,  # allow traffic
+            traffic_flat,  # block traffic
+            traffic_flat,  # allow traffic
         ]
     )
 

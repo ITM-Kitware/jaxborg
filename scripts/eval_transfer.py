@@ -54,13 +54,12 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
-    NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
 )
 from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
-from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
 from jaxborg.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
@@ -388,30 +387,10 @@ def _build_cyborg_mask_cache(wrapper, mappings, const):
     return cache
 
 
-def _cyborg_allow_traffic_mask(controller, mappings):
-    """Build AllowTraffic validity mask from CybORG's live block state.
-
-    Returns (NUM_SUBNETS * NUM_SUBNETS,) bool — True where the zone IS blocked
-    (and AllowTraffic would do something useful).
-    """
-    blocks = controller.state.blocks
-    mask = np.zeros(NUM_SUBNETS * NUM_SUBNETS, dtype=np.bool_)
-    for dst_sid in range(NUM_SUBNETS):
-        dst_name = mappings.subnet_names.get(dst_sid)
-        if dst_name is None:
-            continue
-        for src_name in blocks.get(dst_name, []):
-            src_sid = CYBORG_SUFFIX_TO_ID.get(src_name)
-            if src_sid is not None:
-                mask[src_sid * NUM_SUBNETS + dst_sid] = True
-    return mask
-
-
 def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, const, mask_cache):
     """Fast version of mask projection using precomputed translation cache.
 
     Returns a numpy bool array (caller should stack and convert to jnp once).
-    Masks AllowTraffic for unblocked zones to match JAXborg's training mask.
     """
     controller = wrapper.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
@@ -437,12 +416,6 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
             continue
         for jax_idx in entry:
             jax_mask[jax_idx] = True
-
-    # Mask out AllowTraffic for unblocked zones — matches JAXborg's training mask.
-    # CybORG leaves AllowTraffic unmasked for all controllable zones, but it's a
-    # no-op when nothing is blocked, so we gate it by the live block state.
-    allow_valid = _cyborg_allow_traffic_mask(controller, mappings)
-    jax_mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] &= allow_valid
 
     return jax_mask
 
@@ -472,10 +445,6 @@ def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
             continue
         for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
             jax_mask[jax_idx] = True
-
-    # Mask out AllowTraffic for unblocked zones — matches JAXborg's training mask.
-    allow_valid = _cyborg_allow_traffic_mask(controller, mappings)
-    jax_mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] &= allow_valid
 
     return jnp.array(jax_mask)
 
