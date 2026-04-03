@@ -130,11 +130,16 @@ ${HANDOFF_CONTENT}
 
 ### For L4 Failures
 
-If L4 TOST fails but L1-L3 pass:
-1. Run `scripts/eval_transfer.py --verbose 50` to see step-by-step action divergence
-2. Compare JAX obs/masks vs CybORG obs/masks for specific steps
-3. Identify whether the gap is from obs translation, mask projection, or action effect
-4. Write a targeted L1/L2 test, fix, and re-run L4
+L4 replays the SAME blue actions in both backends with red FSM synced. A large
+gap means the simulation produces different outcomes for identical inputs. Find
+the bug and fix it — do NOT dismiss the gap as "expected RNG divergence" or
+build workarounds (sleep baselines, margin increases).
+
+1. Compare the sleep baseline gap vs trained-policy gap to isolate whether blue's
+   active actions (Restore, etc.) or green/red dynamics drive the divergence
+2. Instrument per-step reward breakdowns (RIA, LWF, ASF) to find which component diverges
+3. Compare per-step state snapshots at the first divergence point
+4. Read CybORG source for that subsystem, write a targeted L1/L2 test, fix it
 
 ## Rules
 
