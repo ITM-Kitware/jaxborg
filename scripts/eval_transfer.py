@@ -38,6 +38,7 @@ from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
     BLUE_ALLOW_TRAFFIC_START,
     BLUE_ANALYSE_START,
+    BLUE_BLOCK_TRAFFIC_END,
     BLUE_BLOCK_TRAFFIC_START,
     BLUE_DECOY_START,
     BLUE_MONITOR,
@@ -54,6 +55,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
+    NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
 )
 from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
@@ -284,10 +286,60 @@ def make_batched_inference_fn(policy, params, policy_kind, deterministic):
     return batched_step
 
 
+def _apply_traffic_filter(mask, blocked_zones):
+    """Filter no-op traffic actions from a mask using blocked_zones state.
+
+    Same logic used in training: AllowTraffic only valid when route IS blocked,
+    BlockTraffic only valid when route is NOT blocked.
+    """
+    offsets = jnp.arange(NUM_SUBNETS * NUM_SUBNETS)
+    src = offsets // NUM_SUBNETS
+    dst = offsets % NUM_SUBNETS
+    is_blocked = blocked_zones[dst, src]
+
+    mask = mask.at[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END].set(
+        mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] & is_blocked
+    )
+    mask = mask.at[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END].set(
+        mask[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END] & ~is_blocked
+    )
+    return mask
+
+
+def _training_mask(const, agent_id, state):
+    """Env mask + training-time filtering of no-op traffic actions."""
+    mask = compute_blue_action_mask(const, agent_id, state)
+    if state is None:
+        return mask
+    return _apply_traffic_filter(mask, state.blocked_zones)
+
+
+def _cyborg_blocked_zones(controller):
+    """Extract CybORG's block state as a (NUM_SUBNETS, NUM_SUBNETS) bool array.
+
+    CybORG stores blocks as: state.blocks[dst_subnet_name] = [src_subnet_name, ...]
+    JAXborg stores: blocked_zones[dst_id, src_id] = True
+    """
+    from jaxborg.topology import CYBORG_SUFFIX_TO_ID
+
+    blocked = np.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=np.bool_)
+    blocks = controller.state.blocks
+    if blocks:
+        for dst_name, src_list in blocks.items():
+            dst_id = CYBORG_SUFFIX_TO_ID.get(dst_name)
+            if dst_id is None:
+                continue
+            for src_name in src_list:
+                src_id = CYBORG_SUFFIX_TO_ID.get(src_name)
+                if src_id is not None:
+                    blocked[dst_id, src_id] = True
+    return jnp.array(blocked)
+
+
 @jax.jit
 def _all_blue_masks(const, state):
-    """Compute action masks for all blue agents in one JIT call."""
-    return jnp.stack([compute_blue_action_mask(const, i, state) for i in range(NUM_BLUE_AGENTS)])
+    """Compute action masks for all blue agents with training-time traffic filtering."""
+    return jnp.stack([_training_mask(const, i, state) for i in range(NUM_BLUE_AGENTS)])
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
@@ -521,7 +573,7 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
     Subsequent calls (same or future runs) load from cache and execute in seconds.
     """
     _agent_ids = jnp.arange(NUM_BLUE_AGENTS)
-    _mask_single = jax.vmap(compute_blue_action_mask, in_axes=(None, 0, None))
+    _mask_single = jax.vmap(_training_mask, in_axes=(None, 0, None))
 
     if policy_kind == "current":
 
@@ -777,13 +829,13 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
             rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
             act_keys = jnp.stack(_rngs)
 
-            # CybORG mask with cached translation (skips re-translating static actions)
-            masks = jnp.stack(
-                [
-                    _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
-                    for agent_name in env.agents
-                ]
-            )
+            # CybORG mask with cached translation + training-time traffic filter
+            blocked_zones = _cyborg_blocked_zones(inner.environment_controller)
+            raw_masks = [
+                _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
+                for agent_name in env.agents
+            ]
+            masks = jnp.stack([_apply_traffic_filter(jnp.array(m), blocked_zones) for m in raw_masks])
             obs_stack = jnp.stack([jnp.array(observations[agent_name], dtype=jnp.float32) for agent_name in env.agents])
 
             # Batched policy inference (1 forward pass instead of 5)
@@ -881,13 +933,13 @@ def rollout_independent_transfer_synced_red(
             jax_obs_stack = jnp.stack([jax_obs[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
             jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, act_keys)
 
-            # --- CybORG side: cached mask translation + batched policy inference ---
-            cyborg_masks = jnp.stack(
-                [
-                    _live_blue_wrapper_mask_in_jax_space_cached(cyborg_env, name, mappings, const, mask_cache)
-                    for name in cyborg_agent_names
-                ]
-            )
+            # --- CybORG side: cached mask translation + training-time traffic filter ---
+            cyborg_blocked = _cyborg_blocked_zones(inner.environment_controller)
+            cyborg_raw_masks = [
+                _live_blue_wrapper_mask_in_jax_space_cached(cyborg_env, name, mappings, const, mask_cache)
+                for name in cyborg_agent_names
+            ]
+            cyborg_masks = jnp.stack([_apply_traffic_filter(jnp.array(m), cyborg_blocked) for m in cyborg_raw_masks])
             cyborg_obs_stack = jnp.stack(
                 [jnp.array(cyborg_obs[name], dtype=jnp.float32) for name in cyborg_agent_names]
             )
@@ -1047,7 +1099,8 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
                 step_keys = jax.random.split(_sub, NUM_BLUE_AGENTS)
             jax_actions_arr, _ = batched_step(jax_obs_stack, jax_masks, step_keys)
 
-            # --- CybORG side: cached mask translation + batched policy ---
+            # --- CybORG side: cached mask translation + training-time traffic filter ---
+            cyborg_blocked = _cyborg_blocked_zones(harness.cyborg_env.environment_controller)
             cyborg_obs_list = []
             cyborg_mask_list = []
             for i, name in enumerate(cyborg_agent_names):
@@ -1055,11 +1108,10 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
                 cyborg_obs_list.append(
                     jnp.array(harness._blue_wrapper.observation_change(name, cyborg_obs_dict), dtype=jnp.float32)
                 )
-                cyborg_mask_list.append(
-                    _live_blue_wrapper_mask_in_jax_space_cached(
-                        harness._blue_wrapper, name, harness.mappings, harness.jax_const, mask_cache
-                    )
+                raw_mask = _live_blue_wrapper_mask_in_jax_space_cached(
+                    harness._blue_wrapper, name, harness.mappings, harness.jax_const, mask_cache
                 )
+                cyborg_mask_list.append(_apply_traffic_filter(jnp.array(raw_mask), cyborg_blocked))
             cyborg_obs_stack = jnp.stack(cyborg_obs_list)
             cyborg_masks = jnp.stack(cyborg_mask_list)
             cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, step_keys)
