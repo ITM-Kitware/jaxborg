@@ -390,7 +390,7 @@ spawn_agent() {
     # srun sessions in other terminals.
     local stale_jobs
     stale_jobs=$(squeue -u "$(whoami)" -h -o "%i %k" 2>/dev/null \
-        | grep "${KARTEN_JOB_TAG}" | awk '{print $1}')
+        | grep "${KARTEN_JOB_TAG}" | awk '{print $1}' || true)
     if [[ -n "$stale_jobs" ]]; then
         echo "  Cleaning up karten-tagged GPU jobs: $stale_jobs"
         echo "$stale_jobs" | xargs -r scancel 2>/dev/null || true
