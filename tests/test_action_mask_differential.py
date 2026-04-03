@@ -1,4 +1,9 @@
-"""Differential test: compare JAX action masks against CybORG BlueFlatWrapper masks."""
+"""Differential test: compare JAX action masks against CybORG BlueFlatWrapper masks.
+
+NOTE: JAXborg intentionally masks AllowTraffic when no zones are blocked (a no-op),
+while CybORG leaves them unmasked.  Comparisons below exclude the AllowTraffic range
+since this divergence is a training-quality enhancement, not a simulation difference.
+"""
 
 import jax.numpy as jnp
 import numpy as np
@@ -6,7 +11,7 @@ import pytest
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyApache import DecoyApache
 from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT import DecoyHarakaSMPT
 
-from jaxborg.actions.encoding import encode_blue_action
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_START, encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import SERVICE_IDS
 from jaxborg.state import create_initial_state
@@ -37,9 +42,14 @@ class TestActionMaskDifferential:
             cyborg_mask = live_blue_wrapper_mask_in_jax_space(wrapped, agent_name, mappings, const)
             jax_mask = np.asarray(compute_blue_action_mask(const, agent_idx, jax_state), dtype=np.bool_)
 
-            if not np.array_equal(cyborg_mask, jax_mask):
-                cyborg_only = np.flatnonzero(cyborg_mask & ~jax_mask).tolist()
-                jax_only = np.flatnonzero(jax_mask & ~cyborg_mask).tolist()
+            # Exclude AllowTraffic range — JAXborg intentionally masks these when
+            # nothing is blocked (no-op), while CybORG leaves them unmasked.
+            cyborg_cmp = cyborg_mask[:BLUE_ALLOW_TRAFFIC_START]
+            jax_cmp = jax_mask[:BLUE_ALLOW_TRAFFIC_START]
+
+            if not np.array_equal(cyborg_cmp, jax_cmp):
+                cyborg_only = np.flatnonzero(cyborg_cmp & ~jax_cmp).tolist()
+                jax_only = np.flatnonzero(jax_cmp & ~cyborg_cmp).tolist()
                 pytest.fail(
                     f"{agent_name}: projected live mask mismatch\n"
                     f"  cyborg_only={format_action_index_set(cyborg_only, mappings, const)}\n"
@@ -63,8 +73,12 @@ class TestActionMaskDifferential:
             agent_name = f"blue_agent_{agent_idx}"
             cyborg_mask = live_blue_wrapper_mask_in_jax_space(wrapped, agent_name, mappings, const)
             jax_mask = np.asarray(compute_blue_action_mask(const, agent_idx, jax_state), dtype=np.bool_)
-            assert int(cyborg_mask.sum()) == int(jax_mask.sum()), (
-                f"{agent_name}: projected valid count {int(cyborg_mask.sum())} != jax {int(jax_mask.sum())}"
+
+            # Compare counts excluding AllowTraffic (intentional divergence)
+            cyborg_count = int(cyborg_mask[:BLUE_ALLOW_TRAFFIC_START].sum())
+            jax_count = int(jax_mask[:BLUE_ALLOW_TRAFFIC_START].sum())
+            assert cyborg_count == jax_count, (
+                f"{agent_name}: projected valid count (excl AllowTraffic) cyborg={cyborg_count} != jax={jax_count}"
             )
 
     def test_haraka_mask_matches_cyborg_failure_on_smtp_host(self, cyborg_env):

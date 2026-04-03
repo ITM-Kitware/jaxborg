@@ -125,13 +125,50 @@ class TestTrafficActions:
                 else:
                     assert mask[idx_block], f"Block src={src} dst={dst} should be valid"
 
-    def test_block_allow_same_mask(self):
+    def test_allow_traffic_masked_when_nothing_blocked(self):
+        """AllowTraffic is a no-op when nothing is blocked, so it should be masked."""
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
+        # Without state (reset-time): nothing blocked → AllowTraffic all False
         mask = compute_blue_action_mask(const, 0)
         n = NUM_SUBNETS * NUM_SUBNETS
-        block_slice = mask[BLUE_BLOCK_TRAFFIC_START : BLUE_BLOCK_TRAFFIC_START + n]
         allow_slice = mask[BLUE_ALLOW_TRAFFIC_START : BLUE_ALLOW_TRAFFIC_START + n]
-        np.testing.assert_array_equal(block_slice, allow_slice)
+        assert not allow_slice.any(), "AllowTraffic should be all-masked when nothing is blocked"
+
+    def test_allow_traffic_unmasked_when_zone_blocked(self):
+        """AllowTraffic should be valid for zones that are actually blocked."""
+        from jaxborg.env import CC4Env
+
+        env = CC4Env(num_steps=100)
+        _, env_state = env.reset(jax.random.PRNGKey(42))
+        const = env_state.const
+        state = env_state.state
+
+        # Find a (src, dst) pair where agent 0 controls dst and src != dst
+        agent_subnets = np.array(const.blue_agent_subnets[0])
+        src, dst = -1, -1
+        for s in range(NUM_SUBNETS):
+            for d in range(NUM_SUBNETS):
+                if agent_subnets[d] and s != d:
+                    src, dst = s, d
+                    break
+            if src >= 0:
+                break
+        assert src >= 0, "No valid traffic pair for agent 0"
+
+        # Initially: AllowTraffic for this pair should be masked (not blocked)
+        mask_before = compute_blue_action_mask(const, 0, state)
+        allow_idx = BLUE_ALLOW_TRAFFIC_START + src * NUM_SUBNETS + dst
+        assert not mask_before[allow_idx], "AllowTraffic should be masked when zone is not blocked"
+
+        # Block the zone, then AllowTraffic should be unmasked
+        blocked_state = state.replace(blocked_zones=state.blocked_zones.at[dst, src].set(True))
+        mask_after = compute_blue_action_mask(const, 0, blocked_state)
+        assert mask_after[allow_idx], "AllowTraffic should be valid when zone is blocked"
+
+        # BlockTraffic should still be valid in both cases
+        block_idx = BLUE_BLOCK_TRAFFIC_START + src * NUM_SUBNETS + dst
+        assert mask_before[block_idx], "BlockTraffic should be valid when not blocked"
+        assert mask_after[block_idx], "BlockTraffic should still be valid when blocked"
 
 
 class TestJITCompatibility:
