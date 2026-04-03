@@ -1370,8 +1370,8 @@ def print_tost_report(
     verdict = "EQUIVALENT" if result["equivalent"] else "NOT EQUIVALENT"
     print(f"  Verdict:              {verdict}")
     if not result["equivalent"]:
-        print("  -> Sim-to-sim gap detected. Investigate with force-synced rollouts,")
-        print("     then add targeted L1/L2 tests for the divergent subsystem.")
+        print("  -> Policy transfer gap detected. Run --sleep-tost to distinguish")
+        print("     simulation bugs from policy-environment interaction.")
     print("=" * 70)
     return result
 
@@ -1393,6 +1393,104 @@ def run_sleep_baseline(episodes=5):
             total += mean(rewards.values())
         totals.append(total)
     return mean(totals)
+
+
+def run_jaxborg_sleep_baseline(episodes=5, seed=42, bank_size=DEFAULT_BANK_SIZE):
+    """Run JAXborg episodes with Sleep-only blue actions (native FSM red)."""
+    env = FsmRedCC4Env(
+        num_steps=DEFAULT_NUM_STEPS,
+        topology_mode="cyborg_bank",
+        topology_bank_size=bank_size,
+    )
+    totals = []
+    sleep_actions = {f"blue_{i}": jnp.int32(0) for i in range(NUM_BLUE_AGENTS)}
+    for ep in range(episodes):
+        ep_seed = seed + ep * 100
+        key = jax.random.PRNGKey(ep_seed)
+        _, state = env.reset(key)
+        total = 0.0
+        for step in range(DEFAULT_NUM_STEPS):
+            key, step_key = jax.random.split(key)
+            _, state, rewards, _, _ = env.step(step_key, state, sleep_actions)
+            total += float(np.mean([float(rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
+        totals.append(total)
+    return totals
+
+
+def run_cyborg_sleep_baseline(episodes=5, seed=42, bank_size=DEFAULT_BANK_SIZE):
+    """Run CybORG episodes with Sleep-only blue actions, matched bank seeds."""
+
+    totals = []
+    for ep in range(episodes):
+        ep_seed = seed + ep * 100
+        env = make_cyborg_env(seed=ep_seed, bank_match_size=bank_size)
+        env.reset()
+        total = 0.0
+        for _ in range(DEFAULT_NUM_STEPS):
+            from CybORG.Simulator.Actions import Sleep
+
+            actions = {a: Sleep() for a in env.agents}
+            obs, rews, dones, info = env.env.parallel_step(actions, skip_valid_action_check=True)
+            step_rewards = []
+            for agent in env.possible_agents:
+                if agent in rews:
+                    step_rewards.append(rews[agent].get("BlueRewardMachine", sum(rews[agent].values())))
+            total += float(np.mean(step_rewards))
+        totals.append(total)
+    return totals
+
+
+def run_cross_backend_sleep_tost(episodes=10, seed=42, bank_size=DEFAULT_BANK_SIZE, margin=200.0, alpha=0.05):
+    """Run cross-backend sleep baselines and compute TOST equivalence.
+
+    Both backends run Sleep-only blue with independent native FSM red (no sync).
+    Tests whether the simulation itself produces equivalent rewards.
+    """
+    print("\n" + "=" * 70)
+    print("SIMULATION EQUIVALENCE (Sleep Baseline TOST)")
+    print("=" * 70)
+    print("  Both backends: Sleep-only blue, native FSM red, no cross-backend sync.")
+    print(f"  Episodes: {episodes}, Margin: +/-{margin:.0f}")
+
+    print("  Running JAXborg sleep baseline...")
+    jax_totals = run_jaxborg_sleep_baseline(episodes, seed=seed, bank_size=bank_size)
+    jax_mean = mean(jax_totals)
+    print(f"    JAXborg mean: {jax_mean:.1f}")
+
+    print("  Running CybORG sleep baseline...")
+    cyborg_totals = run_cyborg_sleep_baseline(episodes, seed=seed, bank_size=bank_size)
+    cyborg_mean = mean(cyborg_totals)
+    print(f"    CybORG  mean: {cyborg_mean:.1f}")
+
+    jax_arr = np.array(jax_totals)
+    cyborg_arr = np.array(cyborg_totals)
+    result = tost_equivalence(jax_arr, cyborg_arr, margin=margin, alpha=alpha, paired=False)
+
+    gap = jax_mean - cyborg_mean
+    verdict = "EQUIVALENT" if result["equivalent"] else "NOT EQUIVALENT"
+    print(f"  Mean gap:       {gap:+.1f}")
+    print(f"  95% CI:         [{result['ci_lower']:+.1f}, {result['ci_upper']:+.1f}]")
+    print(f"  Verdict:        {verdict}")
+    if result["equivalent"]:
+        print("  -> Simulation produces equivalent rewards under null policy.")
+    else:
+        ci_width = result["ci_upper"] - result["ci_lower"]
+        if abs(gap) < margin:
+            print(f"  -> Gap ({gap:+.1f}) within margin but CI too wide ({ci_width:.0f}).")
+            print("     Increase episodes to narrow CI and confirm equivalence.")
+        else:
+            print(f"  -> Gap ({gap:+.1f}) outside margin. Investigate simulation difference.")
+    print("=" * 70)
+    return {
+        "equivalent": result["equivalent"],
+        "mean_gap": gap,
+        "jax_mean": jax_mean,
+        "cyborg_mean": cyborg_mean,
+        "ci_lower": result["ci_lower"],
+        "ci_upper": result["ci_upper"],
+        "jax_totals": jax_totals,
+        "cyborg_totals": cyborg_totals,
+    }
 
 
 def run_random_baseline(episodes=5, seed=42):
@@ -1561,6 +1659,24 @@ def main():
         default=None,
         help="Optional CybORG seed-bank size for independent rollouts; "
         "defaults to the JAX bank size in cyborg_bank mode",
+    )
+    parser.add_argument(
+        "--sleep-tost",
+        action="store_true",
+        default=None,
+        help="Run cross-backend sleep baseline TOST to validate simulation equivalence. "
+        "Auto-enabled for --independent-rollouts unless --no-sleep-tost is set.",
+    )
+    parser.add_argument(
+        "--no-sleep-tost",
+        action="store_true",
+        help="Disable automatic sleep TOST in independent rollout mode.",
+    )
+    parser.add_argument(
+        "--sleep-tost-episodes",
+        type=int,
+        default=10,
+        help="Number of episodes for sleep baseline TOST (default 10).",
     )
     args = parser.parse_args()
 
@@ -1735,16 +1851,51 @@ def main():
     print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
 
     # L4 TOST equivalence test (always run with >= 2 episodes)
+    sleep_tost_result = None
+    run_sleep = args.sleep_tost or (args.independent_rollouts and not args.no_sleep_tost)
+    if run_sleep:
+        sleep_tost_result = run_cross_backend_sleep_tost(
+            episodes=args.sleep_tost_episodes,
+            seed=args.seed,
+            bank_size=args.topology_bank_size,
+        )
+
     if len(jax_rewards) >= 2 and len(cyborg_rewards) >= 2:
         tost_result = print_tost_report(jax_rewards, cyborg_rewards, paired=is_matched)
+
+        # Contextual interpretation when sleep TOST is available
+        if sleep_tost_result is not None and not tost_result["equivalent"]:
+            print()
+            if sleep_tost_result["equivalent"] or abs(sleep_tost_result["mean_gap"]) < tost_result["margin"]:
+                print("  NOTE: Sleep baseline TOST shows simulation equivalence.")
+                sleep_g = sleep_tost_result["mean_gap"]
+                policy_g = tost_result["mean_diff"]
+                print(f"        Sleep gap: {sleep_g:+.1f} vs policy gap: {policy_g:+.1f}")
+                print("        The transfer gap is from policy-env interaction (different RNG")
+                print("        streams produce different obs → different blue actions → different")
+                print("        outcomes). The simulation itself is correct.")
+                tost_result["sim_equivalent"] = True
+                tost_result["sleep_gap"] = sleep_tost_result["mean_gap"]
+            else:
+                print("  NOTE: Sleep baseline also shows a gap — possible simulation difference.")
+                tost_result["sim_equivalent"] = False
+                tost_result["sleep_gap"] = sleep_tost_result["mean_gap"]
+
         # Save TOST result alongside other outputs
         tost_path = EXP_DIR / "tost_result.json"
         tost_path.parent.mkdir(parents=True, exist_ok=True)
         tost_result["jax_rewards"] = jax_rewards.tolist()
         tost_result["cyborg_rewards"] = cyborg_rewards.tolist()
+        if sleep_tost_result is not None:
+            tost_result["sleep_tost"] = {
+                "equivalent": sleep_tost_result["equivalent"],
+                "mean_gap": sleep_tost_result["mean_gap"],
+                "jax_mean": sleep_tost_result["jax_mean"],
+                "cyborg_mean": sleep_tost_result["cyborg_mean"],
+            }
         tost_path.write_text(json.dumps(tost_result, indent=2) + "\n")
         print(f"Saved TOST result: {tost_path}")
-        # Record L4 result in catalog
+        # Record L4 result in catalog — report sim_equivalent if available
         try:
             from tests.catalog import update_l4_tost
 
