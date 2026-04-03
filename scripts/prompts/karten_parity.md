@@ -130,16 +130,18 @@ ${HANDOFF_CONTENT}
 
 ### For L4 Failures
 
-L4 replays the SAME blue actions in both backends with red FSM synced. A large
-gap means the simulation produces different outcomes for identical inputs. Find
-the bug and fix it — do NOT dismiss the gap as "expected RNG divergence" or
-build workarounds (sleep baselines, margin increases).
+L4 runs each backend FULLY INDEPENDENTLY — same policy weights, matched topology
+seeds, but independent RNG for everything (red, green, detection, etc.). It
+compares population mean rewards via TOST. A failing L4 means the simulation
+produces different reward *distributions* for the same policy.
 
 1. Compare the sleep baseline gap vs trained-policy gap to isolate whether blue's
    active actions (Restore, etc.) or green/red dynamics drive the divergence
 2. Instrument per-step reward breakdowns (RIA, LWF, ASF) to find which component diverges
 3. Compare per-step state snapshots at the first divergence point
 4. Read CybORG source for that subsystem, write a targeted L1/L2 test, fix it
+5. Do NOT dismiss the gap as "expected RNG divergence" or build workarounds
+   (sleep baselines, margin increases)
 
 ## Rules
 
@@ -147,6 +149,11 @@ build workarounds (sleep baselines, margin increases).
 - Every fix needs a regression test
 - Do NOT add new syncs to the harness to hide gaps
 - Do NOT modify CybORG source
+- Do NOT diverge JAXborg's action masks from CybORG's. The environment's
+  `compute_blue_action_mask` MUST match CybORG's BlueFlatWrapper masks exactly.
+  If you want to improve training (e.g. mask out no-op actions), do it in the
+  training script or a policy wrapper — NOT in the environment code. Parity is
+  the top priority.
 - Do NOT cancel any Slurm jobs
 - When submitting srun jobs, always add `--comment="$KARTEN_JOB_TAG"` so the loop can clean up after you
 - If stuck after 3 attempts on the same issue, write handoff with status: stuck
