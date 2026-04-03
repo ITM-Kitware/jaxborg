@@ -331,15 +331,9 @@ run_tests() {
         local exit_code=$?
         set -e
 
-        # Check TOST verdict.  L4 passes if:
-        #   (a) policy TOST says EQUIVALENT, OR
-        #   (b) policy TOST says NOT EQUIVALENT but sleep TOST confirms
-        #       simulation equivalence (gap is from policy transfer, not sim bug)
+        # Check TOST verdict — policy rewards must match between backends
         if grep -q "EQUIVALENT" "${HANDOFF_DIR}/test_output.txt" && \
            ! grep -q "NOT EQUIVALENT" "${HANDOFF_DIR}/test_output.txt"; then
-            exit_code=0
-        elif grep -q "simulation equivalence" "${HANDOFF_DIR}/test_output.txt"; then
-            echo "  (simulation equivalent — policy transfer gap only)"
             exit_code=0
         else
             exit_code=1
