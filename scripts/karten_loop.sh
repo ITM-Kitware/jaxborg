@@ -375,6 +375,10 @@ spawn_agent() {
     prompt_file=$(mktemp "${HANDOFF_DIR}/prompt_XXXXXX.md")
     echo "$prompt" > "$prompt_file"
 
+    # Snapshot our slurm jobs BEFORE agent runs, so we can clean up after
+    local jobs_before
+    jobs_before=$(squeue -u "$(whoami)" -h -o "%i" 2>/dev/null | sort)
+
     # Invoke claude in non-interactive mode with 2-hour timeout.
     # Broad tool permissions — the agent needs grep, find, python, etc.
     timeout 7200 claude -p "$(cat "$prompt_file")" \
@@ -384,6 +388,15 @@ spawn_agent() {
     rm -f "$prompt_file"
 
     echo "=== Agent finished (exit=$agent_exit) ==="
+
+    # Cancel any GPU jobs the agent left running (avoid holding GPUs)
+    local jobs_after new_jobs
+    jobs_after=$(squeue -u "$(whoami)" -h -o "%i" 2>/dev/null | sort)
+    new_jobs=$(comm -13 <(echo "$jobs_before") <(echo "$jobs_after"))
+    if [[ -n "$new_jobs" ]]; then
+        echo "  Cleaning up agent GPU jobs: $new_jobs"
+        echo "$new_jobs" | xargs -r scancel 2>/dev/null || true
+    fi
 
     if [[ $agent_exit -eq 124 ]]; then
         echo "!!! Agent timed out after 2 hours"
