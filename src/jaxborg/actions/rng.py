@@ -108,6 +108,24 @@ def sample_red_session_check_choice(const: CC4Const, time, agent_id, key, num_se
     return jax.lax.cond(const.use_red_session_check_choices, from_precomputed, from_rng, None)
 
 
+def sample_exploit_session_choice(const: CC4Const, time, agent_id, key, visible_sessions):
+    """Return exploit session choice index in [0, visible_sessions).
+
+    CybORG's FSM picks uniformly from server_session (abstract sessions in
+    allowed subnets).  Only session 0 holds scan data, so the exploit succeeds
+    iff the choice is 0.  Uses precomputed CybORG choice if available, else
+    JAX RNG.
+    """
+
+    def from_precomputed(_):
+        return const.red_exploit_session_choices[time, agent_id]
+
+    def from_rng(_):
+        return jax.random.randint(key, (), minval=0, maxval=jnp.maximum(visible_sessions, 1), dtype=jnp.int32)
+
+    return jax.lax.cond(const.use_red_exploit_session_choices, from_precomputed, from_rng, None)
+
+
 def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility, key):
     """Return a compatible decoy type index, selected randomly from available types.
 

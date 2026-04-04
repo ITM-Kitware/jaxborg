@@ -126,12 +126,25 @@ def apply_all_actions_in_order(
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
         state = apply_red_session_check(state, const, r, session_check_key)
 
+    from jaxborg.actions.red_common import compute_visible_sessions
+
+    def _update_server_session_hwm(r, ss_counts):
+        live = compute_visible_sessions(state, const, r)
+        return ss_counts.at[r].set(jnp.maximum(ss_counts[r], live))
+
+    server_session_count = jax.lax.fori_loop(
+        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
+    )
+
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
     # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
     fsm_host_entered = state.fsm_host_entered | state.red_sessions
 
-    return state.replace(fsm_host_entered=fsm_host_entered)
+    return state.replace(
+        fsm_host_entered=fsm_host_entered,
+        red_server_session_count=server_session_count,
+    )
 
 
 def apply_all_actions_typed(
@@ -245,12 +258,28 @@ def apply_all_actions_typed(
 
     state = jax.lax.fori_loop(0, NUM_RED_AGENTS, session_check_step, state)
 
+    # CybORG's server_session dict accumulates session IDs monotonically —
+    # entries are never removed even after Blue Restore destroys the session.
+    # Update the high-water mark so the exploit 1/N roll matches CybORG.
+    from jaxborg.actions.red_common import compute_visible_sessions
+
+    def _update_server_session_hwm(r, ss_counts):
+        live = compute_visible_sessions(state, const, r)
+        return ss_counts.at[r].set(jnp.maximum(ss_counts[r], live))
+
+    server_session_count = jax.lax.fori_loop(
+        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
+    )
+
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
     # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
     fsm_host_entered = state.fsm_host_entered | state.red_sessions
 
-    return state.replace(fsm_host_entered=fsm_host_entered)
+    return state.replace(
+        fsm_host_entered=fsm_host_entered,
+        red_server_session_count=server_session_count,
+    )
 
 
 def apply_all_actions(

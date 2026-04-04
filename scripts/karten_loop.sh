@@ -300,21 +300,16 @@ run_l4_train_and_eval() {
     export BLUE_CHECKPOINT
     echo "  Checkpoint: $checkpoint"
 
-    # Step 2: Eval transfer (needs GPU for JAX rollouts)
-    echo "  L4 Step 2: Evaluating transfer (${EVAL_EPISODES} episodes, independent)..."
-    (
-        unset CUDA_VISIBLE_DEVICES JAX_PLATFORMS
-        export JAX_ENABLE_COMPILATION_CACHE=1
-        export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
-        export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
-        srun --gres=gpu:1 --mem=64G --partition=community --comment="${KARTEN_JOB_TAG}" \
-            uv run python scripts/eval_transfer.py \
-                --checkpoint "$checkpoint" \
-                --episodes "$EVAL_EPISODES" \
-                --independent-rollouts \
-                --baselines \
-                --seed "$train_seed"
-    ) >> "${HANDOFF_DIR}/test_output.txt" 2>&1
+    # Step 2: Eval transfer on CPU — run JAXborg and CybORG in parallel
+    echo "  L4 Step 2: Evaluating transfer (${EVAL_EPISODES} episodes, CPU, parallel)..."
+    CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu \
+        uv run python scripts/eval_transfer.py \
+            --checkpoint "$checkpoint" \
+            --episodes "$EVAL_EPISODES" \
+            --independent-rollouts \
+            --baselines \
+            --seed "$train_seed" \
+        >> "${HANDOFF_DIR}/test_output.txt" 2>&1
 }
 
 run_tests() {

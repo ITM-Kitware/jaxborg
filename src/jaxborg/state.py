@@ -83,8 +83,8 @@ class CC4Const:
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
     green_host_order: chex.Array  # (MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS) int32 — per-step full execution order
     use_green_host_order: chex.Array  # scalar bool — True = use CybORG-synced order, False = default order
-    red_exploit_session_ok: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) bool — precomputed exploit session-ok
-    use_red_exploit_session_ok: chex.Array  # scalar bool — True = use precomputed session-selection result
+    red_exploit_session_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed session choice index
+    use_red_exploit_session_choices: chex.Array  # scalar bool — True = use precomputed session choice
 
 
 @struct.dataclass
@@ -158,6 +158,11 @@ class CC4State:
     red_pending_key: chex.Array  # (NUM_RED_AGENTS, 2) uint32 — stored RNG key
     red_pending_source_kind: chex.Array  # (NUM_RED_AGENTS,) int32 — 0 none, 1 host, 2 session binding, 3 bound none
     red_pending_source_host: chex.Array  # (NUM_RED_AGENTS,) int32 — queued scan source (anchor) host
+    # (NUM_RED_AGENTS,) int32 — creation-time abstract session count for exploit 1/N roll
+    red_pending_visible_sessions: chex.Array
+    # (NUM_RED_AGENTS,) int32 — monotonic high-water mark of visible abstract sessions.
+    # Replicates CybORG's server_session dict which never removes destroyed sessions.
+    red_server_session_count: chex.Array
 
     blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
     blue_pending_action: chex.Array  # (NUM_BLUE_AGENTS,) int32 — queued action index
@@ -227,8 +232,8 @@ def create_initial_const() -> CC4Const:
         use_blue_decoy_type_choices=jnp.array(False),
         green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
         use_green_host_order=jnp.array(False),
-        red_exploit_session_ok=jnp.ones((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.bool_),
-        use_red_exploit_session_ok=jnp.array(False),
+        red_exploit_session_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
+        use_red_exploit_session_choices=jnp.array(False),
     )
 
 
@@ -302,6 +307,8 @@ def create_initial_state() -> CC4State:
         red_pending_key=jnp.zeros((NUM_RED_AGENTS, 2), dtype=jnp.uint32),
         red_pending_source_kind=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_source_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
+        red_pending_visible_sessions=jnp.ones(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_server_session_count=jnp.ones(NUM_RED_AGENTS, dtype=jnp.int32),
         blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),

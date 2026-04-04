@@ -16,7 +16,12 @@ from jaxborg.actions.pids import (
     nth_valid_pid,
     pid_row_contains,
 )
-from jaxborg.actions.rng import sample_detection_random, sample_red_pid_delta, sample_red_session_check_choice
+from jaxborg.actions.rng import (
+    sample_detection_random,
+    sample_exploit_session_choice,
+    sample_red_pid_delta,
+    sample_red_session_check_choice,
+)
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -140,6 +145,17 @@ def sync_scan_memory_fields(
     )
 
 
+def compute_visible_sessions(
+    state: CC4State,
+    const: CC4Const,
+    agent_id: int,
+) -> chex.Array:
+    """Count abstract sessions in allowed subnets (CybORG's server_session size)."""
+    abstract_counts = state.red_abstract_session_count[agent_id]
+    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]
+    return jnp.maximum(jnp.sum(abstract_counts * allowed_hosts), jnp.int32(1))
+
+
 def exploit_common_preconditions(
     state: CC4State,
     const: CC4Const,
@@ -154,9 +170,11 @@ def exploit_common_preconditions(
     the target has ports — so P(success) = 1/N where N = abstract sessions in
     allowed subnets.
 
-    In the differential harness, the outcome is synced from CybORG's actual
-    server_session via the precomputed red_exploit_session_ok array in CC4Const.
-    In training, the 1/N roll is performed using JAX RNG.
+    The 1/N roll uses the creation-time N saved in
+    ``red_pending_visible_sessions`` (snapshotted when the action was first
+    queued in ``process_red_with_duration``).  In the differential harness the
+    choice index is synced from CybORG via ``red_exploit_session_choices``;
+    in training it comes from JAX RNG.  Both paths exercise the same N.
     """
     is_active = const.host_active[target_host]
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
@@ -172,21 +190,16 @@ def exploit_common_preconditions(
     if key is None:
         return base
 
-    # Harness mode: use precomputed session-ok from CybORG's actual server_session.
-    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_exploit_session_ok.shape[0] - 1))
-    precomputed_ok = const.red_exploit_session_ok[time_idx, agent_id]
-
-    # Training mode: replicate CybORG's session selection logic.
     # CybORG's FSM picks uniformly from server_session (abstract sessions in
     # allowed subnets).  Only 1 of N sessions has scan data for the target.
-    abstract_counts = state.red_abstract_session_count[agent_id]
-    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]
-    visible_sessions = jnp.maximum(jnp.sum(abstract_counts * allowed_hosts), jnp.int32(1))
-    cyborg_roll = jax.random.randint(key, (), 0, visible_sessions)
+    # N is snapshotted at action creation time (matching CybORG's get_action()
+    # timing).  The choice index is either synced from CybORG or from JAX RNG.
+    visible_sessions = state.red_pending_visible_sessions[agent_id]
+    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_exploit_session_choices.shape[0] - 1))
+    cyborg_roll = sample_exploit_session_choice(const, time_idx, agent_id, key, visible_sessions)
     roll_ok = cyborg_roll == 0
 
-    session_ok = jnp.where(const.use_red_exploit_session_ok, precomputed_ok, roll_ok)
-    return base & session_ok
+    return base & roll_ok
 
 
 def select_scan_source_host(

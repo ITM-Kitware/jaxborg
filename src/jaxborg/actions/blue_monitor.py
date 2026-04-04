@@ -41,6 +41,7 @@ def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = 
     def _ingest_one_host(suspicious_row, event_row, covered):
         def _append_slot(slot, pid_row):
             return append_pid_to_row_allow_duplicates(pid_row, event_row[slot])
+
         updated_row = jax.lax.fori_loop(0, MAX_TRACKED_SUSPICIOUS_PIDS, _append_slot, suspicious_row)
         return jnp.where(covered, updated_row, suspicious_row)
 

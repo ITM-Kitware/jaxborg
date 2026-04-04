@@ -218,9 +218,17 @@ def process_red_with_duration(
         PENDING_SOURCE_KIND_HOST,
         PENDING_SOURCE_KIND_NONE,
     )
+    # Snapshot visible_sessions at creation time for the exploit 1/N roll.
+    # CybORG's FSM picks from server_session which never removes destroyed
+    # sessions — use the monotonic high-water mark instead of live count.
+    creation_visible_sessions = state.red_server_session_count[agent_id]
+    pending_visible_sessions = jnp.where(
+        is_busy, state.red_pending_visible_sessions[agent_id], creation_visible_sessions
+    )
     state_with_source = state.replace(
         red_pending_source_kind=state.red_pending_source_kind.at[agent_id].set(execution_pending_kind),
         red_pending_source_host=state.red_pending_source_host.at[agent_id].set(effective_source_host),
+        red_pending_visible_sessions=state.red_pending_visible_sessions.at[agent_id].set(pending_visible_sessions),
     )
 
     new_state = jax.lax.cond(
@@ -240,12 +248,14 @@ def process_red_with_duration(
         effective_source_binding_host,
         jnp.int32(-1),
     )
+    final_visible_sessions = jnp.where(should_execute, jnp.int32(1), pending_visible_sessions)
     new_state = new_state.replace(
         red_pending_ticks=new_state.red_pending_ticks.at[agent_id].set(final_ticks),
         red_pending_action=new_state.red_pending_action.at[agent_id].set(effective_action),
         red_pending_key=new_state.red_pending_key.at[agent_id].set(effective_key),
         red_pending_source_kind=new_state.red_pending_source_kind.at[agent_id].set(final_source_kind),
         red_pending_source_host=new_state.red_pending_source_host.at[agent_id].set(final_source_host),
+        red_pending_visible_sessions=new_state.red_pending_visible_sessions.at[agent_id].set(final_visible_sessions),
     )
 
     if run_session_check:

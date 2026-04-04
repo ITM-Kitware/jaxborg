@@ -217,6 +217,7 @@ def apply_green_agents_vmapped(
 
     # Pad host_order to GLOBAL_MAX_HOSTS for static vmap shape, mask later.
     active_hosts = green_host_order[:GLOBAL_MAX_HOSTS]
+
     # --- Phase 1: Vmap decisions over ALL host slots (masked) ---
     def decide_for_slot(slot_idx):
         host_idx = active_hosts[slot_idx]

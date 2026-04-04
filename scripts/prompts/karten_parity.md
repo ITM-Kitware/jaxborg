@@ -63,11 +63,12 @@ privesc, reassignment, and a post-step bulk `|= red_sessions`. This matches CybO
 The harness asserts (not syncs) parity via `_assert_fsm_host_entered`.
 
 **Session selection**: CybORG's FSM picks a random session from `server_session`
-(P(success) = 1/N). In training, JAX replicates this with a 1/N roll in
-`exploit_common_preconditions()`. In the harness, `red_exploit_session_ok` is
-precomputed — currently always True because the harness bypasses CybORG's FSM
-session selection (translates with session=0). This is a known harness limitation,
-not a production code gap.
+(P(success) = 1/N where N = len(server_session)). CybORG's `server_session`
+dict never removes destroyed sessions — after Blue Restore, phantom IDs persist,
+inflating N and making exploits fail more often. JAXborg replicates this via
+`red_server_session_count` (monotonic high-water mark updated end-of-step).
+In the harness, `red_exploit_session_choices` syncs the choice index from CybORG.
+See `docs/parity/cyborg_server_session_staleness.md` for details.
 
 ### The Sync Problem
 
@@ -135,13 +136,22 @@ seeds, but independent RNG for everything (red, green, detection, etc.). It
 compares population mean rewards via TOST. A failing L4 means the simulation
 produces different reward *distributions* for the same policy.
 
-1. Compare the sleep baseline gap vs trained-policy gap to isolate whether blue's
-   active actions (Restore, etc.) or green/red dynamics drive the divergence
+**The key diagnostic is directionality of the mean reward difference (JAXborg - CybORG).**
+Independent RNG adds noise but should NOT add bias. If the mean difference is
+consistently positive or negative across runs, that is a real simulation bug —
+regardless of what any sleep or random baseline shows. Sleep baselines only test
+the null-policy path; the trained policy exercises different code paths (Restore,
+Monitor, Remove) that may diverge in ways sleep never triggers.
+
+1. Check the SIGN of the mean reward gap. A consistent direction (e.g. JAXborg
+   always worse) means the sim diverges under active blue play — find the mechanism
 2. Instrument per-step reward breakdowns (RIA, LWF, ASF) to find which component diverges
 3. Compare per-step state snapshots at the first divergence point
 4. Read CybORG source for that subsystem, write a targeted L1/L2 test, fix it
 5. Do NOT dismiss the gap as "expected RNG divergence" or build workarounds
-   (sleep baselines, margin increases)
+   (sleep baselines, margin increases, wider TOST margins)
+6. Do NOT conclude "simulation is correct" based on sleep baseline equivalence —
+   sleep does not exercise Restore/Remove/Monitor code paths
 
 ## Rules
 

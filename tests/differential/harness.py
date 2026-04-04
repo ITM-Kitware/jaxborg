@@ -451,9 +451,9 @@ class CC4DifferentialHarness:
         if self.green_cls is SleepAgent:
             self.jax_const = self.jax_const.replace(green_agents_active=jnp.array(False))
         # Enable exploit session-selection sync: the harness records CybORG's
-        # server_session size per step and provides deterministic session-ok
-        # outcomes so JAX matches CybORG exactly.
-        self.jax_const = self.jax_const.replace(use_red_exploit_session_ok=jnp.array(True))
+        # server_session choice index per step so JAX exercises the same N
+        # and makes the same 1/N decision.
+        self.jax_const = self.jax_const.replace(use_red_exploit_session_choices=jnp.array(True))
         cyborg_state = self.cyborg_env.environment_controller.state
         controller = self.cyborg_env.environment_controller
 
@@ -1283,16 +1283,20 @@ class CC4DifferentialHarness:
             rng = np.random.RandomState(self.seed * 10000 + step * NUM_RED_AGENTS + r)
             chosen_id = int(rng.choice(abstract_session_ids))
             self._exploit_session_ids[r] = chosen_id
-            session_ok = chosen_id == 0
+            # Translate CybORG's outcome into JAXborg's framework:
+            # JAXborg succeeds when choice == 0, so map session-0 → 0
+            # and any other session → its 1-based position.
+            n = len(abstract_session_ids)
+            choice_index = 0 if chosen_id == 0 else (rng.randint(1, max(n, 2)))
 
             # Write at the EXECUTION step: exploit duration is 4, so the
             # action resolves 3 steps after submission.
             exec_step = step + 3
-            max_step = self.jax_const.red_exploit_session_ok.shape[0]
+            max_step = self.jax_const.red_exploit_session_choices.shape[0]
             if exec_step < max_step:
                 self.jax_const = self.jax_const.replace(
-                    red_exploit_session_ok=self.jax_const.red_exploit_session_ok.at[exec_step, r].set(
-                        jnp.bool_(session_ok)
+                    red_exploit_session_choices=self.jax_const.red_exploit_session_choices.at[exec_step, r].set(
+                        jnp.int32(choice_index)
                     ),
                 )
 
