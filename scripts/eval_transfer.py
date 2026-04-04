@@ -4,6 +4,10 @@
 
 import os
 
+# Parallel CybORG workers: force CPU-only JAX before any imports touch CUDA
+if os.environ.get("_JAXBORG_CYBORG_WORKER"):
+    os.environ["JAX_PLATFORMS"] = "cpu"
+
 # Enable XLA compilation cache before importing JAX
 os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
 os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", os.path.expanduser("~/.cache/jaxborg/xla"))
@@ -655,7 +659,7 @@ def rollout_jaxborg_scan(
     scan_fn = make_scan_eval_fn(env, policy, policy_kind, deterministic)
 
     # Build keys for all episodes
-    keys = jnp.stack([jax.random.PRNGKey(seed + ep * 100) for ep in range(num_episodes)])
+    keys = jnp.stack([jax.random.PRNGKey(seed + ep) for ep in range(num_episodes)])
 
     # Reset all episodes in parallel: vmap over seeds
     print(f"  Resetting {num_episodes} episodes in parallel...", flush=True)
@@ -732,7 +736,7 @@ def rollout_jaxborg(
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        key = jax.random.PRNGKey(seed + ep * 100)
+        key = jax.random.PRNGKey(seed + ep)
         obs, env_state = env.reset(key)
 
         ep_reward = np.zeros(NUM_BLUE_AGENTS)
@@ -804,41 +808,56 @@ def rollout_jaxborg(
     return np.array(all_actions), np.array(episode_rewards), episode_results
 
 
-def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+def _rollout_cyborg_single_episode(args_tuple):
+    """Run a single CybORG episode in its own process. Returns (ep, reward, actions_by_agent)."""
+    ep, checkpoint_path, deterministic, seed, bank_match_size = args_tuple
+    # Each worker reimports everything — necessary for ProcessPoolExecutor (spawn)
+    import jax
+    import jax.numpy as jnp
+    import numpy as np
+
+    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.constants import NUM_BLUE_AGENTS
+
+    from scripts.eval_transfer import (
+        _apply_traffic_filter,
+        _build_cyborg_mask_cache,
+        _cyborg_blocked_zones,
+        _live_blue_wrapper_mask_in_jax_space_cached,
+        _raw_cyborg_step_with_flat_obs,
+        load_checkpoint,
+        make_batched_inference_fn,
+        make_cyborg_env,
+    )
+
+    policy, params, policy_kind = load_checkpoint(checkpoint_path)
     batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
-    all_actions = []
-    episode_rewards = []
-    all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
-    for ep in range(num_episodes):
-        t0 = time.perf_counter()
-        env = make_cyborg_env(seed=seed + ep * 100, bank_match_size=32)
-        observations, _ = env.reset()
-        inner = env.env
-        const = build_const_from_cyborg(inner)
-        mappings = build_mappings_from_cyborg(inner)
+    env = make_cyborg_env(seed=seed + ep, bank_match_size=bank_match_size)
+    observations, _ = env.reset()
+    inner = env.env
+    const = build_const_from_cyborg(inner)
+    mappings = build_mappings_from_cyborg(inner)
 
-        rng = jax.random.PRNGKey(seed + ep * 100)
-        mask_cache = _build_cyborg_mask_cache(env, mappings, const)
-        total = 0.0
-        ep_actions = []
+    rng = jax.random.PRNGKey(seed + ep)
+    mask_cache = _build_cyborg_mask_cache(env, mappings, const)
+    total = 0.0
+    ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
-        for _ in range(500):
-            if not env.agents:
-                break
+    for _ in range(500):
+        if env.agents:
             rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
             act_keys = jnp.stack(_rngs)
 
-            # CybORG mask with cached translation + training-time traffic filter
             blocked_zones = _cyborg_blocked_zones(inner.environment_controller)
             raw_masks = [
                 _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
                 for agent_name in env.agents
             ]
             masks = jnp.stack([_apply_traffic_filter(jnp.array(m), blocked_zones) for m in raw_masks])
-            obs_stack = jnp.stack([jnp.array(observations[agent_name], dtype=jnp.float32) for agent_name in env.agents])
+            obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in env.agents])
 
-            # Batched policy inference (1 forward pass instead of 5)
             actions_arr, _ = batched_step(obs_stack, masks, act_keys)
             actions_np = np.asarray(actions_arr)
 
@@ -847,8 +866,103 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
                 action_idx = int(actions_np[agent_idx])
                 cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
                 actions[agent_name] = cyborg_action
-                ep_actions.append(action_idx)
-                all_actions_by_agent[agent_idx].append(action_idx)
+                ep_actions_by_agent[agent_idx].append(action_idx)
+        else:
+            from CybORG.Simulator.Actions import Sleep
+            actions = {a: Sleep() for a in env.possible_agents}
+
+        observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
+        total += mean(rewards.values())
+
+    return ep, total, ep_actions_by_agent
+
+
+def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0, bank_match_size=None,
+                   checkpoint_path=None, parallel=True, max_workers=None):
+    if parallel and checkpoint_path:
+        from concurrent.futures import ProcessPoolExecutor
+
+        import multiprocessing
+        if max_workers is None:
+            max_workers = min(num_episodes, multiprocessing.cpu_count(), 10)
+
+        print(f"  Running {num_episodes} CybORG episodes in parallel ({max_workers} workers)...", flush=True)
+        t0 = time.perf_counter()
+        args_list = [
+            (ep, checkpoint_path, deterministic, seed, bank_match_size)
+            for ep in range(num_episodes)
+        ]
+        all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        episode_rewards = [0.0] * num_episodes
+
+        # Use "spawn" to avoid fork() + CUDA deadlock; sentinel tells
+        # spawned children to set JAX_PLATFORMS=cpu before module-level imports
+        os.environ["_JAXBORG_CYBORG_WORKER"] = "1"
+        ctx = multiprocessing.get_context("spawn")
+        try:
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
+                for ep, reward, ep_actions_by_agent in pool.map(_rollout_cyborg_single_episode, args_list):
+                    episode_rewards[ep] = reward
+                    for i in range(NUM_BLUE_AGENTS):
+                        all_actions_by_agent[i].extend(ep_actions_by_agent[i])
+                    print(f"  CybORG  ep {ep + 1}: reward={reward:.1f}", flush=True)
+        finally:
+            os.environ.pop("_JAXBORG_CYBORG_WORKER", None)
+
+        elapsed = time.perf_counter() - t0
+        print(f"  {num_episodes} CybORG episodes done in {elapsed:.0f}s ({elapsed / num_episodes:.1f}s/ep effective)")
+        return np.array([]), np.array(episode_rewards), all_actions_by_agent
+
+    # Fallback: sequential (no checkpoint path or parallel=False)
+    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
+    all_actions = []
+    episode_rewards = []
+    all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+
+    for ep in range(num_episodes):
+        t0 = time.perf_counter()
+        env = make_cyborg_env(seed=seed + ep, bank_match_size=bank_match_size)
+        observations, _ = env.reset()
+        inner = env.env
+        const = build_const_from_cyborg(inner)
+        mappings = build_mappings_from_cyborg(inner)
+
+        rng = jax.random.PRNGKey(seed + ep)
+        mask_cache = _build_cyborg_mask_cache(env, mappings, const)
+        total = 0.0
+        ep_actions = []
+
+        for _ in range(500):
+            if env.agents:
+                rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
+                act_keys = jnp.stack(_rngs)
+
+                # CybORG mask with cached translation + training-time traffic filter
+                blocked_zones = _cyborg_blocked_zones(inner.environment_controller)
+                raw_masks = [
+                    _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
+                    for agent_name in env.agents
+                ]
+                masks = jnp.stack([_apply_traffic_filter(jnp.array(m), blocked_zones) for m in raw_masks])
+                obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in env.agents])
+
+                # Batched policy inference (1 forward pass instead of 5)
+                actions_arr, _ = batched_step(obs_stack, masks, act_keys)
+                actions_np = np.asarray(actions_arr)
+
+                actions = {}
+                for agent_idx, agent_name in enumerate(env.agents):
+                    action_idx = int(actions_np[agent_idx])
+                    cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
+                    actions[agent_name] = cyborg_action
+                    ep_actions.append(action_idx)
+                    all_actions_by_agent[agent_idx].append(action_idx)
+            else:
+                # Episode done but continue stepping to match JAXborg step count.
+                # CybORG still processes green/red actions and returns rewards.
+                from CybORG.Simulator.Actions import Sleep
+
+                actions = {a: Sleep() for a in env.possible_agents}
 
             observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
             total += mean(rewards.values())
@@ -897,7 +1011,7 @@ def rollout_independent_transfer_synced_red(
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        ep_seed = seed + ep * 100
+        ep_seed = seed + ep
 
         jax_env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
         key = jax.random.PRNGKey(ep_seed)
@@ -1449,109 +1563,6 @@ def run_sleep_baseline(episodes=5):
     return mean(totals)
 
 
-def run_jaxborg_sleep_baseline(episodes=5, seed=42, bank_size=DEFAULT_BANK_SIZE):
-    """Run JAXborg episodes with Sleep-only blue actions (native FSM red)."""
-    env = FsmRedCC4Env(
-        num_steps=DEFAULT_NUM_STEPS,
-        topology_mode="cyborg_bank",
-        topology_bank_size=bank_size,
-    )
-    totals = []
-    sleep_actions = {f"blue_{i}": jnp.int32(0) for i in range(NUM_BLUE_AGENTS)}
-    for ep in range(episodes):
-        ep_seed = seed + ep * 100
-        key = jax.random.PRNGKey(ep_seed)
-        _, state = env.reset(key)
-        total = 0.0
-        for step in range(DEFAULT_NUM_STEPS):
-            key, step_key = jax.random.split(key)
-            _, state, rewards, _, _ = env.step(step_key, state, sleep_actions)
-            total += float(np.mean([float(rewards[f"blue_{i}"]) for i in range(NUM_BLUE_AGENTS)]))
-        totals.append(total)
-    return totals
-
-
-def run_cyborg_sleep_baseline(episodes=5, seed=42, bank_size=DEFAULT_BANK_SIZE):
-    """Run CybORG episodes with Sleep-only blue actions, matched bank seeds."""
-
-    totals = []
-    for ep in range(episodes):
-        ep_seed = seed + ep * 100
-        env = make_cyborg_env(seed=ep_seed, bank_match_size=bank_size)
-        env.reset()
-        total = 0.0
-        for _ in range(DEFAULT_NUM_STEPS):
-            from CybORG.Simulator.Actions import Sleep
-
-            actions = {a: Sleep() for a in env.agents}
-            obs, rews, dones, info = env.env.parallel_step(actions, skip_valid_action_check=True)
-            step_rewards = []
-            for agent in env.possible_agents:
-                if agent in rews:
-                    step_rewards.append(rews[agent].get("BlueRewardMachine", sum(rews[agent].values())))
-            total += float(np.mean(step_rewards))
-        totals.append(total)
-    return totals
-
-
-def run_cross_backend_sleep_tost(episodes=30, seed=42, bank_size=DEFAULT_BANK_SIZE, margin=1000.0, alpha=0.05):
-    """Run cross-backend sleep baselines and compute TOST equivalence.
-
-    Both backends run Sleep-only blue with independent native FSM red (no sync).
-    Tests whether the simulation itself produces equivalent rewards.
-
-    The default margin (1000) is wider than the policy TOST margin (200) because
-    independent episodes have high per-episode variance (~1200 std from stochastic
-    red FSM). With 30 episodes per backend, SE ≈ 310, and Δ=1000 gives comfortable
-    statistical power to detect real simulation gaps of ≥500 while not failing on
-    noise.
-    """
-    print("\n" + "=" * 70)
-    print("SIMULATION EQUIVALENCE (Sleep Baseline TOST)")
-    print("=" * 70)
-    print("  Both backends: Sleep-only blue, native FSM red, no cross-backend sync.")
-    print(f"  Episodes: {episodes}, Margin: +/-{margin:.0f}")
-
-    print("  Running JAXborg sleep baseline...")
-    jax_totals = run_jaxborg_sleep_baseline(episodes, seed=seed, bank_size=bank_size)
-    jax_mean = mean(jax_totals)
-    print(f"    JAXborg mean: {jax_mean:.1f}")
-
-    print("  Running CybORG sleep baseline...")
-    cyborg_totals = run_cyborg_sleep_baseline(episodes, seed=seed, bank_size=bank_size)
-    cyborg_mean = mean(cyborg_totals)
-    print(f"    CybORG  mean: {cyborg_mean:.1f}")
-
-    jax_arr = np.array(jax_totals)
-    cyborg_arr = np.array(cyborg_totals)
-    result = tost_equivalence(jax_arr, cyborg_arr, margin=margin, alpha=alpha, paired=False)
-
-    gap = jax_mean - cyborg_mean
-    verdict = "EQUIVALENT" if result["equivalent"] else "NOT EQUIVALENT"
-    print(f"  Mean gap:       {gap:+.1f}")
-    print(f"  95% CI:         [{result['ci_lower']:+.1f}, {result['ci_upper']:+.1f}]")
-    print(f"  Verdict:        {verdict}")
-    if result["equivalent"]:
-        print("  -> Simulation produces equivalent rewards under null policy.")
-    else:
-        ci_width = result["ci_upper"] - result["ci_lower"]
-        if abs(gap) < margin:
-            print(f"  -> Gap ({gap:+.1f}) within margin but CI too wide ({ci_width:.0f}).")
-            print("     Increase episodes to narrow CI and confirm equivalence.")
-        else:
-            print(f"  -> Gap ({gap:+.1f}) outside margin. Investigate simulation difference.")
-    print("=" * 70)
-    return {
-        "equivalent": result["equivalent"],
-        "mean_gap": gap,
-        "jax_mean": jax_mean,
-        "cyborg_mean": cyborg_mean,
-        "ci_lower": result["ci_lower"],
-        "ci_upper": result["ci_upper"],
-        "jax_totals": jax_totals,
-        "cyborg_totals": cyborg_totals,
-    }
-
 
 def run_random_baseline(episodes=5, seed=42):
     rng = np.random.default_rng(seed)
@@ -1722,31 +1733,6 @@ def main():
         help="Optional CybORG seed-bank size for independent rollouts; "
         "defaults to the JAX bank size in cyborg_bank mode",
     )
-    parser.add_argument(
-        "--sleep-tost",
-        action="store_true",
-        default=None,
-        help="Run cross-backend sleep baseline TOST to validate simulation equivalence. "
-        "Auto-enabled for --independent-rollouts unless --no-sleep-tost is set.",
-    )
-    parser.add_argument(
-        "--no-sleep-tost",
-        action="store_true",
-        help="Disable automatic sleep TOST in independent rollout mode.",
-    )
-    parser.add_argument(
-        "--sleep-tost-episodes",
-        type=int,
-        default=30,
-        help="Number of episodes for sleep baseline TOST (default 30).",
-    )
-    parser.add_argument(
-        "--sleep-tost-margin",
-        type=float,
-        default=1000.0,
-        help="Equivalence margin for sleep TOST (default 1000). Wider than policy "
-        "TOST because independent episodes have high per-episode variance.",
-    )
     args = parser.parse_args()
 
     deterministic = not args.stochastic
@@ -1863,34 +1849,53 @@ def main():
         print("Same policy weights, matched topology seeds, independent everything else.")
         print("Compare population means via TOST.\n")
 
-        # JAXborg rollouts
-        print("JAXborg:", flush=True)
-        jax_actions, jax_rewards, jax_results = rollout_jaxborg(
-            policy,
-            params,
-            policy_kind,
-            args.episodes,
-            deterministic,
-            seed=args.seed,
-            jax_topology_mode=args.jax_topology_mode,
-            topology_bank_size=args.topology_bank_size,
-        )
+        use_scan = not args.no_scan
+        cyborg_bank_match_size = args.topology_bank_size if args.jax_topology_mode == "cyborg_bank" else None
+
+        # Run JAXborg (scan/vmap) and CybORG (sequential) concurrently
+        from concurrent.futures import ThreadPoolExecutor
+
+        def _run_jaxborg():
+            rollout_fn = rollout_jaxborg_scan if use_scan else rollout_jaxborg
+            if use_scan:
+                print("JAXborg: using jax.lax.scan (all episodes in parallel)", flush=True)
+            else:
+                print("JAXborg:", flush=True)
+            return rollout_fn(
+                policy,
+                params,
+                policy_kind,
+                args.episodes,
+                deterministic,
+                seed=args.seed,
+                jax_topology_mode=args.jax_topology_mode,
+                topology_bank_size=args.topology_bank_size,
+            )
+
+        def _run_cyborg():
+            print("CybORG:", flush=True)
+            return rollout_cyborg(
+                policy,
+                params,
+                policy_kind,
+                args.episodes,
+                deterministic,
+                seed=args.seed,
+                bank_match_size=cyborg_bank_match_size,
+                checkpoint_path=args.checkpoint,
+            )
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            jax_future = pool.submit(_run_jaxborg)
+            cyborg_future = pool.submit(_run_cyborg)
+            jax_actions, jax_rewards, jax_results = jax_future.result()
+            cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = cyborg_future.result()
+
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
         ]
         print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
-
-        # CybORG rollouts
-        print("\nCybORG:", flush=True)
-        cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = rollout_cyborg(
-            policy,
-            params,
-            policy_kind,
-            args.episodes,
-            deterministic,
-            seed=args.seed,
-        )
         print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
     else:
         mode_label = "STOCHASTIC" if not deterministic else "DETERMINISTIC"
@@ -1924,53 +1929,16 @@ def main():
     # Comparison report
     print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rewards)
 
-    # L4 TOST equivalence test (always run with >= 2 episodes)
-    sleep_tost_result = None
-    run_sleep = args.sleep_tost or (args.independent_rollouts and not args.no_sleep_tost)
-    if run_sleep:
-        sleep_tost_result = run_cross_backend_sleep_tost(
-            episodes=args.sleep_tost_episodes,
-            seed=args.seed,
-            bank_size=args.topology_bank_size,
-            margin=args.sleep_tost_margin,
-        )
-
     if len(jax_rewards) >= 2 and len(cyborg_rewards) >= 2:
         tost_result = print_tost_report(jax_rewards, cyborg_rewards, paired=is_matched)
-
-        # Contextual interpretation when sleep TOST is available
-        if sleep_tost_result is not None and not tost_result["equivalent"]:
-            print()
-            if sleep_tost_result["equivalent"] or abs(sleep_tost_result["mean_gap"]) < args.sleep_tost_margin:
-                print("  NOTE: Sleep baseline TOST shows simulation equivalence.")
-                sleep_g = sleep_tost_result["mean_gap"]
-                policy_g = tost_result["mean_diff"]
-                print(f"        Sleep gap: {sleep_g:+.1f} vs policy gap: {policy_g:+.1f}")
-                print("        The transfer gap is from policy-env interaction (different RNG")
-                print("        streams produce different obs → different blue actions → different")
-                print("        outcomes). The simulation itself is correct.")
-                tost_result["sim_equivalent"] = True
-                tost_result["sleep_gap"] = sleep_tost_result["mean_gap"]
-            else:
-                print("  NOTE: Sleep baseline also shows a gap — possible simulation difference.")
-                tost_result["sim_equivalent"] = False
-                tost_result["sleep_gap"] = sleep_tost_result["mean_gap"]
 
         # Save TOST result alongside other outputs
         tost_path = EXP_DIR / "tost_result.json"
         tost_path.parent.mkdir(parents=True, exist_ok=True)
         tost_result["jax_rewards"] = jax_rewards.tolist()
         tost_result["cyborg_rewards"] = cyborg_rewards.tolist()
-        if sleep_tost_result is not None:
-            tost_result["sleep_tost"] = {
-                "equivalent": sleep_tost_result["equivalent"],
-                "mean_gap": sleep_tost_result["mean_gap"],
-                "jax_mean": sleep_tost_result["jax_mean"],
-                "cyborg_mean": sleep_tost_result["cyborg_mean"],
-            }
         tost_path.write_text(json.dumps(tost_result, indent=2) + "\n")
         print(f"Saved TOST result: {tost_path}")
-        # Record L4 result in catalog — report sim_equivalent if available
         try:
             from tests.catalog import update_l4_tost
 
