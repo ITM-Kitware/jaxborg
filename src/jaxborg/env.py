@@ -120,18 +120,9 @@ def apply_all_actions_in_order(
 
     state = jax.lax.fori_loop(0, TOTAL_ACTION_ACTOR_SLOTS, step_actor, state)
 
-    # Pre-reassignment HWM update — captures cross-subnet exploit sessions
-    # before they're transferred to another agent.  See apply_all_actions_typed.
-    from jaxborg.actions.red_common import compute_visible_sessions
-
-    def _update_server_session_hwm(r, ss_counts):
-        live = compute_visible_sessions(state, const, r)
-        return ss_counts.at[r].set(jnp.maximum(ss_counts[r], live))
-
-    server_session_count = jax.lax.fori_loop(
-        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
-    )
-    state = state.replace(red_server_session_count=server_session_count)
+    # red_server_session_count is now maintained as a cumulative counter:
+    # incremented in green_vmap (phishing) and reassignment (session transfer).
+    # No HWM update needed here.
 
     state = reassign_cross_subnet_sessions(state, const)
     for b in range(NUM_BLUE_AGENTS):
@@ -140,11 +131,6 @@ def apply_all_actions_in_order(
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
         state = apply_red_session_check(state, const, r, session_check_key)
 
-    # Post-reassignment HWM update
-    server_session_count = jax.lax.fori_loop(
-        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
-    )
-
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
     # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
@@ -152,7 +138,6 @@ def apply_all_actions_in_order(
 
     return state.replace(
         fsm_host_entered=fsm_host_entered,
-        red_server_session_count=server_session_count,
     )
 
 
@@ -247,19 +232,9 @@ def apply_all_actions_typed(
     # CybORG's server_session dict accumulates session IDs monotonically —
     # entries are never removed even after Blue Restore or cross-subnet
     # reassignment.  CybORG processes the exploit action's observation
-    # (which includes the new session) *before* reassignment transfers it
-    # to another agent.  Capture the pre-reassignment peak so cross-subnet
-    # exploit sessions inflate N as they do in CybORG.
-    from jaxborg.actions.red_common import compute_visible_sessions
-
-    def _update_server_session_hwm(r, ss_counts):
-        live = compute_visible_sessions(state, const, r)
-        return ss_counts.at[r].set(jnp.maximum(ss_counts[r], live))
-
-    server_session_count = jax.lax.fori_loop(
-        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
-    )
-    state = state.replace(red_server_session_count=server_session_count)
+    # red_server_session_count is now maintained as a cumulative counter:
+    # incremented in green_vmap (phishing) and reassignment (session transfer).
+    # No HWM update needed here.
 
     state = reassign_cross_subnet_sessions(state, const)
 
@@ -274,12 +249,6 @@ def apply_all_actions_typed(
 
     state = jax.lax.fori_loop(0, NUM_RED_AGENTS, session_check_step, state)
 
-    # Post-reassignment HWM update: also captures sessions that survive
-    # reassignment (e.g. sessions in the agent's own subnet).
-    server_session_count = jax.lax.fori_loop(
-        0, NUM_RED_AGENTS, _update_server_session_hwm, state.red_server_session_count
-    )
-
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
     # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
@@ -287,7 +256,6 @@ def apply_all_actions_typed(
 
     return state.replace(
         fsm_host_entered=fsm_host_entered,
-        red_server_session_count=server_session_count,
     )
 
 
@@ -459,10 +427,16 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_scan_source_pid,
         )
 
+    # CybORG's server_session dict gets one entry per active agent at reset
+    # (the initial RedAbstractSession).  Set the cumulative counter to 1 for
+    # initially active agents, 0 for inactive.
+    red_server_session_count = red_agent_active.astype(jnp.int32)
+
     return state.replace(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_abstract_session_count=red_session_count,  # at reset, all sessions are abstract (primary)
+        red_server_session_count=red_server_session_count,
         red_privilege=red_privilege,
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,

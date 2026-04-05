@@ -240,6 +240,15 @@ def _apply_single_green(
         abstract_counts.at[red_agent_idx, host_idx].set(new_abstract),
         abstract_counts,
     )
+    # CybORG's server_session dict grows by one entry for each new
+    # RedAbstractSession (phishing).  Increment the cumulative counter.
+    red_server_session_count = jnp.where(
+        phish_creates_session,
+        state.red_server_session_count.at[red_agent_idx].set(
+            state.red_server_session_count[red_agent_idx] + 1
+        ),
+        state.red_server_session_count,
+    )
     red_session_is_abstract = jnp.where(
         phish_creates_session,
         state.red_session_is_abstract.at[red_agent_idx, host_idx].set(True),
@@ -401,6 +410,7 @@ def _apply_single_green(
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_abstract_session_count=red_abstract_session_count,
+        red_server_session_count=red_server_session_count,
         red_session_is_abstract=red_session_is_abstract,
         red_abstract_host_rank=red_abstract_host_rank,
         red_next_abstract_rank=red_next_abstract_rank,

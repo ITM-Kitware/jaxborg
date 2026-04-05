@@ -219,8 +219,8 @@ def process_red_with_duration(
         PENDING_SOURCE_KIND_NONE,
     )
     # Snapshot visible_sessions at creation time for the exploit 1/N roll.
-    # CybORG's FSM picks from server_session which never removes destroyed
-    # sessions — use the monotonic high-water mark instead of live count.
+    # CybORG's FSM picks from server_session which accumulates unique session
+    # IDs monotonically — use the cumulative counter that mirrors this.
     creation_visible_sessions = state.red_server_session_count[agent_id]
     pending_visible_sessions = jnp.where(
         is_busy, state.red_pending_visible_sessions[agent_id], creation_visible_sessions

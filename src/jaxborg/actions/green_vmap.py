@@ -321,6 +321,11 @@ def apply_green_agents_vmapped(
             red_abstract_session_count=carry_state.red_abstract_session_count.at[red_idx, h].set(
                 carry_state.red_abstract_session_count[red_idx, h] + 1
             ),
+            # CybORG's server_session dict grows by one entry for each new
+            # RedAbstractSession (phishing).  Increment the cumulative counter.
+            red_server_session_count=carry_state.red_server_session_count.at[red_idx].set(
+                carry_state.red_server_session_count[red_idx] + 1
+            ),
             red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(True),
             red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(assigned_rank),
             red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(next_rank + 1),

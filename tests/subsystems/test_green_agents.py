@@ -963,3 +963,105 @@ def test_remove_clears_sessions_from_phishing_and_follow_on_compromise_matches_c
     assert bool(jax_after_remove.red_sessions[jax_owner, target_host]) == (len(cy_remaining) > 0)
     assert int(jax_after_remove.red_privilege[jax_owner, target_host]) == COMPROMISE_NONE
     assert int(jax_after_remove.host_compromised[target_host]) == COMPROMISE_NONE
+
+
+class TestServerSessionCumulativeCounter:
+    """Verify red_server_session_count matches CybORG's server_session dict size.
+
+    CybORG's server_session accumulates unique session IDs monotonically —
+    entries are never removed even after Blue Restore.  After a Restore→re-phish
+    cycle, server_session grows because the new session gets a new ID.
+
+    JAXborg must replicate this via a cumulative counter that increments on
+    each new abstract session creation (green phishing, reassignment).
+    """
+
+    def test_counter_grows_after_restore_rephish(self, jax_const):
+        """After Restore clears a phishing session and green re-phishes,
+        the cumulative counter must be HIGHER than the peak live count."""
+        from jaxborg.actions.blue_restore import apply_blue_restore
+        from jaxborg.env import _init_red_state
+
+        const = jax_const
+        state = create_initial_state()
+        state = state.replace(host_services=const.initial_services, host_max_pid=const.host_initial_max_pid)
+        state = _init_red_state(const, state)
+
+        # Agent 0 should start with cumulative counter = 1
+        assert int(state.red_server_session_count[0]) == 1
+
+        # Find a host owned by agent 0's subnet
+        agent0_hosts = const.red_agent_subnets[0, const.host_subnet] & const.host_active
+        target_host = int(jnp.argmax(agent0_hosts))
+        assert agent0_hosts[target_host], "Need an active host in agent 0's subnet"
+
+        # Simulate a phishing session on target_host
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, target_host].set(True),
+            red_session_count=state.red_session_count.at[0, target_host].set(1),
+            red_abstract_session_count=state.red_abstract_session_count.at[0, target_host].set(1),
+            red_server_session_count=state.red_server_session_count.at[0].set(
+                state.red_server_session_count[0] + 1
+            ),
+            red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        counter_after_phish = int(state.red_server_session_count[0])
+        assert counter_after_phish == 2  # 1 initial + 1 phish
+
+        # Blue Restore clears the host — counter must NOT decrease
+        blue_idx = 0
+        state_after_restore = apply_blue_restore(state, const, blue_idx, target_host)
+        counter_after_restore = int(state_after_restore.red_server_session_count[0])
+        assert counter_after_restore == counter_after_phish, (
+            f"Cumulative counter must not decrease after Restore: "
+            f"was {counter_after_phish}, now {counter_after_restore}"
+        )
+
+        # Simulate another phishing session on the same host — counter must grow
+        state2 = state_after_restore.replace(
+            red_sessions=state_after_restore.red_sessions.at[0, target_host].set(True),
+            red_session_count=state_after_restore.red_session_count.at[0, target_host].set(1),
+            red_abstract_session_count=state_after_restore.red_abstract_session_count.at[0, target_host].set(1),
+            red_server_session_count=state_after_restore.red_server_session_count.at[0].set(
+                state_after_restore.red_server_session_count[0] + 1
+            ),
+            red_privilege=state_after_restore.red_privilege.at[0, target_host].set(COMPROMISE_USER),
+            host_compromised=state_after_restore.host_compromised.at[target_host].set(COMPROMISE_USER),
+        )
+        counter_after_rephish = int(state2.red_server_session_count[0])
+        assert counter_after_rephish == 3, (
+            f"After Restore→re-phish, counter should be 3 (1 init + 1 first phish + 1 re-phish), "
+            f"got {counter_after_rephish}"
+        )
+
+    def test_green_phishing_increments_counter(self, jax_const):
+        """Green phishing (apply_green_agents) must increment cumulative counter."""
+        from jaxborg.env import _init_red_state
+
+        const = jax_const
+        state = create_initial_state()
+        state = state.replace(host_services=const.initial_services, host_max_pid=const.host_initial_max_pid)
+        state = _init_red_state(const, state)
+
+        counter_before = int(state.red_server_session_count[0])
+
+        # Run many green steps until a phish occurs
+        key = jax.random.PRNGKey(0)
+        phish_count = 0
+        for i in range(200):
+            key, subkey = jax.random.split(key)
+            state_new = apply_green_agents(state, const, subkey)
+            new_count = int(state_new.red_server_session_count[0])
+            delta = new_count - int(state.red_server_session_count[0])
+            phish_count += delta
+            state = state_new
+            if phish_count > 0:
+                break
+
+        counter_after = int(state.red_server_session_count[0])
+        assert counter_after == counter_before + phish_count, (
+            f"Counter should increase by phish count ({phish_count}), "
+            f"was {counter_before}, now {counter_after}"
+        )
+        assert phish_count > 0, "Expected at least one phishing event in 200 green steps"

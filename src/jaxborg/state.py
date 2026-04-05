@@ -160,8 +160,10 @@ class CC4State:
     red_pending_source_host: chex.Array  # (NUM_RED_AGENTS,) int32 — queued scan source (anchor) host
     # (NUM_RED_AGENTS,) int32 — creation-time abstract session count for exploit 1/N roll
     red_pending_visible_sessions: chex.Array
-    # (NUM_RED_AGENTS,) int32 — monotonic high-water mark of visible abstract sessions.
-    # Replicates CybORG's server_session dict which never removes destroyed sessions.
+    # (NUM_RED_AGENTS,) int32 — cumulative count of unique abstract session IDs
+    # ever observed.  Replicates CybORG's server_session dict which never removes
+    # destroyed sessions: each new phishing/reassignment event adds a new session
+    # ID, and IDs are never deleted even after Blue Restore.
     red_server_session_count: chex.Array
 
     blue_pending_ticks: chex.Array  # (NUM_BLUE_AGENTS,) int32 — 0 = idle
@@ -308,7 +310,7 @@ def create_initial_state() -> CC4State:
         red_pending_source_kind=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         red_pending_source_host=jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32),
         red_pending_visible_sessions=jnp.ones(NUM_RED_AGENTS, dtype=jnp.int32),
-        red_server_session_count=jnp.ones(NUM_RED_AGENTS, dtype=jnp.int32),
+        red_server_session_count=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),
         blue_pending_ticks=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         blue_pending_action=jnp.zeros(NUM_BLUE_AGENTS, dtype=jnp.int32),
         red_pending_fsm_action=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32),

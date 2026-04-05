@@ -35,6 +35,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
 
     red_session_count = session_counts
     red_abstract_session_count = state.red_abstract_session_count
+    red_server_session_count = state.red_server_session_count
     red_suspicious_process_count = state.red_suspicious_process_count
     red_privilege = state.red_privilege
     red_session_is_abstract = state.red_session_is_abstract
@@ -86,6 +87,13 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
             red_session_count = red_session_count.at[dst].set(red_session_count[dst] + moved_counts)
             red_abstract_session_count = red_abstract_session_count.at[dst].set(
                 red_abstract_session_count[dst] + moved_abstract
+            )
+            # CybORG's reassignment creates new session IDs for the destination
+            # agent; these get added to server_session.  Increment the cumulative
+            # counter by the total moved abstract sessions.
+            moved_abstract_total = jnp.sum(moved_abstract)
+            red_server_session_count = red_server_session_count.at[dst].set(
+                red_server_session_count[dst] + moved_abstract_total
             )
             red_suspicious_process_count = red_suspicious_process_count.at[dst].set(
                 red_suspicious_process_count[dst] + moved_suspicious
@@ -302,6 +310,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_abstract_session_count=red_abstract_session_count,
+        red_server_session_count=red_server_session_count,
         red_session_pids=red_session_pids,
         red_session_abstract_pids=red_session_abstract_pids,
         red_session_privileged_pids=red_session_privileged_pids,
