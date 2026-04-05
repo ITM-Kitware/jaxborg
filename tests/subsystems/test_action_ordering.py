@@ -6,7 +6,13 @@ import pytest
 from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP, encode_blue_action
 from jaxborg.actions.green import GREEN_ACCESS_SERVICE
 from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_BLUE_AGENTS, NUM_GREEN_RANDOM_FIELDS, NUM_RED_AGENTS
-from jaxborg.env import TOTAL_ACTION_ACTOR_SLOTS, CC4Env, apply_all_actions_in_order
+from jaxborg.env import (
+    TOTAL_ACTION_ACTOR_SLOTS,
+    CC4Env,
+    _cyborg_priority_execution_order,
+    apply_all_actions_in_order,
+    apply_all_actions_typed,
+)
 
 
 def _move_slots_to_front(*front_slots: int) -> jnp.ndarray:
@@ -101,3 +107,50 @@ def test_apply_all_actions_in_order_changes_green_access_outcome_when_block_move
 
     assert bool(blocked_first.green_asf_this_step[source_host])
     assert not bool(green_first.green_asf_this_step[source_host])
+
+
+def test_typed_path_matches_harness_path_execution_order(env_state):
+    """Verify apply_all_actions_typed produces the same state as apply_all_actions_in_order.
+
+    Regression test: the training path previously shuffled agent execution order
+    within each phase, but CybORG uses a deterministic priority-sorted order.
+    Both paths must produce identical results for the same inputs.
+    """
+    state = env_state.state
+    const = env_state.const.replace(
+        use_green_randoms=jnp.array(False),
+    )
+
+    blue_actions = jnp.full(NUM_BLUE_AGENTS, BLUE_SLEEP, dtype=jnp.int32)
+    red_actions = jnp.full(NUM_RED_AGENTS, RED_SLEEP, dtype=jnp.int32)
+    key_green = jax.random.PRNGKey(99)
+    red_keys = jax.random.split(jax.random.PRNGKey(1), NUM_RED_AGENTS)
+    forced_primary_hosts = jnp.full(NUM_RED_AGENTS, -2, dtype=jnp.int32)
+    forced_primary_pids = jnp.full(NUM_RED_AGENTS, -2, dtype=jnp.int32)
+
+    execution_order = _cyborg_priority_execution_order(blue_actions)
+
+    state_harness = apply_all_actions_in_order(
+        state, const, blue_actions, red_actions, key_green, red_keys,
+        forced_primary_hosts, forced_primary_pids, execution_order,
+    )
+    state_typed = apply_all_actions_typed(
+        state, const, blue_actions, red_actions, key_green, red_keys,
+        forced_primary_hosts, forced_primary_pids, execution_order,
+        use_green_vmap=False,
+    )
+
+    # Compare key state fields
+    fields_to_check = [
+        "host_compromised", "red_sessions", "red_session_count",
+        "green_lwf_this_step", "green_asf_this_step", "red_impact_attempted",
+        "red_server_session_count", "fsm_host_entered",
+        "host_service_reliability", "host_services",
+    ]
+    for field in fields_to_check:
+        harness_val = np.array(getattr(state_harness, field))
+        typed_val = np.array(getattr(state_typed, field))
+        np.testing.assert_array_equal(
+            harness_val, typed_val,
+            err_msg=f"Execution order mismatch on field '{field}'",
+        )

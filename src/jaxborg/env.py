@@ -174,19 +174,19 @@ def apply_all_actions_typed(
     """
     green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
 
-    # CybORG shuffles same-priority actions randomly each step.  Replicate
-    # this by shuffling within each phase using a key derived from key_green.
-    shuffle_key = jax.random.fold_in(key_green, 7919)  # distinct fold-in constant
+    # CybORG sorts actions by priority (ControlTraffic=1, else=99) then
+    # executes in deterministic agent-interface insertion order within each
+    # tier.  The shuffle in sort_action_order() is only for bandwidth
+    # checking (all bandwidth_usage=0 in CC4, so effectively a no-op).
+    # Match this by using a fixed order within each phase.
 
     # --- Phase 1: Blue agents (traffic-control first, then others) ---
     is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
     blue_order = jnp.arange(NUM_BLUE_AGENTS, dtype=jnp.int32)
     blue_priority = jnp.where(is_traffic, 0, 1)
-    # Shuffle within each priority group: combine priority (major) + random (minor)
-    blue_shuffle_key = jax.random.fold_in(shuffle_key, 0)
-    blue_rand = jax.random.uniform(blue_shuffle_key, (NUM_BLUE_AGENTS,))
-    blue_sort_key = blue_priority.astype(jnp.float32) + blue_rand * 0.5
-    blue_order = blue_order[jnp.argsort(blue_sort_key, stable=True)]
+    # Deterministic sort by priority; stable sort preserves agent index order
+    # within the same tier, matching CybORG's dict insertion order.
+    blue_order = blue_order[jnp.argsort(blue_priority, stable=True)]
 
     if blue_keys is None:
         blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
@@ -208,16 +208,6 @@ def apply_all_actions_typed(
         from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
 
         green_host_order = _ordered_green_hosts(const)
-        # Shuffle green agent execution order (CybORG shuffles all priority-99
-        # actions randomly; green agents are the most numerous).
-        # IMPORTANT: only shuffle the first num_green_agents entries (active).
-        # The remaining entries are inactive padding and must stay beyond the
-        # loop's iteration range to avoid skipping active agents.
-        green_shuffle_key = jax.random.fold_in(shuffle_key, 1)
-        rand_keys = jax.random.uniform(green_shuffle_key, (GLOBAL_MAX_HOSTS,))
-        is_active_pos = jnp.arange(GLOBAL_MAX_HOSTS) < const.num_green_agents
-        shuffle_sort = jnp.where(is_active_pos, rand_keys, 2.0)
-        green_host_order = green_host_order[jnp.argsort(shuffle_sort)]
 
         def green_step(i, carry_state):
             host_idx = green_host_order[i]
@@ -225,9 +215,8 @@ def apply_all_actions_typed(
 
         state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
-    # --- Phase 3: Red agents (shuffled to match CybORG's random order) ---
-    red_shuffle_key = jax.random.fold_in(shuffle_key, 2)
-    red_order = jax.random.permutation(red_shuffle_key, NUM_RED_AGENTS)
+    # --- Phase 3: Red agents (deterministic order matching CybORG) ---
+    red_order = jnp.arange(NUM_RED_AGENTS, dtype=jnp.int32)
 
     def red_step(i, carry_state):
         r = red_order[i]
