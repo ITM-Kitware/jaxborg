@@ -155,6 +155,9 @@ class EpisodeResult:
     rewards: list = field(default_factory=list)  # per-step rewards
     cumulative_reward: float = 0.0
     trajectory: list = field(default_factory=list)  # list[StepSnapshot]
+    ria_total: float = 0.0  # sum of RIA (Red Impact) reward over episode
+    lwf_total: float = 0.0  # sum of LWF (Local Work Fails) reward over episode
+    asf_total: float = 0.0  # sum of ASF (Access Service Fails) reward over episode
 
 
 def print_per_agent_action_dist(all_actions_by_agent, label="JAXborg"):
@@ -610,7 +613,7 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
         actions = {f"blue_{i}": actions_arr[i] for i in range(NUM_BLUE_AGENTS)}
 
         key, step_key = jax.random.split(key)
-        new_obs, new_env_state, rewards, dones, _ = env.step(step_key, env_state, actions)
+        new_obs, new_env_state, rewards, dones, info = env.step(step_key, env_state, actions)
 
         # Collect per-step data
         reward_arr = jnp.stack([rewards[f"blue_{i}"] for i in range(NUM_BLUE_AGENTS)])
@@ -625,6 +628,9 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
             "hosts_priv": jnp.sum((compromised == COMPROMISE_PRIVILEGED) & active),
             "red_sessions": jnp.sum(st.red_sessions[:NUM_RED_AGENTS]),
             "mission_phase": st.mission_phase,
+            "reward_ria": info["reward_ria"],
+            "reward_lwf": info["reward_lwf"],
+            "reward_asf": info["reward_asf"],
         }
 
         return (params, key, new_env_state, new_obs), step_data
@@ -678,6 +684,9 @@ def rollout_jaxborg_scan(
     hosts_priv_np = np.asarray(all_step_data["hosts_priv"])
     red_sess_np = np.asarray(all_step_data["red_sessions"])
     phase_np = np.asarray(all_step_data["mission_phase"])
+    ria_np = np.asarray(all_step_data["reward_ria"])  # (num_episodes, 500)
+    lwf_np = np.asarray(all_step_data["reward_lwf"])
+    asf_np = np.asarray(all_step_data["reward_asf"])
 
     elapsed = time.perf_counter() - t0
     ep_totals = rewards_np.sum(axis=1)
@@ -712,6 +721,9 @@ def rollout_jaxborg_scan(
                 rewards=rewards_np[ep].tolist(),
                 cumulative_reward=float(ep_totals[ep]),
                 trajectory=ep_trajectory,
+                ria_total=float(ria_np[ep].sum()),
+                lwf_total=float(lwf_np[ep].sum()),
+                asf_total=float(asf_np[ep].sum()),
             )
         )
 
@@ -816,10 +828,9 @@ def _rollout_cyborg_single_episode(args_tuple):
     import jax.numpy as jnp
     import numpy as np
 
+    from jaxborg.constants import NUM_BLUE_AGENTS
     from jaxborg.topology import build_const_from_cyborg
     from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
-    from jaxborg.constants import NUM_BLUE_AGENTS
-
     from scripts.eval_transfer import (
         _apply_traffic_filter,
         _build_cyborg_mask_cache,
@@ -845,6 +856,52 @@ def _rollout_cyborg_single_episode(args_tuple):
     total = 0.0
     ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
+    # Monkeypatch BlueRewardMachine to track per-component rewards
+    import types as _types
+
+    from CybORG.Simulator.Actions.AbstractActions.Impact import Impact as _Impact
+    from CybORG.Simulator.Actions.GreenActions import GreenAccessService as _GAS
+    from CybORG.Simulator.Actions.GreenActions import GreenLocalWork as _GLW
+
+    ec = inner.environment_controller
+    brm = ec.team_reward_calculators["Blue"]["BlueRewardMachine"]
+    _component_log = {"ria": 0.0, "lwf": 0.0, "asf": 0.0}
+
+    def _tracked_calculate(self, current_state, action_dict, agent_observations, done, state):
+        self.phase_rewards = self.get_phase_rewards(state.mission_phase)
+        reward_list = []
+        for agent_name, action in action_dict.items():
+            if not action:
+                continue
+            act = action[0]
+            if isinstance(act, _Impact):
+                hostname = act.hostname
+            elif isinstance(act, (_GAS, _GLW)):
+                hostname = state.ip_addresses[act.ip_address]
+            else:
+                continue
+            subnet_name = state.hostname_subnet_map[hostname].value
+            sessions = state.sessions[agent_name].values()
+            if len([s.ident for s in sessions if s.active]) > 0:
+                success = agent_observations[agent_name].observations[0].data["success"]
+                rz = self.phase_rewards[subnet_name]
+                if "green" in agent_name and success == False:  # noqa: E712
+                    if isinstance(act, _GLW):
+                        r = rz["LWF"]
+                        reward_list.append(r)
+                        _component_log["lwf"] += r
+                    elif isinstance(act, _GAS):
+                        r = rz["ASF"]
+                        reward_list.append(r)
+                        _component_log["asf"] += r
+                elif "red" in agent_name and success and isinstance(act, _Impact):
+                    r = rz["RIA"]
+                    reward_list.append(r)
+                    _component_log["ria"] += r
+        return sum(reward_list)
+
+    brm.calculate_reward = _types.MethodType(_tracked_calculate, brm)
+
     for _ in range(500):
         if env.agents:
             rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
@@ -869,31 +926,42 @@ def _rollout_cyborg_single_episode(args_tuple):
                 ep_actions_by_agent[agent_idx].append(action_idx)
         else:
             from CybORG.Simulator.Actions import Sleep
+
             actions = {a: Sleep() for a in env.possible_agents}
 
         observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
         total += mean(rewards.values())
 
-    return ep, total, ep_actions_by_agent
+    return ep, total, ep_actions_by_agent, _component_log["ria"], _component_log["lwf"], _component_log["asf"]
 
 
-def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0, bank_match_size=None,
-                   checkpoint_path=None, parallel=True, max_workers=None):
+def rollout_cyborg(
+    policy,
+    params,
+    policy_kind,
+    num_episodes=3,
+    deterministic=False,
+    seed=0,
+    bank_match_size=None,
+    checkpoint_path=None,
+    parallel=True,
+    max_workers=None,
+):
     if parallel and checkpoint_path:
+        import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
 
-        import multiprocessing
         if max_workers is None:
             max_workers = min(num_episodes, multiprocessing.cpu_count(), 10)
 
         print(f"  Running {num_episodes} CybORG episodes in parallel ({max_workers} workers)...", flush=True)
         t0 = time.perf_counter()
-        args_list = [
-            (ep, checkpoint_path, deterministic, seed, bank_match_size)
-            for ep in range(num_episodes)
-        ]
+        args_list = [(ep, checkpoint_path, deterministic, seed, bank_match_size) for ep in range(num_episodes)]
         all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         episode_rewards = [0.0] * num_episodes
+        episode_ria = [0.0] * num_episodes
+        episode_lwf = [0.0] * num_episodes
+        episode_asf = [0.0] * num_episodes
 
         # Use "spawn" to avoid fork() + CUDA deadlock; sentinel tells
         # spawned children to set JAX_PLATFORMS=cpu before module-level imports
@@ -901,8 +969,13 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
         ctx = multiprocessing.get_context("spawn")
         try:
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
-                for ep, reward, ep_actions_by_agent in pool.map(_rollout_cyborg_single_episode, args_list):
+                for ep, reward, ep_actions_by_agent, ria, lwf, asf in pool.map(
+                    _rollout_cyborg_single_episode, args_list
+                ):
                     episode_rewards[ep] = reward
+                    episode_ria[ep] = ria
+                    episode_lwf[ep] = lwf
+                    episode_asf[ep] = asf
                     for i in range(NUM_BLUE_AGENTS):
                         all_actions_by_agent[i].extend(ep_actions_by_agent[i])
                     print(f"  CybORG  ep {ep + 1}: reward={reward:.1f}", flush=True)
@@ -911,7 +984,15 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
 
         elapsed = time.perf_counter() - t0
         print(f"  {num_episodes} CybORG episodes done in {elapsed:.0f}s ({elapsed / num_episodes:.1f}s/ep effective)")
-        return np.array([]), np.array(episode_rewards), all_actions_by_agent
+        flat_actions = [a for agent_actions in all_actions_by_agent for a in agent_actions]
+        return (
+            np.array(flat_actions),
+            np.array(episode_rewards),
+            all_actions_by_agent,
+            np.array(episode_ria),
+            np.array(episode_lwf),
+            np.array(episode_asf),
+        )
 
     # Fallback: sequential (no checkpoint path or parallel=False)
     batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
@@ -972,7 +1053,14 @@ def rollout_cyborg(policy, params, policy_kind, num_episodes=3, deterministic=Fa
         all_actions.extend(ep_actions)
         episode_rewards.append(total)
 
-    return np.array(all_actions), np.array(episode_rewards), all_actions_by_agent
+    return (
+        np.array(all_actions),
+        np.array(episode_rewards),
+        all_actions_by_agent,
+        np.zeros(num_episodes),
+        np.zeros(num_episodes),
+        np.zeros(num_episodes),
+    )
 
 
 def rollout_independent_transfer_synced_red(
@@ -1563,7 +1651,6 @@ def run_sleep_baseline(episodes=5):
     return mean(totals)
 
 
-
 def run_random_baseline(episodes=5, seed=42):
     rng = np.random.default_rng(seed)
     totals = []
@@ -1889,7 +1976,9 @@ def main():
             jax_future = pool.submit(_run_jaxborg)
             cyborg_future = pool.submit(_run_cyborg)
             jax_actions, jax_rewards, jax_results = jax_future.result()
-            cyborg_actions, cyborg_rewards, cyborg_actions_by_agent = cyborg_future.result()
+            cyborg_actions, cyborg_rewards, cyborg_actions_by_agent, cyborg_ria, cyborg_lwf, cyborg_asf = (
+                cyborg_future.result()
+            )
 
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
@@ -1897,6 +1986,36 @@ def main():
         print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
         print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
+
+        # Per-component reward breakdown
+        if jax_results and hasattr(jax_results[0], "ria_total"):
+            jax_ria = np.array([r.ria_total for r in jax_results])
+            jax_lwf = np.array([r.lwf_total for r in jax_results])
+            jax_asf = np.array([r.asf_total for r in jax_results])
+            print("\n" + "=" * 70)
+            print("PER-COMPONENT REWARD BREAKDOWN")
+            print("=" * 70)
+            print(f"{'Component':<20} {'JAXborg':>12} {'CybORG':>12} {'Gap (J-C)':>12}")
+            print("-" * 56)
+            for label, j_arr, c_arr in [
+                ("RIA (Red Impact)", jax_ria, cyborg_ria),
+                ("LWF (LocalWork)", jax_lwf, cyborg_lwf),
+                ("ASF (AccessSvc)", jax_asf, cyborg_asf),
+            ]:
+                j_mean = float(j_arr.mean()) if len(j_arr) > 0 else 0.0
+                c_mean = float(c_arr.mean()) if len(c_arr) > 0 else 0.0
+                print(f"{label:<20} {j_mean:>12.1f} {c_mean:>12.1f} {j_mean - c_mean:>+12.1f}")
+            j_total = float(jax_rewards.mean())
+            c_total = float(cyborg_rewards.mean())
+            print("-" * 56)
+            print(f"{'Total':<20} {j_total:>12.1f} {c_total:>12.1f} {j_total - c_total:>+12.1f}")
+            # Sanity: check sum of components matches total
+            j_comp_sum = float(jax_ria.mean() + jax_lwf.mean() + jax_asf.mean())
+            c_comp_sum = float(cyborg_ria.mean() + cyborg_lwf.mean() + cyborg_asf.mean())
+            if abs(j_comp_sum - j_total) > 1.0:
+                print(f"  WARNING: JAXborg component sum ({j_comp_sum:.1f}) != total ({j_total:.1f})")
+            if abs(c_comp_sum - c_total) > 1.0:
+                print(f"  WARNING: CybORG component sum ({c_comp_sum:.1f}) != total ({c_total:.1f})")
     else:
         mode_label = "STOCHASTIC" if not deterministic else "DETERMINISTIC"
         print("\n" + "=" * 70)

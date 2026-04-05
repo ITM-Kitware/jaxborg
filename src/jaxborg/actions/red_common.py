@@ -150,10 +150,14 @@ def compute_visible_sessions(
     const: CC4Const,
     agent_id: int,
 ) -> chex.Array:
-    """Count abstract sessions in allowed subnets (CybORG's server_session size)."""
+    """Count abstract sessions across all active hosts (CybORG's server_session size).
+
+    CybORG's server_session dict includes sessions from ALL subnets the agent
+    has ever observed — including cross-subnet exploit sessions that were later
+    reassigned to other agents.  Do NOT filter by allowed subnets.
+    """
     abstract_counts = state.red_abstract_session_count[agent_id]
-    allowed_hosts = const.red_agent_subnets[agent_id, const.host_subnet]
-    return jnp.maximum(jnp.sum(abstract_counts * allowed_hosts), jnp.int32(1))
+    return jnp.maximum(jnp.sum(abstract_counts * const.host_active), jnp.int32(1))
 
 
 def exploit_common_preconditions(
