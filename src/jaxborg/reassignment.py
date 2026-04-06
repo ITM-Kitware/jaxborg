@@ -187,7 +187,7 @@ def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State
     red_discovered = red_discovered | red_sessions
     # Newly activated agents also discover their start host — CybORG pre-seeds
     # aspace.ip_address with the start host at reset, and it persists through
-    # activation.
+    # activation.  FsmRedCC4Env strips this from the FSM-visible discovery set.
     for r in range(NUM_RED_AGENTS):
         start_h = const.red_start_hosts[r]
         red_discovered = jnp.where(

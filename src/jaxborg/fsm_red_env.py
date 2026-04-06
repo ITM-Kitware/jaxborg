@@ -118,6 +118,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
         state_before = fsm_red_apply_delayed_update(env_state.state)
+        active_before = state_before.red_agent_active
         (
             red_action_arr,
             target_hosts_arr,
@@ -135,6 +136,25 @@ class FsmRedCC4Env(MultiAgentEnv):
 
         all_actions = {**blue_actions, **red_actions}
         obs, env_state, rewards, dones, info = self._env.step_env(key, env_state, all_actions)
+
+        # CybORG's reassignment adds start host to aspace.ip_address, but the
+        # FSM agent's host_states only includes hosts observed via
+        # _process_new_observations.  Strip start host discovery for agents
+        # activated this step so the FSM-visible state matches CybORG's FSM.
+        newly_active = ~active_before & env_state.state.red_agent_active
+        discovered = env_state.state.red_discovered_hosts
+        for r in range(NUM_RED_AGENTS):
+            start_h = env_state.const.red_start_hosts[r]
+            has_session_at_start = env_state.state.red_sessions[r, start_h]
+            discovered = jnp.where(
+                newly_active[r] & ~has_session_at_start,
+                discovered.at[r, start_h].set(False),
+                discovered,
+            )
+        env_state = CC4EnvState(
+            state=env_state.state.replace(red_discovered_hosts=discovered),
+            const=env_state.const,
+        )
 
         executed_flags = [env_state.state.red_pending_ticks[r] == 0 for r in range(NUM_RED_AGENTS)]
 

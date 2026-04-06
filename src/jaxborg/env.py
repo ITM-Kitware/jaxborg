@@ -388,11 +388,12 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
             red_privilege.at[r, start_host].set(COMPROMISE_USER),
             red_privilege,
         )
-        red_discovered = jnp.where(
-            is_active,
-            red_discovered.at[r, start_host].set(True),
-            red_discovered,
-        )
+        # CybORG pre-seeds aspace.ip_address with the start host at reset
+        # for ALL agents (including initially inactive ones).  Always mark
+        # start host as discovered so CC4Env action replay has the correct
+        # action space.  FsmRedCC4Env._strip_inactive_red_reset_knowledge
+        # will clear this for inactive agents to match the FSM's host_states.
+        red_discovered = red_discovered.at[r, start_host].set(True)
         host_compromised = jnp.where(
             is_active,
             host_compromised.at[start_host].set(jnp.maximum(host_compromised[start_host], COMPROMISE_USER)),
@@ -478,11 +479,13 @@ class CC4Env(MultiAgentEnv):
         if topology_mode == "cyborg_bank":
             self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
             # Green random bank encodes CybORG's specific green agent decisions
-            # for a reference trajectory.  These tokens become stale (selecting
-            # inactive services) when blue/red actions diverge from the recording,
-            # producing spurious LWF failures.  Only load for differential sync.
-            if sync_red_policy_bank:
+            # for a reference trajectory.  Always load in non-training mode so
+            # green phishing/LWF decisions match CybORG.  In training mode tokens
+            # become stale when blue actions change services, so only load when
+            # explicitly syncing the full policy bank.
+            if not training_mode or sync_red_policy_bank:
                 self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+            if sync_red_policy_bank:
                 self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
         elif topology_mode != "pure":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
