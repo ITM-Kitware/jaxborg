@@ -97,6 +97,7 @@ def test_generic_deploy_decoy_pending_ticks_match_jax():
 
 
 def test_generic_deploy_decoy_pending_mask_matches_jax_projection():
+    """Mask during pending decoy action matches CybORG — pending state doesn't alter mask."""
     target_hostname = "restricted_zone_b_subnet_server_host_1"
     blue_cls = _make_scripted_blue_agent(
         "blue_agent_2",
@@ -131,9 +132,8 @@ def test_generic_deploy_decoy_pending_mask_matches_jax_projection():
         harness.jax_const,
     )
 
-    # With collapsed action space, pending decoy maps to a single index per host slot
-    pending_indices = np.flatnonzero(cyborg_mask).tolist()
-    assert len(pending_indices) == 1, f"Expected 1 pending decoy index, got {pending_indices}"
+    # Pending state does not affect the mask (CybORG parity) — mask should
+    # still expose all normally valid actions, not just the pending one.
     np.testing.assert_array_equal(jax_mask, cyborg_mask)
 
 

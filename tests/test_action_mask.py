@@ -144,7 +144,8 @@ class TestJITCompatibility:
 
 
 class TestBusyBlueMask:
-    def test_busy_agent_only_exposes_pending_action(self):
+    def test_busy_agent_mask_unchanged(self):
+        """Mask is unaffected by pending-action state (matches CybORG behavior)."""
         from jaxborg.env import CC4Env
 
         env = CC4Env(num_steps=100)
@@ -159,12 +160,12 @@ class TestBusyBlueMask:
         target_host = int(np.flatnonzero(controllable)[0])
         pending_action = encode_blue_action("Restore", target_host, 0, const=const)
 
+        idle_mask = np.array(compute_blue_action_mask(const, 0, state), dtype=bool)
         busy_state = process_blue_with_duration(state, const, 0, pending_action)
-        mask = np.array(compute_blue_action_mask(const, 0, busy_state), dtype=bool)
+        busy_mask = np.array(compute_blue_action_mask(const, 0, busy_state), dtype=bool)
 
         assert int(busy_state.blue_pending_ticks[0]) == 4
-        assert mask.sum() == 1
-        assert mask[pending_action]
+        np.testing.assert_array_equal(busy_mask, idle_mask)
 
 
 class TestWithRealTopology:

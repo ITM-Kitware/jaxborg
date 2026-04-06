@@ -31,9 +31,6 @@ def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const
         host_idx = mappings.hostname_to_idx[action.hostname]
         jax_idx = encode_blue_action("DeployDecoy", host_idx, agent_id, const=const)
         if jax_idx == BLUE_SLEEP:
-            # Unsupported host (e.g. router) — when pending, JAX masks to Sleep-only
-            if label.startswith("[Pending]"):
-                return [BLUE_SLEEP]
             return []
         return [jax_idx]
 
@@ -44,17 +41,13 @@ def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const
 
 
 def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
-    """Project BlueFlatWrapper's live action mask into JAX canonical indices."""
+    """Project BlueFlatWrapper's live action mask into JAX canonical indices.
+
+    CybORG's BlueFixedActionWrapper mask is based purely on host/session
+    validity — pending actions do NOT affect the mask.  CybORG silently
+    continues any in-progress action regardless of the agent's choice.
+    """
     controller = wrapper.env.environment_controller
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is not None and pending["remaining_ticks"] > 0:
-        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
-        label = f"[Pending] {type(pending['action']).__name__}"
-        for jax_idx in cyborg_blue_action_to_jax_indices(
-            pending["action"], label, agent_name, mappings, const, controller.state
-        ):
-            jax_mask[jax_idx] = True
-        return jax_mask
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
     action_space = wrapper.get_action_space(agent_name)

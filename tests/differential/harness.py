@@ -1862,8 +1862,8 @@ class CC4DifferentialHarness:
         self._blue_unsupported_pending = next_pending
 
         # Mirror externally-tracked unsupported pending actions into JAX state
-        # so compute_blue_action_mask() sees the same busy/pending state as the
-        # CybORG wrapper path during differential checks.
+        # so duration.py continues the pending action correctly (the mask is
+        # no longer affected by pending state — CybORG parity).
         blue_pending_ticks = self.jax_state.blue_pending_ticks
         blue_pending_action = self.jax_state.blue_pending_action
         synced = False
