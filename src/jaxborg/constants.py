@@ -54,10 +54,10 @@ ACTION_HOST_SLOTS = NUM_SUBNETS * OBS_HOSTS_PER_SUBNET
 NUM_MESSAGES = NUM_BLUE_AGENTS - 1
 # PID identity slots used for red session PID tracking.
 # Peak observed: 33 with random blue over 50 seeds × 500 steps.
-# 64 gives ~2x headroom while keeping CC4State manageable.
-MAX_TRACKED_SESSION_PIDS = 64
+# 40 gives ~21% headroom over peak (2,191 sps vs 1,543 at 64).
+MAX_TRACKED_SESSION_PIDS = 40
 # PID identity slots used for blue suspicious PID memory.
-MAX_TRACKED_SUSPICIOUS_PIDS = 64
+MAX_TRACKED_SUSPICIOUS_PIDS = 40
 ABSTRACT_RANK_NONE = 1_000_000
 BLUE_OBS_SIZE = (
     1
