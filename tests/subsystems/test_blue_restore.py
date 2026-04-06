@@ -73,17 +73,29 @@ def _find_blue_for_host(const, host):
 
 
 class TestBlueRestoreEncoding:
+    def _agent0_host(self, jax_const):
+        """Find a non-router host in agent 0's observed subnets."""
+        active = np.array(jax_const.host_active, dtype=bool)
+        ctrl = (
+            np.array(jax_const.blue_agent_hosts[0], dtype=bool)
+            & active
+            & ~np.array(jax_const.host_is_router, dtype=bool)
+        )
+        return int(np.flatnonzero(ctrl)[0])
+
     def test_encode_restore(self, jax_const):
-        action_idx = encode_blue_action("Restore", 5, 0, const=jax_const)
+        h = self._agent0_host(jax_const)
+        action_idx = encode_blue_action("Restore", h, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_RESTORE
-        assert int(target_host) == 5
+        assert int(target_host) == h
 
     def test_decode_restore(self, jax_const):
-        action_idx = encode_blue_action("Restore", 5, 0, const=jax_const)
+        h = self._agent0_host(jax_const)
+        action_idx = encode_blue_action("Restore", h, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_RESTORE
-        assert int(target_host) == 5
+        assert int(target_host) == h
 
 
 class TestApplyBlueRestore:

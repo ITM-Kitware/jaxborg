@@ -169,17 +169,29 @@ def _inject_pid_model_from_cyborg(state, cyborg_state, sorted_hosts):
 
 
 class TestBlueRemoveEncoding:
+    def _agent0_host(self, jax_const):
+        """Find a non-router host in agent 0's observed subnets."""
+        active = np.array(jax_const.host_active, dtype=bool)
+        ctrl = (
+            np.array(jax_const.blue_agent_hosts[0], dtype=bool)
+            & active
+            & ~np.array(jax_const.host_is_router, dtype=bool)
+        )
+        return int(np.flatnonzero(ctrl)[0])
+
     def test_encode_remove(self, jax_const):
-        action_idx = encode_blue_action("Remove", 5, 0, const=jax_const)
+        h = self._agent0_host(jax_const)
+        action_idx = encode_blue_action("Remove", h, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_REMOVE
-        assert int(target_host) == 5
+        assert int(target_host) == h
 
     def test_decode_remove(self, jax_const):
-        action_idx = encode_blue_action("Remove", 5, 0, const=jax_const)
+        h = self._agent0_host(jax_const)
+        action_idx = encode_blue_action("Remove", h, 0, const=jax_const)
         action_type, target_host, *_ = decode_blue_action(action_idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_REMOVE
-        assert int(target_host) == 5
+        assert int(target_host) == h
 
 
 class TestApplyBlueRemove:

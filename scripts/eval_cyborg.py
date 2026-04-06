@@ -121,7 +121,10 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return [jax_idx]
 
     try:
-        return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
+        jax_idx = cyborg_blue_to_jax(action, agent_name, mappings, const=const)
+        if jax_idx == BLUE_SLEEP:
+            return []  # host not in agent's observed subnets
+        return [jax_idx]
     except (KeyError, ValueError):
         return []
 

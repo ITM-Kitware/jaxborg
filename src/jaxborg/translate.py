@@ -53,7 +53,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_SUBNETS, OBS_HOSTS_PER_SUBNET
+from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, GLOBAL_MAX_HOSTS, OBS_HOSTS_PER_SUBNET
 from jaxborg.topology import CYBORG_SUBNET_SUFFIX, CYBORG_SUFFIX_TO_ID
 
 
@@ -102,10 +102,15 @@ def build_mappings_from_cyborg(cyborg_env) -> CC4Mappings:
     )
 
 
-def _slot_to_global(flat_slot: int, const) -> int:
-    """Resolve a canonical flat slot to a global host index via const.obs_host_map."""
-    sid = flat_slot // OBS_HOSTS_PER_SUBNET
+def _slot_to_global(flat_slot: int, const, agent_id: int) -> int:
+    """Resolve an agent-relative flat slot to a global host index.
+
+    flat_slot = relative_subnet_idx * OBS_HOSTS_PER_SUBNET + slot_within,
+    where relative_subnet_idx indexes into const.blue_obs_subnets[agent_id].
+    """
+    relative_subnet = flat_slot // OBS_HOSTS_PER_SUBNET
     slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+    sid = int(const.blue_obs_subnets[agent_id, relative_subnet])
     return int(const.obs_host_map[sid, slot_within])
 
 
@@ -339,12 +344,12 @@ def cyborg_blue_to_jax(action, agent_name: str, mappings: CC4Mappings, const=Non
     if cls_name == "BlockTrafficZone":
         from_sid = CYBORG_SUFFIX_TO_ID[action.from_subnet]
         to_sid = CYBORG_SUFFIX_TO_ID[action.to_subnet]
-        return encode_blue_action("BlockTrafficZone", -1, aid, src_subnet=from_sid, dst_subnet=to_sid)
+        return encode_blue_action("BlockTrafficZone", -1, aid, const=const, src_subnet=from_sid, dst_subnet=to_sid)
 
     if cls_name == "AllowTrafficZone":
         from_sid = CYBORG_SUFFIX_TO_ID[action.from_subnet]
         to_sid = CYBORG_SUFFIX_TO_ID[action.to_subnet]
-        return encode_blue_action("AllowTrafficZone", -1, aid, src_subnet=from_sid, dst_subnet=to_sid)
+        return encode_blue_action("AllowTrafficZone", -1, aid, const=const, src_subnet=from_sid, dst_subnet=to_sid)
 
     raise ValueError(f"Unknown CybORG blue action class: {cls_name}")
 
@@ -380,28 +385,30 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
     for start, end, cls in _hostname_actions:
         if start <= action_idx < end:
             flat_slot = action_idx - start
-            host_idx = _slot_to_global(flat_slot, const)
+            host_idx = _slot_to_global(flat_slot, const, agent_id)
             hostname = mappings.idx_to_hostname[host_idx]
             return cls(session=session, agent=agent_name, hostname=hostname)
 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
         flat_slot = action_idx - BLUE_DECOY_START
-        host_idx = _slot_to_global(flat_slot, const)
+        host_idx = _slot_to_global(flat_slot, const, agent_id)
         hostname = mappings.idx_to_hostname[host_idx]
         return DeployDecoy(session=session, agent=agent_name, hostname=hostname)
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START
-        src = offset // NUM_SUBNETS
-        dst = offset % NUM_SUBNETS
+        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
+        dst = int(const.blue_obs_subnets[agent_id, rel_dst])
         from_subnet = mappings.subnet_names[src]
         to_subnet = mappings.subnet_names[dst]
         return BlockTrafficZone(session=session, agent=agent_name, from_subnet=from_subnet, to_subnet=to_subnet)
 
     if BLUE_ALLOW_TRAFFIC_START <= action_idx < BLUE_ALLOW_TRAFFIC_END:
         offset = action_idx - BLUE_ALLOW_TRAFFIC_START
-        src = offset // NUM_SUBNETS
-        dst = offset % NUM_SUBNETS
+        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
+        dst = int(const.blue_obs_subnets[agent_id, rel_dst])
         from_subnet = mappings.subnet_names[src]
         to_subnet = mappings.subnet_names[dst]
         return AllowTrafficZone(session=session, agent=agent_name, from_subnet=from_subnet, to_subnet=to_subnet)
@@ -433,7 +440,7 @@ def describe_red_action(action_idx: int, mappings: CC4Mappings) -> str:
     return f"Unknown({action_idx})"
 
 
-def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> str:
+def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None, agent_id: int = 0) -> str:
     if action_idx == BLUE_SLEEP:
         return "Sleep"
     if action_idx == BLUE_MONITOR:
@@ -448,7 +455,7 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> 
         if start <= action_idx < end:
             flat_slot = action_idx - start
             if const is not None:
-                host_idx = _slot_to_global(flat_slot, const)
+                host_idx = _slot_to_global(flat_slot, const, agent_id)
             else:
                 host_idx = flat_slot
             hostname = mappings.idx_to_hostname.get(host_idx, f"slot_{flat_slot}")
@@ -457,7 +464,7 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> 
     if BLUE_DECOY_START <= action_idx < BLUE_DECOY_END:
         flat_slot = action_idx - BLUE_DECOY_START
         if const is not None:
-            host_idx = _slot_to_global(flat_slot, const)
+            host_idx = _slot_to_global(flat_slot, const, agent_id)
         else:
             host_idx = flat_slot
         hostname = mappings.idx_to_hostname.get(host_idx, f"slot_{flat_slot}")
@@ -465,14 +472,22 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None) -> 
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START
-        src = offset // NUM_SUBNETS
-        dst = offset % NUM_SUBNETS
+        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
+        if const is not None:
+            dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+        else:
+            dst = rel_dst
         return f"BlockTrafficZone({mappings.subnet_names.get(src, src)}->{mappings.subnet_names.get(dst, dst)})"
 
     if BLUE_ALLOW_TRAFFIC_START <= action_idx < BLUE_ALLOW_TRAFFIC_END:
         offset = action_idx - BLUE_ALLOW_TRAFFIC_START
-        src = offset // NUM_SUBNETS
-        dst = offset % NUM_SUBNETS
+        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
+        if const is not None:
+            dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+        else:
+            dst = rel_dst
         return f"AllowTrafficZone({mappings.subnet_names.get(src, src)}->{mappings.subnet_names.get(dst, dst)})"
 
     return f"Unknown({action_idx})"

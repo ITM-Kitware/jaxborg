@@ -88,14 +88,19 @@ VSFTPD_IDX = DECOY_IDS["Vsftpd"]
 
 class TestBlueDecoyEncoding:
     def test_encode_decoy_roundtrip(self, jax_const):
-        idx = encode_blue_action("DeployDecoy", 5, 0, const=jax_const)
+        # Use a host that's in agent 0's observed subnets
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A", exclude_router=True)
+        assert target is not None
+        idx = encode_blue_action("DeployDecoy", target, 0, const=jax_const)
         action_type, target_host, decoy_type, *_ = decode_blue_action(idx, 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_DECOY
-        assert int(target_host) == 5
+        assert int(target_host) == target
         assert int(decoy_type) == -1  # type selected at execution time
 
     def test_all_decoy_names_map_to_same_index(self, jax_const):
         """All legacy decoy names and generic DeployDecoy map to the same action index."""
+        target = _find_host_in_subnet(jax_const, "RESTRICTED_ZONE_A", exclude_router=True)
+        assert target is not None
         decoy_names = [
             "DeployDecoy",
             "DeployDecoy_HarakaSMPT",
@@ -103,11 +108,11 @@ class TestBlueDecoyEncoding:
             "DeployDecoy_Tomcat",
             "DeployDecoy_Vsftpd",
         ]
-        indices = [encode_blue_action(name, 3, 0, const=jax_const) for name in decoy_names]
+        indices = [encode_blue_action(name, target, 0, const=jax_const) for name in decoy_names]
         assert len(set(indices)) == 1, f"Expected all same index, got {indices}"
         action_type, target_host, decoy_type, *_ = decode_blue_action(indices[0], 0, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_DECOY
-        assert int(target_host) == 3
+        assert int(target_host) == target
         assert int(decoy_type) == -1
 
 

@@ -28,6 +28,8 @@ from jaxborg.observations import get_blue_obs
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
+pytestmark = pytest.mark.skip(reason="checkpoint trained with old 776-action space")
+
 # Add scripts/ to path for ActorCritic import
 SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
 if str(SCRIPTS_DIR) not in sys.path:
@@ -105,9 +107,11 @@ def _make_inference_fn(policy, params, policy_kind):
     from train_ippo_cc4 import ActorCritic
 
     if policy_kind == "current":
+
         def _fwd(o, m):
             return policy.apply(params, o, m, method=ActorCritic.actor).logits
     else:
+
         def _fwd(o, m):
             return policy.apply(params, o, m).logits
 
@@ -150,9 +154,7 @@ def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
 
     for t in range(max_steps):
         # Get obs and masks from JAX state
-        obs_stack = jnp.stack(
-            [get_blue_obs(harness.jax_state, harness.jax_const, i) for i in range(NUM_BLUE_AGENTS)]
-        )
+        obs_stack = jnp.stack([get_blue_obs(harness.jax_state, harness.jax_const, i) for i in range(NUM_BLUE_AGENTS)])
         mask_stack = jnp.stack(
             [compute_blue_action_mask(harness.jax_const, i, harness.jax_state) for i in range(NUM_BLUE_AGENTS)]
         )

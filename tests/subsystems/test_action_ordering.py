@@ -73,7 +73,9 @@ def test_apply_all_actions_in_order_changes_green_access_outcome_when_block_move
         use_green_randoms=jnp.array(True),
     )
 
-    block_action = encode_blue_action("BlockTrafficZone", -1, blue_id, src_subnet=src_sid, dst_subnet=dst_sid)
+    block_action = encode_blue_action(
+        "BlockTrafficZone", -1, blue_id, const=const, src_subnet=src_sid, dst_subnet=dst_sid
+    )
     blue_actions = jnp.full(NUM_BLUE_AGENTS, BLUE_SLEEP, dtype=jnp.int32).at[blue_id].set(block_action)
     red_actions = jnp.full(NUM_RED_AGENTS, RED_SLEEP, dtype=jnp.int32)
     forced_primary_hosts = jnp.full(NUM_RED_AGENTS, -2, dtype=jnp.int32)
@@ -131,26 +133,47 @@ def test_typed_path_matches_harness_path_execution_order(env_state):
     execution_order = _cyborg_priority_execution_order(blue_actions)
 
     state_harness = apply_all_actions_in_order(
-        state, const, blue_actions, red_actions, key_green, red_keys,
-        forced_primary_hosts, forced_primary_pids, execution_order,
+        state,
+        const,
+        blue_actions,
+        red_actions,
+        key_green,
+        red_keys,
+        forced_primary_hosts,
+        forced_primary_pids,
+        execution_order,
     )
     state_typed = apply_all_actions_typed(
-        state, const, blue_actions, red_actions, key_green, red_keys,
-        forced_primary_hosts, forced_primary_pids, execution_order,
+        state,
+        const,
+        blue_actions,
+        red_actions,
+        key_green,
+        red_keys,
+        forced_primary_hosts,
+        forced_primary_pids,
+        execution_order,
         use_green_vmap=False,
     )
 
     # Compare key state fields
     fields_to_check = [
-        "host_compromised", "red_sessions", "red_session_count",
-        "green_lwf_this_step", "green_asf_this_step", "red_impact_attempted",
-        "red_server_session_count", "fsm_host_entered",
-        "host_service_reliability", "host_services",
+        "host_compromised",
+        "red_sessions",
+        "red_session_count",
+        "green_lwf_this_step",
+        "green_asf_this_step",
+        "red_impact_attempted",
+        "red_server_session_count",
+        "fsm_host_entered",
+        "host_service_reliability",
+        "host_services",
     ]
     for field in fields_to_check:
         harness_val = np.array(getattr(state_harness, field))
         typed_val = np.array(getattr(state_typed, field))
         np.testing.assert_array_equal(
-            harness_val, typed_val,
+            harness_val,
+            typed_val,
             err_msg=f"Execution order mismatch on field '{field}'",
         )

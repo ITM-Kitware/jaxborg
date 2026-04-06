@@ -53,7 +53,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
-    ACTION_HOST_SLOTS,
+    BLUE_ACTION_HOST_SLOTS,
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
@@ -91,9 +91,9 @@ ACTION_TYPE_NAMES = [
 ACTION_TYPE_RANGES = [
     (BLUE_SLEEP, BLUE_SLEEP + 1),
     (BLUE_MONITOR, BLUE_MONITOR + 1),
-    (BLUE_ANALYSE_START, BLUE_ANALYSE_START + ACTION_HOST_SLOTS),
-    (BLUE_REMOVE_START, BLUE_REMOVE_START + ACTION_HOST_SLOTS),
-    (BLUE_RESTORE_START, BLUE_RESTORE_START + ACTION_HOST_SLOTS),
+    (BLUE_ANALYSE_START, BLUE_ANALYSE_START + BLUE_ACTION_HOST_SLOTS),
+    (BLUE_REMOVE_START, BLUE_REMOVE_START + BLUE_ACTION_HOST_SLOTS),
+    (BLUE_RESTORE_START, BLUE_RESTORE_START + BLUE_ACTION_HOST_SLOTS),
     (BLUE_DECOY_START, BLUE_BLOCK_TRAFFIC_START),
     (BLUE_BLOCK_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_START),
     (BLUE_ALLOW_TRAFFIC_START, BLUE_ALLOW_TRAFFIC_END),
@@ -293,16 +293,20 @@ def make_batched_inference_fn(policy, params, policy_kind, deterministic):
     return batched_step
 
 
-def _apply_traffic_filter(mask, blocked_zones):
+def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
     """Filter no-op traffic actions from a mask using blocked_zones state.
 
     Same logic used in training: AllowTraffic only valid when route IS blocked,
     BlockTraffic only valid when route is NOT blocked.
     """
-    offsets = jnp.arange(NUM_SUBNETS * NUM_SUBNETS)
-    src = offsets // NUM_SUBNETS
-    dst = offsets % NUM_SUBNETS
-    is_blocked = blocked_zones[dst, src]
+    from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS
+
+    offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
+    src = offsets // BLUE_MAX_OBSERVED_SUBNETS
+    rel_dst = offsets % BLUE_MAX_OBSERVED_SUBNETS
+    abs_dst = const.blue_obs_subnets[agent_id, rel_dst]
+    safe_dst = jnp.clip(abs_dst, 0, NUM_SUBNETS - 1)
+    is_blocked = blocked_zones[safe_dst, src] & (abs_dst >= 0)
 
     mask = mask.at[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END].set(
         mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] & is_blocked
@@ -318,7 +322,7 @@ def _training_mask(const, agent_id, state):
     mask = compute_blue_action_mask(const, agent_id, state)
     if state is None:
         return mask
-    return _apply_traffic_filter(mask, state.blocked_zones)
+    return _apply_traffic_filter(mask, state.blocked_zones, const, agent_id)
 
 
 def _cyborg_blocked_zones(controller):
@@ -373,7 +377,10 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return [jax_idx]
 
     try:
-        return [cyborg_blue_to_jax(action, agent_name, mappings, const=const)]
+        jax_idx = cyborg_blue_to_jax(action, agent_name, mappings, const=const)
+        if jax_idx == BLUE_SLEEP:
+            return []  # host not in agent's observed subnets
+        return [jax_idx]
     except (KeyError, ValueError):
         return []
 
@@ -912,7 +919,9 @@ def _rollout_cyborg_single_episode(args_tuple):
                 _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
                 for agent_name in env.agents
             ]
-            masks = jnp.stack([_apply_traffic_filter(jnp.array(m), blocked_zones) for m in raw_masks])
+            masks = jnp.stack(
+                [_apply_traffic_filter(jnp.array(m), blocked_zones, const, i) for i, m in enumerate(raw_masks)]
+            )
             obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in env.agents])
 
             actions_arr, _ = batched_step(obs_stack, masks, act_keys)
@@ -1024,7 +1033,9 @@ def rollout_cyborg(
                     _live_blue_wrapper_mask_in_jax_space_cached(env, agent_name, mappings, const, mask_cache)
                     for agent_name in env.agents
                 ]
-                masks = jnp.stack([_apply_traffic_filter(jnp.array(m), blocked_zones) for m in raw_masks])
+                masks = jnp.stack(
+                    [_apply_traffic_filter(jnp.array(m), blocked_zones, const, i) for i, m in enumerate(raw_masks)]
+                )
                 obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in env.agents])
 
                 # Batched policy inference (1 forward pass instead of 5)
@@ -1141,7 +1152,9 @@ def rollout_independent_transfer_synced_red(
                 _live_blue_wrapper_mask_in_jax_space_cached(cyborg_env, name, mappings, const, mask_cache)
                 for name in cyborg_agent_names
             ]
-            cyborg_masks = jnp.stack([_apply_traffic_filter(jnp.array(m), cyborg_blocked) for m in cyborg_raw_masks])
+            cyborg_masks = jnp.stack(
+                [_apply_traffic_filter(jnp.array(m), cyborg_blocked, const, i) for i, m in enumerate(cyborg_raw_masks)]
+            )
             cyborg_obs_stack = jnp.stack(
                 [jnp.array(cyborg_obs[name], dtype=jnp.float32) for name in cyborg_agent_names]
             )
@@ -1313,7 +1326,9 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
                 raw_mask = _live_blue_wrapper_mask_in_jax_space_cached(
                     harness._blue_wrapper, name, harness.mappings, harness.jax_const, mask_cache
                 )
-                cyborg_mask_list.append(_apply_traffic_filter(jnp.array(raw_mask), cyborg_blocked))
+                cyborg_mask_list.append(
+                    _apply_traffic_filter(jnp.array(raw_mask), cyborg_blocked, harness.jax_const, i)
+                )
             cyborg_obs_stack = jnp.stack(cyborg_obs_list)
             cyborg_masks = jnp.stack(cyborg_mask_list)
             cyborg_actions_arr, _ = batched_step(cyborg_obs_stack, cyborg_masks, step_keys)
@@ -1732,7 +1747,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
             cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
             actions[agent_name] = cyborg_action
 
-            desc = describe_blue_action(action_idx, mappings, const=const)
+            desc = describe_blue_action(action_idx, mappings, const=const, agent_id=agent_idx)
             cyborg_cls = type(cyborg_action).__name__
             valid_str = "OK" if is_valid else "MASKED!"
             step_actions_desc.append(

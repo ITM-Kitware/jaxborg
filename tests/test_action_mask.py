@@ -15,7 +15,9 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
-    ACTION_HOST_SLOTS,
+    BLUE_ACTION_HOST_SLOTS,
+    BLUE_MAX_OBSERVED_SUBNETS,
+    BLUE_TRAFFIC_SLOTS,
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
@@ -45,17 +47,22 @@ class TestSleepMonitorAlwaysValid:
 
 class TestHostBasedActions:
     def test_only_agent_subnets_valid(self):
-        """Slots for subnets not controlled by the agent are masked."""
+        """Slots for relative subnets that are unused (-1) are masked."""
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)  # blue_agent_0 controls 1 subnet
-        agent_subnets = np.array(const.blue_agent_subnets[0])
 
-        for sid in range(NUM_SUBNETS):
-            for slot in range(OBS_HOSTS_PER_SUBNET):
-                flat_slot = sid * OBS_HOSTS_PER_SUBNET + slot
-                action_idx = BLUE_ANALYSE_START + flat_slot
-                if not agent_subnets[sid]:
-                    assert not mask[action_idx], f"sid={sid} slot={slot} should be masked"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
+
+            for rel_idx in range(BLUE_MAX_OBSERVED_SUBNETS):
+                sid = agent_obs_subnets[rel_idx]
+                for slot in range(OBS_HOSTS_PER_SUBNET):
+                    flat_slot = rel_idx * OBS_HOSTS_PER_SUBNET + slot
+                    action_idx = BLUE_ANALYSE_START + flat_slot
+                    if sid == -1:
+                        assert not mask[action_idx], (
+                            f"agent={agent_id} rel_idx={rel_idx} slot={slot} should be masked (unused subnet)"
+                        )
 
     def test_empty_obs_slots_masked(self):
         """Slots where obs_host_map == GLOBAL_MAX_HOSTS are masked.
@@ -63,75 +70,87 @@ class TestHostBasedActions:
         matching CybORG's BlueFlatWrapper which excludes routers.
         """
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        agent_subnets = np.array(const.blue_agent_subnets[0])
 
-        for sid in range(NUM_SUBNETS):
-            if not agent_subnets[sid]:
-                continue
-            for slot in range(OBS_HOSTS_PER_SUBNET):
-                h = int(const.obs_host_map[sid, slot])
-                flat_slot = sid * OBS_HOSTS_PER_SUBNET + slot
-                action_idx = BLUE_ANALYSE_START + flat_slot
-                is_router = slot == OBS_HOSTS_PER_SUBNET - 1
-                if h == GLOBAL_MAX_HOSTS or is_router:
-                    assert not mask[action_idx], f"Slot sid={sid} slot={slot} should be masked"
-                else:
-                    assert mask[action_idx], f"Valid host sid={sid} slot={slot} should be unmasked"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
+
+            for rel_idx in range(BLUE_MAX_OBSERVED_SUBNETS):
+                sid = agent_obs_subnets[rel_idx]
+                if sid == -1:
+                    continue
+                for slot in range(OBS_HOSTS_PER_SUBNET):
+                    h = int(const.obs_host_map[sid, slot])
+                    flat_slot = rel_idx * OBS_HOSTS_PER_SUBNET + slot
+                    action_idx = BLUE_ANALYSE_START + flat_slot
+                    is_router = slot == OBS_HOSTS_PER_SUBNET - 1
+                    if h == GLOBAL_MAX_HOSTS or is_router:
+                        assert not mask[action_idx], f"Slot rel={rel_idx} slot={slot} should be masked"
+                    else:
+                        assert mask[action_idx], f"Valid host rel={rel_idx} slot={slot} should be unmasked"
 
     def test_same_mask_for_analyse_remove_restore(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        for slot in range(ACTION_HOST_SLOTS):
-            a = bool(mask[BLUE_ANALYSE_START + slot])
-            r = bool(mask[BLUE_REMOVE_START + slot])
-            s = bool(mask[BLUE_RESTORE_START + slot])
-            assert a == r == s, f"Mismatch at slot {slot}: analyse={a}, remove={r}, restore={s}"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            for slot in range(BLUE_ACTION_HOST_SLOTS):
+                a = bool(mask[BLUE_ANALYSE_START + slot])
+                r = bool(mask[BLUE_REMOVE_START + slot])
+                s = bool(mask[BLUE_RESTORE_START + slot])
+                assert a == r == s, f"Mismatch at slot {slot}: analyse={a}, remove={r}, restore={s}"
 
     def test_decoy_mask_respects_initial_service_compatibility(self):
         """With collapsed action space, a decoy slot is valid if ANY type is compatible."""
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        for slot in range(ACTION_HOST_SLOTS):
-            host_valid = bool(mask[BLUE_ANALYSE_START + slot])
-            sid = slot // OBS_HOSTS_PER_SUBNET
-            subslot = slot % OBS_HOSTS_PER_SUBNET
-            int(const.obs_host_map[sid, subslot])
-
-            # Tomcat is always compatible, so any valid host slot should have decoy enabled
-            expected = host_valid
-            actual = bool(mask[BLUE_DECOY_START + slot])
-            assert actual == expected, f"Decoy slot {slot} mismatch: expected={expected}, actual={actual}"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            for slot in range(BLUE_ACTION_HOST_SLOTS):
+                host_valid = bool(mask[BLUE_ANALYSE_START + slot])
+                # Tomcat is always compatible, so any valid host slot should have decoy enabled
+                expected = host_valid
+                actual = bool(mask[BLUE_DECOY_START + slot])
+                assert actual == expected, f"Decoy slot {slot} mismatch: expected={expected}, actual={actual}"
 
 
 class TestTrafficActions:
     def test_self_loops_masked(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        for s in range(NUM_SUBNETS):
-            idx = BLUE_BLOCK_TRAFFIC_START + s * NUM_SUBNETS + s
-            assert not mask[idx], f"Self-loop src={s} dst={s} should be masked"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
+            for src in range(NUM_SUBNETS):
+                for rel_dst in range(BLUE_MAX_OBSERVED_SUBNETS):
+                    abs_dst = agent_obs_subnets[rel_dst]
+                    if abs_dst == -1:
+                        continue
+                    idx = BLUE_BLOCK_TRAFFIC_START + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+                    if src == abs_dst:
+                        assert not mask[idx], f"Self-loop src={src} dst={abs_dst} should be masked"
 
     def test_uncontrolled_dst_masked(self):
+        """Unused relative dst slots (-1) should be masked."""
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        agent_subnets = np.array(const.blue_agent_subnets[0])
-
-        for src in range(NUM_SUBNETS):
-            for dst in range(NUM_SUBNETS):
-                idx_block = BLUE_BLOCK_TRAFFIC_START + src * NUM_SUBNETS + dst
-                if not agent_subnets[dst] or src == dst:
-                    assert not mask[idx_block], f"Block src={src} dst={dst} should be masked"
-                else:
-                    assert mask[idx_block], f"Block src={src} dst={dst} should be valid"
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
+            for src in range(NUM_SUBNETS):
+                for rel_dst in range(BLUE_MAX_OBSERVED_SUBNETS):
+                    abs_dst = agent_obs_subnets[rel_dst]
+                    idx_block = BLUE_BLOCK_TRAFFIC_START + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+                    if abs_dst == -1 or src == abs_dst:
+                        assert not mask[idx_block], (
+                            f"Block src={src} rel_dst={rel_dst} (abs={abs_dst}) should be masked"
+                        )
+                    else:
+                        assert mask[idx_block], f"Block src={src} rel_dst={rel_dst} (abs={abs_dst}) should be valid"
 
     def test_block_allow_same_mask(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(const, 0)
-        n = NUM_SUBNETS * NUM_SUBNETS
-        block_slice = mask[BLUE_BLOCK_TRAFFIC_START : BLUE_BLOCK_TRAFFIC_START + n]
-        allow_slice = mask[BLUE_ALLOW_TRAFFIC_START : BLUE_ALLOW_TRAFFIC_START + n]
-        np.testing.assert_array_equal(block_slice, allow_slice)
+        for agent_id in range(5):
+            mask = compute_blue_action_mask(const, agent_id)
+            block_slice = mask[BLUE_BLOCK_TRAFFIC_START : BLUE_BLOCK_TRAFFIC_START + BLUE_TRAFFIC_SLOTS]
+            allow_slice = mask[BLUE_ALLOW_TRAFFIC_START : BLUE_ALLOW_TRAFFIC_START + BLUE_TRAFFIC_SLOTS]
+            np.testing.assert_array_equal(block_slice, allow_slice)
 
 
 class TestJITCompatibility:

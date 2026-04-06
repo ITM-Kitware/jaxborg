@@ -1689,7 +1689,7 @@ class CC4DifferentialHarness:
             action = pending["action"]
             if type(action).__name__ == "DeployDecoy":
                 return BLUE_SLEEP
-            if self._is_unsupported_blue_host_action(action):
+            if self._is_unsupported_blue_host_action(action, agent_idx):
                 return BLUE_SLEEP
         else:
             executed = controller.action.get(agent_name, [])
@@ -1712,14 +1712,14 @@ class CC4DifferentialHarness:
     def _blue_agent_is_busy(self, agent_idx: int) -> bool:
         return bool(self.jax_state.blue_pending_ticks[agent_idx] > 0) or agent_idx in self._blue_unsupported_pending
 
-    def _is_unsupported_blue_host_action(self, action) -> bool:
+    def _is_unsupported_blue_host_action(self, action, agent_id: int = 0) -> bool:
         action_name = type(action).__name__
         if action_name not in self._UNSUPPORTED_BLUE_HOST_ACTIONS:
             return False
         host_idx = self.mappings.hostname_to_idx.get(getattr(action, "hostname", None))
         if host_idx is None:
             return False
-        encoded = encode_blue_action(action_name, host_idx, 0, const=self.jax_const)
+        encoded = encode_blue_action(action_name, host_idx, agent_id, const=self.jax_const)
         return encoded == BLUE_SLEEP
 
     def _apply_unsupported_blue_host_action(self, agent_idx: int, action_name: str, host_idx: int):
@@ -1743,8 +1743,9 @@ class CC4DifferentialHarness:
             from jaxborg.constants import OBS_HOSTS_PER_SUBNET
 
             flat_slot = pending_action - BLUE_DECOY_START
-            sid = flat_slot // OBS_HOSTS_PER_SUBNET
+            relative_subnet = flat_slot // OBS_HOSTS_PER_SUBNET
             slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+            sid = int(self.jax_const.blue_obs_subnets[b, relative_subnet])
             target_host = int(self.jax_const.obs_host_map[sid, slot_within])
             hostname = self.mappings.idx_to_hostname.get(target_host)
             new_svcs = new_services_by_host.get(hostname, set())
@@ -1823,7 +1824,7 @@ class CC4DifferentialHarness:
                     if jax_action == BLUE_SLEEP:
                         next_pending[b] = ("DeployDecoy", host_idx, int(pending["remaining_ticks"]))
                         continue
-            if pending is not None and self._is_unsupported_blue_host_action(pending["action"]):
+            if pending is not None and self._is_unsupported_blue_host_action(pending["action"], b):
                 action = pending["action"]
                 host_idx = self.mappings.hostname_to_idx[action.hostname]
                 next_pending[b] = (type(action).__name__, host_idx, int(pending["remaining_ticks"]))

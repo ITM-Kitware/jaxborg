@@ -1026,10 +1026,13 @@ class TestFsmRedEnvDifferential:
         harness.reset()
 
         rng = np.random.default_rng(0)
-        # Run up to 100 steps looking for a red exploit from a blocked subnet
+        # Run up to 300 steps looking for a red exploit from a blocked subnet.
+        # With agent-relative blue encoding, each agent can only block traffic
+        # TO its own observed subnets, so blocked-route exploits need more steps
+        # for red to spread into subnets where blocks are active.
         found_step = None
         step_result = None
-        for step in range(100):
+        for step in range(300):
             blue_actions = _sample_random_blue_actions_from_live_mask(harness, rng)
             step_result = harness.full_step(blue_actions)
 
@@ -1071,4 +1074,4 @@ class TestFsmRedEnvDifferential:
             if found_step is not None:
                 break
 
-        assert found_step is not None, "Never found a red exploit from a blocked subnet in 100 steps"
+        assert found_step is not None, "Never found a red exploit from a blocked subnet in 300 steps"

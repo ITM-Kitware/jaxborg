@@ -120,7 +120,11 @@ class TestBlueRestoreDuration5:
         state = env_state.state
         const = env_state.const
 
-        host_indices = jnp.where(const.host_active & const.host_is_server, size=GLOBAL_MAX_HOSTS)[0]
+        # Target must be a server host in agent 0's observed subnets
+        host_indices = jnp.where(
+            const.host_active & const.host_is_server & const.blue_agent_hosts[0] & ~const.host_is_router,
+            size=GLOBAL_MAX_HOSTS,
+        )[0]
         target_host = int(host_indices[0])
         restore_action = encode_blue_action("Restore", target_host, 0, const=const)
 

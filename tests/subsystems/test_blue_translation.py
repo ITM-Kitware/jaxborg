@@ -93,13 +93,19 @@ class TestBlueActionTranslation:
     )
     def test_traffic_action_roundtrip(self, blue_translation_context, action_name, expected_cls):
         const, mappings, _ = blue_translation_context
-        subnet_ids = sorted(mappings.subnet_names.keys())
-        src_subnet, dst_subnet = subnet_ids[0], subnet_ids[1]
+        # dst must be in agent 0's observed subnets for agent-relative encoding
+
+        agent_obs = [int(const.blue_obs_subnets[0, i]) for i in range(3) if int(const.blue_obs_subnets[0, i]) >= 0]
+        dst_subnet = agent_obs[0]
+        # Pick a src_subnet different from dst
+        all_subnets = sorted(mappings.subnet_names.keys())
+        src_subnet = next(s for s in all_subnets if s != dst_subnet)
 
         action_idx = encode_blue_action(
             action_name,
             -1,
             0,
+            const=const,
             src_subnet=src_subnet,
             dst_subnet=dst_subnet,
         )

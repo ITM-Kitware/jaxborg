@@ -36,6 +36,7 @@ from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
 from jaxborg.actions.masking import compute_blue_action_mask
+from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
 
@@ -216,6 +217,42 @@ class MetricsLogger:
         self.file.close()
         if self.mlflow_enabled:
             mlflow.log_artifact(str(self.filepath))
+
+
+def _training_mask(const, agent_id, state):
+    """Env mask + training-time filtering of no-op traffic actions.
+
+    AllowTraffic is masked out when the route is NOT blocked (no-op).
+    BlockTraffic is masked out when the route IS already blocked (no-op).
+    This prevents policy collapse into the AllowTraffic action sink.
+
+    The environment's compute_blue_action_mask is unchanged (CybORG parity);
+    this wrapper applies additional training-only filtering.
+    """
+    mask = compute_blue_action_mask(const, agent_id, state)
+    if state is None:
+        return mask
+
+    # Traffic actions encoded as: base + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+    # blocked_zones[dst, src] = True means traffic from src→dst is blocked
+    # Resolve relative dst to absolute via blue_obs_subnets
+    offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
+    src = offsets // BLUE_MAX_OBSERVED_SUBNETS
+    rel_dst = offsets % BLUE_MAX_OBSERVED_SUBNETS
+    abs_dst = const.blue_obs_subnets[agent_id, rel_dst]
+    safe_dst = jnp.clip(abs_dst, 0, NUM_SUBNETS - 1)
+    is_blocked = state.blocked_zones[safe_dst, src] & (abs_dst >= 0)
+
+    # AllowTraffic: only meaningful when the route IS blocked
+    mask = mask.at[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END].set(
+        mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] & is_blocked
+    )
+    # BlockTraffic: only meaningful when the route is NOT blocked
+    mask = mask.at[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END].set(
+        mask[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END] & ~is_blocked
+    )
+
+    return mask
 
 
 def make_train(config):

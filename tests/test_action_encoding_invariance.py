@@ -1,8 +1,8 @@
 """Tests that blue action encoding is topology-invariant.
 
 The core invariant: action index N must always target the same canonical
-(subnet, host_role, host_slot) regardless of topology seed. If this fails,
-a trained policy cannot transfer between topologies.
+(relative_subnet_slot, host_role, host_slot) regardless of topology seed.
+If this fails, a trained policy cannot transfer between topologies.
 """
 
 import jax
@@ -15,7 +15,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import (
-    ACTION_HOST_SLOTS,
+    BLUE_ACTION_HOST_SLOTS,
     GLOBAL_MAX_HOSTS,
     MAX_SERVER_HOSTS,
     MAX_USER_HOSTS,
@@ -28,8 +28,8 @@ from jaxborg.topology import build_topology
 
 
 def _slot_to_canonical(flat_slot: int):
-    """Map a flat action slot to its canonical (subnet_id, role, slot_within_subnet)."""
-    subnet_id = flat_slot // OBS_HOSTS_PER_SUBNET
+    """Map a flat agent-relative action slot to its canonical (relative_subnet_idx, role, slot_within_subnet)."""
+    relative_subnet_idx = flat_slot // OBS_HOSTS_PER_SUBNET
     slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
     if slot_within < MAX_SERVER_HOSTS:
         role = "server"
@@ -37,7 +37,7 @@ def _slot_to_canonical(flat_slot: int):
         role = "user"
     else:
         role = "router"
-    return (SUBNET_NAMES[subnet_id], role, slot_within)
+    return (relative_subnet_idx, role, slot_within)
 
 
 class TestActionEncodingTopologyInvariance:
@@ -45,7 +45,7 @@ class TestActionEncodingTopologyInvariance:
 
     def test_analyse_action_canonical_meaning_stable_across_seeds(self):
         """For each valid Analyse action in seed 0, the same action index in seed 1
-        must target the same canonical (subnet, role, slot)."""
+        must target the same canonical (relative_subnet, role, slot)."""
         c0 = build_topology(jax.random.PRNGKey(0), num_steps=100)
         c1 = build_topology(jax.random.PRNGKey(1), num_steps=100)
 
@@ -54,20 +54,19 @@ class TestActionEncodingTopologyInvariance:
             mask0 = compute_blue_action_mask(c0, agent_id)
             mask1 = compute_blue_action_mask(c1, agent_id)
 
-            for slot in range(ACTION_HOST_SLOTS):
+            for slot in range(BLUE_ACTION_HOST_SLOTS):
                 action_idx = BLUE_ANALYSE_START + slot
                 if not bool(mask0[action_idx]) or not bool(mask1[action_idx]):
                     continue
 
                 # Both topologies resolve this slot to the same canonical target
-                # because the slot encoding is topology-invariant
                 canon0 = _slot_to_canonical(slot)
                 canon1 = _slot_to_canonical(slot)
                 assert canon0 == canon1
 
                 # Also verify both resolve to valid hosts
-                host0 = int(_slot_to_global_host(c0, slot))
-                host1 = int(_slot_to_global_host(c1, slot))
+                host0 = int(_slot_to_global_host(c0, slot, agent_id))
+                host1 = int(_slot_to_global_host(c1, slot, agent_id))
                 assert host0 < GLOBAL_MAX_HOSTS
                 assert host1 < GLOBAL_MAX_HOSTS
 
@@ -84,7 +83,7 @@ class TestActionEncodingTopologyInvariance:
                 c = build_topology(jax.random.PRNGKey(seed), num_steps=100)
                 mask = compute_blue_action_mask(c, agent_id)
                 valid = set()
-                for slot in range(ACTION_HOST_SLOTS):
+                for slot in range(BLUE_ACTION_HOST_SLOTS):
                     if bool(mask[BLUE_ANALYSE_START + slot]):
                         valid.add(slot)
                 valid_sets.append(valid)
@@ -103,21 +102,22 @@ class TestActionEncodingTopologyInvariance:
         router slots to routers."""
         router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
         c = build_topology(jax.random.PRNGKey(0), num_steps=100)
-        mask = compute_blue_action_mask(c, 0)
 
-        for slot in range(ACTION_HOST_SLOTS):
-            action_idx = BLUE_ANALYSE_START + slot
-            if not bool(mask[action_idx]):
-                continue
-            _, target_host, _, _, _ = decode_blue_action(action_idx, 0, c)
-            h = int(target_host)
-            slot_within = slot % OBS_HOSTS_PER_SUBNET
-            if slot_within < MAX_SERVER_HOSTS:
-                assert bool(c.host_is_server[h]), f"slot {slot}: host {h} should be server"
-            elif slot_within < router_slot:
-                assert bool(c.host_is_user[h]), f"slot {slot}: host {h} should be user"
-            else:
-                assert bool(c.host_is_router[h]), f"slot {slot}: host {h} should be router"
+        for agent_id in range(NUM_BLUE_AGENTS):
+            mask = compute_blue_action_mask(c, agent_id)
+            for slot in range(BLUE_ACTION_HOST_SLOTS):
+                action_idx = BLUE_ANALYSE_START + slot
+                if not bool(mask[action_idx]):
+                    continue
+                _, target_host, _, _, _ = decode_blue_action(action_idx, agent_id, c)
+                h = int(target_host)
+                slot_within = slot % OBS_HOSTS_PER_SUBNET
+                if slot_within < MAX_SERVER_HOSTS:
+                    assert bool(c.host_is_server[h]), f"slot {slot}: host {h} should be server"
+                elif slot_within < router_slot:
+                    assert bool(c.host_is_user[h]), f"slot {slot}: host {h} should be user"
+                else:
+                    assert bool(c.host_is_router[h]), f"slot {slot}: host {h} should be router"
 
     def test_obs_host_map_slots_are_canonical(self):
         """obs_host_map (subnet, slot) ordering is consistent across seeds:
@@ -202,14 +202,22 @@ class TestCybORGActionEncodingParity:
             agent_subnets = cyborg_wrapped.subnets(agent_name)
             for sub_idx, subnet_name in enumerate(agent_subnets):
                 sid = CYBORG_SUFFIX_TO_ID[subnet_name]
+                # Find which relative index this subnet maps to in blue_obs_subnets
+                rel_idx = -1
+                for ri in range(3):
+                    if int(jax_const.blue_obs_subnets[agent_id, ri]) == sid:
+                        rel_idx = ri
+                        break
+                assert rel_idx >= 0, f"subnet {subnet_name} not found in blue_obs_subnets for agent {agent_id}"
+
                 for host_slot in range(cyborg_hosts_per_subnet):
                     cyborg_slot = sub_idx * cyborg_hosts_per_subnet + host_slot
                     if cyborg_slot >= len(cyborg_analyse):
                         break
                     cyborg_hostname, cyborg_valid = cyborg_analyse[cyborg_slot]
 
-                    # JAXborg canonical slot
-                    jax_slot = sid * OBS_HOSTS_PER_SUBNET + host_slot
+                    # JAXborg agent-relative slot
+                    jax_slot = rel_idx * OBS_HOSTS_PER_SUBNET + host_slot
                     jax_action_idx = BLUE_ANALYSE_START + jax_slot
                     jax_mask = compute_blue_action_mask(jax_const, agent_id)
 
