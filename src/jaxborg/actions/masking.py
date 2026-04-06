@@ -1,6 +1,6 @@
 import jax.numpy as jnp
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_DECOY_START, BLUE_SLEEP
 from jaxborg.constants import (
     ACTION_HOST_SLOTS,
     DECOY_IDS,
@@ -98,9 +98,32 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
         # unsupported action (e.g. Restore on router) — mask everything.
         is_unsupported_pending = pending_action == BLUE_SLEEP
 
-        # For all pending actions: one-hot for the stored action
+        # For pending DeployDecoy, CybORG allows ALL compatible decoy types
+        # on the target host slot — not just the stored decoy type.  Build a
+        # mask that enables every compatible decoy for the same host slot.
+        is_decoy = (pending_action >= BLUE_DECOY_START) & (
+            pending_action < BLUE_DECOY_START + ACTION_HOST_SLOTS * NUM_DECOY_TYPES
+        )
+        decoy_offset = pending_action - BLUE_DECOY_START
+        host_slot = decoy_offset % ACTION_HOST_SLOTS
+
+        # For non-decoy pending actions: one-hot for the stored action
         safe_action = jnp.clip(pending_action, 0, BLUE_ALLOW_TRAFFIC_END - 1)
-        pending_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[safe_action].set(True)
+        non_decoy_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[safe_action].set(True)
+
+        # For decoy pending actions: enable ALL compatible decoy types on the
+        # same host slot (matching CybORG's DeployDecoy behavior).
+        all_decoy_mask = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_)
+        for dt in range(NUM_DECOY_TYPES):
+            idx = BLUE_DECOY_START + dt * ACTION_HOST_SLOTS + host_slot
+            compat = decoy_mask[dt * ACTION_HOST_SLOTS + host_slot]
+            all_decoy_mask = all_decoy_mask.at[idx].set(compat)
+        # Always include the stored pending action itself — CybORG allows it
+        # even on hosts (e.g. routers) where decoy_mask is False.
+        # Applied after the loop so compat=False can't overwrite it.
+        all_decoy_mask = all_decoy_mask.at[safe_action].set(True)
+
+        pending_mask = jnp.where(is_decoy, all_decoy_mask, non_decoy_mask)
 
         # Unsupported pending → only Sleep is allowed (CybORG allows Sleep
         # even when the agent is busy with an unsupported action like Restore).
