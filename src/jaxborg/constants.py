@@ -53,12 +53,11 @@ OBS_VECTOR_HOSTS_PER_SUBNET = MAX_USER_HOSTS + MAX_SERVER_HOSTS
 ACTION_HOST_SLOTS = NUM_SUBNETS * OBS_HOSTS_PER_SUBNET
 NUM_MESSAGES = NUM_BLUE_AGENTS - 1
 # PID identity slots used for red session PID tracking.
-# Measured peak: 13 per (agent, host) across 10 random-action CC4 episodes.
-# 32 provides 2.5x safety margin and aligns to GPU cache lines.
-MAX_TRACKED_SESSION_PIDS = 16
+# Peak observed: 33 with random blue over 50 seeds × 500 steps.
+# 64 gives ~2x headroom while keeping CC4State manageable.
+MAX_TRACKED_SESSION_PIDS = 64
 # PID identity slots used for blue suspicious PID memory.
-# Measured peak: 13 per (agent, host); proc_creation peak: 1.
-MAX_TRACKED_SUSPICIOUS_PIDS = 16
+MAX_TRACKED_SUSPICIOUS_PIDS = 64
 ABSTRACT_RANK_NONE = 1_000_000
 BLUE_OBS_SIZE = (
     1
