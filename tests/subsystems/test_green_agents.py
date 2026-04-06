@@ -1000,9 +1000,7 @@ class TestServerSessionCumulativeCounter:
             red_sessions=state.red_sessions.at[0, target_host].set(True),
             red_session_count=state.red_session_count.at[0, target_host].set(1),
             red_abstract_session_count=state.red_abstract_session_count.at[0, target_host].set(1),
-            red_server_session_count=state.red_server_session_count.at[0].set(
-                state.red_server_session_count[0] + 1
-            ),
+            red_server_session_count=state.red_server_session_count.at[0].set(state.red_server_session_count[0] + 1),
             red_privilege=state.red_privilege.at[0, target_host].set(COMPROMISE_USER),
             host_compromised=state.host_compromised.at[target_host].set(COMPROMISE_USER),
         )
@@ -1061,7 +1059,6 @@ class TestServerSessionCumulativeCounter:
 
         counter_after = int(state.red_server_session_count[0])
         assert counter_after == counter_before + phish_count, (
-            f"Counter should increase by phish count ({phish_count}), "
-            f"was {counter_before}, now {counter_after}"
+            f"Counter should increase by phish count ({phish_count}), was {counter_before}, now {counter_after}"
         )
         assert phish_count > 0, "Expected at least one phishing event in 200 green steps"

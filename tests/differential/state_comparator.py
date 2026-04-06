@@ -28,38 +28,42 @@ _DETECTION_FIELDS = {
     "host_process_creation_pids",
 }
 
-_ERROR_FIELDS = {
-    "identity_primary_host",
-    "identity_primary_pid",
-    "identity_primary_abstract",
-    "identity_pending_busy",
-    "identity_pending_ticks",
-    "identity_pending_action",
-    "host_compromised",
-    "red_privilege",
-    "red_sessions",
-    "red_discovered_hosts",
-    "red_scanned_hosts",
-    "host_services",
-    "host_service_reliability",
-    "host_has_malware",
-    "host_decoys",
-    "ot_service_stopped",
-    "blocked_zones",
-    "mission_phase",
-    "rewards",
-    "observation",
-} | _DETECTION_FIELDS | {
-    # Promoted from WARNING — verified clean across 100+ seeds with trained policy
-    "fsm_host_states",
-    "red_session_count",
-    "blue_suspicious_pids",
-    # Newly added high-value comparisons
-    "red_agent_active",
-    "red_session_is_abstract",
-    "host_decoy_reliability",
-    "blue_pending_busy",
-}
+_ERROR_FIELDS = (
+    {
+        "identity_primary_host",
+        "identity_primary_pid",
+        "identity_primary_abstract",
+        "identity_pending_busy",
+        "identity_pending_ticks",
+        "identity_pending_action",
+        "host_compromised",
+        "red_privilege",
+        "red_sessions",
+        "red_discovered_hosts",
+        "red_scanned_hosts",
+        "host_services",
+        "host_service_reliability",
+        "host_has_malware",
+        "host_decoys",
+        "ot_service_stopped",
+        "blocked_zones",
+        "mission_phase",
+        "rewards",
+        "observation",
+    }
+    | _DETECTION_FIELDS
+    | {
+        # Promoted from WARNING — verified clean across 100+ seeds with trained policy
+        "fsm_host_states",
+        "red_session_count",
+        "blue_suspicious_pids",
+        # Newly added high-value comparisons
+        "red_agent_active",
+        "red_session_is_abstract",
+        "host_decoy_reliability",
+        "blue_pending_busy",
+    }
+)
 
 _WARNING_FIELDS: set[str] = set()
 

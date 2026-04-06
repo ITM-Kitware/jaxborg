@@ -589,8 +589,13 @@ class TestFsmDiscoverSuccessFlag:
             red_discovered_hosts=before.red_discovered_hosts.at[0, 5].set(True),
         )
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(5), target_subnet, FSM_ACT_DISCOVER,
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(5),
+            target_subnet,
+            FSM_ACT_DISCOVER,
         )
         assert bool(success), "Discover with valid session should succeed"
 
@@ -606,8 +611,13 @@ class TestFsmDiscoverSuccessFlag:
         # Discover fails: no session, red_discover_success stays False
         after = before  # no change — action failed
         success = determine_fsm_success(
-            before, after, const, 0,
-            jnp.int32(5), target_subnet, FSM_ACT_DISCOVER,
+            before,
+            after,
+            const,
+            0,
+            jnp.int32(5),
+            target_subnet,
+            FSM_ACT_DISCOVER,
         )
         assert not bool(success), "Failed discover should not be success just because prior hosts exist"
 

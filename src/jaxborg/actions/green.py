@@ -244,9 +244,7 @@ def _apply_single_green(
     # RedAbstractSession (phishing).  Increment the cumulative counter.
     red_server_session_count = jnp.where(
         phish_creates_session,
-        state.red_server_session_count.at[red_agent_idx].set(
-            state.red_server_session_count[red_agent_idx] + 1
-        ),
+        state.red_server_session_count.at[red_agent_idx].set(state.red_server_session_count[red_agent_idx] + 1),
         state.red_server_session_count,
     )
     red_session_is_abstract = jnp.where(
