@@ -35,14 +35,7 @@ from flax.training.train_state import TrainState
 from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
-from jaxborg.actions.encoding import (
-    BLUE_ALLOW_TRAFFIC_END,
-    BLUE_ALLOW_TRAFFIC_START,
-    BLUE_BLOCK_TRAFFIC_END,
-    BLUE_BLOCK_TRAFFIC_START,
-)
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import NUM_SUBNETS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
 
@@ -225,39 +218,6 @@ class MetricsLogger:
             mlflow.log_artifact(str(self.filepath))
 
 
-def _training_mask(const, agent_id, state):
-    """Env mask + training-time filtering of no-op traffic actions.
-
-    AllowTraffic is masked out when the route is NOT blocked (no-op).
-    BlockTraffic is masked out when the route IS already blocked (no-op).
-    This prevents policy collapse into the AllowTraffic action sink.
-
-    The environment's compute_blue_action_mask is unchanged (CybORG parity);
-    this wrapper applies additional training-only filtering.
-    """
-    mask = compute_blue_action_mask(const, agent_id, state)
-    if state is None:
-        return mask
-
-    # Traffic actions encoded as: base + src * NUM_SUBNETS + dst
-    # blocked_zones[dst, src] = True means traffic from src→dst is blocked
-    offsets = jnp.arange(NUM_SUBNETS * NUM_SUBNETS)
-    src = offsets // NUM_SUBNETS
-    dst = offsets % NUM_SUBNETS
-    is_blocked = state.blocked_zones[dst, src]
-
-    # AllowTraffic: only meaningful when the route IS blocked
-    mask = mask.at[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END].set(
-        mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] & is_blocked
-    )
-    # BlockTraffic: only meaningful when the route is NOT blocked
-    mask = mask.at[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END].set(
-        mask[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END] & ~is_blocked
-    )
-
-    return mask
-
-
 def make_train(config):
     """Build env, network, and a single JIT'd collect_and_update function.
 
@@ -323,7 +283,7 @@ def make_train(config):
 
         # --- Rollout via scan (vmapped over NUM_ENVS) ---
         _agent_ids = jnp.arange(num_agents)
-        _mask_over_envs = jax.vmap(_training_mask, in_axes=(0, None, 0))
+        _mask_over_envs = jax.vmap(compute_blue_action_mask, in_axes=(0, None, 0))
         _mask_over_agents = jax.vmap(_mask_over_envs, in_axes=(None, 0, None))
 
         def _env_step(carry, _):
@@ -561,7 +521,7 @@ def main(cfg):
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
-    timestamp = time.strftime("%Y%m%d_%H%M")
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
     save_dir = EXP_DIR / f"ippo_cc4_{timestamp}"
     save_dir.mkdir(parents=True, exist_ok=True)
 
