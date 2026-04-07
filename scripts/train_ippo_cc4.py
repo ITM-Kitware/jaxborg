@@ -405,17 +405,20 @@ def make_train(config):
         _, last_val = network.apply(train_state.params, flat_last_obs, None, flat_last_critic_obs)
         last_val = last_val.reshape(num_envs, num_agents)
 
-        def _get_advantages(gae_and_next_value, transition):
+        def _get_advantages(gae_and_next_value, gae_inputs):
             gae, next_value = gae_and_next_value
-            done, value, reward = transition.done, transition.value, transition.reward
+            done, value, reward = gae_inputs
             delta = reward + config["GAMMA"] * next_value * (1 - done) - value
             gae = delta + config["GAMMA"] * config["GAE_LAMBDA"] * (1 - done) * gae
             return (gae, value), gae
 
+        # Pass only the 3 fields needed for GAE, not the full Transition
+        # (avoids moving obs/avail_actions through the scan unnecessarily).
+        gae_inputs = (traj_batch.done, traj_batch.value, traj_batch.reward)
         _, advantages = jax.lax.scan(
             _get_advantages,
             (jnp.zeros_like(last_val), last_val),
-            traj_batch,
+            gae_inputs,
             reverse=True,
             unroll=8,
         )
