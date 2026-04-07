@@ -363,6 +363,10 @@ def make_train(config):
             step_keys = jax.random.split(_rng, num_envs)
             new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
 
+            # When critic uses the same obs as actor, store a scalar placeholder
+            # instead of duplicating the full obs array (saves ~5 GB per rollout).
+            stored_critic_obs = critic_obs_batch if centralized_critic else jnp.zeros((), dtype=jnp.float32)
+
             transition = Transition(
                 done=jnp.stack([dones[a] for a in agents], axis=-1),
                 action=action,
@@ -370,7 +374,7 @@ def make_train(config):
                 reward=jnp.stack([rewards[a] for a in agents], axis=-1) * config["REWARD_SCALE"],
                 log_prob=log_prob,
                 obs=obs_batch,
-                critic_obs=critic_obs_batch,
+                critic_obs=stored_critic_obs,
                 avail_actions=avail_batch,
                 valid_action_count=avail_batch.sum(axis=-1).astype(jnp.float32),
                 blue_busy=busy_batch.astype(jnp.float32),
@@ -380,6 +384,11 @@ def make_train(config):
             return (new_env_state, new_obs, rng), transition
 
         (env_state, obs, rng), traj_batch = jax.lax.scan(_env_step, (env_state, obs, rng), None, config["NUM_STEPS"])
+
+        # Restore critic_obs from obs when not centralized (was stored as scalar
+        # placeholder in scan to avoid duplicating 5 GB of observation data).
+        if not centralized_critic:
+            traj_batch = traj_batch._replace(critic_obs=traj_batch.obs)
 
         # --- GAE ---
         # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
