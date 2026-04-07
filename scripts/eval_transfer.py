@@ -1779,9 +1779,9 @@ def main():
     parser.add_argument("--episodes", type=int, default=3, help="Rollout episodes (default 3)")
     parser.add_argument("--stochastic", action="store_true", help="Sample from policy instead of argmax")
     parser.add_argument(
-        "--independent-rollouts",
+        "--matched",
         action="store_true",
-        help="Run independent JAX/CybORG episodes instead of matched-state transfer diagnostics",
+        help="Run matched-state transfer diagnostics (lockstep JAX/CybORG, for debugging parity)",
     )
     parser.add_argument(
         "--compare-jax-modes",
@@ -1928,9 +1928,9 @@ def main():
         print(f"Saved mode split report: {out_path}")
         return
 
-    is_matched = not args.independent_rollouts
+    is_matched = args.matched
 
-    if args.independent_rollouts:
+    if not is_matched:
         print("\n" + "=" * 70)
         print("FULLY INDEPENDENT ROLLOUTS")
         print("=" * 70)
