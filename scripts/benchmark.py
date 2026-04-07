@@ -56,7 +56,6 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
         "CRITIC_MAX_GRAD_NORM": 50.0,
         "ACTIVATION": "tanh",
         "HIDDEN_DIM": 256,
-        "CENTRALIZED_CRITIC": False,
         "ANNEAL_LR": False,
         "LR": 3e-4,
         "REWARD_SCALE": 1.0,

@@ -62,10 +62,9 @@ class ActorCritic(nn.Module):
     def critic(self, x):
         return self.critic_head(x)
 
-    def __call__(self, x, avail_actions=None, critic_x=None):
+    def __call__(self, x, avail_actions=None):
         pi = self.actor_head(x, avail_actions)
-        critic_input = x if critic_x is None else critic_x
-        value = self.critic_head(critic_input)
+        value = self.critic_head(x)
         return pi, value
 
 
@@ -115,7 +114,6 @@ class Transition(NamedTuple):
     reward: jnp.ndarray
     log_prob: jnp.ndarray
     obs: jnp.ndarray
-    critic_obs: jnp.ndarray
     avail_actions: jnp.ndarray
     valid_action_count: jnp.ndarray
     blue_busy: jnp.ndarray
@@ -289,7 +287,6 @@ def make_train(config):
         hidden_dim=config.get("HIDDEN_DIM", 256),
         activation=config["ACTIVATION"],
     )
-    centralized_critic = bool(config.get("CENTRALIZED_CRITIC", True))
 
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
@@ -297,11 +294,7 @@ def make_train(config):
 
     def _init_train_state(rng):
         init_x = jnp.zeros(inner_env.observation_space(agents[0]).shape)
-        critic_dim = inner_env.observation_space(agents[0]).shape[0]
-        if centralized_critic:
-            critic_dim = num_agents * critic_dim
-        init_critic_x = jnp.zeros((critic_dim,), dtype=jnp.float32)
-        network_params = network.init(rng, init_x, None, init_critic_x)
+        network_params = network.init(rng, init_x)
 
         if config["ANNEAL_LR"]:
             tx = optax.adam(learning_rate=linear_schedule, eps=1e-5)
@@ -329,13 +322,6 @@ def make_train(config):
             # obs/env_state have leading (num_envs,) dim
             # Stack agents: (num_envs, num_agents, obs_dim)
             obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
-            if centralized_critic:
-                critic_obs_batch = jnp.broadcast_to(
-                    obs_batch.reshape(num_envs, 1, -1),
-                    (num_envs, num_agents, num_agents * obs_batch.shape[-1]),
-                )
-            else:
-                critic_obs_batch = obs_batch
             busy_batch = env_state.env_state.state.blue_pending_ticks > 0
             avail_batch = _mask_over_agents(
                 env_state.env_state.const,
@@ -346,9 +332,8 @@ def make_train(config):
             rng, _rng = jax.random.split(rng)
             # Flatten (num_envs, num_agents) for network, then reshape back
             flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
-            flat_critic_obs = critic_obs_batch.reshape(-1, critic_obs_batch.shape[-1])
             flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
-            pi, value = network.apply(train_state.params, flat_obs, flat_avail, flat_critic_obs)
+            pi, value = network.apply(train_state.params, flat_obs, flat_avail)
 
             action_flat = pi.sample(seed=_rng)
             log_prob_flat = pi.log_prob(action_flat)
@@ -363,10 +348,6 @@ def make_train(config):
             step_keys = jax.random.split(_rng, num_envs)
             new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
 
-            # When critic uses the same obs as actor, store a scalar placeholder
-            # instead of duplicating the full obs array (saves ~5 GB per rollout).
-            stored_critic_obs = critic_obs_batch if centralized_critic else jnp.zeros((), dtype=jnp.float32)
-
             transition = Transition(
                 done=jnp.stack([dones[a] for a in agents], axis=-1),
                 action=action,
@@ -374,7 +355,6 @@ def make_train(config):
                 reward=jnp.stack([rewards[a] for a in agents], axis=-1) * config["REWARD_SCALE"],
                 log_prob=log_prob,
                 obs=obs_batch,
-                critic_obs=stored_critic_obs,
                 avail_actions=avail_batch,
                 valid_action_count=avail_batch.sum(axis=-1).astype(jnp.float32),
                 blue_busy=busy_batch.astype(jnp.float32),
@@ -385,24 +365,11 @@ def make_train(config):
 
         (env_state, obs, rng), traj_batch = jax.lax.scan(_env_step, (env_state, obs, rng), None, config["NUM_STEPS"])
 
-        # Restore critic_obs from obs when not centralized (was stored as scalar
-        # placeholder in scan to avoid duplicating 5 GB of observation data).
-        if not centralized_critic:
-            traj_batch = traj_batch._replace(critic_obs=traj_batch.obs)
-
         # --- GAE ---
         # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
         last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
-        if centralized_critic:
-            last_critic_obs_batch = jnp.broadcast_to(
-                last_obs_batch.reshape(num_envs, 1, -1),
-                (num_envs, num_agents, num_agents * last_obs_batch.shape[-1]),
-            )
-        else:
-            last_critic_obs_batch = last_obs_batch
         flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
-        flat_last_critic_obs = last_critic_obs_batch.reshape(-1, last_critic_obs_batch.shape[-1])
-        _, last_val = network.apply(train_state.params, flat_last_obs, None, flat_last_critic_obs)
+        _, last_val = network.apply(train_state.params, flat_last_obs)
         last_val = last_val.reshape(num_envs, num_agents)
 
         def _get_advantages(gae_and_next_value, gae_inputs):
@@ -435,7 +402,7 @@ def make_train(config):
                 traj_batch, policy_advantages, targets, policy_mask = batch_info
 
                 def _loss_fn(params, traj_batch, gae, targets, policy_mask):
-                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions, traj_batch.critic_obs)
+                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
                     log_prob = pi.log_prob(traj_batch.action)
                     policy_weight = policy_mask.astype(jnp.float32)
                     policy_count = jnp.maximum(policy_weight.sum(), 1.0)
