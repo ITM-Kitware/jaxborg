@@ -163,8 +163,8 @@ class TestJITCompatibility:
 
 
 class TestBusyBlueMask:
-    def test_busy_agent_mask_unchanged(self):
-        """Mask is unaffected by pending-action state (matches CybORG behavior)."""
+    def test_busy_agent_sleep_only(self):
+        """Mask forces Sleep-only during pending multi-tick action (matches CybORG behavior)."""
         from jaxborg.env import CC4Env
 
         env = CC4Env(num_steps=100)
@@ -180,11 +180,14 @@ class TestBusyBlueMask:
         pending_action = encode_blue_action("Restore", target_host, 0, const=const)
 
         idle_mask = np.array(compute_blue_action_mask(const, 0, state), dtype=bool)
+        assert idle_mask.sum() > 2, "idle mask should have multiple valid actions"
+
         busy_state = process_blue_with_duration(state, const, 0, pending_action)
         busy_mask = np.array(compute_blue_action_mask(const, 0, busy_state), dtype=bool)
 
         assert int(busy_state.blue_pending_ticks[0]) == 4
-        np.testing.assert_array_equal(busy_mask, idle_mask)
+        assert busy_mask[0] is np.True_, "Sleep must be valid when busy"
+        assert busy_mask.sum() == 1, "only Sleep should be valid when busy"
 
 
 class TestWithRealTopology:

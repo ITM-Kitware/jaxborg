@@ -46,11 +46,19 @@ def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const
 def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
     """Project BlueFlatWrapper's live action mask into JAX canonical indices.
 
-    CybORG's BlueFixedActionWrapper mask is based purely on host/session
-    validity — pending actions do NOT affect the mask.  CybORG silently
-    continues any in-progress action regardless of the agent's choice.
+    Includes pending-action lockout: when a multi-tick action is in progress,
+    only Sleep is valid.  CybORG silently continues the pending action
+    regardless of the agent's choice, and re-submitting a non-Sleep action
+    would trigger a duplicate action_cost charge.
     """
     controller = wrapper.env.environment_controller
+
+    # Pending-action lockout — only Sleep while busy
+    pending = controller.actions_in_progress.get(agent_name)
+    if pending is not None and pending["remaining_ticks"] > 0:
+        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
+        jax_mask[BLUE_SLEEP] = True
+        return jax_mask
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
     action_space = wrapper.get_action_space(agent_name)
@@ -67,9 +75,8 @@ def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
 def comparison_blue_mask_in_jax_space(controller, agent_name, agent_idx, state, mappings, const):
     """Return the JAX mask for comparison with CybORG.
 
-    Now that the action space uses a single DeployDecoy per host slot,
-    compute_blue_action_mask already produces the correct mask for all cases
-    including pending decoy actions.
+    compute_blue_action_mask handles all masking including pending-action
+    lockout (Sleep-only while busy) and DeployDecoy host-slot encoding.
     """
     return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
 
