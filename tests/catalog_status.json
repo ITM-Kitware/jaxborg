@@ -22,9 +22,9 @@
   "8": "passing",
   "9": "passing",
   "l4_tost": {
-    "equivalent": false,
+    "equivalent": true,
     "margin": 200.0,
-    "mean_diff": -153.80000000000018,
-    "episodes": 10
+    "mean_diff": 56.1400000000001,
+    "episodes": 50
   }
 }
