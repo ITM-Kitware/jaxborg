@@ -390,12 +390,10 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
     controller = env.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
+        # Force Sleep during pending ticks to avoid CybORG re-charging
+        # action_cost for the resubmitted (silently dropped) action.
         jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-        label = f"[Pending] {type(pending['action']).__name__}"
-        for jax_idx in _cyborg_action_to_jax_indices(
-            pending["action"], label, agent_name, mappings, const, controller.state
-        ):
-            jax_mask[jax_idx] = True
+        jax_mask[BLUE_SLEEP] = True
         return jnp.array(jax_mask)
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
@@ -461,12 +459,10 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
     controller = wrapper.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
+        # Force Sleep during pending ticks to avoid CybORG re-charging
+        # action_cost for the resubmitted (silently dropped) action.
         jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
-        label = f"[Pending] {type(pending['action']).__name__}"
-        for jax_idx in _cyborg_action_to_jax_indices(
-            pending["action"], label, agent_name, mappings, const, controller.state
-        ):
-            jax_mask[jax_idx] = True
+        jax_mask[BLUE_SLEEP] = True
         return jax_mask
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
@@ -491,12 +487,10 @@ def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
     controller = wrapper.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
+        # Force Sleep during pending ticks to avoid CybORG re-charging
+        # action_cost for the resubmitted (silently dropped) action.
         jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-        label = f"[Pending] {type(pending['action']).__name__}"
-        for jax_idx in _cyborg_action_to_jax_indices(
-            pending["action"], label, agent_name, mappings, const, controller.state
-        ):
-            jax_mask[jax_idx] = True
+        jax_mask[BLUE_SLEEP] = True
         return jnp.array(jax_mask)
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
@@ -526,14 +520,7 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     observations = {
         agent: wrapper.observation_change(agent, obs[agent]) for agent in wrapper.possible_agents if agent in obs
     }
-    # Use only BlueRewardMachine, excluding action_cost.  CybORG adds an
-    # action_cost component (e.g. Restore costs -1) that JAX does not model.
-    # The differential harness also uses only BlueRewardMachine.
-    rewards = {
-        agent: rews[agent].get("BlueRewardMachine", sum(rews[agent].values()))
-        for agent in wrapper.possible_agents
-        if agent in rews
-    }
+    rewards = {agent: sum(rews[agent].values()) for agent in wrapper.possible_agents if agent in rews}
     terminated = {agent: bool(dones[agent]) for agent in wrapper.possible_agents if agent in dones}
     truncated = terminated.copy()
     info = {agent: {"action_mask": wrapper.get_action_space(agent)["mask"]} for agent in wrapper.possible_agents}

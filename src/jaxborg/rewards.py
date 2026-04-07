@@ -2,6 +2,7 @@ import chex
 import jax.numpy as jnp
 from flax import struct
 
+from jaxborg.actions.encoding import BLUE_RESTORE_END, BLUE_RESTORE_START
 from jaxborg.constants import MISSION_PHASES
 from jaxborg.state import CC4Const, CC4State
 
@@ -16,6 +17,7 @@ class RewardBreakdown:
     ria_reward: chex.Array
     lwf_reward: chex.Array
     asf_reward: chex.Array
+    action_cost: chex.Array
     ria_count: chex.Array
     lwf_count: chex.Array
     asf_count: chex.Array
@@ -27,6 +29,8 @@ def compute_reward_breakdown(
     impact_hosts: chex.Array,
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
+    blue_actions: chex.Array = None,
+    blue_pre_step_pending: chex.Array = None,
 ) -> RewardBreakdown:
     """Compute blue team shared reward for this step.
 
@@ -36,6 +40,8 @@ def compute_reward_breakdown(
         impact_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where red Impact succeeded
         green_lwf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenLocalWork failed
         green_asf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenAccessService failed
+        blue_actions: (NUM_BLUE_AGENTS,) int32 - encoded blue actions this step
+        blue_pre_step_pending: (NUM_BLUE_AGENTS,) int32 - pending ticks before this step
 
     Returns:
         RewardBreakdown with total reward and per-term counts.
@@ -53,11 +59,21 @@ def compute_reward_breakdown(
     lwf_reward = jnp.sum(green_lwf_hosts.astype(jnp.float32) * lwf_weights * active)
     asf_reward = jnp.sum(green_asf_hosts.astype(jnp.float32) * asf_weights * active)
 
+    # Action cost: CybORG charges -1 per Restore initiation (team-level).
+    # Only charged when the agent is not already in a pending multi-tick action.
+    if blue_actions is not None and blue_pre_step_pending is not None:
+        is_restore = (blue_actions >= BLUE_RESTORE_START) & (blue_actions < BLUE_RESTORE_END)
+        is_initiating = blue_pre_step_pending == 0
+        action_cost = -jnp.sum((is_restore & is_initiating).astype(jnp.float32))
+    else:
+        action_cost = jnp.float32(0.0)
+
     return RewardBreakdown(
-        total=ria_reward + lwf_reward + asf_reward,
+        total=ria_reward + lwf_reward + asf_reward + action_cost,
         ria_reward=ria_reward,
         lwf_reward=lwf_reward,
         asf_reward=asf_reward,
+        action_cost=action_cost,
         ria_count=jnp.sum(impact_hosts.astype(jnp.float32) * active),
         lwf_count=jnp.sum(green_lwf_hosts.astype(jnp.float32) * active),
         asf_count=jnp.sum(green_asf_hosts.astype(jnp.float32) * active),
@@ -70,6 +86,8 @@ def compute_rewards(
     impact_hosts: chex.Array,
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
+    blue_actions: chex.Array = None,
+    blue_pre_step_pending: chex.Array = None,
 ) -> chex.Array:
     """Compute blue team shared reward for this step."""
     return compute_reward_breakdown(
@@ -78,6 +96,8 @@ def compute_rewards(
         impact_hosts,
         green_lwf_hosts,
         green_asf_hosts,
+        blue_actions,
+        blue_pre_step_pending,
     ).total
 
 

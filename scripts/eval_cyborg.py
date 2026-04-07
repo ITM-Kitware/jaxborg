@@ -18,7 +18,7 @@ from flax.linen.initializers import constant, orthogonal
 from train_ippo_cc4 import ActorCritic
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
-from jaxborg.topology import build_const_from_cyborg
+from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
 from jaxborg.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
@@ -49,14 +49,15 @@ class LegacyActor(nn.Module):
         return distrax.Categorical(logits=action_logits)
 
 
-def make_env(seed=None):
+def make_env(seed=None, bank_match_size=None):
+    actual_seed = cyborg_bank_seed_from_seed(seed, bank_match_size) if bank_match_size is not None else seed
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
         red_agent_class=FiniteStateRedAgent,
         steps=EPISODE_LENGTH,
     )
-    cyborg = CybORG(sg, "sim", seed=seed)
+    cyborg = CybORG(sg, "sim", seed=actual_seed)
     return BlueFlatWrapper(env=cyborg, pad_spaces=True)
 
 
@@ -146,12 +147,10 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const, lookup=None
     controller = env.env.environment_controller
     pending = controller.actions_in_progress.get(agent_name)
     if pending is not None and pending["remaining_ticks"] > 0:
+        # Force Sleep during pending ticks to avoid CybORG re-charging
+        # action_cost for the resubmitted (silently dropped) action.
         jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-        label = f"[Pending] {type(pending['action']).__name__}"
-        for jax_idx in _cyborg_action_to_jax_indices(
-            pending["action"], label, agent_name, mappings, const, controller.state
-        ):
-            jax_mask[jax_idx] = True
+        jax_mask[BLUE_SLEEP] = True
         return jnp.array(jax_mask)
 
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
@@ -231,13 +230,13 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
     return total
 
 
-def evaluate(checkpoint_path, episodes, seed, deterministic):
+def evaluate(checkpoint_path, episodes, seed, deterministic, bank_match_size=None):
     policy, params, policy_kind = load_checkpoint(checkpoint_path)
-    env = make_env(seed)
     rng = jax.random.PRNGKey(seed if seed is not None else 0)
 
     episode_rewards = []
     for ep in range(episodes):
+        env = make_env(seed=seed + ep, bank_match_size=bank_match_size)
         rng, _rng = jax.random.split(rng)
         reward = run_episode(env, policy, params, policy_kind, deterministic, _rng)
         episode_rewards.append(reward)
@@ -256,6 +255,7 @@ def build_arg_parser():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--stochastic", action="store_true")
+    parser.add_argument("--bank-match-size", type=int, default=32, help="Topology bank size for seed matching")
     return parser
 
 
@@ -267,7 +267,7 @@ def main(argv=None):
     deterministic = not args.stochastic
     if args.deterministic:
         deterministic = True
-    evaluate(args.checkpoint, args.episodes, args.seed, deterministic)
+    evaluate(args.checkpoint, args.episodes, args.seed, deterministic, args.bank_match_size)
 
 
 if __name__ == "__main__":
