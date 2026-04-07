@@ -1,20 +1,23 @@
-"""CleanRL-style PPO baseline for CC4 with action masking.
+"""Pure-CybORG PPO baseline for CC4 with action masking.
 
-Single-file, minimal-dependency PPO for CybORG CC4. Designed to be simple
-and debuggable. Uses parameter sharing across agents 0-3 (same obs/act space)
-and a separate policy for agent 4 (larger obs/act space).
+Goal: produce the simplest credible CPU-only baseline for CC4, so JaxBorg's
+GPU speedup and policy quality can be compared against a real reference point.
+Not chasing SOTA — establishing a trustworthy, reproducible number.
+
+Written in CleanRL style (single-file, minimal dependencies, readable).
+Uses parameter sharing across agents 0-3 (same obs/act space) and a separate
+policy for agent 4 (larger obs/act space).
+
+Hyperparameter sources:
+- Singh et al. (AAMAS 2025): LR=5e-5, minibatch=32768, SGD_iters=30, net=[256,256]
+- CC4 Tutorial: gamma=0.85
+- Cybermonic KEEP (CC4 competition): actor_lr=3e-4, critic_lr=1e-3, batch=2500, epochs=4
 
 Key design choices:
 - Reward scaling via running return std (critical for CC4's large negative rewards)
 - Action masking via logit masking (set invalid logits to -1e8)
 - GAE with proper episode boundary handling
 - Multiple parallel CybORG environments via multiprocessing
-- Shared policy for agents with identical spaces (IPPO with parameter sharing)
-
-Reference configs:
-- Singh et al. (AAMAS 2025): LR=5e-5, minibatch=32768, SGD_iters=30, net=[256,256]
-- CC4 Tutorial: gamma=0.85
-- Cybermonic KEEP: actor_lr=3e-4, critic_lr=1e-3, batch=2500, epochs=4
 """
 
 import argparse
