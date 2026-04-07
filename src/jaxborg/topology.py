@@ -1,6 +1,9 @@
 import hashlib
+import multiprocessing
+import os
 import pickle
-from functools import lru_cache
+import signal
+from functools import lru_cache, partial
 from pathlib import Path
 
 import jax
@@ -422,27 +425,44 @@ def _red_policy_cache_key(num_steps: int, bank_size: int) -> str:
     )
 
 
-def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+_PARALLEL_THRESHOLD = 8  # use multiprocessing for bank_size >= this
+
+
+def _pool_init():
+    """Ignore SIGINT in workers so Ctrl-C is handled by the main process."""
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
+
+
+def _pool_workers(bank_size: int) -> int:
+    """Choose worker count: min(bank_size, cpus - 8), clamped to [1, 56]."""
+    cpus = os.cpu_count() or 1
+    return max(1, min(bank_size, cpus - 8, 56))
+
+
+def _build_one_topology(seed: int, num_steps: int) -> dict:
+    """Build one CC4Const from a CybORG seed; returns numpy pytree."""
+    jax.config.update("jax_platforms", "cpu")
+
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    consts = []
-    for seed in range(bank_size):
-        scenario = EnterpriseScenarioGenerator(
-            blue_agent_class=SleepAgent,
-            green_agent_class=EnterpriseGreenAgent,
-            red_agent_class=FiniteStateRedAgent,
-            steps=num_steps,
-        )
-        cyborg = CybORG(scenario_generator=scenario, seed=seed)
-        cyborg.reset()
-        consts.append(build_const_from_cyborg(cyborg))
-
-    return jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0), *consts)
+    scenario = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=FiniteStateRedAgent,
+        steps=num_steps,
+    )
+    cyborg = CybORG(scenario_generator=scenario, seed=seed)
+    cyborg.reset()
+    const = build_const_from_cyborg(cyborg)
+    return jax.tree.map(np.asarray, const)
 
 
-def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+def _build_one_green(seed: int, num_steps: int) -> np.ndarray:
+    """Record green random tape for one CybORG seed; returns numpy array."""
+    jax.config.update("jax_platforms", "cpu")
+
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
@@ -452,33 +472,32 @@ def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     from jaxborg.cyborg_green_recorder import GreenRecorder
     from jaxborg.translate import build_mappings_from_cyborg
 
-    green_randoms = []
-    for seed in range(bank_size):
-        scenario = EnterpriseScenarioGenerator(
-            blue_agent_class=SleepAgent,
-            green_agent_class=EnterpriseGreenAgent,
-            red_agent_class=FiniteStateRedAgent,
-            steps=num_steps,
-        )
-        cyborg = CybORG(scenario_generator=scenario, seed=seed)
-        wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-        wrapper.reset()
+    scenario = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=FiniteStateRedAgent,
+        steps=num_steps,
+    )
+    cyborg = CybORG(scenario_generator=scenario, seed=seed)
+    wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+    wrapper.reset()
 
-        mappings = build_mappings_from_cyborg(cyborg)
-        recorder = GreenRecorder()
-        recorder.install(cyborg, mappings)
+    mappings = build_mappings_from_cyborg(cyborg)
+    recorder = GreenRecorder()
+    recorder.install(cyborg, mappings)
 
-        sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-        for step_idx in range(num_steps):
-            wrapper.step(actions=sleep_actions)
-            recorder.extract_step(step_idx)
+    sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+    for step_idx in range(num_steps):
+        wrapper.step(actions=sleep_actions)
+        recorder.extract_step(step_idx)
 
-        green_randoms.append(recorder.to_jax_array())
-
-    return jnp.stack(green_randoms, axis=0)
+    return np.asarray(recorder.to_jax_array())
 
 
-def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+def _build_one_red_policy(seed: int, num_steps: int) -> np.ndarray:
+    """Record red policy random tape for one CybORG seed; returns numpy array."""
+    jax.config.update("jax_platforms", "cpu")
+
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
@@ -488,28 +507,135 @@ def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
     from jaxborg.translate import build_mappings_from_cyborg
 
-    tapes = []
-    for seed in range(bank_size):
-        scenario = EnterpriseScenarioGenerator(
-            blue_agent_class=SleepAgent,
-            green_agent_class=EnterpriseGreenAgent,
-            red_agent_class=FiniteStateRedAgent,
-            steps=num_steps,
-        )
-        cyborg = CybORG(scenario_generator=scenario, seed=seed)
-        wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-        wrapper.reset()
+    scenario = EnterpriseScenarioGenerator(
+        blue_agent_class=SleepAgent,
+        green_agent_class=EnterpriseGreenAgent,
+        red_agent_class=FiniteStateRedAgent,
+        steps=num_steps,
+    )
+    cyborg = CybORG(scenario_generator=scenario, seed=seed)
+    wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+    wrapper.reset()
 
-        recorder = RedPolicyRecorder()
-        recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
+    recorder = RedPolicyRecorder()
+    recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
 
-        sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-        for _step in range(num_steps):
-            wrapper.step(actions=sleep_actions)
+    sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+    for _ in range(num_steps):
+        wrapper.step(actions=sleep_actions)
 
-        tapes.append(recorder.to_jax_array())
+    return np.asarray(recorder.to_jax_array())
 
-    return jnp.stack(tapes, axis=0)
+
+def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+    if bank_size >= _PARALLEL_THRESHOLD:
+        workers = _pool_workers(bank_size)
+        print(f"  Building topology bank ({bank_size} seeds, {workers} workers)...", flush=True)
+        worker_fn = partial(_build_one_topology, num_steps=num_steps)
+        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
+            consts = list(pool.imap(worker_fn, range(bank_size)))
+    else:
+        from CybORG import CybORG
+        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+        consts = []
+        for seed in range(bank_size):
+            scenario = EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=EnterpriseGreenAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=num_steps,
+            )
+            cyborg = CybORG(scenario_generator=scenario, seed=seed)
+            cyborg.reset()
+            consts.append(jax.tree.map(np.asarray, build_const_from_cyborg(cyborg)))
+
+    return jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0), *consts)
+
+
+def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    if bank_size >= _PARALLEL_THRESHOLD:
+        workers = _pool_workers(bank_size)
+        print(f"  Building green random bank ({bank_size} seeds, {workers} workers)...", flush=True)
+        worker_fn = partial(_build_one_green, num_steps=num_steps)
+        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
+            arrays = list(pool.imap(worker_fn, range(bank_size)))
+    else:
+        from CybORG import CybORG
+        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+        from CybORG.Agents.Wrappers import BlueFlatWrapper
+        from CybORG.Simulator.Actions import Sleep
+        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+        from jaxborg.cyborg_green_recorder import GreenRecorder
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        arrays = []
+        for seed in range(bank_size):
+            scenario = EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=EnterpriseGreenAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=num_steps,
+            )
+            cyborg = CybORG(scenario_generator=scenario, seed=seed)
+            wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+            wrapper.reset()
+
+            mappings = build_mappings_from_cyborg(cyborg)
+            recorder = GreenRecorder()
+            recorder.install(cyborg, mappings)
+
+            sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+            for step_idx in range(num_steps):
+                wrapper.step(actions=sleep_actions)
+                recorder.extract_step(step_idx)
+
+            arrays.append(np.asarray(recorder.to_jax_array()))
+
+    return jnp.stack(arrays, axis=0)
+
+
+def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
+    if bank_size >= _PARALLEL_THRESHOLD:
+        workers = _pool_workers(bank_size)
+        print(f"  Building red policy bank ({bank_size} seeds, {workers} workers)...", flush=True)
+        worker_fn = partial(_build_one_red_policy, num_steps=num_steps)
+        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
+            arrays = list(pool.imap(worker_fn, range(bank_size)))
+    else:
+        from CybORG import CybORG
+        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+        from CybORG.Agents.Wrappers import BlueFlatWrapper
+        from CybORG.Simulator.Actions import Sleep
+        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+        from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
+        from jaxborg.translate import build_mappings_from_cyborg
+
+        arrays = []
+        for seed in range(bank_size):
+            scenario = EnterpriseScenarioGenerator(
+                blue_agent_class=SleepAgent,
+                green_agent_class=EnterpriseGreenAgent,
+                red_agent_class=FiniteStateRedAgent,
+                steps=num_steps,
+            )
+            cyborg = CybORG(scenario_generator=scenario, seed=seed)
+            wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
+            wrapper.reset()
+
+            recorder = RedPolicyRecorder()
+            recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
+
+            sleep_actions = {agent: Sleep() for agent in wrapper.agents}
+            for _ in range(num_steps):
+                wrapper.step(actions=sleep_actions)
+
+            arrays.append(np.asarray(recorder.to_jax_array()))
+
+    return jnp.stack(arrays, axis=0)
 
 
 @lru_cache(maxsize=None)
