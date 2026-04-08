@@ -17,13 +17,8 @@ class TestEvalSeedUniqueness:
         """JAXborg must select 30 distinct topology bank entries for 30 episodes."""
         seed = 0
         bank_size = 32
-        indices = [
-            int(cyborg_bank_index_from_key(jax.random.PRNGKey(seed + ep), bank_size))
-            for ep in range(30)
-        ]
-        assert len(set(indices)) == 30, (
-            f"Only {len(set(indices))} unique bank indices for 30 episodes: {indices}"
-        )
+        indices = [int(cyborg_bank_index_from_key(jax.random.PRNGKey(seed + ep), bank_size)) for ep in range(30)]
+        assert len(set(indices)) == 30, f"Only {len(set(indices))} unique bank indices for 30 episodes: {indices}"
 
     def test_cyborg_seeds_unique_for_30_episodes(self):
         """CybORG must receive 30 distinct seeds for 30 episodes."""
@@ -42,17 +37,14 @@ class TestEvalSeedUniqueness:
         for ep in range(30):
             jax_idx = int(cyborg_bank_index_from_key(jax.random.PRNGKey(seed + ep), bank_size))
             cyborg_seed = seed + ep
-            assert jax_idx == cyborg_seed, (
-                f"ep {ep}: JAXborg bank_idx={jax_idx} != CybORG seed={cyborg_seed}"
-            )
+            assert jax_idx == cyborg_seed, f"ep {ep}: JAXborg bank_idx={jax_idx} != CybORG seed={cyborg_seed}"
 
     def test_old_scheme_had_collisions(self):
         """Document that the old ep*100 scheme produced only 8 unique bank seeds."""
         seed = 0
         bank_size = 32
         old_indices = [
-            int(cyborg_bank_index_from_key(jax.random.PRNGKey(seed + ep * 100), bank_size))
-            for ep in range(30)
+            int(cyborg_bank_index_from_key(jax.random.PRNGKey(seed + ep * 100), bank_size)) for ep in range(30)
         ]
         # The old scheme mapped 30 episodes to only 8 unique bank entries
         assert len(set(old_indices)) == 8, (

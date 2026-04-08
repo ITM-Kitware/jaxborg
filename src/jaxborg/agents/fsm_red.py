@@ -351,29 +351,28 @@ def fsm_red_select_actions(
     where red_actions is shape (NUM_RED_AGENTS,) int32 array, and the rest are
     (NUM_RED_AGENTS,) arrays. updated_state has pending fields written.
     """
-    red_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
-    target_hosts = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
-    target_subnets = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
-    fsm_actions = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.int32)
-    eligible_flags = jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_)
+    # Each agent's selection reads only its own agent-indexed state slices, so
+    # all 6 selections can be computed from the SAME initial state.  This lets
+    # XLA parallelize the independent computations instead of chaining them
+    # through 6 sequential state.replace calls.
+    all_results = [_select_one_agent(state, const, r, red_keys[r]) for r in range(NUM_RED_AGENTS)]
 
-    for r in range(NUM_RED_AGENTS):
-        action, eff_host, eff_subnet, eff_fsm_act, eff_eligible, source_kind, source_host = _select_one_agent(
-            state, const, r, red_keys[r]
-        )
-        red_actions = red_actions.at[r].set(action)
-        target_hosts = target_hosts.at[r].set(eff_host)
-        target_subnets = target_subnets.at[r].set(eff_subnet)
-        fsm_actions = fsm_actions.at[r].set(eff_fsm_act)
-        eligible_flags = eligible_flags.at[r].set(eff_eligible)
+    red_actions = jnp.array([r[0] for r in all_results], dtype=jnp.int32)
+    target_hosts = jnp.array([r[1] for r in all_results], dtype=jnp.int32)
+    target_subnets = jnp.array([r[2] for r in all_results], dtype=jnp.int32)
+    fsm_actions = jnp.array([r[3] for r in all_results], dtype=jnp.int32)
+    eligible_flags = jnp.array([r[4] for r in all_results], dtype=jnp.bool_)
+    source_kinds = jnp.array([r[5] for r in all_results], dtype=jnp.int32)
+    source_hosts = jnp.array([r[6] for r in all_results], dtype=jnp.int32)
 
-        state = state.replace(
-            red_pending_fsm_action=state.red_pending_fsm_action.at[r].set(eff_fsm_act),
-            red_pending_target_host=state.red_pending_target_host.at[r].set(eff_host),
-            red_pending_target_subnet=state.red_pending_target_subnet.at[r].set(eff_subnet),
-            red_pending_source_kind=state.red_pending_source_kind.at[r].set(source_kind),
-            red_pending_source_host=state.red_pending_source_host.at[r].set(source_host),
-        )
+    # Single batched state update instead of 6 sequential replaces.
+    state = state.replace(
+        red_pending_fsm_action=fsm_actions,
+        red_pending_target_host=target_hosts,
+        red_pending_target_subnet=target_subnets,
+        red_pending_source_kind=source_kinds,
+        red_pending_source_host=source_hosts,
+    )
 
     return red_actions, target_hosts, target_subnets, fsm_actions, eligible_flags, state
 
@@ -522,6 +521,10 @@ def _compute_post_step_fsm_states(
 ) -> jnp.ndarray:
     fsm_states = state_after.fsm_host_states
 
+    # Each agent's FSM update reads/writes only its own row in fsm_states,
+    # so all 6 agents can be computed from the same initial state.
+    updated_rows = []
+    skip_flags = []
     for r in range(NUM_RED_AGENTS):
         success = determine_fsm_success(
             state_before,
@@ -533,24 +536,12 @@ def _compute_post_step_fsm_states(
             fsm_actions[r],
         )
         exec_flag = jnp.bool_(True) if executed_flags is None else executed_flags[r]
-        # CybORG processes FSM transitions inside get_action() at the NEXT
-        # step.  If the agent is inactive at step end, get_action() is skipped
-        # and the transition is never applied — the FSM freezes.
         skip = (
             ~eligible_flags[r]
             | ~exec_flag
             | (fsm_actions[r] == FSM_ACT_DISCOVER_DECEPTION)
             | ~state_after.red_agent_active[r]
         )
-        # Use state_before for discover mask: CybORG's _host_state_transition
-        # runs BEFORE _process_new_observations, so newly discovered hosts
-        # are NOT in host_states during the transition.  They enter as K
-        # (not KD) via _process_new_observations afterwards.
-        #
-        # Filter by fsm_host_entered to match CybORG's host_states membership:
-        # red_discovered_hosts may include pre-seeded topology hosts or
-        # info-linked hosts that haven't been observed by the FSM agent yet.
-        # CybORG's _host_state_transition only iterates over host_states keys.
         discovered_for_fsm = state_before.red_discovered_hosts[r] & state_before.fsm_host_entered[r]
         updated = fsm_red_update_state(
             fsm_states,
@@ -562,19 +553,19 @@ def _compute_post_step_fsm_states(
             fsm_actions[r],
             success,
         )
-        fsm_states = jnp.where(skip, fsm_states, updated)
+        updated_rows.append(updated[r])
+        skip_flags.append(skip)
 
-    # Session-loss recovery: roll back compromise state to KD for hosts
-    # where the agent no longer has a session.  Gate on state_after activity
-    # because CybORG's _session_removal_state_change runs inside get_action()
-    # at the NEXT step — skipped when the agent is inactive.
-    for r in range(NUM_RED_AGENTS):
-        agent_fsm = fsm_states[r]
-        has_session = state_after.red_sessions[r]
-        is_active = state_after.red_agent_active[r]
-        was_compromised = (agent_fsm == FSM_U) | (agent_fsm == FSM_UD) | (agent_fsm == FSM_R) | (agent_fsm == FSM_RD)
-        lost_session = was_compromised & ~has_session & is_active
-        fsm_states = fsm_states.at[r].set(jnp.where(lost_session, FSM_KD, agent_fsm))
+    # Batch merge: for each agent, select between original and updated row.
+    updated_matrix = jnp.stack(updated_rows)  # (NUM_RED_AGENTS, GLOBAL_MAX_HOSTS)
+    skip_mask = jnp.stack(skip_flags)[:, None]  # (NUM_RED_AGENTS, 1)
+    fsm_states = jnp.where(skip_mask, fsm_states, updated_matrix)
+
+    # Session-loss recovery: each agent reads/writes only its own row.
+    # Compute all recoveries from the same state, then batch apply.
+    was_compromised = (fsm_states == FSM_U) | (fsm_states == FSM_UD) | (fsm_states == FSM_R) | (fsm_states == FSM_RD)
+    lost_session = was_compromised & ~state_after.red_sessions & state_after.red_agent_active[:, None]
+    fsm_states = jnp.where(lost_session, FSM_KD, fsm_states)
 
     return fsm_states
 

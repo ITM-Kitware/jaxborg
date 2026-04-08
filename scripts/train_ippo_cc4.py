@@ -36,7 +36,6 @@ from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
 
@@ -115,9 +114,7 @@ class Transition(NamedTuple):
     log_prob: jnp.ndarray
     obs: jnp.ndarray
     avail_actions: jnp.ndarray
-    valid_action_count: jnp.ndarray
     blue_busy: jnp.ndarray
-    info: jnp.ndarray
 
 
 def _subtree_global_norm(tree, *path):
@@ -217,42 +214,6 @@ class MetricsLogger:
             mlflow.log_artifact(str(self.filepath))
 
 
-def _training_mask(const, agent_id, state):
-    """Env mask + training-time filtering of no-op traffic actions.
-
-    AllowTraffic is masked out when the route is NOT blocked (no-op).
-    BlockTraffic is masked out when the route IS already blocked (no-op).
-    This prevents policy collapse into the AllowTraffic action sink.
-
-    The environment's compute_blue_action_mask is unchanged (CybORG parity);
-    this wrapper applies additional training-only filtering.
-    """
-    mask = compute_blue_action_mask(const, agent_id, state)
-    if state is None:
-        return mask
-
-    # Traffic actions encoded as: base + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
-    # blocked_zones[dst, src] = True means traffic from src→dst is blocked
-    # Resolve relative dst to absolute via blue_obs_subnets
-    offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
-    src = offsets // BLUE_MAX_OBSERVED_SUBNETS
-    rel_dst = offsets % BLUE_MAX_OBSERVED_SUBNETS
-    abs_dst = const.blue_obs_subnets[agent_id, rel_dst]
-    safe_dst = jnp.clip(abs_dst, 0, NUM_SUBNETS - 1)
-    is_blocked = state.blocked_zones[safe_dst, src] & (abs_dst >= 0)
-
-    # AllowTraffic: only meaningful when the route IS blocked
-    mask = mask.at[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END].set(
-        mask[BLUE_ALLOW_TRAFFIC_START:BLUE_ALLOW_TRAFFIC_END] & is_blocked
-    )
-    # BlockTraffic: only meaningful when the route is NOT blocked
-    mask = mask.at[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END].set(
-        mask[BLUE_BLOCK_TRAFFIC_START:BLUE_BLOCK_TRAFFIC_END] & ~is_blocked
-    )
-
-    return mask
-
-
 def make_train(config):
     """Build env, network, and a single JIT'd collect_and_update function.
 
@@ -316,8 +277,23 @@ def make_train(config):
         _mask_over_envs = jax.vmap(compute_blue_action_mask, in_axes=(0, None, 0))
         _mask_over_agents = jax.vmap(_mask_over_envs, in_axes=(None, 0, None))
 
+        # Seed the info accumulator with zeros matching the env's info dict shape.
+        # Inner env returns (num_envs,) scalars; LogWrapper adds (num_envs, num_agents) arrays.
+        _info_acc_init = {
+            "reward_ria": jnp.zeros(num_envs, dtype=jnp.float32),
+            "reward_lwf": jnp.zeros(num_envs, dtype=jnp.float32),
+            "reward_asf": jnp.zeros(num_envs, dtype=jnp.float32),
+            "action_cost": jnp.zeros(num_envs, dtype=jnp.float32),
+            "impact_count": jnp.zeros(num_envs, dtype=jnp.float32),
+            "green_lwf_count": jnp.zeros(num_envs, dtype=jnp.float32),
+            "green_asf_count": jnp.zeros(num_envs, dtype=jnp.float32),
+            "returned_episode_returns": jnp.zeros((num_envs, num_agents), dtype=jnp.float32),
+            "returned_episode_lengths": jnp.zeros((num_envs, num_agents), dtype=jnp.float32),
+            "returned_episode": jnp.zeros((num_envs, num_agents), dtype=jnp.float32),
+        }
+
         def _env_step(carry, _):
-            env_state, obs, rng = carry
+            env_state, obs, rng, info_acc = carry
 
             # obs/env_state have leading (num_envs,) dim
             # Stack agents: (num_envs, num_agents, obs_dim)
@@ -348,6 +324,9 @@ def make_train(config):
             step_keys = jax.random.split(_rng, num_envs)
             new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
 
+            # Accumulate info sums in the carry instead of storing per-step.
+            info_acc = jax.tree.map(lambda acc, v: acc + jnp.asarray(v, dtype=jnp.float32), info_acc, info)
+
             transition = Transition(
                 done=jnp.stack([dones[a] for a in agents], axis=-1),
                 action=action,
@@ -356,14 +335,14 @@ def make_train(config):
                 log_prob=log_prob,
                 obs=obs_batch,
                 avail_actions=avail_batch,
-                valid_action_count=avail_batch.sum(axis=-1).astype(jnp.float32),
                 blue_busy=busy_batch.astype(jnp.float32),
-                info=info,
             )
 
-            return (new_env_state, new_obs, rng), transition
+            return (new_env_state, new_obs, rng, info_acc), transition
 
-        (env_state, obs, rng), traj_batch = jax.lax.scan(_env_step, (env_state, obs, rng), None, config["NUM_STEPS"])
+        (env_state, obs, rng, info_sums), traj_batch = jax.lax.scan(
+            _env_step, (env_state, obs, rng, _info_acc_init), None, config["NUM_STEPS"]
+        )
 
         # --- GAE ---
         # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
@@ -470,7 +449,7 @@ def make_train(config):
             rng, _rng = jax.random.split(rng)
             batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
             permutation = jax.random.permutation(_rng, batch_size)
-            batch = (traj_batch._replace(info={}), policy_advantages, targets, policy_mask)
+            batch = (traj_batch, policy_advantages, targets, policy_mask)
             # Flatten (NUM_STEPS, num_envs, num_agents, ...) -> (batch_size, ...)
             batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
             shuffled_batch = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
@@ -488,17 +467,20 @@ def make_train(config):
         rng = update_state[-1]
 
         loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
-        metric = jax.tree.map(lambda x: x.mean(), traj_batch.info)
+        # info_sums accumulated over NUM_STEPS; take mean over steps and envs.
+        num_steps_f = jnp.float32(config["NUM_STEPS"])
+        metric = jax.tree.map(lambda x: x.mean() / num_steps_f, info_sums)
         active_mask = policy_mask
+        valid_action_count = traj_batch.avail_actions.sum(axis=-1).astype(jnp.float32)
         rollout_info = {
             "mean_rollout_return": traj_batch.reward.sum(axis=0).mean(),
-            "mean_valid_actions": traj_batch.valid_action_count.mean(),
-            "mean_mask_uniform_entropy": jnp.log(jnp.maximum(traj_batch.valid_action_count, 1.0)).mean(),
+            "mean_valid_actions": valid_action_count.mean(),
+            "mean_mask_uniform_entropy": jnp.log(jnp.maximum(valid_action_count, 1.0)).mean(),
             "busy_fraction": traj_batch.blue_busy.mean(),
             "decision_fraction": active_mask.mean(),
-            "mean_active_valid_actions": masked_mean(traj_batch.valid_action_count, active_mask),
+            "mean_active_valid_actions": masked_mean(valid_action_count, active_mask),
             "mean_active_mask_uniform_entropy": masked_mean(
-                jnp.log(jnp.maximum(traj_batch.valid_action_count, 1.0)),
+                jnp.log(jnp.maximum(valid_action_count, 1.0)),
                 active_mask,
             ),
             "nonzero_reward_fraction": (traj_batch.reward != 0).mean(),
