@@ -36,7 +36,7 @@ SCRIPTS_DIR = Path(__file__).resolve().parent
 if str(SCRIPTS_DIR) not in sys.path:
     sys.path.append(str(SCRIPTS_DIR))
 
-from train_ippo_cc4 import ActorCritic
+from train_ippo_cc4 import ActorCritic, SharedActorCritic
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -158,6 +158,8 @@ class EpisodeResult:
     ria_total: float = 0.0  # sum of RIA (Red Impact) reward over episode
     lwf_total: float = 0.0  # sum of LWF (Local Work Fails) reward over episode
     asf_total: float = 0.0  # sum of ASF (Access Service Fails) reward over episode
+    blue_busy_by_agent: list = field(default_factory=list)  # [agent_idx][step] = 0/1
+    phase_per_step: list = field(default_factory=list)  # [step] = phase
 
 
 def print_per_agent_action_dist(all_actions_by_agent, label="JAXborg"):
@@ -227,6 +229,17 @@ def load_checkpoint(path):
                 f"Legacy checkpoint action_dim={ckpt['action_dim']} is incompatible with current action space "
                 f"{BLUE_ALLOW_TRAFFIC_END}"
             )
+        # SharedActorCritic has 4 Dense layers (trunk×2 + actor + critic);
+        # LegacyActor has 3 (hidden×2 + output).
+        dense_count = sum(1 for k in nested_params if k.startswith("Dense_"))
+        if dense_count >= 4:
+            policy = SharedActorCritic(
+                action_dim=ckpt["action_dim"],
+                hidden_dim=ckpt["hidden_dim"],
+                activation=ckpt["activation"],
+            )
+            return policy, ckpt["params"], "shared"
+
         policy = LegacyActor(
             action_dim=ckpt["action_dim"],
             hidden_dim=ckpt["hidden_dim"],
@@ -258,6 +271,8 @@ def _default_cyborg_bank_match_size(jax_topology_mode: str, topology_bank_size: 
 def policy_dist(policy, params, policy_kind, obs_jax, mask):
     if policy_kind == "current":
         return policy.apply(params, obs_jax, mask, method=ActorCritic.actor)
+    if policy_kind == "shared":
+        return policy.apply(params, obs_jax, mask, method=SharedActorCritic.actor)
     return policy.apply(params, obs_jax, mask)
 
 
@@ -271,6 +286,10 @@ def make_batched_inference_fn(policy, params, policy_kind, deterministic):
 
         def _fwd(o, m):
             return policy.apply(params, o, m, method=ActorCritic.actor).logits
+    elif policy_kind == "shared":
+
+        def _fwd(o, m):
+            return policy.apply(params, o, m, method=SharedActorCritic.actor).logits
     else:
 
         def _fwd(o, m):
@@ -580,6 +599,10 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 
         def _fwd(params, obs_flat, mask_flat):
             return policy.apply(params, obs_flat, mask_flat, method=ActorCritic.actor).logits
+    elif policy_kind == "shared":
+
+        def _fwd(params, obs_flat, mask_flat):
+            return policy.apply(params, obs_flat, mask_flat, method=SharedActorCritic.actor).logits
     else:
 
         def _fwd(params, obs_flat, mask_flat):
@@ -617,6 +640,7 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 
         step_data = {
             "actions": actions_arr,
+            "blue_busy": (env_state.state.blue_pending_ticks > 0).astype(jnp.int32),
             "reward_mean": reward_arr.mean(),
             "hosts_user": jnp.sum((compromised == COMPROMISE_USER) & active),
             "hosts_priv": jnp.sum((compromised == COMPROMISE_PRIVILEGED) & active),
@@ -673,6 +697,7 @@ def rollout_jaxborg_scan(
 
     # Single device-to-host transfer for all episodes
     actions_np = np.asarray(all_step_data["actions"])  # (num_episodes, 500, NUM_BLUE_AGENTS)
+    blue_busy_np = np.asarray(all_step_data["blue_busy"])  # (num_episodes, 500, NUM_BLUE_AGENTS)
     rewards_np = np.asarray(all_step_data["reward_mean"])  # (num_episodes, 500)
     hosts_user_np = np.asarray(all_step_data["hosts_user"])
     hosts_priv_np = np.asarray(all_step_data["hosts_priv"])
@@ -707,11 +732,14 @@ def rollout_jaxborg_scan(
             for s in range(500)
         ]
         ep_actions_by_agent = [actions_np[ep, :, i].tolist() for i in range(NUM_BLUE_AGENTS)]
+        ep_busy_by_agent = [blue_busy_np[ep, :, i].tolist() for i in range(NUM_BLUE_AGENTS)]
         all_actions_flat.extend(actions_np[ep].ravel().tolist())
         episode_rewards.append(float(ep_totals[ep]))
         episode_results.append(
             EpisodeResult(
                 actions_by_agent=ep_actions_by_agent,
+                blue_busy_by_agent=ep_busy_by_agent,
+                phase_per_step=phase_np[ep].tolist(),
                 rewards=rewards_np[ep].tolist(),
                 cumulative_reward=float(ep_totals[ep]),
                 trajectory=ep_trajectory,
@@ -1853,7 +1881,48 @@ def main():
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
         ]
-        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg (all steps)")
+
+        # Decision-only distribution (non-busy steps)
+        if jax_results[0].blue_busy_by_agent:
+            decision_by_agent = [
+                [a for ep in jax_results for a, b in zip(ep.actions_by_agent[i], ep.blue_busy_by_agent[i]) if b == 0]
+                for i in range(NUM_BLUE_AGENTS)
+            ]
+            total_steps = sum(len(ep.actions_by_agent[0]) for ep in jax_results) * NUM_BLUE_AGENTS
+            decision_steps = sum(len(agent) for agent in decision_by_agent)
+            busy_pct = 100.0 * (1.0 - decision_steps / total_steps) if total_steps > 0 else 0.0
+            print(f"\n  (busy fraction: {busy_pct:.1f}% — filtered out below)")
+            print_per_agent_action_dist(decision_by_agent, label="JAXborg (decisions only)")
+
+        # Per-phase distribution
+        if jax_results[0].phase_per_step:
+            phase_names = {0: "Phase0", 1: "MissionA", 2: "MissionB"}
+            phase_actions = {0: [], 1: [], 2: []}
+            for ep in jax_results:
+                for step_idx, phase in enumerate(ep.phase_per_step):
+                    for i in range(NUM_BLUE_AGENTS):
+                        busy = ep.blue_busy_by_agent[i][step_idx] if ep.blue_busy_by_agent else 0
+                        if busy == 0:
+                            phase_actions[phase].append(ep.actions_by_agent[i][step_idx])
+            header = f"{'Phase':<10}"
+            for name in ACTION_TYPE_NAMES:
+                header += f" {name:>8}"
+            header += f" {'N':>8}"
+            print("\nPer-Phase Action Distribution (decisions only):")
+            print(header)
+            print("-" * len(header))
+            for phase in [0, 1, 2]:
+                acts = phase_actions[phase]
+                if not acts:
+                    continue
+                dist = action_distribution(acts)
+                row = f"{phase_names[phase]:<10}"
+                for pct in dist:
+                    row += f" {pct * 100:7.1f}%"
+                row += f" {len(acts):>8}"
+                print(row)
+
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
 
         print(f"\nMean reward ({args.episodes} episodes): {jax_rewards.mean():.1f}")

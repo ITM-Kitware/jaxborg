@@ -106,6 +106,49 @@ class CriticHead(nn.Module):
         return jnp.squeeze(critic, axis=-1)
 
 
+class SharedActorCritic(nn.Module):
+    """Actor-critic with shared trunk, matching CybORG's PPOAgent architecture.
+
+    Shared 2-layer [hidden_dim, hidden_dim] trunk, then single-layer actor and
+    critic projections branching from it.
+    """
+
+    action_dim: int
+    hidden_dim: int = 256
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, x, avail_actions=None):
+        activation = nn.relu if self.activation == "relu" else nn.tanh
+
+        # Shared trunk (matches CybORG's self.features)
+        trunk = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        trunk = activation(trunk)
+        trunk = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(trunk)
+        trunk = activation(trunk)
+
+        # Actor projection (single layer)
+        action_logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(trunk)
+        if avail_actions is not None:
+            unavail_actions = 1 - avail_actions
+            action_logits = action_logits - (unavail_actions * 1e10)
+        pi = distrax.Categorical(logits=action_logits)
+
+        # Critic projection (single layer)
+        value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(trunk)
+        value = jnp.squeeze(value, axis=-1)
+
+        return pi, value
+
+    def actor(self, x, avail_actions=None):
+        pi, _ = self(x, avail_actions)
+        return pi
+
+    def critic(self, x):
+        _, value = self(x)
+        return value
+
+
 class Transition(NamedTuple):
     done: jnp.ndarray
     action: jnp.ndarray
@@ -243,11 +286,20 @@ def make_train(config):
     init_keys = jax.random.split(init_key, num_envs)
     init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
 
-    network = ActorCritic(
-        inner_env.action_space(agents[0]).n,
-        hidden_dim=config.get("HIDDEN_DIM", 256),
-        activation=config["ACTIVATION"],
-    )
+    cyborg_matched = bool(config.get("CYBORG_MATCHED", False))
+
+    if cyborg_matched:
+        network = SharedActorCritic(
+            inner_env.action_space(agents[0]).n,
+            hidden_dim=config.get("HIDDEN_DIM", 256),
+            activation=config["ACTIVATION"],
+        )
+    else:
+        network = ActorCritic(
+            inner_env.action_space(agents[0]).n,
+            hidden_dim=config.get("HIDDEN_DIM", 256),
+            activation=config["ACTIVATION"],
+        )
 
     def linear_schedule(count):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
@@ -370,7 +422,10 @@ def make_train(config):
         )
         raw_advantages = advantages
         targets = raw_advantages + traj_batch.value
-        policy_mask = (1.0 - traj_batch.blue_busy).astype(jnp.float32)
+        if cyborg_matched:
+            policy_mask = jnp.ones_like(traj_batch.blue_busy)
+        else:
+            policy_mask = (1.0 - traj_batch.blue_busy).astype(jnp.float32)
         policy_adv_mean = masked_mean(raw_advantages, policy_mask)
         policy_adv_std = jnp.sqrt(masked_var(raw_advantages, policy_mask) + 1e-8)
         policy_advantages = (raw_advantages - policy_adv_mean) / policy_adv_std
@@ -417,15 +472,26 @@ def make_train(config):
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                 total_loss, grads = grad_fn(train_state.params, traj_batch, policy_advantages, targets, policy_mask)
                 pre_clip_grad_norm = optax.global_norm(grads)
-                actor_clip_norm = config.get("ACTOR_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
-                critic_clip_norm = config.get("CRITIC_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
-                grads, actor_grad_norm, actor_grad_norm_clipped = _clip_named_subtree(
-                    grads, "actor_head", actor_clip_norm
-                )
-                grads, critic_grad_norm, critic_grad_norm_clipped = _clip_named_subtree(
-                    grads, "critic_head", critic_clip_norm
-                )
-                grad_norm = optax.global_norm(grads)
+                if cyborg_matched:
+                    # Global clip at 0.5 matching torch.nn.utils.clip_grad_norm_(params, 0.5)
+                    max_norm = jnp.asarray(0.5, dtype=jnp.float32)
+                    scale = jnp.minimum(1.0, max_norm / (pre_clip_grad_norm + 1e-8))
+                    grads = jax.tree.map(lambda x: x * scale, grads)
+                    grad_norm = optax.global_norm(grads)
+                    actor_grad_norm = pre_clip_grad_norm
+                    actor_grad_norm_clipped = grad_norm
+                    critic_grad_norm = pre_clip_grad_norm
+                    critic_grad_norm_clipped = grad_norm
+                else:
+                    actor_clip_norm = config.get("ACTOR_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
+                    critic_clip_norm = config.get("CRITIC_MAX_GRAD_NORM", config["MAX_GRAD_NORM"])
+                    grads, actor_grad_norm, actor_grad_norm_clipped = _clip_named_subtree(
+                        grads, "actor_head", actor_clip_norm
+                    )
+                    grads, critic_grad_norm, critic_grad_norm_clipped = _clip_named_subtree(
+                        grads, "critic_head", critic_clip_norm
+                    )
+                    grad_norm = optax.global_norm(grads)
                 train_state = train_state.apply_gradients(grads=grads)
 
                 loss_info = {

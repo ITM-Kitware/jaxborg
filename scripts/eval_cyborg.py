@@ -15,7 +15,7 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from flax.linen.initializers import constant, orthogonal
-from train_ippo_cc4 import ActorCritic
+from train_ippo_cc4 import ActorCritic, SharedActorCritic
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
@@ -83,6 +83,15 @@ def load_checkpoint(path):
                 f"Legacy checkpoint action_dim={ckpt['action_dim']} is incompatible with current action space "
                 f"{BLUE_ALLOW_TRAFFIC_END}"
             )
+        dense_count = sum(1 for k in nested_params if k.startswith("Dense_"))
+        if dense_count >= 4:
+            policy = SharedActorCritic(
+                action_dim=ckpt["action_dim"],
+                hidden_dim=ckpt["hidden_dim"],
+                activation=ckpt["activation"],
+            )
+            return policy, ckpt["params"], "shared"
+
         policy = LegacyActor(
             action_dim=ckpt["action_dim"],
             hidden_dim=ckpt["hidden_dim"],
@@ -96,6 +105,8 @@ def load_checkpoint(path):
 def policy_dist(policy, params, policy_kind, obs_jax, mask):
     if policy_kind == "current":
         return policy.apply(params, obs_jax, mask, method=ActorCritic.actor)
+    if policy_kind == "shared":
+        return policy.apply(params, obs_jax, mask, method=SharedActorCritic.actor)
     return policy.apply(params, obs_jax, mask)
 
 
