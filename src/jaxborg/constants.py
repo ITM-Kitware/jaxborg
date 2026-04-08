@@ -57,11 +57,10 @@ BLUE_TRAFFIC_SLOTS = NUM_SUBNETS * BLUE_MAX_OBSERVED_SUBNETS
 NUM_MESSAGES = NUM_BLUE_AGENTS - 1
 # PID identity slots used for red session PID tracking.
 # Peak observed: 33 with random blue over 50 seeds × 500 steps.
-# 36 gives ~9% headroom over peak.  Smaller arrays reduce XLA state
-# size (3 red PID arrays + 1 blue → ~50 MB savings with 1024 envs).
-MAX_TRACKED_SESSION_PIDS = 36
+# 34 gives ~3% headroom over peak.
+MAX_TRACKED_SESSION_PIDS = 34
 # PID identity slots used for blue suspicious PID memory.
-MAX_TRACKED_SUSPICIOUS_PIDS = 36
+MAX_TRACKED_SUSPICIOUS_PIDS = 34
 ABSTRACT_RANK_NONE = 1_000_000
 BLUE_OBS_SIZE = (
     1
