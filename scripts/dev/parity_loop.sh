@@ -2,7 +2,7 @@
 # Differential parity loop (fuzzer only): run batches until mismatch or clean.
 #
 # Usage:
-#   bash scripts/parity_loop.sh
+#   bash scripts/dev/parity_loop.sh
 #
 # Environment variables:
 #   MAX_ITERATIONS          - max fuzz batches (default: 20)

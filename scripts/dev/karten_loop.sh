@@ -5,14 +5,14 @@
 # failures, passes structured handoff between agent invocations.
 #
 # Usage:
-#   bash scripts/karten_loop.sh              # run from L1 upward
-#   LEVEL=l3i bash scripts/karten_loop.sh    # start at specific level
-#   MAX_ITER=10 bash scripts/karten_loop.sh  # limit iterations
+#   bash scripts/dev/karten_loop.sh              # run from L1 upward
+#   LEVEL=l3i bash scripts/dev/karten_loop.sh    # start at specific level
+#   MAX_ITER=10 bash scripts/dev/karten_loop.sh  # limit iterations
 
 set -euo pipefail
 
 # --- Configuration ---
-WORKTREE="$(cd "$(dirname "$0")/.." && pwd)"
+WORKTREE="$(cd "$(dirname "$0")/../.." && pwd)"
 HANDOFF_DIR="${WORKTREE}/.agent_handoff"
 STATUS_FILE="${HANDOFF_DIR}/verification_status.json"
 PROMPT_TEMPLATE="${WORKTREE}/scripts/prompts/karten_parity.md"
@@ -80,7 +80,7 @@ via slurm (GPU), then runs it fully independently in both JAXborg and CybORG —
 no sync of any kind (red, green, detection all independent). Compares population
 mean rewards via TOST. A failing L4 means a simulation bug.
 
-Steps: (1) train via srun --gres=gpu:1, (2) eval_transfer.py --independent-rollouts"
+Steps: (1) train via srun --gres=gpu:1, (2) scripts/eval/transfer.py --independent-rollouts"
 )
 declare -A LEVEL_COMMANDS=(
     [l1]="uv run pytest tests/subsystems/ -v -x -n auto"
@@ -278,7 +278,7 @@ run_l4_train_and_eval() {
         export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
         export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
         srun --gres=gpu:1 --mem=64G --partition=community --comment="${KARTEN_JOB_TAG}" \
-            uv run python scripts/train_ippo_cc4.py \
+            uv run python scripts/train/ippo_jax.py \
                 TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
                 NUM_ENVS="$TRAIN_NUM_ENVS" \
                 TOPOLOGY_MODE="$TOPOLOGY_MODE" \
@@ -303,7 +303,7 @@ run_l4_train_and_eval() {
     # Step 2: Eval transfer on CPU — run JAXborg and CybORG in parallel
     echo "  L4 Step 2: Evaluating transfer (${EVAL_EPISODES} episodes, CPU, parallel)..."
     CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu \
-        uv run python scripts/eval_transfer.py \
+        uv run python scripts/eval/transfer.py \
             --checkpoint "$checkpoint" \
             --episodes "$EVAL_EPISODES" \
             --independent-rollouts \

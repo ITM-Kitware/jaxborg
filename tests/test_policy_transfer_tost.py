@@ -40,10 +40,10 @@ def _load_checkpoint(path):
     # Import ActorCritic from training script
     import sys
 
-    scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    from train_ippo_cc4 import ActorCritic
+    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
+    if train_dir not in sys.path:
+        sys.path.insert(0, train_dir)
+    from ippo_jax import ActorCritic
 
     nested_params = ckpt["params"].get("params", {})
     if "actor_head" in nested_params:
@@ -92,10 +92,10 @@ def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
     from jaxborg.constants import NUM_BLUE_AGENTS
     from jaxborg.fsm_red_env import FsmRedCC4Env
 
-    scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    from train_ippo_cc4 import ActorCritic
+    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
+    if train_dir not in sys.path:
+        sys.path.insert(0, train_dir)
+    from ippo_jax import ActorCritic
 
     env = FsmRedCC4Env(num_steps=num_steps)
     rewards = []
@@ -146,10 +146,10 @@ def _rollout_cyborg(policy, params, kind, seed, num_episodes, num_steps=500):
 
     from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 
-    scripts_dir = str(Path(__file__).resolve().parent.parent / "scripts")
-    if scripts_dir not in sys.path:
-        sys.path.insert(0, scripts_dir)
-    from train_ippo_cc4 import ActorCritic
+    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
+    if train_dir not in sys.path:
+        sys.path.insert(0, train_dir)
+    from ippo_jax import ActorCritic
 
     rewards = []
 

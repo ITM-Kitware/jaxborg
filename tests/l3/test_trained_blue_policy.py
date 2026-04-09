@@ -30,10 +30,12 @@ from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
 pytestmark = pytest.mark.skip(reason="checkpoint trained with old 776-action space")
 
-# Add scripts/ to path for ActorCritic import
-SCRIPTS_DIR = Path(__file__).resolve().parent.parent.parent / "scripts"
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
+# Add scripts subdirs to path for ActorCritic / LegacyActor imports
+_scripts_base = Path(__file__).resolve().parent.parent.parent / "scripts"
+for _subdir in ("train", "eval"):
+    _p = str(_scripts_base / _subdir)
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 
 # --- Checkpoint discovery ---
@@ -75,8 +77,8 @@ def _get_checkpoint_path() -> Path | None:
 
 def _load_policy(checkpoint_path: Path):
     """Load policy and params from checkpoint. Returns (policy, params, kind)."""
-    from eval_transfer import LegacyActor
-    from train_ippo_cc4 import ActorCritic
+    from transfer import LegacyActor
+    from ippo_jax import ActorCritic
 
     with open(checkpoint_path, "rb") as f:
         ckpt = pickle.load(f)
@@ -104,7 +106,7 @@ def _load_policy(checkpoint_path: Path):
 
 def _make_inference_fn(policy, params, policy_kind):
     """Build a JIT-compiled deterministic inference function."""
-    from train_ippo_cc4 import ActorCritic
+    from ippo_jax import ActorCritic
 
     if policy_kind == "current":
 

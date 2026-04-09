@@ -5,8 +5,8 @@ Generates topology, green-random, and red-policy banks using multiprocessing.
 Saves to the same cache location that training expects (.bank_cache/).
 
 Usage:
-    uv run python scripts/generate_bank.py --bank-size 1024 --workers 56
-    uv run python scripts/generate_bank.py --bank-size 1024 --only topo  # just topologies
+    uv run python scripts/train/generate_bank.py --bank-size 1024 --workers 56
+    uv run python scripts/train/generate_bank.py --bank-size 1024 --only topo  # just topologies
 """
 
 import argparse

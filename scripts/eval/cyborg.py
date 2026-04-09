@@ -5,6 +5,11 @@ import pickle
 from pathlib import Path
 from statistics import mean, stdev
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "train"))
+
 import distrax
 import flax.linen as nn
 import jax
@@ -15,7 +20,7 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from flax.linen.initializers import constant, orthogonal
-from train_ippo_cc4 import ActorCritic, SharedActorCritic
+from ippo_jax import ActorCritic, SharedActorCritic
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed

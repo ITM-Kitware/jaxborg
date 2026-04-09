@@ -106,7 +106,7 @@ index so JAXborg exercises its own N computation.
 CybORG's `SimulationController` adds an `action_cost` reward component that sums
 `action.cost` for each blue agent (e.g., Restore costs −1). JAXborg does not model
 this component — it uses only `BlueRewardMachine` for rewards. The eval pipeline
-(`scripts/eval_transfer.py`) extracts only `BlueRewardMachine` from CybORG rewards
+(`scripts/eval/transfer.py`) extracts only `BlueRewardMachine` from CybORG rewards
 to match.
 
 - CybORG: `Simulator/SimulationController.py:310–311`

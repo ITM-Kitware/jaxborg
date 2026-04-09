@@ -9,7 +9,7 @@
 #   5. If claude confirms TOST passes and everything looks good → done
 #
 # Usage:
-#   srun --gres=gpu:1 --mem=64G bash scripts/transfer_loop.sh
+#   srun --gres=gpu:1 --mem=64G bash scripts/dev/transfer_loop.sh
 #
 # Environment variables:
 #   MAX_ROUNDS          - train→verify iterations (default: 10)
@@ -28,7 +28,7 @@ elif [ -n "${SLURM_SUBMIT_DIR:-}" ]; then
     cd "$SLURM_SUBMIT_DIR"
 else
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    cd "$SCRIPT_DIR/.."
+    cd "$SCRIPT_DIR/../.."
 fi
 
 # Ensure Ctrl+C kills child processes (uv/python/JAX)
@@ -60,7 +60,7 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     # --- 1. Train from scratch ---
     echo ""
     echo "--- Step 1: Training IPPO ($TRAIN_TIMESTEPS steps, $TRAIN_NUM_ENVS envs, topology=$TOPOLOGY_MODE) ---"
-    uv run python scripts/train_ippo_cc4.py \
+    uv run python scripts/train/ippo_jax.py \
         TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
         NUM_ENVS="$TRAIN_NUM_ENVS" \
         TOPOLOGY_MODE="$TOPOLOGY_MODE" \
@@ -83,7 +83,7 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     # --- 2. Eval on JAXborg + CybORG (includes TOST) ---
     echo ""
     echo "--- Step 2: Evaluating transfer ($EVAL_EPISODES episodes, independent) ---"
-    EVAL_OUTPUT=$(uv run python scripts/eval_transfer.py \
+    EVAL_OUTPUT=$(uv run python scripts/eval/transfer.py \
         --checkpoint "$CHECKPOINT" \
         --episodes "$EVAL_EPISODES" \
         --independent-rollouts \

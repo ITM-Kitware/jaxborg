@@ -1,7 +1,7 @@
 """Benchmark XLA compile time and steady-state training throughput.
 
 Usage:
-    srun --gres=gpu:1 --mem=64G -- uv run python scripts/benchmark.py [--num-updates N] [--clear-cache]
+    srun --gres=gpu:1 --mem=64G -- uv run python scripts/eval/benchmark_jax.py [--num-updates N] [--clear-cache]
 """
 
 import os
@@ -62,8 +62,8 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
     }
 
     # Use make_train from the training script
-    sys.path.insert(0, str(Path(__file__).parent))
-    from train_ippo_cc4 import make_train
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "train"))
+    from ippo_jax import make_train
 
     print(f"\nConfig: NUM_ENVS={config['NUM_ENVS']}, NUM_STEPS={config['NUM_STEPS']}")
     print(f"Benchmark: {num_updates} updates\n")

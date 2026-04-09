@@ -29,14 +29,14 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-SCRIPTS_DIR = Path(__file__).resolve().parent
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.append(str(SCRIPTS_DIR))
+TRAIN_DIR = Path(__file__).resolve().parent.parent / "train"
+if str(TRAIN_DIR) not in sys.path:
+    sys.path.append(str(TRAIN_DIR))
 
-from train_ippo_cc4 import ActorCritic, SharedActorCritic
+from ippo_jax import ActorCritic, SharedActorCritic
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -853,7 +853,7 @@ def _rollout_cyborg_single_episode(args_tuple):
     from jaxborg.constants import NUM_BLUE_AGENTS
     from jaxborg.topology import build_const_from_cyborg
     from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
-    from scripts.eval_transfer import (
+    from scripts.eval.transfer import (
         _apply_traffic_filter,
         _build_cyborg_mask_cache,
         _cyborg_blocked_zones,

@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 
-from scripts.train_ippo_cc4 import compute_value_loss
+from scripts.train.ippo_jax import compute_value_loss
 
 
 def test_unclipped_value_loss_keeps_gradient_for_large_target_error():

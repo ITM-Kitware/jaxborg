@@ -5,7 +5,7 @@ differential fuzzer catches them.  Each mutation runs in a subprocess
 to avoid JIT cache interference.
 
 Usage:
-    uv run python scripts/mutation_test.py [--seeds 3] [--steps 30]
+    uv run python scripts/dev/mutation_test.py [--seeds 3] [--steps 30]
 """
 
 import argparse

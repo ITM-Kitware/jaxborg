@@ -61,15 +61,15 @@ uv sync --group cuda         # GPU support (training)
 uv run pytest tests/ -v -n auto
 
 # Train JaxBorg IPPO
-uv run python scripts/train_ippo_cc4.py total_timesteps=50000000
+uv run python scripts/train/ippo_jax.py total_timesteps=50000000
 
 # Evaluate a trained policy (independent rollouts on both engines + TOST)
-JAX_PLATFORMS=cpu uv run python scripts/eval_transfer.py \
+JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
     --checkpoint jaxborg-exp/<run>/checkpoint_final.pkl \
     --episodes 100 --stochastic
 
 # Train CybORG PPO baseline (CPU-only, CleanRL)
-JAX_PLATFORMS=cpu uv run python scripts/baselines/train_cleanrl_ppo.py \
+JAX_PLATFORMS=cpu uv run python scripts/train/ppo_cleanrl_cyborg.py \
     --num-envs 48 --total-timesteps 20000000 --lr 3e-4 --gamma 0.99 \
     --num-epochs 4 --ent-coef 0.01 --no-anneal-lr
 ```

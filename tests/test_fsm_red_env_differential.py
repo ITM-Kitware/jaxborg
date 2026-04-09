@@ -338,7 +338,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.fsm_red_env import FsmRedCC4Env
         from jaxborg.topology import build_const_from_cyborg
         from jaxborg.translate import build_mappings_from_cyborg
-        from scripts.eval_transfer import make_cyborg_env
+        from scripts.eval.transfer import make_cyborg_env
 
         seed = 3
         bank_size = 2
@@ -383,7 +383,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.constants import NUM_RED_AGENTS
         from jaxborg.fsm_red_env import FsmRedCC4Env
         from jaxborg.translate import build_mappings_from_cyborg, jax_red_to_cyborg
-        from scripts.eval_transfer import make_cyborg_env
+        from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
         bank_size = 2
@@ -455,7 +455,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import encode_blue_action
         from jaxborg.topology import build_const_from_cyborg
         from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
-        from scripts.eval_transfer import make_cyborg_env
+        from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
         bank_size = 2
@@ -493,7 +493,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
         from jaxborg.fsm_red_env import FsmRedCC4Env
         from jaxborg.translate import build_mappings_from_cyborg
-        from scripts.eval_transfer import make_cyborg_env
+        from scripts.eval.transfer import make_cyborg_env
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
         seed = 4

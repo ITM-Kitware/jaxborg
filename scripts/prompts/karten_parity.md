@@ -29,7 +29,7 @@ export CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu
 uv run pytest tests/subsystems/ -v -x -n auto   # L1 property tests
 uv run pytest tests/differential/ -v -x -n auto  # L2 interaction tests
 BLUE_CHECKPOINT=$BLUE_CHECKPOINT uv run pytest tests/l3/ -v -x -n auto  # L3 full rollout
-uv run python scripts/eval_transfer.py \
+uv run python scripts/eval/transfer.py \
   --checkpoint $BLUE_CHECKPOINT --episodes 30 --independent-rollouts --seed 42  # L4 transfer eval
 uv run ruff check --fix . && uv run ruff format .   # lint
 ```
