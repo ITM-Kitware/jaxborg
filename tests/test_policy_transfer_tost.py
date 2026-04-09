@@ -26,24 +26,13 @@ TOST_ALPHA = float(os.environ.get("JAXBORG_TOST_ALPHA", "0.05"))
 
 def _load_checkpoint(path):
     """Load checkpoint and return (policy, params, kind)."""
-    # Lazy imports to avoid slow import when test is skipped
-    import distrax  # noqa: F401
-    import flax.linen as nn
-    from flax.linen.initializers import constant, orthogonal
+    from jaxborg.policy import ActorCritic, LegacyActor
 
     ckpt_path = Path(path)
     if not ckpt_path.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
     with ckpt_path.open("rb") as f:
         ckpt = pickle.load(f)
-
-    # Import ActorCritic from training script
-    import sys
-
-    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
-    if train_dir not in sys.path:
-        sys.path.insert(0, train_dir)
-    from ippo_jax import ActorCritic
 
     nested_params = ckpt["params"].get("params", {})
     if "actor_head" in nested_params:
@@ -53,25 +42,6 @@ def _load_checkpoint(path):
             activation=ckpt["activation"],
         )
         return policy, ckpt["params"], "current"
-
-    # Legacy format
-    class LegacyActor(nn.Module):
-        action_dim: int
-        hidden_dim: int = 256
-        activation: str = "tanh"
-
-        @nn.compact
-        def __call__(self, x, avail_actions=None):
-            activation = nn.relu if self.activation == "relu" else nn.tanh
-            h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-            h = activation(h)
-            h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(h)
-            h = activation(h)
-            logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
-            if avail_actions is not None:
-                logits = logits - ((1 - avail_actions) * 1e10)
-
-            return distrax.Categorical(logits=logits)
 
     if "Dense_0" in nested_params:
         policy = LegacyActor(
@@ -86,16 +56,10 @@ def _load_checkpoint(path):
 
 def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
     """Run episodes in JaxBorg and return per-episode cumulative rewards."""
-    import sys
-
     from jaxborg.actions.masking import compute_blue_action_mask
     from jaxborg.constants import NUM_BLUE_AGENTS
     from jaxborg.fsm_red_env import FsmRedCC4Env
-
-    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
-    if train_dir not in sys.path:
-        sys.path.insert(0, train_dir)
-    from ippo_jax import ActorCritic
+    from jaxborg.policy import ActorCritic
 
     env = FsmRedCC4Env(num_steps=num_steps)
     rewards = []
@@ -137,19 +101,13 @@ def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
 
 def _rollout_cyborg(policy, params, kind, seed, num_episodes, num_steps=500):
     """Run episodes in CybORG and return per-episode cumulative rewards."""
-    import sys
-
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
     from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
-
-    train_dir = str(Path(__file__).resolve().parent.parent / "scripts" / "train")
-    if train_dir not in sys.path:
-        sys.path.insert(0, train_dir)
-    from ippo_jax import ActorCritic
+    from jaxborg.policy import ActorCritic
 
     rewards = []
 

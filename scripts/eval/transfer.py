@@ -32,11 +32,8 @@ from flax.linen.initializers import constant, orthogonal
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-TRAIN_DIR = Path(__file__).resolve().parent.parent / "train"
-if str(TRAIN_DIR) not in sys.path:
-    sys.path.append(str(TRAIN_DIR))
 
-from ippo_jax import ActorCritic, SharedActorCritic
+from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -101,27 +98,6 @@ ACTION_TYPE_RANGES = [
 
 DEFAULT_NUM_STEPS = 500
 DEFAULT_BANK_SIZE = 32
-
-
-class LegacyActor(nn.Module):
-    action_dim: int
-    hidden_dim: int = 256
-    activation: str = "tanh"
-
-    @nn.compact
-    def __call__(self, x, avail_actions=None):
-        activation = nn.relu if self.activation == "relu" else nn.tanh
-
-        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
-        actor_mean = activation(actor_mean)
-        actor_mean = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(actor_mean)
-        actor_mean = activation(actor_mean)
-        action_logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(actor_mean)
-
-        if avail_actions is not None:
-            action_logits = action_logits - ((1 - avail_actions) * 1e10)
-
-        return distrax.Categorical(logits=action_logits)
 
 
 def classify_action(action_idx: int) -> int:

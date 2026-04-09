@@ -14,7 +14,6 @@ Usage:
 
 import os
 import pickle
-import sys
 from pathlib import Path
 
 import jax
@@ -25,17 +24,11 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.observations import get_blue_obs
+from jaxborg.policy import ActorCritic, LegacyActor
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
 pytestmark = pytest.mark.skip(reason="checkpoint trained with old 776-action space")
-
-# Add scripts subdirs to path for ActorCritic / LegacyActor imports
-_scripts_base = Path(__file__).resolve().parent.parent.parent / "scripts"
-for _subdir in ("train", "eval"):
-    _p = str(_scripts_base / _subdir)
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 
 # --- Checkpoint discovery ---
@@ -77,9 +70,6 @@ def _get_checkpoint_path() -> Path | None:
 
 def _load_policy(checkpoint_path: Path):
     """Load policy and params from checkpoint. Returns (policy, params, kind)."""
-    from transfer import LegacyActor
-    from ippo_jax import ActorCritic
-
     with open(checkpoint_path, "rb") as f:
         ckpt = pickle.load(f)
 
@@ -106,8 +96,6 @@ def _load_policy(checkpoint_path: Path):
 
 def _make_inference_fn(policy, params, policy_kind):
     """Build a JIT-compiled deterministic inference function."""
-    from ippo_jax import ActorCritic
-
     if policy_kind == "current":
 
         def _fwd(o, m):

@@ -238,7 +238,7 @@ def print_trajectory_summary(trajectory, label="CybORG ep"):
         print(f" {i:>4}  {s['phase']:>5}  {s['reward']:>7.1f}  {s['cum_reward']:>8.1f}{marker}")
 
 
-def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
+def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", verbose=False):
     agent_small = PPOAgent(SMALL_OBS_DIM, SMALL_ACT_DIM)
     agent_large = PPOAgent(LARGE_OBS_DIM, LARGE_ACT_DIM)
 
@@ -271,7 +271,9 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
         for phase in [0, 1, 2]:
             all_per_phase_types[phase].extend(per_phase_types[phase])
 
-        if (ep + 1) % 10 == 0 or ep == num_episodes - 1:
+        if verbose:
+            print(f"  Episode {ep + 1}: reward={ep_reward:.1f}")
+        elif (ep + 1) % 10 == 0 or ep == num_episodes - 1:
             print(
                 f"  Episode {ep + 1}/{num_episodes}: "
                 f"mean={np.mean(episode_rewards):.1f} +/- {np.std(episode_rewards):.1f}, "
@@ -298,6 +300,11 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default"):
     print_action_dist_table(all_per_agent_types, label="CybORG")
     print_phase_dist_table(all_per_phase_types)
     print_trajectory_summary(last_trajectory, label=f"CybORG ep {num_episodes}")
+
+    if verbose:
+        print(f"\nPer-episode rewards:")
+        for i, r in enumerate(episode_rewards):
+            print(f"  Episode {i + 1:3d}: {r:.1f}")
 
     # Save results
     # Build serializable action dist
@@ -336,6 +343,7 @@ def main():
     parser.add_argument("--model-dir", type=str, default=str(EXP_DIR / "cleanrl_ppo"))
     parser.add_argument("--num-episodes", type=int, default=50)
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--verbose", action="store_true", help="Print per-episode rewards")
     parser.add_argument("--tag", type=str, default="default")
     args = parser.parse_args()
 
@@ -344,6 +352,7 @@ def main():
         num_episodes=args.num_episodes,
         deterministic=args.deterministic,
         tag=args.tag,
+        verbose=args.verbose,
     )
 
 
