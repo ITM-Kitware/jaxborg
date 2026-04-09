@@ -5,8 +5,9 @@ GPU speedup and policy quality can be compared against a real reference point.
 Not chasing SOTA — establishing a trustworthy, reproducible number.
 
 Written in CleanRL style (single-file, minimal dependencies, readable).
-Uses parameter sharing across agents 0-3 (same obs/act space) and a separate
-policy for agent 4 (larger obs/act space).
+Uses full parameter sharing: a single policy for all 5 agents. Agents 0-3
+(single-subnet) have their observations and action masks zero-padded to match
+agent 4's dimensions. Action masking prevents invalid actions.
 
 Hyperparameter sources:
 - Singh et al. (AAMAS 2025): LR=5e-5, minibatch=32768, SGD_iters=30, net=[256,256]
@@ -43,11 +44,9 @@ EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 
-# Agents 0-3 share obs/act spaces; agent 4 is different
-SMALL_OBS_DIM = 92
-SMALL_ACT_DIM = 82
-LARGE_OBS_DIM = BLUE_OBS_SIZE
-LARGE_ACT_DIM = 242
+# Unified obs/act dims (agent 4's sizes — agents 0-3 are zero-padded to match)
+OBS_DIM = BLUE_OBS_SIZE  # 210
+ACT_DIM = 242
 
 
 def make_cyborg_env():
@@ -250,15 +249,10 @@ def train(args):
     print(f"Creating {args.num_envs} parallel CybORG environments...", flush=True)
     envs = ParallelEnvs(args.num_envs)
 
-    # Create networks - shared policy for agents 0-3, separate for agent 4
-    agent_small = PPOAgent(SMALL_OBS_DIM, SMALL_ACT_DIM, hidden_dims=(256, 256)).to(device)
-    agent_large = PPOAgent(LARGE_OBS_DIM, LARGE_ACT_DIM, hidden_dims=(256, 256)).to(device)
+    # Single shared policy for all 5 agents (obs/masks zero-padded to max dims)
+    agent = PPOAgent(OBS_DIM, ACT_DIM, hidden_dims=(256, 256)).to(device)
 
-    optimizer = optim.Adam(
-        list(agent_small.parameters()) + list(agent_large.parameters()),
-        lr=args.lr,
-        eps=1e-5,
-    )
+    optimizer = optim.Adam(agent.parameters(), lr=args.lr, eps=1e-5)
 
     # Reward scaler
     reward_scaler = RewardScaler(args.num_envs, args.gamma) if args.norm_rewards else None
@@ -272,8 +266,7 @@ def train(args):
         if ckpt_path.exists():
             print(f"Resuming from full checkpoint {ckpt_path}...", flush=True)
             ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
-            agent_small.load_state_dict(ckpt["agent_small"])
-            agent_large.load_state_dict(ckpt["agent_large"])
+            agent.load_state_dict(ckpt["agent"])
             optimizer.load_state_dict(ckpt["optimizer"])
             resumed_steps = ckpt["total_steps"]
             resumed_updates = ckpt["num_updates"]
@@ -285,11 +278,9 @@ def train(args):
                 reward_scaler.count = rs["count"]
         else:
             # Fall back to bare model weights (no optimizer/scaler state)
-            small_path = ckpt_dir / f"model_small_{args.resume_tag}.pt"
-            large_path = ckpt_dir / f"model_large_{args.resume_tag}.pt"
-            print(f"No full checkpoint; loading bare weights from {small_path}...", flush=True)
-            agent_small.load_state_dict(torch.load(small_path, map_location=device, weights_only=True))
-            agent_large.load_state_dict(torch.load(large_path, map_location=device, weights_only=True))
+            model_path = ckpt_dir / f"model_{args.resume_tag}.pt"
+            print(f"No full checkpoint; loading bare weights from {model_path}...", flush=True)
+            agent.load_state_dict(torch.load(model_path, map_location=device, weights_only=True))
             # Estimate resumed steps from metrics file
             metrics_src = ckpt_dir / f"metrics_{args.resume_tag}.jsonl"
             if metrics_src.exists():
@@ -302,19 +293,14 @@ def train(args):
     # Rollout storage
     num_steps = args.rollout_length
 
-    # Storage arrays
-    obs_small = torch.zeros((num_steps, args.num_envs, 4, SMALL_OBS_DIM))
-    obs_large = torch.zeros((num_steps, args.num_envs, 1, LARGE_OBS_DIM))
-    actions_small = torch.zeros((num_steps, args.num_envs, 4), dtype=torch.long)
-    actions_large = torch.zeros((num_steps, args.num_envs, 1), dtype=torch.long)
-    logprobs_small = torch.zeros((num_steps, args.num_envs, 4))
-    logprobs_large = torch.zeros((num_steps, args.num_envs, 1))
+    # Storage arrays — all 5 agents use unified dims
+    obs_buf = torch.zeros((num_steps, args.num_envs, NUM_AGENTS, OBS_DIM))
+    actions_buf = torch.zeros((num_steps, args.num_envs, NUM_AGENTS), dtype=torch.long)
+    logprobs_buf = torch.zeros((num_steps, args.num_envs, NUM_AGENTS))
     rewards_all = torch.zeros((num_steps, args.num_envs))  # shared reward (same for all agents)
     dones_all = torch.zeros((num_steps, args.num_envs))
-    values_small = torch.zeros((num_steps, args.num_envs, 4))
-    values_large = torch.zeros((num_steps, args.num_envs, 1))
-    masks_small = torch.zeros((num_steps, args.num_envs, 4, SMALL_ACT_DIM))
-    masks_large = torch.zeros((num_steps, args.num_envs, 1, LARGE_ACT_DIM))
+    values_buf = torch.zeros((num_steps, args.num_envs, NUM_AGENTS))
+    masks_buf = torch.zeros((num_steps, args.num_envs, NUM_AGENTS, ACT_DIM))
 
     # MLflow setup
     mlflow_db = EXP_DIR / "mlflow.db"
@@ -339,7 +325,7 @@ def train(args):
             "max_grad_norm": args.max_grad_norm,
             "norm_rewards": args.norm_rewards,
             "network": "[256, 256]",
-            "shared_policy": "agents_0-3_shared",
+            "shared_policy": "all_agents_shared",
             "anneal_lr": args.anneal_lr,
             "num_rollouts_per_update": args.num_rollouts_per_update,
         }
@@ -364,21 +350,14 @@ def train(args):
     total_steps = resumed_steps
     num_updates = resumed_updates
     rollouts_collected = 0
-    accum_obs_s, accum_obs_l = [], []
-    accum_act_s, accum_act_l = [], []
-    accum_lp_s, accum_lp_l = [], []
-    accum_adv_s, accum_adv_l = [], []
-    accum_ret_s, accum_ret_l = [], []
-    accum_val_s, accum_val_l = [], []
-    accum_mask_s, accum_mask_l = [], []
+    accum_obs, accum_act, accum_lp = [], [], []
+    accum_adv, accum_ret, accum_val, accum_mask = [], [], [], []
 
     steps_per_update = args.num_envs * args.rollout_length * args.num_rollouts_per_update
     total_updates = args.total_timesteps // steps_per_update
     # Agent-level batch size for SGD (accounts for accumulation)
-    small_batch = num_steps * args.num_envs * 4 * args.num_rollouts_per_update
-    large_batch = num_steps * args.num_envs * 1 * args.num_rollouts_per_update
-    small_mb_size = small_batch // args.num_minibatches
-    large_mb_size = large_batch // args.num_minibatches
+    agent_batch = num_steps * args.num_envs * NUM_AGENTS * args.num_rollouts_per_update
+    mb_size = agent_batch // args.num_minibatches
 
     print(f"\n{'=' * 70}")
     print("CleanRL PPO for CybORG CC4")
@@ -389,8 +368,7 @@ def train(args):
     print(f"  Steps per update: {steps_per_update:,} (env steps)")
     print(f"  Total timesteps: {args.total_timesteps:,}")
     print(f"  Total updates: {total_updates}")
-    print(f"  Small agent batch: {small_batch:,} -> {small_mb_size:,} per minibatch")
-    print(f"  Large agent batch: {large_batch:,} -> {large_mb_size:,} per minibatch")
+    print(f"  Agent batch: {agent_batch:,} -> {mb_size:,} per minibatch")
     print(f"  LR: {args.lr}, Gamma: {args.gamma}, GAE Lambda: {args.gae_lambda}")
     print(f"  Epochs: {args.num_epochs}, Clip: {args.clip_coef}")
     print(f"  Ent coef: {args.ent_coef}, VF coef: {args.vf_coef}")
@@ -402,43 +380,33 @@ def train(args):
         while total_steps < args.total_timesteps:
             # ── Collect rollout ──────────────────────────────────────
             for step in range(num_steps):
-                # Store observations and masks
+                # Store observations and masks (zero-padded to unified dims)
                 for env_idx in range(args.num_envs):
-                    for i in range(4):
+                    for i in range(NUM_AGENTS):
                         agent_id = AGENT_IDS[i]
-                        obs_small[step, env_idx, i] = torch.from_numpy(all_obs[env_idx][agent_id].astype(np.float32))
-                        masks_small[step, env_idx, i] = torch.from_numpy(
-                            np.array(all_info[env_idx][agent_id]["action_mask"], dtype=np.float32)
-                        )
-                    agent_id = AGENT_IDS[4]
-                    obs_large[step, env_idx, 0] = torch.from_numpy(all_obs[env_idx][agent_id].astype(np.float32))
-                    masks_large[step, env_idx, 0] = torch.from_numpy(
-                        np.array(all_info[env_idx][agent_id]["action_mask"], dtype=np.float32)
-                    )
+                        raw_obs = all_obs[env_idx][agent_id].astype(np.float32)
+                        raw_mask = np.array(all_info[env_idx][agent_id]["action_mask"], dtype=np.float32)
+                        # Zero-pad shorter obs/masks to unified dims
+                        obs_buf[step, env_idx, i, : len(raw_obs)] = torch.from_numpy(raw_obs)
+                        obs_buf[step, env_idx, i, len(raw_obs) :] = 0.0
+                        masks_buf[step, env_idx, i, : len(raw_mask)] = torch.from_numpy(raw_mask)
+                        masks_buf[step, env_idx, i, len(raw_mask) :] = 0.0
 
-                # Get actions from policies
+                # Get actions from single policy
                 with torch.no_grad():
-                    obs_s_flat = obs_small[step].reshape(-1, SMALL_OBS_DIM)
-                    mask_s_flat = masks_small[step].reshape(-1, SMALL_ACT_DIM)
-                    act_s, lp_s, _, val_s = agent_small.get_action_and_value(obs_s_flat, mask_s_flat)
-                    actions_small[step] = act_s.reshape(args.num_envs, 4)
-                    logprobs_small[step] = lp_s.reshape(args.num_envs, 4)
-                    values_small[step] = val_s.reshape(args.num_envs, 4)
-
-                    obs_l_flat = obs_large[step].reshape(-1, LARGE_OBS_DIM)
-                    mask_l_flat = masks_large[step].reshape(-1, LARGE_ACT_DIM)
-                    act_l, lp_l, _, val_l = agent_large.get_action_and_value(obs_l_flat, mask_l_flat)
-                    actions_large[step] = act_l.reshape(args.num_envs, 1)
-                    logprobs_large[step] = lp_l.reshape(args.num_envs, 1)
-                    values_large[step] = val_l.reshape(args.num_envs, 1)
+                    obs_flat = obs_buf[step].reshape(-1, OBS_DIM)
+                    mask_flat = masks_buf[step].reshape(-1, ACT_DIM)
+                    act, lp, _, val = agent.get_action_and_value(obs_flat, mask_flat)
+                    actions_buf[step] = act.reshape(args.num_envs, NUM_AGENTS)
+                    logprobs_buf[step] = lp.reshape(args.num_envs, NUM_AGENTS)
+                    values_buf[step] = val.reshape(args.num_envs, NUM_AGENTS)
 
                 # Build action dicts and step environments
                 action_dicts = []
                 for env_idx in range(args.num_envs):
                     ad = {}
-                    for i in range(4):
-                        ad[AGENT_IDS[i]] = int(actions_small[step, env_idx, i].item())
-                    ad[AGENT_IDS[4]] = int(actions_large[step, env_idx, 0].item())
+                    for i in range(NUM_AGENTS):
+                        ad[AGENT_IDS[i]] = int(actions_buf[step, env_idx, i].item())
                     action_dicts.append(ad)
 
                 all_obs, all_rew, all_done, all_info = envs.step(action_dicts)
@@ -471,71 +439,41 @@ def train(args):
 
             # ── Compute advantages (GAE) ─────────────────────────────
             with torch.no_grad():
-                # Bootstrap values for last observation
-                obs_s_flat = torch.zeros(args.num_envs * 4, SMALL_OBS_DIM)
-                obs_l_flat = torch.zeros(args.num_envs, LARGE_OBS_DIM)
+                # Bootstrap values for last observation (zero-padded)
+                next_obs_flat = torch.zeros(args.num_envs * NUM_AGENTS, OBS_DIM)
                 for env_idx in range(args.num_envs):
-                    for i in range(4):
-                        obs_s_flat[env_idx * 4 + i] = torch.from_numpy(
-                            all_obs[env_idx][AGENT_IDS[i]].astype(np.float32)
-                        )
-                    obs_l_flat[env_idx] = torch.from_numpy(all_obs[env_idx][AGENT_IDS[4]].astype(np.float32))
+                    for i in range(NUM_AGENTS):
+                        raw_obs = all_obs[env_idx][AGENT_IDS[i]].astype(np.float32)
+                        next_obs_flat[env_idx * NUM_AGENTS + i, : len(raw_obs)] = torch.from_numpy(raw_obs)
 
-                next_val_s = agent_small.get_value(obs_s_flat).reshape(args.num_envs, 4)
-                next_val_l = agent_large.get_value(obs_l_flat).reshape(args.num_envs, 1)
+                next_val = agent.get_value(next_obs_flat).reshape(args.num_envs, NUM_AGENTS)
 
-                # GAE for small agents - all use the same shared reward
-                advantages_small = torch.zeros((num_steps, args.num_envs, 4))
-                lastgaelam = torch.zeros(args.num_envs, 4)
+                # GAE for all agents — all use the same shared reward
+                advantages = torch.zeros((num_steps, args.num_envs, NUM_AGENTS))
+                lastgaelam = torch.zeros(args.num_envs, NUM_AGENTS)
                 for t in reversed(range(num_steps)):
                     if t == num_steps - 1:
                         nextnonterminal = (1.0 - dones_all[t]).unsqueeze(-1)
-                        nextvalues = next_val_s
+                        nextvalues = next_val
                     else:
                         nextnonterminal = (1.0 - dones_all[t]).unsqueeze(-1)
-                        nextvalues = values_small[t + 1]
-                    # All agents get the same reward
-                    rew_expanded = rewards_all[t].unsqueeze(-1).expand_as(values_small[t])
-                    delta = rew_expanded + args.gamma * nextvalues * nextnonterminal - values_small[t]
-                    advantages_small[t] = lastgaelam = (
+                        nextvalues = values_buf[t + 1]
+                    rew_expanded = rewards_all[t].unsqueeze(-1).expand_as(values_buf[t])
+                    delta = rew_expanded + args.gamma * nextvalues * nextnonterminal - values_buf[t]
+                    advantages[t] = lastgaelam = (
                         delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
                     )
 
-                returns_small = advantages_small + values_small
-
-                # GAE for large agent
-                advantages_large = torch.zeros((num_steps, args.num_envs, 1))
-                lastgaelam = torch.zeros(args.num_envs, 1)
-                for t in reversed(range(num_steps)):
-                    if t == num_steps - 1:
-                        nextnonterminal = (1.0 - dones_all[t]).unsqueeze(-1)
-                        nextvalues = next_val_l
-                    else:
-                        nextnonterminal = (1.0 - dones_all[t]).unsqueeze(-1)
-                        nextvalues = values_large[t + 1]
-                    rew_expanded = rewards_all[t].unsqueeze(-1)
-                    delta = rew_expanded + args.gamma * nextvalues * nextnonterminal - values_large[t]
-                    advantages_large[t] = lastgaelam = (
-                        delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                    )
-
-                returns_large = advantages_large + values_large
+                returns = advantages + values_buf
 
             # ── Accumulate rollout data ──────────────────────────────
-            accum_obs_s.append(obs_small.reshape(-1, SMALL_OBS_DIM).clone())
-            accum_obs_l.append(obs_large.reshape(-1, LARGE_OBS_DIM).clone())
-            accum_act_s.append(actions_small.reshape(-1).clone())
-            accum_act_l.append(actions_large.reshape(-1).clone())
-            accum_lp_s.append(logprobs_small.reshape(-1).clone())
-            accum_lp_l.append(logprobs_large.reshape(-1).clone())
-            accum_adv_s.append(advantages_small.reshape(-1).clone())
-            accum_adv_l.append(advantages_large.reshape(-1).clone())
-            accum_ret_s.append(returns_small.reshape(-1).clone())
-            accum_ret_l.append(returns_large.reshape(-1).clone())
-            accum_val_s.append(values_small.reshape(-1).clone())
-            accum_val_l.append(values_large.reshape(-1).clone())
-            accum_mask_s.append(masks_small.reshape(-1, SMALL_ACT_DIM).clone())
-            accum_mask_l.append(masks_large.reshape(-1, LARGE_ACT_DIM).clone())
+            accum_obs.append(obs_buf.reshape(-1, OBS_DIM).clone())
+            accum_act.append(actions_buf.reshape(-1).clone())
+            accum_lp.append(logprobs_buf.reshape(-1).clone())
+            accum_adv.append(advantages.reshape(-1).clone())
+            accum_ret.append(returns.reshape(-1).clone())
+            accum_val.append(values_buf.reshape(-1).clone())
+            accum_mask.append(masks_buf.reshape(-1, ACT_DIM).clone())
             rollouts_collected += 1
 
             if rollouts_collected < args.num_rollouts_per_update:
@@ -554,42 +492,26 @@ def train(args):
                 lr = args.lr
 
             # Concatenate accumulated rollouts for minibatching
-            b_obs_s = torch.cat(accum_obs_s)
-            b_obs_l = torch.cat(accum_obs_l)
-            b_act_s = torch.cat(accum_act_s)
-            b_act_l = torch.cat(accum_act_l)
-            b_lp_s = torch.cat(accum_lp_s)
-            b_lp_l = torch.cat(accum_lp_l)
-            b_adv_s = torch.cat(accum_adv_s)
-            b_adv_l = torch.cat(accum_adv_l)
-            b_ret_s = torch.cat(accum_ret_s)
-            b_ret_l = torch.cat(accum_ret_l)
-            b_val_s = torch.cat(accum_val_s)
-            b_val_l = torch.cat(accum_val_l)
-            b_mask_s = torch.cat(accum_mask_s)
-            b_mask_l = torch.cat(accum_mask_l)
+            b_obs = torch.cat(accum_obs)
+            b_act = torch.cat(accum_act)
+            b_lp = torch.cat(accum_lp)
+            b_adv = torch.cat(accum_adv)
+            b_ret = torch.cat(accum_ret)
+            b_val = torch.cat(accum_val)
+            b_mask = torch.cat(accum_mask)
 
             # Clear accumulators
-            accum_obs_s.clear()
-            accum_obs_l.clear()
-            accum_act_s.clear()
-            accum_act_l.clear()
-            accum_lp_s.clear()
-            accum_lp_l.clear()
-            accum_adv_s.clear()
-            accum_adv_l.clear()
-            accum_ret_s.clear()
-            accum_ret_l.clear()
-            accum_val_s.clear()
-            accum_val_l.clear()
-            accum_mask_s.clear()
-            accum_mask_l.clear()
+            accum_obs.clear()
+            accum_act.clear()
+            accum_lp.clear()
+            accum_adv.clear()
+            accum_ret.clear()
+            accum_val.clear()
+            accum_mask.clear()
             rollouts_collected = 0
 
-            total_s = b_obs_s.shape[0]
-            total_l = b_obs_l.shape[0]
-            mb_size_s = total_s // args.num_minibatches
-            mb_size_l = total_l // args.num_minibatches
+            total_n = b_obs.shape[0]
+            mb_size_n = total_n // args.num_minibatches
 
             # Epoch metrics accumulators
             epoch_pg_loss = 0.0
@@ -600,74 +522,42 @@ def train(args):
             n_minibatches_total = 0
 
             for epoch in range(args.num_epochs):
-                perm_s = torch.randperm(total_s)
-                perm_l = torch.randperm(total_l)
+                perm = torch.randperm(total_n)
 
                 for mb_idx in range(args.num_minibatches):
-                    idx_s = perm_s[mb_idx * mb_size_s : (mb_idx + 1) * mb_size_s]
-                    idx_l = perm_l[mb_idx * mb_size_l : (mb_idx + 1) * mb_size_l]
+                    idx = perm[mb_idx * mb_size_n : (mb_idx + 1) * mb_size_n]
 
-                    # Small agents
-                    mb_obs_s = b_obs_s[idx_s]
-                    mb_act_s = b_act_s[idx_s]
-                    mb_lp_s = b_lp_s[idx_s]
-                    mb_adv_s = b_adv_s[idx_s]
-                    mb_ret_s = b_ret_s[idx_s]
-                    mb_mask_s = b_mask_s[idx_s]
-
-                    # Large agent
-                    mb_obs_l = b_obs_l[idx_l]
-                    mb_act_l = b_act_l[idx_l]
-                    mb_lp_l = b_lp_l[idx_l]
-                    mb_adv_l = b_adv_l[idx_l]
-                    mb_ret_l = b_ret_l[idx_l]
-                    mb_mask_l = b_mask_l[idx_l]
+                    mb_obs = b_obs[idx]
+                    mb_act = b_act[idx]
+                    mb_lp = b_lp[idx]
+                    mb_adv = b_adv[idx]
+                    mb_ret = b_ret[idx]
+                    mb_mask = b_mask[idx]
 
                     # Forward pass
-                    _, new_lp_s, ent_s, new_val_s = agent_small.get_action_and_value(mb_obs_s, mb_mask_s, mb_act_s)
-                    _, new_lp_l, ent_l, new_val_l = agent_large.get_action_and_value(mb_obs_l, mb_mask_l, mb_act_l)
+                    _, new_lp, ent, new_val = agent.get_action_and_value(mb_obs, mb_mask, mb_act)
 
-                    # ── Small agent loss ──
-                    adv_s = (mb_adv_s - mb_adv_s.mean()) / (mb_adv_s.std() + 1e-8)
-                    logratio_s = new_lp_s - mb_lp_s
-                    ratio_s = logratio_s.exp()
-                    pg_loss1_s = -adv_s * ratio_s
-                    pg_loss2_s = -adv_s * torch.clamp(ratio_s, 1 - args.clip_coef, 1 + args.clip_coef)
-                    pg_loss_s = torch.max(pg_loss1_s, pg_loss2_s).mean()
-                    vf_loss_s = 0.5 * ((new_val_s - mb_ret_s) ** 2).mean()
-                    entropy_s = ent_s.mean()
-
-                    # ── Large agent loss ──
-                    adv_l = (mb_adv_l - mb_adv_l.mean()) / (mb_adv_l.std() + 1e-8)
-                    logratio_l = new_lp_l - mb_lp_l
-                    ratio_l = logratio_l.exp()
-                    pg_loss1_l = -adv_l * ratio_l
-                    pg_loss2_l = -adv_l * torch.clamp(ratio_l, 1 - args.clip_coef, 1 + args.clip_coef)
-                    pg_loss_l = torch.max(pg_loss1_l, pg_loss2_l).mean()
-                    vf_loss_l = 0.5 * ((new_val_l - mb_ret_l) ** 2).mean()
-                    entropy_l = ent_l.mean()
-
-                    # Combined loss (weighted by num agents: 4 small + 1 large)
-                    pg_loss = (4 * pg_loss_s + pg_loss_l) / 5
-                    vf_loss = (4 * vf_loss_s + vf_loss_l) / 5
-                    entropy_loss = (4 * entropy_s + entropy_l) / 5
+                    # PPO loss
+                    adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                    logratio = new_lp - mb_lp
+                    ratio = logratio.exp()
+                    pg_loss1 = -adv * ratio
+                    pg_loss2 = -adv * torch.clamp(ratio, 1 - args.clip_coef, 1 + args.clip_coef)
+                    pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+                    vf_loss = 0.5 * ((new_val - mb_ret) ** 2).mean()
+                    entropy_loss = ent.mean()
 
                     loss = pg_loss - args.ent_coef * entropy_loss + args.vf_coef * vf_loss
 
                     optimizer.zero_grad()
                     loss.backward()
-                    nn.utils.clip_grad_norm_(
-                        list(agent_small.parameters()) + list(agent_large.parameters()),
-                        args.max_grad_norm,
-                    )
+                    nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
                     optimizer.step()
 
                     # Track metrics
                     with torch.no_grad():
-                        all_ratio = torch.cat([ratio_s, ratio_l])
-                        all_logratio = torch.cat([logratio_s, logratio_l])
-                        approx_kl = ((all_ratio - 1) - all_logratio).mean().item()
-                        clipfrac = ((all_ratio - 1.0).abs() > args.clip_coef).float().mean().item()
+                        approx_kl = ((ratio - 1) - logratio).mean().item()
+                        clipfrac = ((ratio - 1.0).abs() > args.clip_coef).float().mean().item()
 
                     epoch_pg_loss += pg_loss.item()
                     epoch_vf_loss += vf_loss.item()
@@ -693,10 +583,8 @@ def train(args):
 
             # Compute explained variance
             with torch.no_grad():
-                all_vals = torch.cat([b_val_s, b_val_l])
-                all_rets = torch.cat([b_ret_s, b_ret_l])
-                y_var = all_rets.var()
-                explained_var = (1 - (all_rets - all_vals).var() / (y_var + 1e-8)).item() if y_var > 1e-8 else 0.0
+                y_var = b_ret.var()
+                explained_var = (1 - (b_ret - b_val).var() / (y_var + 1e-8)).item() if y_var > 1e-8 else 0.0
 
             # Episode reward stats
             if completed_rewards:
@@ -751,8 +639,7 @@ def train(args):
             # Periodic checkpoint
             if args.checkpoint_every > 0 and total_steps % args.checkpoint_every < steps_per_update:
                 ckpt = {
-                    "agent_small": agent_small.state_dict(),
-                    "agent_large": agent_large.state_dict(),
+                    "agent": agent.state_dict(),
                     "optimizer": optimizer.state_dict(),
                     "total_steps": total_steps,
                     "num_updates": num_updates,
@@ -778,8 +665,7 @@ def train(args):
 
     # Save full checkpoint for resume
     ckpt = {
-        "agent_small": agent_small.state_dict(),
-        "agent_large": agent_large.state_dict(),
+        "agent": agent.state_dict(),
         "optimizer": optimizer.state_dict(),
         "total_steps": total_steps,
         "num_updates": num_updates,
@@ -794,8 +680,7 @@ def train(args):
     ckpt_path = save_dir / f"checkpoint_{args.tag or 'default'}.pt"
     torch.save(ckpt, ckpt_path)
     # Also save bare weights for eval script compatibility
-    torch.save(agent_small.state_dict(), save_dir / f"model_small_{args.tag or 'default'}.pt")
-    torch.save(agent_large.state_dict(), save_dir / f"model_large_{args.tag or 'default'}.pt")
+    torch.save(agent.state_dict(), save_dir / f"model_{args.tag or 'default'}.pt")
 
     if completed_rewards:
         final_reward = np.mean(completed_rewards[-50:])

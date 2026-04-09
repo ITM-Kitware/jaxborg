@@ -21,10 +21,8 @@ EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 
-SMALL_OBS_DIM = 92
-SMALL_ACT_DIM = 82
-LARGE_OBS_DIM = BLUE_OBS_SIZE
-LARGE_ACT_DIM = 242
+OBS_DIM = BLUE_OBS_SIZE  # 210
+ACT_DIM = 242
 
 ACTION_TYPE_NAMES = [
     "Sleep",
@@ -106,7 +104,7 @@ def make_cyborg_env():
     return EnterpriseMAE(cyborg)
 
 
-def run_episode(agent_small, agent_large, env, deterministic):
+def run_episode(agent, env, deterministic):
     """Run one episode, collecting actions, rewards, and trajectory data."""
     obs, info = env.reset()
 
@@ -128,14 +126,14 @@ def run_episode(agent_small, agent_large, env, deterministic):
         for i in range(NUM_AGENTS):
             agent_id = AGENT_IDS[i]
             with torch.no_grad():
-                if i < 4:
-                    o = torch.from_numpy(obs[agent_id].astype(np.float32)).unsqueeze(0)
-                    m = torch.from_numpy(np.array(info[agent_id]["action_mask"], dtype=np.float32)).unsqueeze(0)
-                    act = agent_small.get_action(o, m, deterministic=deterministic).item()
-                else:
-                    o = torch.from_numpy(obs[agent_id].astype(np.float32)).unsqueeze(0)
-                    m = torch.from_numpy(np.array(info[agent_id]["action_mask"], dtype=np.float32)).unsqueeze(0)
-                    act = agent_large.get_action(o, m, deterministic=deterministic).item()
+                raw_obs = obs[agent_id].astype(np.float32)
+                raw_mask = np.array(info[agent_id]["action_mask"], dtype=np.float32)
+                # Zero-pad to unified dims
+                o = torch.zeros(1, OBS_DIM)
+                o[0, : len(raw_obs)] = torch.from_numpy(raw_obs)
+                m = torch.zeros(1, ACT_DIM)
+                m[0, : len(raw_mask)] = torch.from_numpy(raw_mask)
+                act = agent.get_action(o, m, deterministic=deterministic).item()
 
             actions[agent_id] = act
 
@@ -239,15 +237,11 @@ def print_trajectory_summary(trajectory, label="CybORG ep"):
 
 
 def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", verbose=False):
-    agent_small = PPOAgent(SMALL_OBS_DIM, SMALL_ACT_DIM)
-    agent_large = PPOAgent(LARGE_OBS_DIM, LARGE_ACT_DIM)
+    agent = PPOAgent(OBS_DIM, ACT_DIM)
 
-    small_path = model_dir / f"model_small_{tag}.pt"
-    large_path = model_dir / f"model_large_{tag}.pt"
-    agent_small.load_state_dict(torch.load(small_path, weights_only=True))
-    agent_large.load_state_dict(torch.load(large_path, weights_only=True))
-    agent_small.eval()
-    agent_large.eval()
+    model_path = model_dir / f"model_{tag}.pt"
+    agent.load_state_dict(torch.load(model_path, weights_only=True))
+    agent.eval()
 
     env = make_cyborg_env()
     episode_rewards = []
@@ -260,7 +254,7 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     last_trajectory = None
     for ep in range(num_episodes):
         ep_reward, per_agent_types, per_phase_types, trajectory = run_episode(
-            agent_small, agent_large, env, deterministic
+            agent, env, deterministic
         )
         episode_rewards.append(ep_reward)
         episode_lengths.append(len(trajectory))
