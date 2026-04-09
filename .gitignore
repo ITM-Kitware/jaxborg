@@ -12,3 +12,4 @@ jaxborg-exp/
 mlruns/
 .agent_handoff/
 .jax_cache/
+slurm-*.out
