@@ -466,7 +466,7 @@ def make_train(config):
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
-@hydra.main(config_path="configs", config_name="ippo_cc4", version_base=None)
+@hydra.main(config_path=".", config_name="ippo_cc4", version_base=None)
 def main(cfg):
     config = OmegaConf.to_container(cfg)
     mlflow_enabled = bool(config.get("MLFLOW_ENABLED", True))
