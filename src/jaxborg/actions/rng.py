@@ -146,11 +146,15 @@ def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility
     return jax.lax.cond(const.use_blue_decoy_type_choices, from_precomputed, from_fallback_rng, None)
 
 
-def sample_blue_decoy_pid_delta(const: CC4Const, time, agent_id, key):
-    """Return Host.create_pid delta in [1, 9] for blue decoy process creation."""
+def sample_blue_decoy_pid_delta(const: CC4Const, time, agent_id, key, respawn_index=0):
+    """Return Host.create_pid delta in [1, 9] for blue decoy process creation.
+
+    respawn_index selects which precomputed delta to use when multiple decoys
+    are respawned in a single Remove action (0 for DeployDecoy or first respawn).
+    """
 
     def from_precomputed(_):
-        return jnp.maximum(const.blue_decoy_pid_deltas[time, agent_id], jnp.int32(1))
+        return jnp.maximum(const.blue_decoy_pid_deltas[time, agent_id, respawn_index], jnp.int32(1))
 
     def from_fallback_rng(_):
         return jax.random.randint(key, (), minval=1, maxval=10, dtype=jnp.int32)

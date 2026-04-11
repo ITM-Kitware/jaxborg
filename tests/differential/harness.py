@@ -111,28 +111,6 @@ _ZERO_INT_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
 _ZERO_BOOL_HOSTS = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
 
 
-def _is_router_action_slot(action_idx, const):
-    """Return True if action_idx targets a router host slot.
-
-    CybORG's wrapper excludes routers from the action space but JAX includes
-    them.  Router slots are at position MAX_SERVER_HOSTS + MAX_USER_HOSTS
-    within each subnet's host slots.
-    """
-    from jaxborg.actions.encoding import (
-        BLUE_ALLOW_TRAFFIC_START,
-        BLUE_ANALYSE_START,
-        BLUE_MONITOR,
-    )
-    from jaxborg.constants import MAX_SERVER_HOSTS, MAX_USER_HOSTS, OBS_HOSTS_PER_SUBNET
-
-    # Only host-targeted actions (Analyse/Remove/Restore/Decoy) have router slots.
-    # Traffic and Monitor actions don't target hosts.
-    if action_idx <= BLUE_MONITOR or action_idx >= BLUE_ALLOW_TRAFFIC_START:
-        return False
-    slot = (action_idx - BLUE_ANALYSE_START) % OBS_HOSTS_PER_SUBNET
-    return slot == MAX_SERVER_HOSTS + MAX_USER_HOSTS
-
-
 def _capture_service_process_map(cy_state):
     service_map = {}
     for hostname, host in cy_state.hosts.items():
@@ -785,11 +763,6 @@ class CC4DifferentialHarness:
                 if not np.array_equal(cyborg_mask, jax_mask):
                     cyborg_only = np.flatnonzero(cyborg_mask & ~jax_mask).tolist()
                     jax_only = np.flatnonzero(jax_mask & ~cyborg_mask).tolist()
-                    # CybORG's wrapper excludes router hosts from the action
-                    # space.  JAX includes them via obs_host_map.  Filter out
-                    # router-slot actions from jax_only since they are expected
-                    # to be JAX-only.
-                    jax_only = [idx for idx in jax_only if not _is_router_action_slot(idx, self.jax_const)]
                     if cyborg_only or jax_only:
                         cyborg_only_desc = format_action_index_set(cyborg_only, self.mappings, self.jax_const)
                         jax_only_desc = format_action_index_set(jax_only, self.mappings, self.jax_const)
@@ -969,7 +942,45 @@ class CC4DifferentialHarness:
                     by_host.setdefault(hidx, []).append(int(sess.pid))
             self._pre_step_session_pids[ridx] = by_host
 
+        # Wrap blue agent get_action to return Sleep for router targets.
+        # Runs inside CybORG's step at the exact point get_action is called,
+        # preserving RNG order.  Duration is preserved so the busy/free pattern
+        # matches.  Only track as intercepted when the agent is free (CybORG
+        # discards get_action results for busy agents).
+        _orig_get_actions = {}
+        _router_intercepted: set[int] = set()
+        if blue_actions is None and self.use_cyborg_blue_policy:
+            from CybORG.Simulator.Actions import Sleep as CySleep
+
+            for b in range(NUM_BLUE_AGENTS):
+                agent_name = f"blue_agent_{b}"
+                if agent_name in cyborg_actions:
+                    continue
+                interface = controller.agent_interfaces[agent_name]
+                _orig_get_actions[agent_name] = interface.get_action
+                _mappings = self.mappings
+                _jax_const = self.jax_const
+                _ctrl = controller
+
+                def _wrapped(obs, action_space=None, _orig=interface.get_action, _b=b, _name=agent_name):
+                    action = _orig(obs, action_space)
+                    hostname = getattr(action, "hostname", None)
+                    if hostname:
+                        host_idx = _mappings.hostname_to_idx.get(hostname)
+                        if host_idx is not None and bool(_jax_const.host_is_router[host_idx]):
+                            if _ctrl.actions_in_progress.get(_name) is None:
+                                _router_intercepted.add(_b)
+                            sleep = CySleep()
+                            sleep.duration = action.duration
+                            return sleep
+                    return action
+
+                interface.get_action = _wrapped
+
         controller.step(cyborg_actions)
+
+        for agent_name, orig in _orig_get_actions.items():
+            controller.agent_interfaces[agent_name].get_action = orig
 
         forced_primary_hosts_post = _extract_primary_hosts(cy_state, self.mappings)
 
@@ -1069,6 +1080,23 @@ class CC4DifferentialHarness:
             if self.strict_random_sync and random_sync_report.has_issues:
                 raise AssertionError(random_sync_report.format(int(self.jax_state.time)))
 
+        # Sync JAX pending ticks for router-intercepted agents BEFORE building
+        # the action array so _blue_agent_is_busy() returns True and
+        # _resolve_blue_action returns BLUE_SLEEP via the busy path.
+        if _router_intercepted:
+            blue_pending_ticks = self.jax_state.blue_pending_ticks
+            blue_pending_action = self.jax_state.blue_pending_action
+            for b in _router_intercepted:
+                pending = controller.actions_in_progress.get(f"blue_agent_{b}")
+                if pending is not None:
+                    # remaining+1 so after process_blue_with_duration's decrement it matches CybORG
+                    blue_pending_ticks = blue_pending_ticks.at[b].set(int(pending["remaining_ticks"]) + 1)
+                    blue_pending_action = blue_pending_action.at[b].set(BLUE_SLEEP)
+            self.jax_state = self.jax_state.replace(
+                blue_pending_ticks=blue_pending_ticks,
+                blue_pending_action=blue_pending_action,
+            )
+
         # --- JAX action application via shared apply_all_actions_in_order (same as training code path) ---
         blue_action_arr = jnp.array(
             [
@@ -1094,6 +1122,7 @@ class CC4DifferentialHarness:
             forced_primary_hosts_pre,
             forced_primary_pids_pre,
         )
+
         if self.green_recorder:
             detection_consumed = int(self.jax_state.detection_random_index)
             expected_consumed = detection_count if using_detection_sync else 0
@@ -1700,6 +1729,13 @@ class CC4DifferentialHarness:
         if isinstance(action, InvalidAction) or type(action).__name__ == "Sleep":
             return BLUE_SLEEP
 
+        # Router-targeted actions are not encodable (router slots removed)
+        hostname = getattr(action, "hostname", None)
+        if hostname:
+            host_idx = self.mappings.hostname_to_idx.get(hostname)
+            if host_idx is not None and bool(self.jax_const.host_is_router[host_idx]):
+                return BLUE_SLEEP
+
         return cyborg_blue_to_jax(action, agent_name, self.mappings, const=self.jax_const)
 
     _SERVICE_TO_DECOY = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}
@@ -1740,11 +1776,11 @@ class CC4DifferentialHarness:
             pending_action = int(self.jax_state.blue_pending_action[b])
             if not (BLUE_DECOY_START <= pending_action < BLUE_DECOY_END):
                 continue
-            from jaxborg.constants import OBS_HOSTS_PER_SUBNET
+            from jaxborg.constants import OBS_VECTOR_HOSTS_PER_SUBNET
 
             flat_slot = pending_action - BLUE_DECOY_START
-            relative_subnet = flat_slot // OBS_HOSTS_PER_SUBNET
-            slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+            relative_subnet = flat_slot // OBS_VECTOR_HOSTS_PER_SUBNET
+            slot_within = flat_slot % OBS_VECTOR_HOSTS_PER_SUBNET
             sid = int(self.jax_const.blue_obs_subnets[b, relative_subnet])
             target_host = int(self.jax_const.obs_host_map[sid, slot_within])
             hostname = self.mappings.idx_to_hostname.get(target_host)

@@ -22,22 +22,19 @@ import time
 from functools import partial
 from typing import NamedTuple
 
-import distrax
-import flax.linen as nn
 import hydra
 import jax
 import jax.numpy as jnp
 import mlflow
 import numpy as np
 import optax
-from flax.linen.initializers import constant, orthogonal
 from flax.training.train_state import TrainState
 from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.fsm_red_env import FsmRedCC4Env
-from jaxborg.policy import ActorCritic, ActorHead, CriticHead, SharedActorCritic
+from jaxborg.policy import ActorCritic, SharedActorCritic
 
 
 class Transition(NamedTuple):

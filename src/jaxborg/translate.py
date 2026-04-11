@@ -53,7 +53,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, GLOBAL_MAX_HOSTS, OBS_HOSTS_PER_SUBNET
+from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, GLOBAL_MAX_HOSTS, OBS_VECTOR_HOSTS_PER_SUBNET
 from jaxborg.topology import CYBORG_SUBNET_SUFFIX, CYBORG_SUFFIX_TO_ID
 
 
@@ -105,11 +105,11 @@ def build_mappings_from_cyborg(cyborg_env) -> CC4Mappings:
 def _slot_to_global(flat_slot: int, const, agent_id: int) -> int:
     """Resolve an agent-relative flat slot to a global host index.
 
-    flat_slot = relative_subnet_idx * OBS_HOSTS_PER_SUBNET + slot_within,
+    flat_slot = relative_subnet_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot_within,
     where relative_subnet_idx indexes into const.blue_obs_subnets[agent_id].
     """
-    relative_subnet = flat_slot // OBS_HOSTS_PER_SUBNET
-    slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+    relative_subnet = flat_slot // OBS_VECTOR_HOSTS_PER_SUBNET
+    slot_within = flat_slot % OBS_VECTOR_HOSTS_PER_SUBNET
     sid = int(const.blue_obs_subnets[agent_id, relative_subnet])
     return int(const.obs_host_map[sid, slot_within])
 
@@ -397,18 +397,20 @@ def jax_blue_to_cyborg(action_idx: int, agent_id: int, mappings: CC4Mappings, co
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START
-        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        src_offset = offset // BLUE_MAX_OBSERVED_SUBNETS
         rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
         dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+        src = src_offset if src_offset < dst else src_offset + 1
         from_subnet = mappings.subnet_names[src]
         to_subnet = mappings.subnet_names[dst]
         return BlockTrafficZone(session=session, agent=agent_name, from_subnet=from_subnet, to_subnet=to_subnet)
 
     if BLUE_ALLOW_TRAFFIC_START <= action_idx < BLUE_ALLOW_TRAFFIC_END:
         offset = action_idx - BLUE_ALLOW_TRAFFIC_START
-        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        src_offset = offset // BLUE_MAX_OBSERVED_SUBNETS
         rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
         dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+        src = src_offset if src_offset < dst else src_offset + 1
         from_subnet = mappings.subnet_names[src]
         to_subnet = mappings.subnet_names[dst]
         return AllowTrafficZone(session=session, agent=agent_name, from_subnet=from_subnet, to_subnet=to_subnet)
@@ -472,22 +474,26 @@ def describe_blue_action(action_idx: int, mappings: CC4Mappings, const=None, age
 
     if BLUE_BLOCK_TRAFFIC_START <= action_idx < BLUE_BLOCK_TRAFFIC_END:
         offset = action_idx - BLUE_BLOCK_TRAFFIC_START
-        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        src_offset = offset // BLUE_MAX_OBSERVED_SUBNETS
         rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
         if const is not None:
             dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+            src = src_offset if src_offset < dst else src_offset + 1
         else:
             dst = rel_dst
+            src = src_offset
         return f"BlockTrafficZone({mappings.subnet_names.get(src, src)}->{mappings.subnet_names.get(dst, dst)})"
 
     if BLUE_ALLOW_TRAFFIC_START <= action_idx < BLUE_ALLOW_TRAFFIC_END:
         offset = action_idx - BLUE_ALLOW_TRAFFIC_START
-        src = offset // BLUE_MAX_OBSERVED_SUBNETS
+        src_offset = offset // BLUE_MAX_OBSERVED_SUBNETS
         rel_dst = offset % BLUE_MAX_OBSERVED_SUBNETS
         if const is not None:
             dst = int(const.blue_obs_subnets[agent_id, rel_dst])
+            src = src_offset if src_offset < dst else src_offset + 1
         else:
             dst = rel_dst
+            src = src_offset
         return f"AllowTrafficZone({mappings.subnet_names.get(src, src)}->{mappings.subnet_names.get(dst, dst)})"
 
     return f"Unknown({action_idx})"

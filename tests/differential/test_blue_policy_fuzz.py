@@ -153,25 +153,22 @@ def test_router_restore_pending_ticks_match_jax():
     )
     harness.reset()
 
-    # Verify that encode_blue_action succeeds for router hosts (no longer unsupported)
+    # Router slots are structurally excluded from the blue action space
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
 
     router_host_idx = harness.mappings.hostname_to_idx[target_hostname]
     encoded = encode_blue_action("Restore", router_host_idx, 0, const=harness.jax_const)
-    assert encoded != BLUE_SLEEP, "Router Restore should now encode via JIT pipeline"
+    assert encoded == BLUE_SLEEP, "Router Restore should not encode (router slots removed)"
 
     step0 = harness.full_step()
     controller = harness.cyborg_env.environment_controller
-    pending = controller.actions_in_progress["blue_agent_0"]
 
     assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
-    assert type(pending["action"]).__name__ == "Restore"
-    assert pending["action"].hostname == target_hostname
-    assert int(pending["remaining_ticks"]) == 4
-    # Router actions now go through the normal JIT pipeline, not the unsupported workaround
-    assert 0 not in harness._blue_unsupported_pending, (
-        "Router actions should go through JIT pipeline, not unsupported workaround"
-    )
+    # Router action intercepted: CybORG executes duration-matched Sleep
+    pending = controller.actions_in_progress.get("blue_agent_0")
+    assert pending is not None
+    assert type(pending["action"]).__name__ == "Sleep"
+    assert int(pending["remaining_ticks"]) == 4  # Restore duration=5, ticked to 4
     assert int(harness.jax_state.blue_pending_ticks[0]) == 4
 
 
@@ -192,39 +189,26 @@ def test_router_generic_deploy_decoy_matches_jax():
     )
     harness.reset()
 
-    # Verify that encode_blue_action succeeds for router hosts (no longer unsupported)
+    # Router slots are structurally excluded from the blue action space
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
 
     router_host_idx = harness.mappings.hostname_to_idx[target_hostname]
     encoded = encode_blue_action("DeployDecoy", router_host_idx, 3, const=harness.jax_const)
-    assert encoded != BLUE_SLEEP, "Router DeployDecoy should now encode via JIT pipeline"
+    assert encoded == BLUE_SLEEP, "Router DeployDecoy should not encode (router slots removed)"
 
     controller = harness.cyborg_env.environment_controller
-    before_services = {str(name).split(".")[-1].lower() for name in controller.state.hosts[target_hostname].services}
     step0 = harness.full_step()
-    pending = controller.actions_in_progress["blue_agent_3"]
 
     assert [d for d in step0.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
-    assert type(pending["action"]).__name__ == "DeployDecoy"
-    assert pending["action"].hostname == target_hostname
-    assert int(pending["remaining_ticks"]) == 1
-    # Router actions now go through the normal JIT pipeline, not the unsupported workaround
-    assert 3 not in harness._blue_unsupported_pending, (
-        "Router actions should go through JIT pipeline, not unsupported workaround"
-    )
+    # Router action intercepted: CybORG executes duration-matched Sleep
+    pending = controller.actions_in_progress.get("blue_agent_3")
+    assert pending is not None
+    assert type(pending["action"]).__name__ == "Sleep"
+    assert int(pending["remaining_ticks"]) == 1  # DeployDecoy duration=2, ticked to 1
     assert int(harness.jax_state.blue_pending_ticks[3]) == 1
 
     step1 = harness.full_step()
-    target_host = controller.state.hosts[target_hostname]
-    target_host_idx = harness.mappings.hostname_to_idx[target_hostname]
-    service_names = {str(name).split(".")[-1].lower() for name in target_host.services}
-    added_services = service_names - before_services
-    assert len(added_services) == 1
-    added_service = next(iter(added_services))
-    jax_decoys = tuple(bool(v) for v in harness.jax_state.host_decoys[target_host_idx])
-
     assert [d for d in step1.diffs if d.field_name in _STATE_ERROR_FIELDS] == []
-    assert jax_decoys == _DECOY_SERVICE_TO_FLAGS[added_service]
 
 
 def test_fuzzer_runs_with_cyborg_random_blue_policy():

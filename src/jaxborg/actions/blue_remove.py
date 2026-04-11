@@ -240,8 +240,7 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
 
     # Recompute host_max_pid from remaining processes. CybORG's
     # Host.create_pid() uses max(current processes) which decreases when
-    # processes are removed.  When a decoy was respawned, recompute from
-    # scratch using the UPDATED decoy PIDs (old ones removed).
+    # processes are removed.
     #
     # For the respawn PID base, use PRE-removal session PIDs.  CybORG kills
     # suspicious PIDs one at a time (Remove.execute loops over sus_pids);
@@ -252,38 +251,58 @@ def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_ho
         jnp.where(state.red_session_pids[:, target_host, :] >= 0, state.red_session_pids[:, target_host, :], 0)
     )
     base_max_no_decoy = jnp.maximum(const.host_initial_max_pid[target_host], max_red_pre_removal)
-    max_decoy_updated = jnp.max(
-        jnp.where(host_decoy_process_pids[target_host] >= 0, host_decoy_process_pids[target_host], 0)
-    )
     max_orphan = state.host_orphaned_decoy_max_pid[target_host]
-    recomputed_max_after_decoy_kill = jnp.maximum(jnp.maximum(base_max_no_decoy, max_decoy_updated), max_orphan)
+    base_max_w_orphan = jnp.maximum(base_max_no_decoy, max_orphan)
     # Standard recompute (includes original decoy PIDs) for non-decoy-respawn case.
     recomputed_max_standard = recompute_host_max_pid(state, const, target_host, new_session_pids)
-    recomputed_max = jnp.where(any_decoy_respawned, recomputed_max_after_decoy_kill, recomputed_max_standard)
 
-    # Respawn killed decoys with new PIDs (matching CybORG's service respawn
-    # in StopProcess.kill_process).
+    # Respawn ALL killed decoys with new PIDs (matching CybORG's service
+    # respawn in StopProcess.kill_process).  CybORG kills and respawns one
+    # decoy at a time: after killing decoy X, it computes
+    # max(remaining_processes) which includes not-yet-killed decoys but
+    # excludes X.  Each respawn PID > the base, so subsequent respawns use
+    # the latest respawn PID as their base.
     if key is None:
         key = jax.random.PRNGKey(0)
-    pid_delta = sample_blue_decoy_pid_delta(const, state.time, agent_id, key)
-    respawn_pid = recomputed_max + pid_delta
-    # Find the first cleared decoy slot and assign the respawn PID.
-    cleared_slots = host_decoy_process_pids[target_host] < 0
-    original_slots = state.host_decoy_process_pids[target_host] >= 0
-    needs_respawn = cleared_slots & original_slots
-    has_respawn_slot = jnp.any(needs_respawn)
-    respawn_slot = jnp.argmax(needs_respawn)
-    host_decoy_process_pids = jnp.where(
-        any_decoy_respawned & has_respawn_slot,
-        host_decoy_process_pids.at[target_host, respawn_slot].set(respawn_pid),
-        host_decoy_process_pids,
+
+    def _respawn_one_decoy(respawn_idx, carry):
+        pids, prev_respawn_max = carry
+        cleared = pids[target_host] < 0
+        originals = state.host_decoy_process_pids[target_host] >= 0
+        needs = cleared & originals
+        has_slot = jnp.any(needs)
+        slot = jnp.argmax(needs)
+        # Max of original decoy PIDs EXCLUDING the current slot.  This
+        # represents the not-yet-killed decoys still in CybORG's process
+        # list at the time this decoy is killed.
+        orig_excl = state.host_decoy_process_pids[target_host].at[slot].set(jnp.int32(-1))
+        max_orig_excl = jnp.max(jnp.where(orig_excl >= 0, orig_excl, jnp.int32(0)))
+        # CybORG's base: max(non-decoy procs, other decoys, previous respawns)
+        effective_max = jnp.maximum(jnp.maximum(base_max_w_orphan, max_orig_excl), prev_respawn_max)
+        delta = sample_blue_decoy_pid_delta(const, state.time, agent_id, key, respawn_index=respawn_idx)
+        new_pid = effective_max + delta
+        pids = jnp.where(
+            has_slot,
+            pids.at[target_host, slot].set(new_pid),
+            pids,
+        )
+        prev_respawn_max = jnp.where(has_slot, new_pid, prev_respawn_max)
+        return pids, prev_respawn_max
+
+    from jaxborg.constants import NUM_DECOY_TYPES
+
+    host_decoy_process_pids, _ = jax.lax.cond(
+        any_decoy_respawned,
+        lambda args: jax.lax.fori_loop(0, NUM_DECOY_TYPES, _respawn_one_decoy, args),
+        lambda args: args,
+        (host_decoy_process_pids, jnp.int32(0)),
     )
-    # Update max to include respawned PID.
-    recomputed_max = jnp.where(
-        any_decoy_respawned & has_respawn_slot,
-        jnp.maximum(recomputed_max, respawn_pid),
-        recomputed_max,
+    # Final host_max_pid: max of all remaining PIDs (surviving + respawned decoys + base)
+    max_decoy_final = jnp.max(
+        jnp.where(host_decoy_process_pids[target_host] >= 0, host_decoy_process_pids[target_host], jnp.int32(0))
     )
+    recomputed_max_after_respawn = jnp.maximum(base_max_w_orphan, max_decoy_final)
+    recomputed_max = jnp.where(any_decoy_respawned, recomputed_max_after_respawn, recomputed_max_standard)
 
     host_max_pid = jnp.where(
         covers_host & (any_removed | any_decoy_respawned),

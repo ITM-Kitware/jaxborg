@@ -23,17 +23,13 @@ from pathlib import Path
 from statistics import mean, stdev
 
 import distrax
-import flax.linen as nn
 import jax
 import jax.numpy as jnp
 import numpy as np
-from flax.linen.initializers import constant, orthogonal
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-
-from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
 
 from jaxborg.actions.encoding import (
     BLUE_ALLOW_TRAFFIC_END,
@@ -57,11 +53,12 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
-    OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
 )
 from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
+from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
 from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
 from jaxborg.translate import (
     build_mappings_from_cyborg,
@@ -297,9 +294,11 @@ def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
     from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS
 
     offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
-    src = offsets // BLUE_MAX_OBSERVED_SUBNETS
+    src_offset = offsets // BLUE_MAX_OBSERVED_SUBNETS
     rel_dst = offsets % BLUE_MAX_OBSERVED_SUBNETS
     abs_dst = const.blue_obs_subnets[agent_id, rel_dst]
+    # Decompress src_offset to absolute subnet (skip self-loop)
+    src = jnp.where(src_offset >= abs_dst, src_offset + 1, src_offset)
     safe_dst = jnp.clip(abs_dst, 0, NUM_SUBNETS - 1)
     is_blocked = blocked_zones[safe_dst, src] & (abs_dst >= 0)
 
@@ -1704,8 +1703,8 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
 
         wrong_subnet_hosts = []
         for slot in valid_slots:
-            subnet_id = int(slot // OBS_HOSTS_PER_SUBNET)
-            slot_within = int(slot % OBS_HOSTS_PER_SUBNET)
+            subnet_id = int(slot // OBS_VECTOR_HOSTS_PER_SUBNET)
+            slot_within = int(slot % OBS_VECTOR_HOSTS_PER_SUBNET)
             hidx = int(const.obs_host_map[subnet_id, slot_within])
             if hidx >= GLOBAL_MAX_HOSTS:
                 continue
