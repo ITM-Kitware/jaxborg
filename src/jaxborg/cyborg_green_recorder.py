@@ -14,6 +14,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     MAX_STEPS,
     NUM_BLUE_AGENTS,
+    NUM_DECOY_TYPES,
     NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
     NUM_SERVICES,
@@ -174,7 +175,8 @@ class GreenRecorder:
         """After a CybORG step: segment logs, convert to (GLOBAL_MAX_HOSTS, 8) uniforms."""
         fields = np.zeros((GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
         red_pid_deltas = np.zeros((NUM_RED_AGENTS,), dtype=np.int32)
-        blue_decoy_pid_deltas = np.zeros((NUM_BLUE_AGENTS,), dtype=np.int32)
+        blue_decoy_pid_deltas = np.zeros((NUM_BLUE_AGENTS, NUM_DECOY_TYPES), dtype=np.int32)
+        _blue_decoy_pid_delta_counts = np.zeros((NUM_BLUE_AGENTS,), dtype=np.int32)
         report = StepRandomSyncReport()
 
         # Capture CybORG's FULL execution order (all agents in slot-index form).
@@ -238,14 +240,12 @@ class GreenRecorder:
                 ):
                     bidx = int(agent_name.split("_")[-1])
                     if 0 <= bidx < NUM_BLUE_AGENTS:
-                        delta = _extract_create_pid_delta(calls)
-                        if delta > 0:
-                            if blue_decoy_pid_deltas[bidx] != 0:
-                                report.blue_decoy_pid_collisions.append(
-                                    f"{agent_name}:{action_type} saw repeated create_pid deltas "
-                                    f"{int(blue_decoy_pid_deltas[bidx])} and {delta}"
-                                )
-                            blue_decoy_pid_deltas[bidx] = delta
+                        deltas = _extract_all_create_pid_deltas(calls)
+                        for delta in deltas:
+                            slot = int(_blue_decoy_pid_delta_counts[bidx])
+                            if slot < NUM_DECOY_TYPES:
+                                blue_decoy_pid_deltas[bidx, slot] = delta
+                                _blue_decoy_pid_delta_counts[bidx] += 1
                 if agent_name is not None:
                     _record_non_green_random_usage(report, agent_name, action_type, calls)
                 continue
@@ -296,6 +296,23 @@ def _extract_create_pid_delta(calls):
         if low == 1 and high == 10:
             return int(call[1])
     return 0
+
+
+def _extract_all_create_pid_deltas(calls):
+    """Extract ALL Host.create_pid deltas from a single action's RNG calls.
+
+    CybORG's Remove can kill and respawn multiple decoy processes in one action,
+    producing multiple integers(1, 10) calls.
+    """
+    deltas = []
+    for call in calls:
+        if call[0] != "integers":
+            continue
+        low = call[2] if len(call) >= 4 else 0
+        high = call[3] if len(call) >= 4 else call[2]
+        if low == 1 and high == 10:
+            deltas.append(int(call[1]))
+    return deltas
 
 
 def _record_non_green_random_usage(report: StepRandomSyncReport, agent_name: str, action_type: str, calls):

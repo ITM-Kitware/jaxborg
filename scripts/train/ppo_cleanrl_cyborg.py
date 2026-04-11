@@ -460,9 +460,7 @@ def train(args):
                         nextvalues = values_buf[t + 1]
                     rew_expanded = rewards_all[t].unsqueeze(-1).expand_as(values_buf[t])
                     delta = rew_expanded + args.gamma * nextvalues * nextnonterminal - values_buf[t]
-                    advantages[t] = lastgaelam = (
-                        delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
-                    )
+                    advantages[t] = lastgaelam = delta + args.gamma * args.gae_lambda * nextnonterminal * lastgaelam
 
                 returns = advantages + values_buf
 

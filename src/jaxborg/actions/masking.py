@@ -7,7 +7,7 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_DECOY_TYPES,
     NUM_SUBNETS,
-    OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
     SERVICE_IDS,
 )
 from jaxborg.state import CC4Const, CC4State
@@ -49,20 +49,16 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     """
     agent_obs_subnets = const.blue_obs_subnets[agent_id]  # (3,) int, -1 = unused
 
-    # Build (BLUE_MAX_OBSERVED_SUBNETS, OBS_HOSTS_PER_SUBNET) validity array
-    # For each relative subnet slot, look up the absolute subnet and check obs_host_map.
+    # Build (BLUE_MAX_OBSERVED_SUBNETS, OBS_VECTOR_HOSTS_PER_SUBNET) validity array
+    # Only non-router slots (0..15); router at slot 16 is structurally excluded.
     def _subnet_validity(rel_idx):
         sid = agent_obs_subnets[rel_idx]
         safe_sid = jnp.clip(sid, 0, NUM_SUBNETS - 1)
-        obs_valid = const.obs_host_map[safe_sid] < GLOBAL_MAX_HOSTS  # (OBS_HOSTS_PER_SUBNET,)
+        obs_valid = const.obs_host_map[safe_sid, :OBS_VECTOR_HOSTS_PER_SUBNET] < GLOBAL_MAX_HOSTS
         subnet_active = sid >= 0
         return obs_valid & subnet_active
 
-    slot_valid = jnp.stack([_subnet_validity(i) for i in range(BLUE_MAX_OBSERVED_SUBNETS)])  # (3, OBS_HOSTS_PER_SUBNET)
-
-    # Exclude router slots (last slot per subnet)
-    router_slot_mask = jnp.arange(OBS_HOSTS_PER_SUBNET) != (OBS_HOSTS_PER_SUBNET - 1)
-    slot_valid = slot_valid & router_slot_mask[None, :]
+    slot_valid = jnp.stack([_subnet_validity(i) for i in range(BLUE_MAX_OBSERVED_SUBNETS)])
 
     slot_valid_flat = slot_valid.reshape(-1)  # (BLUE_ACTION_HOST_SLOTS,)
 
@@ -70,14 +66,11 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     def _subnet_host_data(rel_idx):
         sid = agent_obs_subnets[rel_idx]
         safe_sid = jnp.clip(sid, 0, NUM_SUBNETS - 1)
-        safe_host_idx = jnp.where(
-            const.obs_host_map[safe_sid] < GLOBAL_MAX_HOSTS,
-            const.obs_host_map[safe_sid],
-            0,
-        )
+        hosts = const.obs_host_map[safe_sid, :OBS_VECTOR_HOSTS_PER_SUBNET]
+        safe_host_idx = jnp.where(hosts < GLOBAL_MAX_HOSTS, hosts, 0)
         return safe_host_idx
 
-    # (BLUE_MAX_OBSERVED_SUBNETS, OBS_HOSTS_PER_SUBNET)
+    # (BLUE_MAX_OBSERVED_SUBNETS, OBS_VECTOR_HOSTS_PER_SUBNET)
     safe_hosts = jnp.stack([_subnet_host_data(i) for i in range(BLUE_MAX_OBSERVED_SUBNETS)])
     safe_hosts_flat = safe_hosts.reshape(-1)  # (BLUE_ACTION_HOST_SLOTS,)
 
@@ -93,14 +86,12 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     any_decoy_compat = _decoy_compat_vectorized(flat_services, flat_decoys)
     decoy_mask = any_decoy_compat & slot_valid_flat
 
-    # Traffic: src can be any of 9 subnets, dst must be one of agent's observed subnets (relative 0-2)
-    # Layout: src_subnet * BLUE_MAX_OBSERVED_SUBNETS + relative_dst
-    src_idx = jnp.arange(NUM_SUBNETS)[:, None]  # (9, 1)
-    # Absolute dst for each relative slot
+    # Traffic: src_offset ranges 0..(NUM_SUBNETS-2), dst is relative 0-2.
+    # Self-loops (src==dst) are excluded structurally by the compressed encoding.
+    # Layout: src_offset * BLUE_MAX_OBSERVED_SUBNETS + relative_dst
     abs_dst = agent_obs_subnets[None, :]  # (1, 3)
     dst_active = abs_dst >= 0
-    not_self_loop = src_idx != abs_dst
-    traffic_flat = (dst_active & not_self_loop).reshape(-1)  # (BLUE_TRAFFIC_SLOTS,)
+    traffic_flat = jnp.broadcast_to(dst_active, (NUM_SUBNETS - 1, BLUE_MAX_OBSERVED_SUBNETS)).reshape(-1)
 
     mask = jnp.concatenate(
         [

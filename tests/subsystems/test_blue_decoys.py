@@ -397,7 +397,7 @@ class TestDecoyTypeSelectionParity:
         before_max = const.host_initial_max_pid[target]
         pid_delta = int(after_max - before_max)
         const_for_test = const.replace(
-            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx].set(pid_delta),
+            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx, 0].set(pid_delta),
             use_blue_decoy_pid_deltas=jnp.array(True),
             blue_decoy_type_choices=const.blue_decoy_type_choices.at[0, blue_idx].set(cyborg_decoy_type),
             use_blue_decoy_type_choices=jnp.array(True),
@@ -472,7 +472,7 @@ class TestDifferentialWithCybORG:
 
         state = _make_jax_state(const)
         const = const.replace(
-            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx].set(decoy_delta),
+            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx, 0].set(decoy_delta),
             use_blue_decoy_pid_deltas=jnp.array(True),
         )
         new_state = apply_blue_decoy(state, const, blue_idx, target, decoy_type)

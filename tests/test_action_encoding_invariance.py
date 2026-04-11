@@ -22,6 +22,7 @@ from jaxborg.constants import (
     NUM_BLUE_AGENTS,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
     SUBNET_NAMES,
 )
 from jaxborg.topology import build_topology
@@ -29,14 +30,12 @@ from jaxborg.topology import build_topology
 
 def _slot_to_canonical(flat_slot: int):
     """Map a flat agent-relative action slot to its canonical (relative_subnet_idx, role, slot_within_subnet)."""
-    relative_subnet_idx = flat_slot // OBS_HOSTS_PER_SUBNET
-    slot_within = flat_slot % OBS_HOSTS_PER_SUBNET
+    relative_subnet_idx = flat_slot // OBS_VECTOR_HOSTS_PER_SUBNET
+    slot_within = flat_slot % OBS_VECTOR_HOSTS_PER_SUBNET
     if slot_within < MAX_SERVER_HOSTS:
         role = "server"
-    elif slot_within < MAX_SERVER_HOSTS + MAX_USER_HOSTS:
-        role = "user"
     else:
-        role = "router"
+        role = "user"
     return (relative_subnet_idx, role, slot_within)
 
 
@@ -98,9 +97,8 @@ class TestActionEncodingTopologyInvariance:
             )
 
     def test_decode_resolves_to_correct_host_type(self):
-        """decode_blue_action resolves server slots to servers, user slots to users,
-        router slots to routers."""
-        router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
+        """decode_blue_action resolves server slots to servers, user slots to users.
+        Router slots are structurally excluded from the action space."""
         c = build_topology(jax.random.PRNGKey(0), num_steps=100)
 
         for agent_id in range(NUM_BLUE_AGENTS):
@@ -111,13 +109,11 @@ class TestActionEncodingTopologyInvariance:
                     continue
                 _, target_host, _, _, _ = decode_blue_action(action_idx, agent_id, c)
                 h = int(target_host)
-                slot_within = slot % OBS_HOSTS_PER_SUBNET
+                slot_within = slot % OBS_VECTOR_HOSTS_PER_SUBNET
                 if slot_within < MAX_SERVER_HOSTS:
                     assert bool(c.host_is_server[h]), f"slot {slot}: host {h} should be server"
-                elif slot_within < router_slot:
-                    assert bool(c.host_is_user[h]), f"slot {slot}: host {h} should be user"
                 else:
-                    assert bool(c.host_is_router[h]), f"slot {slot}: host {h} should be router"
+                    assert bool(c.host_is_user[h]), f"slot {slot}: host {h} should be user"
 
     def test_obs_host_map_slots_are_canonical(self):
         """obs_host_map (subnet, slot) ordering is consistent across seeds:
@@ -217,7 +213,7 @@ class TestCybORGActionEncodingParity:
                     cyborg_hostname, cyborg_valid = cyborg_analyse[cyborg_slot]
 
                     # JAXborg agent-relative slot
-                    jax_slot = rel_idx * OBS_HOSTS_PER_SUBNET + host_slot
+                    jax_slot = rel_idx * OBS_VECTOR_HOSTS_PER_SUBNET + host_slot
                     jax_action_idx = BLUE_ANALYSE_START + jax_slot
                     jax_mask = compute_blue_action_mask(jax_const, agent_id)
 

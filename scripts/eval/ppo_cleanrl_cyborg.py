@@ -253,9 +253,7 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     t0 = time.time()
     last_trajectory = None
     for ep in range(num_episodes):
-        ep_reward, per_agent_types, per_phase_types, trajectory = run_episode(
-            agent, env, deterministic
-        )
+        ep_reward, per_agent_types, per_phase_types, trajectory = run_episode(agent, env, deterministic)
         episode_rewards.append(ep_reward)
         episode_lengths.append(len(trajectory))
         last_trajectory = trajectory
@@ -296,7 +294,7 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     print_trajectory_summary(last_trajectory, label=f"CybORG ep {num_episodes}")
 
     if verbose:
-        print(f"\nPer-episode rewards:")
+        print("\nPer-episode rewards:")
         for i, r in enumerate(episode_rewards):
             print(f"  Episode {i + 1:3d}: {r:.1f}")
 

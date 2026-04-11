@@ -51,20 +51,35 @@ SRC = SUBNET_IDS["INTERNET"]  # 8
 DST = SUBNET_IDS["ADMIN_NETWORK"]  # 5 (relative index 0 for agent 4)
 
 
+def _compress_src(src_subnet, dst_subnet):
+    """Compress absolute source subnet to offset (skip self-loop)."""
+    return src_subnet if src_subnet < dst_subnet else src_subnet - 1
+
+
 class TestBlueTrafficEncoding:
     def test_encode_block(self, jax_const):
         rel_dst = int(np.flatnonzero(np.array(jax_const.blue_obs_subnets[AGENT_ID]) == DST)[0])
         idx = encode_blue_action("BlockTrafficZone", -1, AGENT_ID, const=jax_const, src_subnet=SRC, dst_subnet=DST)
-        assert idx == BLUE_BLOCK_TRAFFIC_START + SRC * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+        src_offset = _compress_src(SRC, DST)
+        assert idx == BLUE_BLOCK_TRAFFIC_START + src_offset * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
 
     def test_encode_allow(self, jax_const):
         rel_dst = int(np.flatnonzero(np.array(jax_const.blue_obs_subnets[AGENT_ID]) == DST)[0])
         idx = encode_blue_action("AllowTrafficZone", -1, AGENT_ID, const=jax_const, src_subnet=SRC, dst_subnet=DST)
-        assert idx == BLUE_ALLOW_TRAFFIC_START + SRC * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+        src_offset = _compress_src(SRC, DST)
+        assert idx == BLUE_ALLOW_TRAFFIC_START + src_offset * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+
+    def test_encode_self_loop_returns_sleep(self, jax_const):
+        """Self-loop (src==dst) returns BLUE_SLEEP."""
+        from jaxborg.actions.encoding import BLUE_SLEEP
+
+        idx = encode_blue_action("BlockTrafficZone", -1, AGENT_ID, const=jax_const, src_subnet=DST, dst_subnet=DST)
+        assert idx == BLUE_SLEEP
 
     def test_decode_block(self, jax_const):
         rel_dst = int(np.flatnonzero(np.array(jax_const.blue_obs_subnets[AGENT_ID]) == DST)[0])
-        action_idx = BLUE_BLOCK_TRAFFIC_START + SRC * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+        src_offset = _compress_src(SRC, DST)
+        action_idx = BLUE_BLOCK_TRAFFIC_START + src_offset * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
         action_type, _, _, src, dst = decode_blue_action(action_idx, AGENT_ID, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_BLOCK_TRAFFIC
         assert int(src) == SRC
@@ -72,7 +87,8 @@ class TestBlueTrafficEncoding:
 
     def test_decode_allow(self, jax_const):
         rel_dst = int(np.flatnonzero(np.array(jax_const.blue_obs_subnets[AGENT_ID]) == DST)[0])
-        action_idx = BLUE_ALLOW_TRAFFIC_START + SRC * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+        src_offset = _compress_src(SRC, DST)
+        action_idx = BLUE_ALLOW_TRAFFIC_START + src_offset * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
         action_type, _, _, src, dst = decode_blue_action(action_idx, AGENT_ID, jax_const)
         assert int(action_type) == BLUE_ACTION_TYPE_ALLOW_TRAFFIC
         assert int(src) == SRC
@@ -83,7 +99,7 @@ class TestBlueTrafficEncoding:
         for s in range(NUM_SUBNETS):
             for rel_d in range(BLUE_MAX_OBSERVED_SUBNETS):
                 abs_d = int(agent_obs[rel_d])
-                if abs_d < 0:
+                if abs_d < 0 or s == abs_d:
                     continue
                 idx = encode_blue_action(
                     "BlockTrafficZone", -1, AGENT_ID, const=jax_const, src_subnet=s, dst_subnet=abs_d

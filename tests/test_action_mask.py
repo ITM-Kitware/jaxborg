@@ -20,7 +20,7 @@ from jaxborg.constants import (
     BLUE_TRAFFIC_SLOTS,
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
-    OBS_HOSTS_PER_SUBNET,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
 )
 from jaxborg.topology import build_topology
 
@@ -56,8 +56,8 @@ class TestHostBasedActions:
 
             for rel_idx in range(BLUE_MAX_OBSERVED_SUBNETS):
                 sid = agent_obs_subnets[rel_idx]
-                for slot in range(OBS_HOSTS_PER_SUBNET):
-                    flat_slot = rel_idx * OBS_HOSTS_PER_SUBNET + slot
+                for slot in range(OBS_VECTOR_HOSTS_PER_SUBNET):
+                    flat_slot = rel_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot
                     action_idx = BLUE_ANALYSE_START + flat_slot
                     if sid == -1:
                         assert not mask[action_idx], (
@@ -66,8 +66,7 @@ class TestHostBasedActions:
 
     def test_empty_obs_slots_masked(self):
         """Slots where obs_host_map == GLOBAL_MAX_HOSTS are masked.
-        Router slots (slot == OBS_HOSTS_PER_SUBNET - 1) are also masked,
-        matching CybORG's BlueFlatWrapper which excludes routers.
+        Router slots are structurally excluded (not in the action space).
         """
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
 
@@ -79,12 +78,11 @@ class TestHostBasedActions:
                 sid = agent_obs_subnets[rel_idx]
                 if sid == -1:
                     continue
-                for slot in range(OBS_HOSTS_PER_SUBNET):
+                for slot in range(OBS_VECTOR_HOSTS_PER_SUBNET):
                     h = int(const.obs_host_map[sid, slot])
-                    flat_slot = rel_idx * OBS_HOSTS_PER_SUBNET + slot
+                    flat_slot = rel_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot
                     action_idx = BLUE_ANALYSE_START + flat_slot
-                    is_router = slot == OBS_HOSTS_PER_SUBNET - 1
-                    if h == GLOBAL_MAX_HOSTS or is_router:
+                    if h == GLOBAL_MAX_HOSTS:
                         assert not mask[action_idx], f"Slot rel={rel_idx} slot={slot} should be masked"
                     else:
                         assert mask[action_idx], f"Valid host rel={rel_idx} slot={slot} should be unmasked"
@@ -113,19 +111,20 @@ class TestHostBasedActions:
 
 
 class TestTrafficActions:
-    def test_self_loops_masked(self):
+    def test_no_self_loops_in_action_space(self):
+        """Self-loops are structurally excluded — all traffic slots are valid
+        (for active destinations) since compressed src_offset skips src==dst."""
+        from jaxborg.actions.encoding import decode_blue_action
+
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
         for agent_id in range(5):
             mask = compute_blue_action_mask(const, agent_id)
-            agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
-            for src in range(NUM_SUBNETS):
-                for rel_dst in range(BLUE_MAX_OBSERVED_SUBNETS):
-                    abs_dst = agent_obs_subnets[rel_dst]
-                    if abs_dst == -1:
-                        continue
-                    idx = BLUE_BLOCK_TRAFFIC_START + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
-                    if src == abs_dst:
-                        assert not mask[idx], f"Self-loop src={src} dst={abs_dst} should be masked"
+            for offset in range(BLUE_TRAFFIC_SLOTS):
+                idx = BLUE_BLOCK_TRAFFIC_START + offset
+                if not mask[idx]:
+                    continue
+                _, _, _, src, dst = decode_blue_action(idx, agent_id, const)
+                assert int(src) != int(dst), f"Self-loop found: src={int(src)} dst={int(dst)}"
 
     def test_uncontrolled_dst_masked(self):
         """Unused relative dst slots (-1) should be masked."""
@@ -133,16 +132,18 @@ class TestTrafficActions:
         for agent_id in range(5):
             mask = compute_blue_action_mask(const, agent_id)
             agent_obs_subnets = np.array(const.blue_obs_subnets[agent_id])
-            for src in range(NUM_SUBNETS):
+            for src_offset in range(NUM_SUBNETS - 1):
                 for rel_dst in range(BLUE_MAX_OBSERVED_SUBNETS):
                     abs_dst = agent_obs_subnets[rel_dst]
-                    idx_block = BLUE_BLOCK_TRAFFIC_START + src * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
-                    if abs_dst == -1 or src == abs_dst:
+                    idx_block = BLUE_BLOCK_TRAFFIC_START + src_offset * BLUE_MAX_OBSERVED_SUBNETS + rel_dst
+                    if abs_dst == -1:
                         assert not mask[idx_block], (
-                            f"Block src={src} rel_dst={rel_dst} (abs={abs_dst}) should be masked"
+                            f"Block src_offset={src_offset} rel_dst={rel_dst} (abs={abs_dst}) should be masked"
                         )
                     else:
-                        assert mask[idx_block], f"Block src={src} rel_dst={rel_dst} (abs={abs_dst}) should be valid"
+                        assert mask[idx_block], (
+                            f"Block src_offset={src_offset} rel_dst={rel_dst} (abs={abs_dst}) should be valid"
+                        )
 
     def test_block_allow_same_mask(self):
         const = build_topology(jax.random.PRNGKey(0), num_steps=100)
