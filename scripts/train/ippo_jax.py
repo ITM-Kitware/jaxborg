@@ -48,6 +48,15 @@ class Transition(NamedTuple):
     blue_busy: jnp.ndarray
 
 
+class RewardNormState(NamedTuple):
+    """Running statistics for reward normalization (Welford online update)."""
+
+    returns: jnp.ndarray  # (num_envs,) — discounted return tracker
+    mean: jnp.ndarray  # scalar — running mean of returns
+    var: jnp.ndarray  # scalar — running variance of returns
+    count: jnp.ndarray  # scalar — total sample count
+
+
 def _subtree_global_norm(tree, *path):
     subtree = tree
     for key in path:
@@ -177,6 +186,7 @@ def make_train(config):
     network_type = config.get("NETWORK_TYPE", "separate")
     busy_masking = bool(config.get("BUSY_MASKING", True))
     grad_clip_mode = config.get("GRAD_CLIP_MODE", "per_head")
+    norm_rewards = bool(config.get("NORM_REWARDS", False))
 
     if network_type == "shared":
         network = SharedActorCritic(
@@ -210,8 +220,8 @@ def make_train(config):
             tx=tx,
         )
 
-    @partial(jax.jit, donate_argnums=(0, 1, 2, 3))
-    def _collect_and_update(train_state, env_state, obs, rng):
+    @partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
+    def _collect_and_update(train_state, env_state, obs, rng, reward_norm_state):
         """Scan NUM_STEPS env steps, compute GAE, run PPO epochs — all JIT'd."""
 
         # --- Rollout via scan (vmapped over NUM_ENVS) ---
@@ -235,7 +245,7 @@ def make_train(config):
         }
 
         def _env_step(carry, _):
-            env_state, obs, rng, info_acc = carry
+            env_state, obs, rng, info_acc, rn_state = carry
 
             # obs/env_state have leading (num_envs,) dim
             # Stack agents: (num_envs, num_agents, obs_dim)
@@ -269,21 +279,60 @@ def make_train(config):
             # Accumulate info sums in the carry instead of storing per-step.
             info_acc = jax.tree.map(lambda acc, v: acc + jnp.asarray(v, dtype=jnp.float32), info_acc, info)
 
+            # Per-env team reward (all agents share the same reward)
+            team_reward = rewards[agents[0]]  # (num_envs,)
+            done_signal = dones[agents[0]]  # (num_envs,)
+
+            if norm_rewards:
+                # Update running discounted returns
+                new_returns = rn_state.returns * config["GAMMA"] + team_reward
+
+                # Welford online update of mean/var over the returns batch
+                batch_mean = jnp.mean(new_returns)
+                batch_var = jnp.var(new_returns)
+                batch_count = jnp.array(num_envs, dtype=jnp.float32)
+
+                delta = batch_mean - rn_state.mean
+                total_count = rn_state.count + batch_count
+                new_mean = rn_state.mean + delta * batch_count / total_count
+                m_a = rn_state.var * rn_state.count
+                m_b = batch_var * batch_count
+                m2 = m_a + m_b + delta**2 * rn_state.count * batch_count / total_count
+                new_var = m2 / total_count
+
+                # Scale reward by running return std, clip to [-10, 10]
+                scaled_reward = team_reward / (jnp.sqrt(new_var) + 1e-8)
+                scaled_reward = jnp.clip(scaled_reward, -10.0, 10.0)
+
+                # Reset returns on episode done
+                new_returns = new_returns * (1.0 - done_signal)
+
+                rn_state = RewardNormState(
+                    returns=new_returns,
+                    mean=new_mean,
+                    var=new_var,
+                    count=total_count,
+                )
+                # Stack across agents and apply REWARD_SCALE on top of normalization
+                reward_out = jnp.stack([scaled_reward] * num_agents, axis=-1) * config["REWARD_SCALE"]
+            else:
+                reward_out = jnp.stack([rewards[a] for a in agents], axis=-1) * config["REWARD_SCALE"]
+
             transition = Transition(
                 done=jnp.stack([dones[a] for a in agents], axis=-1),
                 action=action,
                 value=value,
-                reward=jnp.stack([rewards[a] for a in agents], axis=-1) * config["REWARD_SCALE"],
+                reward=reward_out,
                 log_prob=log_prob,
                 obs=obs_batch,
                 avail_actions=avail_batch,
                 blue_busy=busy_batch.astype(jnp.float32),
             )
 
-            return (new_env_state, new_obs, rng, info_acc), transition
+            return (new_env_state, new_obs, rng, info_acc, rn_state), transition
 
-        (env_state, obs, rng, info_sums), traj_batch = jax.lax.scan(
-            _env_step, (env_state, obs, rng, _info_acc_init), None, config["NUM_STEPS"]
+        (env_state, obs, rng, info_sums, reward_norm_state), traj_batch = jax.lax.scan(
+            _env_step, (env_state, obs, rng, _info_acc_init, reward_norm_state), None, config["NUM_STEPS"]
         )
 
         # --- GAE ---
@@ -455,9 +504,12 @@ def make_train(config):
             "policy_advantage_mean": policy_adv_mean,
             "policy_advantage_std": policy_adv_std,
         }
+        if norm_rewards:
+            rollout_info["reward_norm_var"] = reward_norm_state.var
+            rollout_info["reward_norm_count"] = reward_norm_state.count
         metric = {**metric, **loss_info, **rollout_info}
 
-        return train_state, env_state, obs, rng, metric
+        return train_state, env_state, obs, rng, reward_norm_state, metric
 
     return env, network, init_obs, init_env_state, _init_train_state, _collect_and_update
 
@@ -506,6 +558,7 @@ def main(cfg):
                 "hidden_dim": config.get("HIDDEN_DIM", 256),
                 "activation": config["ACTIVATION"],
                 "anneal_lr": config["ANNEAL_LR"],
+                "norm_rewards": config.get("NORM_REWARDS", False),
             }
         )
 
@@ -517,6 +570,7 @@ def main(cfg):
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
     print(f"Topology mode: {config.get('TOPOLOGY_MODE', 'pure')}")
+    print(f"Reward normalization: {config.get('NORM_REWARDS', False)}")
     print("=" * 60, flush=True)
 
     t_setup = time.perf_counter()
@@ -529,6 +583,14 @@ def main(cfg):
 
     env_state = init_env_state
     obs = init_obs
+
+    num_envs = config.get("NUM_ENVS", 1)
+    reward_norm_state = RewardNormState(
+        returns=jnp.zeros(num_envs, dtype=jnp.float32),
+        mean=jnp.zeros((), dtype=jnp.float32),
+        var=jnp.ones((), dtype=jnp.float32),
+        count=jnp.array(1e-4, dtype=jnp.float32),
+    )
 
     config_path = save_dir / "config.json"
     with open(config_path, "w") as f:
@@ -545,7 +607,9 @@ def main(cfg):
     print("  (first update includes XLA compilation — may take a few minutes)", flush=True)
 
     for update_idx in range(num_updates):
-        train_state, env_state, obs, rng, metric = collect_and_update(train_state, env_state, obs, rng)
+        train_state, env_state, obs, rng, reward_norm_state, metric = collect_and_update(
+            train_state, env_state, obs, rng, reward_norm_state
+        )
         metric = jax.device_get(metric)
 
         if update_idx == 0:
@@ -599,6 +663,9 @@ def main(cfg):
             "green_lwf_count": float(metric["green_lwf_count"]),
             "green_asf_count": float(metric["green_asf_count"]),
         }
+        if "reward_norm_var" in metric:
+            record["reward_norm_var"] = float(metric["reward_norm_var"])
+            record["reward_norm_count"] = float(metric["reward_norm_count"])
         logger.log(record, step=step)
         if reward > best_reward:
             best_reward = reward
@@ -615,16 +682,21 @@ def main(cfg):
         if (update_idx + 1) % checkpoint_every == 0 or update_idx == num_updates - 1:
             ckpt_name = f"checkpoint_{step}.pkl" if update_idx < num_updates - 1 else "checkpoint_final.pkl"
             ckpt_path = save_dir / ckpt_name
+            ckpt_data = {
+                "params": train_state.params,
+                "hidden_dim": config.get("HIDDEN_DIM", 256),
+                "activation": config["ACTIVATION"],
+                "action_dim": env.action_space(env.agents[0]).n,
+            }
+            if bool(config.get("NORM_REWARDS", False)):
+                ckpt_data["reward_norm_state"] = {
+                    "returns": jax.device_get(reward_norm_state.returns),
+                    "mean": jax.device_get(reward_norm_state.mean),
+                    "var": jax.device_get(reward_norm_state.var),
+                    "count": jax.device_get(reward_norm_state.count),
+                }
             with open(ckpt_path, "wb") as f:
-                pickle.dump(
-                    {
-                        "params": train_state.params,
-                        "hidden_dim": config.get("HIDDEN_DIM", 256),
-                        "activation": config["ACTIVATION"],
-                        "action_dim": env.action_space(env.agents[0]).n,
-                    },
-                    f,
-                )
+                pickle.dump(ckpt_data, f)
             if mlflow_enabled:
                 mlflow.log_artifact(str(ckpt_path), artifact_path="checkpoints")
 
