@@ -9,6 +9,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import find_blue_for_host, find_host_in_subnet
 
 from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
@@ -18,9 +19,7 @@ from jaxborg.constants import (
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     MAX_TRACKED_SESSION_PIDS,
-    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
-    SUBNET_IDS,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
@@ -29,26 +28,6 @@ from jaxborg.topology import build_topology
 @pytest.fixture(scope="module")
 def jax_const():
     return build_topology(jax.random.PRNGKey(42), num_steps=100)
-
-
-def _find_host_in_subnet(const, subnet_name, exclude_router=True):
-    sid = SUBNET_IDS[subnet_name]
-    for h in range(int(const.num_hosts)):
-        if not bool(const.host_active[h]):
-            continue
-        if int(const.host_subnet[h]) != sid:
-            continue
-        if exclude_router and bool(const.host_is_router[h]):
-            continue
-        return h
-    return None
-
-
-def _find_blue_for_host(const, host_idx):
-    for b in range(NUM_BLUE_AGENTS):
-        if bool(const.blue_agent_hosts[b, host_idx]):
-            return b
-    return None
 
 
 def _setup_multi_session_host(const, target_h, num_agents=3, sessions_per_agent=1, privileged_agents=None):
@@ -91,9 +70,9 @@ class TestMultiAgentMultiSession:
     """Multiple red agents with sessions on same host."""
 
     def test_three_agents_one_session_each(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         assert target is not None
-        blue = _find_blue_for_host(jax_const, target)
+        blue = find_blue_for_host(jax_const, target)
         assert blue is not None
 
         state = _setup_multi_session_host(jax_const, target, num_agents=3)
@@ -105,10 +84,9 @@ class TestMultiAgentMultiSession:
         assert int(state.host_compromised[target]) == COMPROMISE_USER
 
     def test_three_agents_remove_one_preserves_compromise(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue agent covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = _setup_multi_session_host(jax_const, target, num_agents=3)
 
@@ -130,10 +108,9 @@ class TestMultiAgentMultiSession:
         assert int(new_state.host_compromised[target]) >= COMPROMISE_USER
 
     def test_mixed_privilege_remove_preserves_max(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue agent covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         # Agent 0: USER, Agent 1: PRIVILEGED
         state = _setup_multi_session_host(jax_const, target, num_agents=2, privileged_agents={1})
@@ -151,10 +128,9 @@ class TestMultiAgentMultiSession:
         assert int(new_state.host_compromised[target]) == COMPROMISE_PRIVILEGED
 
     def test_restore_clears_all_agents(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue agent covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = _setup_multi_session_host(jax_const, target, num_agents=3)
 
@@ -171,7 +147,7 @@ class TestMultiSessionSameAgent:
     """Single red agent with multiple sessions on same host."""
 
     def test_two_sessions_same_agent(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         assert target is not None
 
         state = _setup_multi_session_host(jax_const, target, num_agents=1, sessions_per_agent=2)
@@ -184,10 +160,9 @@ class TestMultiSessionSameAgent:
         assert 5001 in live_pids
 
     def test_remove_one_of_two_sessions(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue agent covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = _setup_multi_session_host(jax_const, target, num_agents=1, sessions_per_agent=2)
 
@@ -211,7 +186,7 @@ class TestPIDCapacityStress:
     """Test behavior near PID tracking capacity limits."""
 
     def test_many_sessions_near_capacity(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         assert target is not None
 
         state = create_initial_state()
@@ -237,10 +212,9 @@ class TestPIDCapacityStress:
         assert len(live_pids) == n_pids, f"Expected {n_pids} PIDs, got {len(live_pids)}"
 
     def test_restore_clears_all_pids(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue agent covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))

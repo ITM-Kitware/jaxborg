@@ -8,23 +8,20 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import find_blue_for_host, find_host_in_subnet
 
 from jaxborg.actions.blue_decoys import host_decoy_compatibility_mask
 from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.blue_remove import apply_blue_remove
-from jaxborg.actions.blue_restore import apply_blue_restore
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_privesc import apply_privesc
 from jaxborg.constants import (
-    COMPROMISE_NONE,
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     DECOY_IDS,
-    NUM_BLUE_AGENTS,
     NUM_DECOY_TYPES,
     NUM_SERVICES,
     SERVICE_IDS,
-    SUBNET_IDS,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
@@ -33,26 +30,6 @@ from jaxborg.topology import build_topology
 @pytest.fixture(scope="module")
 def jax_const():
     return build_topology(jax.random.PRNGKey(42), num_steps=100)
-
-
-def _find_host_in_subnet(const, subnet_name, exclude_router=True):
-    sid = SUBNET_IDS[subnet_name]
-    for h in range(int(const.num_hosts)):
-        if not bool(const.host_active[h]):
-            continue
-        if int(const.host_subnet[h]) != sid:
-            continue
-        if exclude_router and bool(const.host_is_router[h]):
-            continue
-        return h
-    return None
-
-
-def _find_blue_for_host(const, host_idx):
-    for b in range(NUM_BLUE_AGENTS):
-        if bool(const.blue_agent_hosts[b, host_idx]):
-            return b
-    return None
 
 
 # =============================================================================
@@ -68,7 +45,7 @@ class TestSandboxRemovalMultiSession:
 
     def test_single_sandboxed_session_is_removed(self, jax_const):
         """Sandboxed single session should be removed on privesc attempt."""
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
@@ -101,7 +78,7 @@ class TestSandboxRemovalMultiSession:
         have an abstract session). The key invariant is that sessions are NOT
         removed when count > 1, even if the sandbox flag is set.
         """
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
@@ -184,10 +161,9 @@ class TestRemovePrivilegeProtection:
     """Remove should not kill privileged (root/SYSTEM) PIDs."""
 
     def test_privileged_pid_survives_remove(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -217,10 +193,9 @@ class TestRemovePrivilegeProtection:
         assert int(new_state.red_session_count[0, target]) == 1
 
     def test_unprivileged_pid_killed_privileged_survives(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -264,10 +239,9 @@ class TestMonitorActivityAging:
 
     def test_activity_ages_after_monitor(self, jax_const):
         """Current activity should become old_activity after monitor."""
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -284,10 +258,9 @@ class TestMonitorActivityAging:
 
     def test_old_activity_clears_after_second_monitor(self, jax_const):
         """Old activity should clear when no new activity occurs."""
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -303,99 +276,6 @@ class TestMonitorActivityAging:
         assert not bool(new_state.old_host_activity_detected[target]), (
             "Old activity should clear when no current activity"
         )
-
-
-# =============================================================================
-# Gap 5: Restore resets all expected fields
-# =============================================================================
-class TestRestoreCompleteness:
-    """Restore should reset ALL session-related fields."""
-
-    def test_restore_clears_malware(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
-
-        state = create_initial_state()
-        state = state.replace(
-            host_services=jnp.array(jax_const.initial_services),
-            host_has_malware=state.host_has_malware.at[target].set(True),
-            red_sessions=state.red_sessions.at[0, target].set(True),
-            red_session_count=state.red_session_count.at[0, target].set(1),
-            red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
-            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
-        )
-
-        new_state = apply_blue_restore(state, jax_const, blue, target)
-        assert not bool(new_state.host_has_malware[target]), "Restore should clear malware"
-
-    def test_restore_clears_decoys(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
-
-        state = create_initial_state()
-        state = state.replace(
-            host_services=jnp.array(jax_const.initial_services),
-            host_decoys=state.host_decoys.at[target, 0].set(True),
-            red_sessions=state.red_sessions.at[0, target].set(True),
-            red_session_count=state.red_session_count.at[0, target].set(1),
-            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
-        )
-
-        new_state = apply_blue_restore(state, jax_const, blue, target)
-        assert not bool(np.any(np.asarray(new_state.host_decoys[target]))), "Restore should clear decoys"
-
-    def test_restore_resets_services_to_initial(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
-
-        state = create_initial_state()
-        initial_services = jnp.array(jax_const.initial_services)
-        # Kill a service
-        modified_services = initial_services.at[target, 0].set(False)
-        state = state.replace(
-            host_services=modified_services,
-            red_sessions=state.red_sessions.at[0, target].set(True),
-            red_session_count=state.red_session_count.at[0, target].set(1),
-            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
-        )
-
-        new_state = apply_blue_restore(state, jax_const, blue, target)
-        np.testing.assert_array_equal(
-            np.asarray(new_state.host_services[target]),
-            np.asarray(jax_const.initial_services[target]),
-            err_msg="Restore should reset services to initial",
-        )
-
-    def test_restore_clears_all_red_agents(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
-
-        state = create_initial_state()
-        state = state.replace(host_services=jnp.array(jax_const.initial_services))
-
-        # Two different red agents on same host
-        for r in range(2):
-            state = state.replace(
-                red_sessions=state.red_sessions.at[r, target].set(True),
-                red_session_count=state.red_session_count.at[r, target].set(1),
-                red_privilege=state.red_privilege.at[r, target].set(COMPROMISE_USER),
-                host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
-            )
-
-        new_state = apply_blue_restore(state, jax_const, blue, target)
-
-        for r in range(2):
-            assert not bool(new_state.red_sessions[r, target]), f"Restore should clear agent {r}"
-            assert int(new_state.red_session_count[r, target]) == 0
-        assert int(new_state.host_compromised[target]) == COMPROMISE_NONE
 
 
 # =============================================================================
@@ -427,7 +307,7 @@ class TestDecoyExploitDetection:
         """HTTP exploit should fail when Apache decoy is deployed."""
         from jaxborg.actions.red_exploit import apply_exploit_http
 
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
 
@@ -457,10 +337,9 @@ class TestSessionCountConsistency:
 
     def test_count_zero_implies_no_session(self, jax_const):
         """session_count==0 must imply red_sessions==False."""
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))

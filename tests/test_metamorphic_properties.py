@@ -7,6 +7,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import find_blue_for_host
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.blue_monitor import apply_blue_monitor
@@ -18,9 +19,7 @@ from jaxborg.constants import (
     COMPROMISE_NONE,
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
-    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
-    SUBNET_IDS,
 )
 from jaxborg.rewards import compute_rewards
 from jaxborg.state import create_initial_state
@@ -33,26 +32,6 @@ _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 @pytest.fixture(scope="module")
 def jax_const():
     return build_topology(jax.random.PRNGKey(42), num_steps=100)
-
-
-def _find_host_in_subnet(const, subnet_name, exclude_router=True):
-    sid = SUBNET_IDS[subnet_name]
-    for h in range(int(const.num_hosts)):
-        if not bool(const.host_active[h]):
-            continue
-        if int(const.host_subnet[h]) != sid:
-            continue
-        if exclude_router and bool(const.host_is_router[h]):
-            continue
-        return h
-    return None
-
-
-def _find_blue_for_host(const, host_idx):
-    for b in range(NUM_BLUE_AGENTS):
-        if bool(const.blue_agent_hosts[b, host_idx]):
-            return b
-    return None
 
 
 def _make_state(const):
@@ -90,7 +69,7 @@ def test_restore_clean_host_is_noop(jax_const):
         # Must not be the red start host
         if int(state.red_sessions[0, h]):
             continue
-        b = _find_blue_for_host(const, h)
+        b = find_blue_for_host(const, h)
         if b is not None:
             target = h
             blue_idx = b
@@ -164,8 +143,7 @@ def test_session_count_bounded_by_exploit_successes(jax_const):
         target = h
         break
 
-    if target is None:
-        pytest.skip("No suitable target host in start subnet")
+    assert target is not None, "Start subnet must have non-router hosts besides the start host"
 
     # Manually set up scan and discovery state so exploit preconditions pass
     state = state.replace(
@@ -225,9 +203,8 @@ def test_removing_all_sessions_clears_compromise(jax_const):
         )
 
         # Now use Restore to clear everything (a blue agent that covers this host)
-        blue_idx = _find_blue_for_host(const, target)
-        if blue_idx is None:
-            continue  # skip if no blue covers this host
+        blue_idx = find_blue_for_host(const, target)
+        assert blue_idx is not None, f"Active non-router host {target} must be covered by a blue agent"
 
         state2 = apply_blue_restore(state, const, blue_idx, target)
 
@@ -258,8 +235,7 @@ def test_monitor_on_uncovered_host_is_noop(jax_const):
         if not bool(const.blue_agent_hosts[agent_id, h]):
             uncovered_host = h
             break
-    if uncovered_host is None:
-        pytest.skip("All active hosts are covered by blue_agent_0")
+    assert uncovered_host is not None, "blue_agent_0 covers only RESTRICTED_ZONE_A, must have uncovered hosts"
 
     # Set some detection flags on the uncovered host
     state = state.replace(
@@ -308,8 +284,7 @@ def test_blocking_prevents_cross_subnet_exploit(jax_const):
         dst_subnet = h_subnet
         break
 
-    if target is None:
-        pytest.skip("No target host in a different subnet from red start")
+    assert target is not None, "Must have active non-router hosts in subnets other than the red start subnet"
 
     # Set up scan/discovery prereqs so the exploit would normally be attempted
     state = state.replace(

@@ -11,6 +11,7 @@ import jax  # noqa: E402
 import pytest  # noqa: E402
 
 from jaxborg.actions import apply_blue_action, apply_red_action  # noqa: E402
+from jaxborg.constants import NUM_BLUE_AGENTS, SUBNET_IDS  # noqa: E402
 from jaxborg.state import CC4State  # noqa: E402
 from jaxborg.topology import build_topology  # noqa: E402
 
@@ -25,6 +26,28 @@ def setup_red_agent_session(state: CC4State, agent_id: int, host: int) -> CC4Sta
         red_session_is_abstract=state.red_session_is_abstract.at[agent_id, host].set(True),
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(host),
     )
+
+
+def find_host_in_subnet(const, subnet_name, exclude_router=True):
+    """Find an active non-router host in the specified subnet."""
+    sid = SUBNET_IDS[subnet_name]
+    for h in range(int(const.num_hosts)):
+        if not bool(const.host_active[h]):
+            continue
+        if int(const.host_subnet[h]) != sid:
+            continue
+        if exclude_router and bool(const.host_is_router[h]):
+            continue
+        return h
+    return None
+
+
+def find_blue_for_host(const, host_idx):
+    """Find which blue agent (if any) covers a given host."""
+    for b in range(NUM_BLUE_AGENTS):
+        if bool(const.blue_agent_hosts[b, host_idx]):
+            return b
+    return None
 
 
 @pytest.fixture(scope="session")

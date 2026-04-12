@@ -11,6 +11,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
+from conftest import find_blue_for_host, find_host_in_subnet
 
 from jaxborg.actions import apply_red_action
 from jaxborg.actions.blue_restore import apply_blue_restore
@@ -18,9 +19,7 @@ from jaxborg.actions.encoding import encode_red_action
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.constants import (
     COMPROMISE_USER,
-    NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
-    SUBNET_IDS,
 )
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_topology
@@ -31,26 +30,6 @@ _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 @pytest.fixture(scope="module")
 def jax_const():
     return build_topology(jax.random.PRNGKey(42), num_steps=100)
-
-
-def _find_host_in_subnet(const, subnet_name, exclude_router=True):
-    sid = SUBNET_IDS[subnet_name]
-    for h in range(int(const.num_hosts)):
-        if not bool(const.host_active[h]):
-            continue
-        if int(const.host_subnet[h]) != sid:
-            continue
-        if exclude_router and bool(const.host_is_router[h]):
-            continue
-        return h
-    return None
-
-
-def _find_blue_for_host(const, host_idx):
-    for b in range(NUM_BLUE_AGENTS):
-        if bool(const.blue_agent_hosts[b, host_idx]):
-            return b
-    return None
 
 
 def _check_session_invariants(state, const, label=""):
@@ -148,10 +127,9 @@ class TestSessionInvariantsAfterRestore:
     """Verify invariants hold after Restore clears a host."""
 
     def test_invariants_after_restore(self, jax_const):
-        target = _find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
-        blue = _find_blue_for_host(jax_const, target)
-        if blue is None:
-            pytest.skip("No blue covers target")
+        target = find_host_in_subnet(jax_const, "OPERATIONAL_ZONE_A")
+        blue = find_blue_for_host(jax_const, target)
+        assert blue is not None, "OPERATIONAL_ZONE_A host must be covered by blue agent 1"
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
