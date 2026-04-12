@@ -365,16 +365,14 @@ def make_train(config):
             policy_mask = (1.0 - traj_batch.blue_busy).astype(jnp.float32)
         else:
             policy_mask = jnp.ones_like(traj_batch.blue_busy)
-        policy_adv_mean = masked_mean(raw_advantages, policy_mask)
-        policy_adv_std = jnp.sqrt(masked_var(raw_advantages, policy_mask) + 1e-8)
-        policy_advantages = (raw_advantages - policy_adv_mean) / policy_adv_std
-
         # --- PPO update epochs ---
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
-                traj_batch, policy_advantages, targets, policy_mask = batch_info
+                traj_batch, advantages, targets, policy_mask = batch_info
 
                 def _loss_fn(params, traj_batch, gae, targets, policy_mask):
+                    # Per-minibatch advantage normalization (matches CybORG)
+                    gae = (gae - gae.mean()) / (gae.std() + 1e-8)
                     pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
                     log_prob = pi.log_prob(traj_batch.action)
                     policy_weight = policy_mask.astype(jnp.float32)
@@ -409,7 +407,7 @@ def make_train(config):
                     return total_loss, (value_loss, loss_actor, entropy, approx_kl, clip_frac, explained_var)
 
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                total_loss, grads = grad_fn(train_state.params, traj_batch, policy_advantages, targets, policy_mask)
+                total_loss, grads = grad_fn(train_state.params, traj_batch, advantages, targets, policy_mask)
                 pre_clip_grad_norm = optax.global_norm(grads)
                 if grad_clip_mode == "global":
                     # Global clip at MAX_GRAD_NORM matching torch.nn.utils.clip_grad_norm_
@@ -450,11 +448,11 @@ def make_train(config):
                 }
                 return train_state, loss_info
 
-            train_state, traj_batch, policy_advantages, targets, policy_mask, rng = update_state
+            train_state, traj_batch, raw_advantages, targets, policy_mask, rng = update_state
             rng, _rng = jax.random.split(rng)
             batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
             permutation = jax.random.permutation(_rng, batch_size)
-            batch = (traj_batch, policy_advantages, targets, policy_mask)
+            batch = (traj_batch, raw_advantages, targets, policy_mask)
             # Flatten (NUM_STEPS, num_envs, num_agents, ...) -> (batch_size, ...)
             batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
             shuffled_batch = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
@@ -463,21 +461,27 @@ def make_train(config):
                 shuffled_batch,
             )
             train_state, loss_info = jax.lax.scan(_update_minibatch, train_state, minibatches)
-            update_state = (train_state, traj_batch, policy_advantages, targets, policy_mask, rng)
+            update_state = (train_state, traj_batch, raw_advantages, targets, policy_mask, rng)
             return update_state, loss_info
 
-        update_state = (train_state, traj_batch, policy_advantages, targets, policy_mask, rng)
+        update_state = (train_state, traj_batch, raw_advantages, targets, policy_mask, rng)
         update_state, loss_info = jax.lax.scan(_update_epoch, update_state, None, config["UPDATE_EPOCHS"])
         train_state = update_state[0]
         rng = update_state[-1]
 
         loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
+        # Raw episode return: sum of raw reward components over the rollout, mean over envs.
+        raw_rollout_return = (
+            info_sums["reward_ria"] + info_sums["reward_lwf"]
+            + info_sums["reward_asf"] + info_sums["action_cost"]
+        ).mean()
         # info_sums accumulated over NUM_STEPS; take mean over steps and envs.
         num_steps_f = jnp.float32(config["NUM_STEPS"])
         metric = jax.tree.map(lambda x: x.mean() / num_steps_f, info_sums)
         active_mask = policy_mask
         valid_action_count = traj_batch.avail_actions.sum(axis=-1).astype(jnp.float32)
         rollout_info = {
+            "raw_rollout_return": raw_rollout_return,
             "mean_rollout_return": traj_batch.reward.sum(axis=0).mean(),
             "mean_valid_actions": valid_action_count.mean(),
             "mean_mask_uniform_entropy": jnp.log(jnp.maximum(valid_action_count, 1.0)).mean(),
@@ -501,8 +505,6 @@ def make_train(config):
             "raw_advantage_mean": raw_advantages.mean(),
             "raw_advantage_std": raw_advantages.std(),
             "raw_advantage_abs_mean": jnp.abs(raw_advantages).mean(),
-            "policy_advantage_mean": policy_adv_mean,
-            "policy_advantage_std": policy_adv_std,
         }
         if norm_rewards:
             rollout_info["reward_norm_var"] = reward_norm_state.var
@@ -617,10 +619,12 @@ def main(cfg):
             print(f"  first update compiled + ran in {elapsed_first:.1f}s", flush=True)
 
         step = (update_idx + 1) * num_steps * config.get("NUM_ENVS", 1)
+        raw_reward = float(metric["raw_rollout_return"])
         reward = float(metric["mean_rollout_return"])
         record = {
             "update": update_idx + 1,
             "steps": step,
+            "raw_episode_reward_mean": raw_reward,
             "episode_reward_mean": reward,
             "loss": float(metric["total_loss"]),
             "policy_loss": float(metric["actor_loss"]),
@@ -654,8 +658,6 @@ def main(cfg):
             "raw_advantage_mean": float(metric["raw_advantage_mean"]),
             "raw_advantage_std": float(metric["raw_advantage_std"]),
             "raw_advantage_abs_mean": float(metric["raw_advantage_abs_mean"]),
-            "policy_advantage_mean": float(metric["policy_advantage_mean"]),
-            "policy_advantage_std": float(metric["policy_advantage_std"]),
             "reward_ria": float(metric["reward_ria"]),
             "reward_lwf": float(metric["reward_lwf"]),
             "reward_asf": float(metric["reward_asf"]),
@@ -667,14 +669,14 @@ def main(cfg):
             record["reward_norm_var"] = float(metric["reward_norm_var"])
             record["reward_norm_count"] = float(metric["reward_norm_count"])
         logger.log(record, step=step)
-        if reward > best_reward:
-            best_reward = reward
+        if raw_reward > best_reward:
+            best_reward = raw_reward
 
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             elapsed = time.perf_counter() - start_time
             sps = step / elapsed
             print(
-                f"  update {update_idx + 1}/{num_updates} | step {step} | reward {reward:.1f} | {sps:.0f} sps",
+                f"  update {update_idx + 1}/{num_updates} | step {step} | reward {raw_reward:.1f} | {sps:.0f} sps",
                 flush=True,
             )
 
@@ -706,7 +708,7 @@ def main(cfg):
     total_steps = int(config["TOTAL_TIMESTEPS"])
     sps = total_steps / elapsed
 
-    final_return = float(metric["returned_episode_returns"])
+    final_return = float(metric["raw_rollout_return"])
     if mlflow_enabled:
         mlflow.log_artifact(str(config_path))
         mlflow.log_metrics(
