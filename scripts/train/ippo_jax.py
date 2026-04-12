@@ -174,9 +174,11 @@ def make_train(config):
     init_keys = jax.random.split(init_key, num_envs)
     init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
 
-    cyborg_matched = bool(config.get("CYBORG_MATCHED", False))
+    network_type = config.get("NETWORK_TYPE", "separate")
+    busy_masking = bool(config.get("BUSY_MASKING", True))
+    grad_clip_mode = config.get("GRAD_CLIP_MODE", "per_head")
 
-    if cyborg_matched:
+    if network_type == "shared":
         network = SharedActorCritic(
             inner_env.action_space(agents[0]).n,
             hidden_dim=config.get("HIDDEN_DIM", 256),
@@ -310,10 +312,10 @@ def make_train(config):
         )
         raw_advantages = advantages
         targets = raw_advantages + traj_batch.value
-        if cyborg_matched:
-            policy_mask = jnp.ones_like(traj_batch.blue_busy)
-        else:
+        if busy_masking:
             policy_mask = (1.0 - traj_batch.blue_busy).astype(jnp.float32)
+        else:
+            policy_mask = jnp.ones_like(traj_batch.blue_busy)
         policy_adv_mean = masked_mean(raw_advantages, policy_mask)
         policy_adv_std = jnp.sqrt(masked_var(raw_advantages, policy_mask) + 1e-8)
         policy_advantages = (raw_advantages - policy_adv_mean) / policy_adv_std
@@ -360,9 +362,9 @@ def make_train(config):
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                 total_loss, grads = grad_fn(train_state.params, traj_batch, policy_advantages, targets, policy_mask)
                 pre_clip_grad_norm = optax.global_norm(grads)
-                if cyborg_matched:
-                    # Global clip at 0.5 matching torch.nn.utils.clip_grad_norm_(params, 0.5)
-                    max_norm = jnp.asarray(0.5, dtype=jnp.float32)
+                if grad_clip_mode == "global":
+                    # Global clip at MAX_GRAD_NORM matching torch.nn.utils.clip_grad_norm_
+                    max_norm = jnp.asarray(config["MAX_GRAD_NORM"], dtype=jnp.float32)
                     scale = jnp.minimum(1.0, max_norm / (pre_clip_grad_norm + 1e-8))
                     grads = jax.tree.map(lambda x: x * scale, grads)
                     grad_norm = optax.global_norm(grads)

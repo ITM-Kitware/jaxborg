@@ -25,7 +25,7 @@ uv run python scripts/train/ippo_jax.py \
   GAMMA=0.85 \
   SEED=42 MLFLOW_ENABLED=false \
   CHECKPOINT_EVERY_UPDATES=10 \
-  +NORM_REWARDS=true +CYBORG_MATCHED=true
+  +NORM_REWARDS=true NETWORK_TYPE=shared BUSY_MASKING=false GRAD_CLIP_MODE=global
 
 echo "Training finished: $(date)"
 
