@@ -713,12 +713,12 @@ def train(args):
 def main():
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for CybORG CC4")
     parser.add_argument("--total-timesteps", type=int, default=5_000_000)
-    parser.add_argument("--num-envs", type=int, default=16)
+    parser.add_argument("--num-envs", type=int, default=48)
     parser.add_argument(
         "--rollout-length", type=int, default=500, help="Steps per rollout per env (500 = one full episode)"
     )
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
-    parser.add_argument("--gamma", type=float, default=0.85, help="Discount factor (CC4 tutorial: 0.85)")
+    parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--num-epochs", type=int, default=10, help="SGD epochs per rollout")
     parser.add_argument("--num-minibatches", type=int, default=8, help="Number of minibatches per epoch")
