@@ -268,15 +268,19 @@ class GreenRecorder:
 
         return fields, red_pid_deltas, blue_decoy_pid_deltas, report
 
-    def to_jax_array(self):
-        """Return (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) array."""
-        import jax.numpy as jnp
-
+    def to_numpy_array(self):
+        """Return (MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS) numpy array."""
         result = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
         for i, step_data in enumerate(self._per_step_data):
             if i < MAX_STEPS:
                 result[i] = step_data
-        return jnp.array(result)
+        return result
+
+    def to_jax_array(self):
+        """Return (MAX_STEPS, GLOBAL_MAX_HOSTS, 8) array."""
+        import jax.numpy as jnp
+
+        return jnp.array(self.to_numpy_array())
 
 
 def _map_calls_to_fields(fields, host_idx, action_type, calls, ip_to_host_idx=None, host=None):

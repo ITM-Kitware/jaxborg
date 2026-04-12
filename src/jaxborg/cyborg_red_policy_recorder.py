@@ -80,6 +80,9 @@ class RedPolicyRecorder:
 
             agent.get_action = _make_wrapped(orig_get_action, agent_idx, recorder).__get__(agent, type(agent))
 
+    def to_numpy_array(self):
+        return self._tape
+
     def to_jax_array(self):
         import jax.numpy as jnp
 

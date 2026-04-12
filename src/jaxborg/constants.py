@@ -23,6 +23,20 @@ SUBNET_NAMES = [
 
 SUBNET_IDS = {name: i for i, name in enumerate(SUBNET_NAMES)}
 
+CYBORG_SUBNET_SUFFIX = {
+    "RESTRICTED_ZONE_A": "restricted_zone_a_subnet",
+    "RESTRICTED_ZONE_B": "restricted_zone_b_subnet",
+    "OPERATIONAL_ZONE_A": "operational_zone_a_subnet",
+    "OPERATIONAL_ZONE_B": "operational_zone_b_subnet",
+    "CONTRACTOR_NETWORK": "contractor_network_subnet",
+    "ADMIN_NETWORK": "admin_network_subnet",
+    "OFFICE_NETWORK": "office_network_subnet",
+    "PUBLIC_ACCESS_ZONE": "public_access_zone_subnet",
+    "INTERNET": "internet_subnet",
+}
+
+CYBORG_SUFFIX_TO_ID = {v: SUBNET_IDS[k] for k, v in CYBORG_SUBNET_SUFFIX.items()}
+
 SERVICE_NAMES = ["SSHD", "APACHE2", "MYSQLD", "SMTP", "OTSERVICE"]
 SERVICE_IDS = {name: i for i, name in enumerate(SERVICE_NAMES)}
 

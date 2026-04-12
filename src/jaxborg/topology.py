@@ -11,12 +11,13 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxborg.constants import (
+    CYBORG_SUBNET_SUFFIX,  # noqa: F401 — re-exported
+    CYBORG_SUFFIX_TO_ID,  # noqa: F401 — re-exported
     GLOBAL_MAX_HOSTS,
     MAX_DETECTION_RANDOMS,
     MAX_SERVER_HOSTS,
     MAX_STEPS,
     MAX_USER_HOSTS,
-    MISSION_PHASES,
     NUM_BLUE_AGENTS,
     NUM_DECOY_TYPES,
     NUM_GREEN_RANDOM_FIELDS,
@@ -26,26 +27,24 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
     SERVICE_IDS,
-    SERVICE_NAMES,
     SUBNET_IDS,
-    SUBNET_NAMES,
     TOTAL_ACTION_ACTOR_SLOTS,
 )
 from jaxborg.state import CC4Const
-
-CYBORG_SUBNET_SUFFIX = {
-    "RESTRICTED_ZONE_A": "restricted_zone_a_subnet",
-    "RESTRICTED_ZONE_B": "restricted_zone_b_subnet",
-    "OPERATIONAL_ZONE_A": "operational_zone_a_subnet",
-    "OPERATIONAL_ZONE_B": "operational_zone_b_subnet",
-    "CONTRACTOR_NETWORK": "contractor_network_subnet",
-    "ADMIN_NETWORK": "admin_network_subnet",
-    "OFFICE_NETWORK": "office_network_subnet",
-    "PUBLIC_ACCESS_ZONE": "public_access_zone_subnet",
-    "INTERNET": "internet_subnet",
-}
-
-CYBORG_SUFFIX_TO_ID = {v: SUBNET_IDS[k] for k, v in CYBORG_SUBNET_SUFFIX.items()}
+from jaxborg.topology_numpy import (
+    _ROUTER_LINKS,
+    BLUE_AGENT_SUBNETS,
+    RED_AGENT_SUBNETS,
+    _build_allowed_subnet_pairs_pure,
+    _build_blue_obs_subnets,
+    _build_comms_policy,
+    _build_phase_rewards,
+    _compute_allowed_subnet_pairs,  # noqa: F401 — re-exported
+    _compute_mission_phases,
+    _compute_phase_boundaries,
+    _subnet_nacl_adjacency,
+    build_const_arrays_from_cyborg,
+)
 
 
 def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
@@ -60,344 +59,10 @@ def cyborg_bank_seed_from_seed(seed: int, bank_size: int) -> int:
     return int(cyborg_bank_index_from_key(key, bank_size))
 
 
-def _subnet_nacl_adjacency() -> np.ndarray:
-    """Build the default NACL-based subnet adjacency matrix.
-
-    Returns (NUM_SUBNETS, NUM_SUBNETS) bool numpy array where [i,j]=True means
-    traffic can flow from subnet i to subnet j.
-    """
-    S = SUBNET_IDS
-    adj = np.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
-
-    adj[S["RESTRICTED_ZONE_A"], S["OPERATIONAL_ZONE_A"]] = True
-    adj[S["RESTRICTED_ZONE_A"], S["CONTRACTOR_NETWORK"]] = True
-    adj[S["RESTRICTED_ZONE_A"], S["PUBLIC_ACCESS_ZONE"]] = True
-
-    adj[S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"]] = True
-
-    adj[S["RESTRICTED_ZONE_B"], S["OPERATIONAL_ZONE_B"]] = True
-    adj[S["RESTRICTED_ZONE_B"], S["CONTRACTOR_NETWORK"]] = True
-    adj[S["RESTRICTED_ZONE_B"], S["PUBLIC_ACCESS_ZONE"]] = True
-
-    adj[S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"]] = True
-
-    adj[S["CONTRACTOR_NETWORK"], S["RESTRICTED_ZONE_A"]] = True
-    adj[S["CONTRACTOR_NETWORK"], S["RESTRICTED_ZONE_B"]] = True
-    adj[S["CONTRACTOR_NETWORK"], S["PUBLIC_ACCESS_ZONE"]] = True
-
-    adj[S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_A"]] = True
-    adj[S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_B"]] = True
-    adj[S["PUBLIC_ACCESS_ZONE"], S["CONTRACTOR_NETWORK"]] = True
-    adj[S["PUBLIC_ACCESS_ZONE"], S["ADMIN_NETWORK"]] = True
-    adj[S["PUBLIC_ACCESS_ZONE"], S["OFFICE_NETWORK"]] = True
-
-    adj[S["ADMIN_NETWORK"], S["PUBLIC_ACCESS_ZONE"]] = True
-    adj[S["ADMIN_NETWORK"], S["OFFICE_NETWORK"]] = True
-
-    adj[S["OFFICE_NETWORK"], S["PUBLIC_ACCESS_ZONE"]] = True
-    adj[S["OFFICE_NETWORK"], S["ADMIN_NETWORK"]] = True
-
-    adj[S["INTERNET"], S["RESTRICTED_ZONE_A"]] = True
-    adj[S["INTERNET"], S["OPERATIONAL_ZONE_A"]] = True
-    adj[S["INTERNET"], S["RESTRICTED_ZONE_B"]] = True
-    adj[S["INTERNET"], S["OPERATIONAL_ZONE_B"]] = True
-    adj[S["INTERNET"], S["CONTRACTOR_NETWORK"]] = True
-    adj[S["INTERNET"], S["PUBLIC_ACCESS_ZONE"]] = True
-    adj[S["INTERNET"], S["ADMIN_NETWORK"]] = True
-    adj[S["INTERNET"], S["OFFICE_NETWORK"]] = True
-
-    return adj
-
-
-_ROUTER_LINKS = {
-    "INTERNET": [
-        "RESTRICTED_ZONE_A",
-        "RESTRICTED_ZONE_B",
-        "CONTRACTOR_NETWORK",
-        "PUBLIC_ACCESS_ZONE",
-    ],
-    "RESTRICTED_ZONE_A": ["INTERNET", "OPERATIONAL_ZONE_A"],
-    "RESTRICTED_ZONE_B": ["INTERNET", "OPERATIONAL_ZONE_B"],
-    "CONTRACTOR_NETWORK": ["INTERNET"],
-    "PUBLIC_ACCESS_ZONE": ["INTERNET", "ADMIN_NETWORK", "OFFICE_NETWORK"],
-    "OPERATIONAL_ZONE_A": ["RESTRICTED_ZONE_A"],
-    "OPERATIONAL_ZONE_B": ["RESTRICTED_ZONE_B"],
-    "ADMIN_NETWORK": ["PUBLIC_ACCESS_ZONE"],
-    "OFFICE_NETWORK": ["PUBLIC_ACCESS_ZONE"],
-}
-
-BLUE_AGENT_SUBNETS = [
-    ["RESTRICTED_ZONE_A"],
-    ["OPERATIONAL_ZONE_A"],
-    ["RESTRICTED_ZONE_B"],
-    ["OPERATIONAL_ZONE_B"],
-    ["PUBLIC_ACCESS_ZONE", "ADMIN_NETWORK", "OFFICE_NETWORK"],
-]
-
-RED_AGENT_SUBNETS = [
-    ["CONTRACTOR_NETWORK"],
-    ["RESTRICTED_ZONE_A"],
-    ["OPERATIONAL_ZONE_A"],
-    ["RESTRICTED_ZONE_B"],
-    ["OPERATIONAL_ZONE_B"],
-    ["PUBLIC_ACCESS_ZONE", "ADMIN_NETWORK", "OFFICE_NETWORK"],
-]
-
-
-def _build_data_links(
-    host_subnet: np.ndarray,
-    host_is_router: np.ndarray,
-    num_hosts: int,
-    subnet_router_idx: np.ndarray,
-) -> np.ndarray:
-    """Build host-level data_links adjacency from CybORG router topology rules."""
-    links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
-
-    for h in range(num_hosts):
-        s = int(host_subnet[h])
-        sname = SUBNET_NAMES[s]
-
-        if sname == "INTERNET":
-            for neighbor_name in _ROUTER_LINKS["INTERNET"]:
-                neighbor_sid = SUBNET_IDS[neighbor_name]
-                r = int(subnet_router_idx[neighbor_sid])
-                if r >= 0:
-                    links[h, r] = True
-                    links[r, h] = True
-        elif host_is_router[h]:
-            for neighbor_name in _ROUTER_LINKS.get(sname, []):
-                neighbor_sid = SUBNET_IDS[neighbor_name]
-                if neighbor_name == "INTERNET":
-                    internet_host = int(subnet_router_idx[SUBNET_IDS["INTERNET"]])
-                    if internet_host >= 0:
-                        links[h, internet_host] = True
-                        links[internet_host, h] = True
-                else:
-                    r = int(subnet_router_idx[neighbor_sid])
-                    if r >= 0:
-                        links[h, r] = True
-                        links[r, h] = True
-        else:
-            r = int(subnet_router_idx[s])
-            if r >= 0:
-                links[h, r] = True
-                links[r, h] = True
-
-    return links
-
-
 def build_const_from_cyborg(cyborg_env) -> CC4Const:
     """Extract static topology from a live CybORG environment."""
-    state = cyborg_env.environment_controller.state
-    scenario = state.scenario
-
-    hostname_to_idx = {}
-    host_active = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_subnet = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
-    host_is_router = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_is_server = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_is_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_respond_to_ping = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_has_bruteforceable_user = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_has_rfi = np.zeros(GLOBAL_MAX_HOSTS, dtype=bool)
-    host_initial_max_pid = np.zeros(GLOBAL_MAX_HOSTS, dtype=np.int32)
-    initial_services = np.zeros((GLOBAL_MAX_HOSTS, len(SERVICE_NAMES)), dtype=bool)
-    subnet_router_idx = np.full(NUM_SUBNETS, -1, dtype=np.int32)
-
-    sorted_hostnames = sorted(state.hosts.keys())
-    for idx, hostname in enumerate(sorted_hostnames):
-        hostname_to_idx[hostname] = idx
-
-    num_hosts = len(sorted_hostnames)
-    assert num_hosts <= GLOBAL_MAX_HOSTS
-
-    for hostname, idx in hostname_to_idx.items():
-        host = state.hosts[hostname]
-        subnet_name_cyborg = state.hostname_subnet_map[hostname]
-        sid = CYBORG_SUFFIX_TO_ID[subnet_name_cyborg]
-
-        host_active[idx] = True
-        host_subnet[idx] = sid
-
-        if hostname == "root_internet_host_0":
-            subnet_router_idx[SUBNET_IDS["INTERNET"]] = idx
-        elif "_router" in hostname:
-            host_is_router[idx] = True
-            subnet_router_idx[sid] = idx
-        elif "_server_host_" in hostname:
-            host_is_server[idx] = True
-        elif "_user_host_" in hostname:
-            host_is_user[idx] = True
-
-        host_respond_to_ping[idx] = host.respond_to_ping
-        if host.processes:
-            process_pids = [int(proc.pid) for proc in host.processes if proc.pid is not None]
-            if process_pids:
-                host_initial_max_pid[idx] = np.int32(max(process_pids))
-
-        for user in host.users:
-            if getattr(user, "bruteforceable", False):
-                host_has_bruteforceable_user[idx] = True
-                break
-
-        if host.processes:
-            for proc in host.processes:
-                if hasattr(proc, "properties") and proc.properties and "rfi" in proc.properties:
-                    host_has_rfi[idx] = True
-
-        if host.services:
-            for svc_name in host.services:
-                svc_str = str(svc_name).split(".")[-1] if "." in str(svc_name) else str(svc_name)
-                if svc_str in SERVICE_IDS:
-                    initial_services[idx, SERVICE_IDS[svc_str]] = True
-
-    data_links = _build_data_links(host_subnet, host_is_router, num_hosts, subnet_router_idx)
-
-    _fill_data_links_from_cyborg(data_links, state, hostname_to_idx)
-
-    subnet_adjacency = _subnet_nacl_adjacency()
-
-    blue_agent_subnets = np.zeros((NUM_BLUE_AGENTS, NUM_SUBNETS), dtype=bool)
-    blue_agent_hosts = np.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    for i, snames in enumerate(BLUE_AGENT_SUBNETS):
-        for sname in snames:
-            sid = SUBNET_IDS[sname]
-            blue_agent_subnets[i, sid] = True
-            for h in range(num_hosts):
-                if host_active[h] and host_subnet[h] == sid:
-                    blue_agent_hosts[i, h] = True
-
-    red_start_hosts = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
-    red_agent_subnets = np.zeros((NUM_RED_AGENTS, NUM_SUBNETS), dtype=bool)
-    _red_agent_initially_active = np.zeros(NUM_RED_AGENTS, dtype=bool)
-    for agent_name, agent_info in scenario.agents.items():
-        if not agent_name.startswith("red_agent_"):
-            continue
-        red_idx = int(agent_name.split("_")[-1])
-        if red_idx >= NUM_RED_AGENTS:
-            continue
-        if agent_info.starting_sessions:
-            sess = agent_info.starting_sessions[0]
-            if sess.hostname in hostname_to_idx:
-                red_start_hosts[red_idx] = hostname_to_idx[sess.hostname]
-        _red_agent_initially_active[red_idx] = agent_info.active
-        if agent_info.allowed_subnets:
-            for sub_enum in agent_info.allowed_subnets:
-                cyborg_suffix = str(sub_enum)
-                if cyborg_suffix in CYBORG_SUFFIX_TO_ID:
-                    red_agent_subnets[red_idx, CYBORG_SUFFIX_TO_ID[cyborg_suffix]] = True
-    red_initial_discovered_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    red_initial_scanned_hosts = np.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    controller = cyborg_env.environment_controller
-    known_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
-    scanned_hosts_by_red = [set() for _ in range(NUM_RED_AGENTS)]
-    for red_idx in range(NUM_RED_AGENTS):
-        iface = controller.agent_interfaces.get(f"red_agent_{red_idx}")
-        if iface is None:
-            continue
-        action_space = getattr(iface, "action_space", None)
-        if action_space is not None:
-            for ip, known in getattr(action_space, "ip_address", {}).items():
-                if not known:
-                    continue
-                hostname = state.ip_addresses.get(ip)
-                if hostname in hostname_to_idx:
-                    known_hosts_by_red[red_idx].add(hostname_to_idx[hostname])
-        for sess in state.sessions.get(f"red_agent_{red_idx}", {}).values():
-            for ip in getattr(sess, "ports", {}).keys():
-                hostname = state.ip_addresses.get(ip)
-                if hostname in hostname_to_idx:
-                    scanned_hosts_by_red[red_idx].add(hostname_to_idx[hostname])
-    for red_idx in range(NUM_RED_AGENTS):
-        if known_hosts_by_red[red_idx]:
-            red_start_hosts[red_idx] = min(known_hosts_by_red[red_idx])
-        if _red_agent_initially_active[red_idx]:
-            red_initial_discovered_hosts[red_idx, red_start_hosts[red_idx]] = True
-            for hidx in known_hosts_by_red[red_idx]:
-                red_initial_discovered_hosts[red_idx, hidx] = True
-        # Inactive agents: DON'T pre-seed discovery from aspace.ip_address.
-        # CybORG's FSM starts with empty host_states; the pre-populated IP
-        # doesn't enter host_states until the agent processes an observation.
-        for hidx in scanned_hosts_by_red[red_idx]:
-            red_initial_scanned_hosts[red_idx, hidx] = True
-    host_info_links = np.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=bool)
-    for src_hostname, host in state.hosts.items():
-        if src_hostname not in hostname_to_idx:
-            continue
-        src_idx = hostname_to_idx[src_hostname]
-        for dst_hostname in getattr(host, "info", {}).keys():
-            if dst_hostname in hostname_to_idx:
-                host_info_links[src_idx, hostname_to_idx[dst_hostname]] = True
-
-    green_agent_host, green_agent_active, green_count = _build_green_agent_map_numpy(
-        host_active=host_active,
-        host_subnet=host_subnet,
-        host_is_user=host_is_user,
-        num_hosts=num_hosts,
-    )
-
-    phase_boundaries = _compute_phase_boundaries(scenario.mission_phases)
-    allowed_subnet_pairs = _compute_allowed_subnet_pairs(scenario.allowed_subnets_per_mphase)
-
-    obs_host_map = _build_obs_host_map(
-        host_subnet, host_is_server, host_is_user, host_is_router, host_active, num_hosts
-    )
-
-    return CC4Const(
-        host_active=jnp.array(host_active),
-        host_subnet=jnp.array(host_subnet),
-        host_is_router=jnp.array(host_is_router),
-        host_is_server=jnp.array(host_is_server),
-        host_is_user=jnp.array(host_is_user),
-        subnet_adjacency=jnp.array(subnet_adjacency),
-        data_links=jnp.array(data_links),
-        initial_services=jnp.array(initial_services),
-        host_has_bruteforceable_user=jnp.array(host_has_bruteforceable_user),
-        host_has_rfi=jnp.array(host_has_rfi),
-        host_respond_to_ping=jnp.array(host_respond_to_ping),
-        host_initial_max_pid=jnp.array(host_initial_max_pid),
-        blue_agent_subnets=jnp.array(blue_agent_subnets),
-        blue_agent_hosts=jnp.array(blue_agent_hosts),
-        red_start_hosts=jnp.array(red_start_hosts),
-        red_agent_subnets=jnp.array(red_agent_subnets),
-        red_initial_discovered_hosts=jnp.array(red_initial_discovered_hosts),
-        red_initial_scanned_hosts=jnp.array(red_initial_scanned_hosts),
-        host_info_links=jnp.array(host_info_links),
-        green_agent_host=jnp.array(green_agent_host),
-        green_agent_active=jnp.array(green_agent_active),
-        num_green_agents=jnp.int32(green_count),
-        phase_rewards=jnp.array(_build_phase_rewards_from_cyborg(cyborg_env)),
-        phase_boundaries=jnp.array(phase_boundaries),
-        allowed_subnet_pairs=jnp.array(allowed_subnet_pairs),
-        obs_host_map=jnp.array(obs_host_map),
-        blue_obs_subnets=jnp.array(_build_blue_obs_subnets()),
-        comms_policy=jnp.array(_build_comms_policy()),
-        max_steps=500,
-        num_hosts=jnp.int32(num_hosts),
-        green_agents_active=jnp.array(True),
-        # Precomputed RNG arrays (defaults: disabled / zeros)
-        green_randoms=jnp.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=jnp.float32),
-        use_green_randoms=jnp.array(False),
-        red_policy_randoms=jnp.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=jnp.float32),
-        use_red_policy_randoms=jnp.array(False),
-        detection_randoms=jnp.zeros(MAX_DETECTION_RANDOMS, dtype=jnp.float32),
-        use_detection_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS, NUM_DECOY_TYPES), dtype=jnp.int32),
-        use_blue_decoy_pid_deltas=jnp.array(False),
-        red_privesc_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        use_red_privesc_choices=jnp.array(False),
-        red_session_check_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        red_session_check_hosts=jnp.full((MAX_STEPS, NUM_RED_AGENTS), -1, dtype=jnp.int32),
-        use_red_session_check_choices=jnp.array(False),
-        blue_decoy_type_choices=jnp.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=jnp.int32),
-        use_blue_decoy_type_choices=jnp.array(False),
-        green_host_order=jnp.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=jnp.int32),
-        use_green_host_order=jnp.array(False),
-        red_exploit_session_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
-        use_red_exploit_session_choices=jnp.array(False),
-    )
+    arrays = build_const_arrays_from_cyborg(cyborg_env)
+    return CC4Const(**{k: jnp.asarray(v) for k, v in arrays.items()})
 
 
 _BANK_CACHE_DIR = Path(__file__).resolve().parents[2] / ".bank_cache"
@@ -440,107 +105,23 @@ def _pool_workers(bank_size: int) -> int:
     return max(1, min(bank_size, cpus - 8, 56))
 
 
-def _build_one_topology(seed: int, num_steps: int) -> dict:
-    """Build one CC4Const from a CybORG seed; returns numpy pytree."""
-    jax.config.update("jax_platforms", "cpu")
-
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    scenario = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=num_steps,
-    )
-    cyborg = CybORG(scenario_generator=scenario, seed=seed)
-    cyborg.reset()
-    const = build_const_from_cyborg(cyborg)
-    return jax.tree.map(np.asarray, const)
-
-
-def _build_one_green(seed: int, num_steps: int) -> np.ndarray:
-    """Record green random tape for one CybORG seed; returns numpy array."""
-    jax.config.update("jax_platforms", "cpu")
-
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Agents.Wrappers import BlueFlatWrapper
-    from CybORG.Simulator.Actions import Sleep
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.cyborg_green_recorder import GreenRecorder
-    from jaxborg.translate import build_mappings_from_cyborg
-
-    scenario = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=num_steps,
-    )
-    cyborg = CybORG(scenario_generator=scenario, seed=seed)
-    wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-    wrapper.reset()
-
-    mappings = build_mappings_from_cyborg(cyborg)
-    recorder = GreenRecorder()
-    recorder.install(cyborg, mappings)
-
-    sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-    for step_idx in range(num_steps):
-        wrapper.step(actions=sleep_actions)
-        recorder.extract_step(step_idx)
-
-    return np.asarray(recorder.to_jax_array())
-
-
-def _build_one_red_policy(seed: int, num_steps: int) -> np.ndarray:
-    """Record red policy random tape for one CybORG seed; returns numpy array."""
-    jax.config.update("jax_platforms", "cpu")
-
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Agents.Wrappers import BlueFlatWrapper
-    from CybORG.Simulator.Actions import Sleep
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
-    from jaxborg.translate import build_mappings_from_cyborg
-
-    scenario = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=num_steps,
-    )
-    cyborg = CybORG(scenario_generator=scenario, seed=seed)
-    wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-    wrapper.reset()
-
-    recorder = RedPolicyRecorder()
-    recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
-
-    sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-    for _ in range(num_steps):
-        wrapper.step(actions=sleep_actions)
-
-    return np.asarray(recorder.to_jax_array())
-
-
 def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
     if bank_size >= _PARALLEL_THRESHOLD:
+        from jaxborg.topology_workers import _build_one_topology
+
         workers = _pool_workers(bank_size)
         print(f"  Building topology bank ({bank_size} seeds, {workers} workers)...", flush=True)
         worker_fn = partial(_build_one_topology, num_steps=num_steps)
         with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
-            consts = list(pool.imap(worker_fn, range(bank_size)))
+            dicts = list(pool.imap(worker_fn, range(bank_size)))
+        stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
+        return CC4Const(**stacked)
     else:
         from CybORG import CybORG
         from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        consts = []
+        dicts = []
         for seed in range(bank_size):
             scenario = EnterpriseScenarioGenerator(
                 blue_agent_class=SleepAgent,
@@ -550,13 +131,16 @@ def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
             )
             cyborg = CybORG(scenario_generator=scenario, seed=seed)
             cyborg.reset()
-            consts.append(jax.tree.map(np.asarray, build_const_from_cyborg(cyborg)))
+            dicts.append(build_const_arrays_from_cyborg(cyborg))
 
-    return jax.tree.map(lambda *xs: jnp.stack([jnp.asarray(x) for x in xs], axis=0), *consts)
+    stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
+    return CC4Const(**stacked)
 
 
 def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     if bank_size >= _PARALLEL_THRESHOLD:
+        from jaxborg.topology_workers import _build_one_green
+
         workers = _pool_workers(bank_size)
         print(f"  Building green random bank ({bank_size} seeds, {workers} workers)...", flush=True)
         worker_fn = partial(_build_one_green, num_steps=num_steps)
@@ -600,6 +184,8 @@ def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
 
 def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     if bank_size >= _PARALLEL_THRESHOLD:
+        from jaxborg.topology_workers import _build_one_red_policy
+
         workers = _pool_workers(bank_size)
         print(f"  Building red policy bank ({bank_size} seeds, {workers} workers)...", flush=True)
         worker_fn = partial(_build_one_red_policy, num_steps=num_steps)
@@ -716,45 +302,6 @@ def get_cyborg_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Arr
         pickle.dump(np.asarray(bank), f)
     print(f"Cached red policy random bank to {cache_path}", flush=True)
     return bank
-
-
-def _fill_data_links_from_cyborg(links: np.ndarray, state, hostname_to_idx: dict) -> None:
-    """Overwrite data_links from CybORG's actual interface data_links."""
-    links[:] = False
-    for hostname, host in state.hosts.items():
-        h = hostname_to_idx[hostname]
-        for iface in host.interfaces:
-            if iface.interface_type == "wired":
-                for dl_name in iface.data_links:
-                    if dl_name in hostname_to_idx:
-                        j = hostname_to_idx[dl_name]
-                        links[h, j] = True
-                        links[j, h] = True
-
-
-def _compute_phase_boundaries(mission_phases) -> np.ndarray:
-    boundaries = np.zeros(MISSION_PHASES, dtype=np.int32)
-    cumulative = 0
-    for i, phase_len in enumerate(mission_phases):
-        boundaries[i] = cumulative
-        cumulative += phase_len
-    return boundaries
-
-
-def _compute_allowed_subnet_pairs(allowed_per_mphase) -> np.ndarray:
-    pairs = np.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
-    for phase_idx, phase_pairs in enumerate(allowed_per_mphase):
-        for src_enum, dst_enum in phase_pairs:
-            src_name = str(src_enum).split(".")[-1] if "." in str(src_enum) else str(src_enum)
-            dst_name = str(dst_enum).split(".")[-1] if "." in str(dst_enum) else str(dst_enum)
-            src_cyborg = src_name.lower() + "_subnet"
-            dst_cyborg = dst_name.lower() + "_subnet"
-            if src_cyborg in CYBORG_SUFFIX_TO_ID and dst_cyborg in CYBORG_SUFFIX_TO_ID:
-                si = CYBORG_SUFFIX_TO_ID[src_cyborg]
-                di = CYBORG_SUFFIX_TO_ID[dst_cyborg]
-                pairs[phase_idx, si, di] = True
-                pairs[phase_idx, di, si] = True
-    return pairs
 
 
 def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> CC4Const:
@@ -998,71 +545,6 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     )
 
 
-def _compute_mission_phases(steps: int) -> tuple:
-    quotient, remainder = divmod(steps, 3)
-    if remainder == 2:
-        return (quotient + 1, quotient + 1, quotient)
-    if remainder == 1:
-        return (quotient + 1, quotient, quotient)
-    return (quotient, quotient, quotient)
-
-
-def _build_phase_rewards() -> np.ndarray:
-    S = SUBNET_IDS
-    # (MISSION_PHASES, NUM_SUBNETS, 3) where columns are [LWF, ASF, RIA]
-    pr = np.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=np.float32)
-
-    # Phase 0 (Preplanning)
-    pr[0, S["RESTRICTED_ZONE_A"]] = [-1, -3, -1]
-    pr[0, S["OPERATIONAL_ZONE_A"]] = [-1, -1, -1]
-    pr[0, S["RESTRICTED_ZONE_B"]] = [-1, -3, -1]
-    pr[0, S["OPERATIONAL_ZONE_B"]] = [-1, -1, -1]
-    pr[0, S["CONTRACTOR_NETWORK"]] = [0, -5, -5]
-    pr[0, S["ADMIN_NETWORK"]] = [-1, -1, -3]
-    pr[0, S["OFFICE_NETWORK"]] = [-1, -1, -3]
-    pr[0, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
-    pr[0, S["INTERNET"]] = [0, 0, -1]
-
-    # Phase 1 (MissionA)
-    pr[1, S["RESTRICTED_ZONE_A"]] = [-2, -1, -3]
-    pr[1, S["OPERATIONAL_ZONE_A"]] = [-10, 0, -10]
-    pr[1, S["RESTRICTED_ZONE_B"]] = [-1, -1, -1]
-    pr[1, S["OPERATIONAL_ZONE_B"]] = [-1, -1, -1]
-    pr[1, S["CONTRACTOR_NETWORK"]] = [0, 0, 0]
-    pr[1, S["ADMIN_NETWORK"]] = [-1, -1, -3]
-    pr[1, S["OFFICE_NETWORK"]] = [-1, -1, -3]
-    pr[1, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
-    pr[1, S["INTERNET"]] = [0, 0, 0]
-
-    # Phase 2 (MissionB)
-    pr[2, S["RESTRICTED_ZONE_A"]] = [-1, -3, -3]
-    pr[2, S["OPERATIONAL_ZONE_A"]] = [-1, -1, -1]
-    pr[2, S["RESTRICTED_ZONE_B"]] = [-2, -1, -3]
-    pr[2, S["OPERATIONAL_ZONE_B"]] = [-10, 0, -10]
-    pr[2, S["CONTRACTOR_NETWORK"]] = [0, 0, 0]
-    pr[2, S["ADMIN_NETWORK"]] = [-1, -1, -3]
-    pr[2, S["OFFICE_NETWORK"]] = [-1, -1, -3]
-    pr[2, S["PUBLIC_ACCESS_ZONE"]] = [-1, -1, -3]
-    pr[2, S["INTERNET"]] = [0, 0, 0]
-
-    return pr
-
-
-def _build_phase_rewards_from_cyborg(cyborg_env) -> np.ndarray:
-    from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
-
-    brm = BlueRewardMachine("")
-    pr = np.zeros((MISSION_PHASES, NUM_SUBNETS, 3), dtype=np.float32)
-    for phase in range(MISSION_PHASES):
-        table = brm.get_phase_rewards(phase)
-        for cyborg_name, rewards in table.items():
-            sid = CYBORG_SUFFIX_TO_ID[cyborg_name]
-            pr[phase, sid, 0] = rewards["LWF"]
-            pr[phase, sid, 1] = rewards["ASF"]
-            pr[phase, sid, 2] = rewards["RIA"]
-    return pr
-
-
 JAX_TO_CYBORG_ORDER = np.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=np.int32)
 
 _ALPHA_SUBNET_ORDER_NP = np.array([5, 4, 6, 2, 3, 7, 0, 1, 8])
@@ -1082,28 +564,6 @@ _CYBORG_GENERATION_SUBNET_ORDER_NP = np.array(
     dtype=np.int32,
 )
 _CYBORG_GENERATION_SUBNET_ORDER = jnp.array(_CYBORG_GENERATION_SUBNET_ORDER_NP)
-
-
-def _build_green_agent_map_numpy(
-    host_active: np.ndarray,
-    host_subnet: np.ndarray,
-    host_is_user: np.ndarray,
-    num_hosts: int,
-) -> tuple[np.ndarray, np.ndarray, np.int32]:
-    green_agent_host = np.full(GLOBAL_MAX_HOSTS, -1, dtype=np.int32)
-    green_agent_active = host_active & host_is_user
-    green_count = 0
-    for sid in _CYBORG_GENERATION_SUBNET_ORDER_NP:
-        for host_idx in range(num_hosts):
-            if not host_active[host_idx]:
-                continue
-            if host_subnet[host_idx] != sid:
-                continue
-            if not host_is_user[host_idx]:
-                continue
-            green_agent_host[host_idx] = green_count
-            green_count += 1
-    return green_agent_host, green_agent_active, np.int32(green_count)
 
 
 def _build_green_agent_map_jax(
@@ -1131,151 +591,6 @@ def _build_green_agent_map_jax(
             next_idx = next_idx + valid.astype(jnp.int32)
 
     return green_agent_host, green_agent_active, next_idx
-
-
-def _build_obs_host_map(
-    host_subnet: np.ndarray,
-    host_is_server: np.ndarray,
-    host_is_user: np.ndarray,
-    host_is_router: np.ndarray,
-    host_active: np.ndarray,
-    num_hosts: int,
-) -> np.ndarray:
-    obs_map = np.full((NUM_SUBNETS, OBS_HOSTS_PER_SUBNET), GLOBAL_MAX_HOSTS, dtype=np.int32)
-    router_slot = MAX_SERVER_HOSTS + MAX_USER_HOSTS
-    for sid in range(NUM_SUBNETS):
-        servers = []
-        users = []
-        for h in range(num_hosts):
-            if not host_active[h] or host_subnet[h] != sid:
-                continue
-            if host_is_server[h]:
-                servers.append(h)
-            elif host_is_user[h]:
-                users.append(h)
-        for i, h in enumerate(servers[:MAX_SERVER_HOSTS]):
-            obs_map[sid, i] = h
-        for i, h in enumerate(users[:MAX_USER_HOSTS]):
-            obs_map[sid, MAX_SERVER_HOSTS + i] = h
-        router_hosts = sorted(
-            [h for h in range(num_hosts) if host_active[h] and host_subnet[h] == sid and host_is_router[h]]
-        )
-        if router_hosts:
-            obs_map[sid, router_slot] = router_hosts[0]
-    return obs_map
-
-
-def _build_blue_obs_subnets() -> np.ndarray:
-    result = np.full((NUM_BLUE_AGENTS, 3), -1, dtype=np.int32)
-    for agent_idx, snames in enumerate(BLUE_AGENT_SUBNETS):
-        cyborg_sorted = sorted(CYBORG_SUBNET_SUFFIX[s] for s in snames)
-        for slot, cyborg_name in enumerate(cyborg_sorted):
-            result[agent_idx, slot] = CYBORG_SUFFIX_TO_ID[cyborg_name]
-    return result
-
-
-def _build_comms_policy() -> np.ndarray:
-    S = SUBNET_IDS
-    base_hosts = [
-        "INTERNET",
-        "ADMIN_NETWORK",
-        "OFFICE_NETWORK",
-        "PUBLIC_ACCESS_ZONE",
-        "CONTRACTOR_NETWORK",
-        "RESTRICTED_ZONE_A",
-        "RESTRICTED_ZONE_B",
-    ]
-    base_ids = [S[n] for n in base_hosts]
-
-    adj = np.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
-    for phase in range(MISSION_PHASES):
-        for i_idx in range(len(base_ids)):
-            for j_idx in range(i_idx + 1, len(base_ids)):
-                adj[phase, base_ids[i_idx], base_ids[j_idx]] = True
-                adj[phase, base_ids[j_idx], base_ids[i_idx]] = True
-        adj[phase, S["RESTRICTED_ZONE_A"], S["OPERATIONAL_ZONE_A"]] = True
-        adj[phase, S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"]] = True
-        adj[phase, S["RESTRICTED_ZONE_B"], S["OPERATIONAL_ZONE_B"]] = True
-        adj[phase, S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"]] = True
-
-    remove_phase1 = [
-        (S["RESTRICTED_ZONE_A"], S["OPERATIONAL_ZONE_A"]),
-        (S["RESTRICTED_ZONE_A"], S["CONTRACTOR_NETWORK"]),
-        (S["RESTRICTED_ZONE_A"], S["RESTRICTED_ZONE_B"]),
-        (S["RESTRICTED_ZONE_A"], S["INTERNET"]),
-    ]
-    for a, b in remove_phase1:
-        adj[1, a, b] = False
-        adj[1, b, a] = False
-
-    remove_phase2 = [
-        (S["RESTRICTED_ZONE_B"], S["OPERATIONAL_ZONE_B"]),
-        (S["RESTRICTED_ZONE_B"], S["CONTRACTOR_NETWORK"]),
-        (S["RESTRICTED_ZONE_B"], S["RESTRICTED_ZONE_A"]),
-        (S["RESTRICTED_ZONE_B"], S["INTERNET"]),
-    ]
-    for a, b in remove_phase2:
-        adj[2, a, b] = False
-        adj[2, b, a] = False
-
-    return ~adj
-
-
-def _build_allowed_subnet_pairs_pure() -> np.ndarray:
-    """Build allowed_subnet_pairs matching CybORG's _set_allowed_subnets_per_mission_phase."""
-    S = SUBNET_IDS
-
-    policy_1 = [
-        (S["PUBLIC_ACCESS_ZONE"], S["CONTRACTOR_NETWORK"]),
-        (S["ADMIN_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["OFFICE_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_A"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_B"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["RESTRICTED_ZONE_A"], S["CONTRACTOR_NETWORK"]),
-        (S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"]),
-        (S["RESTRICTED_ZONE_B"], S["CONTRACTOR_NETWORK"]),
-        (S["RESTRICTED_ZONE_B"], S["RESTRICTED_ZONE_A"]),
-        (S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"]),
-    ]
-
-    policy_2 = [
-        (S["PUBLIC_ACCESS_ZONE"], S["CONTRACTOR_NETWORK"]),
-        (S["ADMIN_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["OFFICE_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_A"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_B"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["RESTRICTED_ZONE_B"], S["CONTRACTOR_NETWORK"]),
-        (S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"]),
-    ]
-
-    policy_3 = [
-        (S["PUBLIC_ACCESS_ZONE"], S["CONTRACTOR_NETWORK"]),
-        (S["ADMIN_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["OFFICE_NETWORK"], S["CONTRACTOR_NETWORK"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_A"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_A"]),
-        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_B"]),
-        (S["ADMIN_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["OFFICE_NETWORK"], S["RESTRICTED_ZONE_B"]),
-        (S["RESTRICTED_ZONE_A"], S["CONTRACTOR_NETWORK"]),
-        (S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"]),
-    ]
-
-    pairs = np.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
-    for phase_idx, policy in enumerate([policy_1, policy_2, policy_3]):
-        for si, di in policy:
-            pairs[phase_idx, si, di] = True
-            pairs[phase_idx, di, si] = True
-    return pairs
 
 
 def _build_blue_agent_subnets_bool():

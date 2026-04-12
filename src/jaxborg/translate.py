@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from jaxborg.actions.encoding import (
+from jaxborg.actions.action_defs import (
     BLUE_ALLOW_TRAFFIC_END,
     BLUE_ALLOW_TRAFFIC_START,
     BLUE_ANALYSE_END,
@@ -53,8 +53,13 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
-from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, GLOBAL_MAX_HOSTS, OBS_VECTOR_HOSTS_PER_SUBNET
-from jaxborg.topology import CYBORG_SUBNET_SUFFIX, CYBORG_SUFFIX_TO_ID
+from jaxborg.constants import (
+    BLUE_MAX_OBSERVED_SUBNETS,
+    CYBORG_SUBNET_SUFFIX,
+    CYBORG_SUFFIX_TO_ID,
+    GLOBAL_MAX_HOSTS,
+    OBS_VECTOR_HOSTS_PER_SUBNET,
+)
 
 
 @dataclass
