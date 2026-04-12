@@ -314,7 +314,7 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     Host indices follow alphabetical hostname ordering (same as build_const_from_cyborg):
     subnets ordered by CYBORG_SUBNET_SUFFIX, within each subnet: router < servers < users.
     """
-    k_counts, k_services, k_red = jax.random.split(key, 3)
+    k_counts, k_services, k_red, k_pids = jax.random.split(key, 4)
     k_users, k_servers = jax.random.split(k_counts)
 
     n_users = jax.random.randint(k_users, (8,), 3, 11)
@@ -341,7 +341,6 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     host_respond_to_ping = host_is_server | host_is_user
     host_has_bruteforceable_user = host_is_server | host_is_user
     host_has_rfi = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
-    host_initial_max_pid = jnp.where(host_is_server | host_is_user, 5000, 0).astype(jnp.int32)
 
     svc_host = host_is_server | host_is_user
     is_operational = (host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_A"]) | (
@@ -365,6 +364,14 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     initial_services = initial_services.at[:, SERVICE_IDS["SMTP"]].set(
         initial_services[:, SERVICE_IDS["SMTP"]] | addon_selected[:, 2]
     )
+
+    # Randomize initial max PID per host to match CybORG's _generate_pid().
+    # CybORG samples each service process PID from randint(1000, 10000);
+    # host_initial_max_pid = max over those draws.  Routers/internet have
+    # no service processes so remain 0.
+    pid_samples = jax.random.randint(k_pids, (GLOBAL_MAX_HOSTS, NUM_SERVICES), 1000, 10000)
+    masked_pids = jnp.where(initial_services, pid_samples, jnp.int32(0))
+    host_initial_max_pid = jnp.max(masked_pids, axis=1).astype(jnp.int32)
 
     subnet_router_idx = jnp.full(NUM_SUBNETS, -1, dtype=jnp.int32)
     for alpha_i in range(9):
