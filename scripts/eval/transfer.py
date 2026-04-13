@@ -1554,7 +1554,7 @@ def main():
     parser = argparse.ArgumentParser(description="Evaluate JAXborg-trained policy: rollout, transfer, baselines")
     parser.add_argument("--checkpoint", required=True, help="Path to checkpoint_final.pkl")
     parser.add_argument("--episodes", type=int, default=10, help="Rollout episodes (default 10)")
-    parser.add_argument("--stochastic", action="store_true", help="Sample from policy instead of argmax")
+    parser.add_argument("--deterministic", action="store_true", help="Use argmax instead of sampling from policy")
     parser.add_argument(
         "--matched",
         action="store_true",
@@ -1589,7 +1589,7 @@ def main():
     )
     args = parser.parse_args()
 
-    deterministic = not args.stochastic
+    deterministic = args.deterministic
 
     print(f"Loading checkpoint: {args.checkpoint}")
     policy, params, policy_kind = load_checkpoint(args.checkpoint)

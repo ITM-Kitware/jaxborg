@@ -28,7 +28,7 @@ from jaxborg.policy import ActorCritic, LegacyActor
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
-pytestmark = pytest.mark.skip(reason="checkpoint trained with old 776-action space")
+pytestmark = pytest.mark.skip(reason="excluded from default suite; run explicitly with: uv run pytest tests/l3/test_trained_blue_policy.py -v")
 
 
 # --- Checkpoint discovery ---

@@ -11,12 +11,12 @@ CybORG CC4 is a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 bl
 
 ### Speed
 
-| Engine  | Parallelism                  | Steps/sec | 50M wall time |
+| Engine  | Parallelism                  | Steps/sec | 20M wall time |
 | ------- | ---------------------------- | --------- | ------------- |
-| CybORG  | 48 CPU processes             | 332       | 41.8 h        |
-| jaxborg | 1,024 vectorized envs on GPU | 2,645     | 5.4 h         |
+| CybORG  | 48 CPU processes             | 332       | 16.7 h        |
+| jaxborg | 1,024 vectorized envs on GPU | 2,512     | 2.2 h         |
 
-**8x throughput**, **~8x wall-time** on a single NVIDIA RTX A6000. jaxborg's entire training loop (rollout + GAE + PPO update) compiles to one XLA program; first-run compile takes ~7 min (cached thereafter).
+**~7.5x throughput**, **~7.5x wall-time** on a single NVIDIA RTX A6000. jaxborg's entire training loop (rollout + GAE + PPO update) compiles to one XLA program; first-run compile takes ~7 min (cached thereafter).
 
 ### Parity
 
@@ -24,39 +24,35 @@ CybORG CC4 is a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 bl
 
 We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-sided t-test) equivalence procedure from [Karten et al. (2026)](https://arxiv.org/abs/2603.12145): run the same trained policy independently on both engines and test whether mean reward difference falls within ±Δ with 95% confidence.
 
-100 episodes, stochastic, 95% confidence, Δ=±200:
+Stochastic, 95% confidence, Δ=±200:
 
-| Policy            | jaxborg | CybORG | Gap | 95% CI     | Verdict        |
-| ----------------- | ------: | -----: | --: | ---------- | -------------- |
-| IPPO 50M (seed 0) |    -510 |   -595 | +85 | [+6, +165] | **EQUIVALENT** |
-| IPPO 50M (seed 1) |    -549 |   -576 | +27 | [-16, +69] | **EQUIVALENT** |
+| Policy          | Episodes | jaxborg | CybORG |  Gap | 95% CI       | Verdict        |
+| --------------- | -------: | ------: | -----: | ---: | ------------ | -------------- |
+| IPPO 20M (pure) |       30 |  -1,280 |   -977 | -303 | [-476, -130] | NOT EQUIVALENT |
 
 #### Training Comparison
 
-| Run                       |   Reward | Steps |
-| ------------------------- | -------: | ----- |
-| CybORG PPO                |   -1,658 | 20M   |
-| jaxborg (shared trunk)    |   -1,373 | 25.6M |
-| jaxborg (separate trunks) | **-225** | 50M   |
-
-Matching jaxborg's training config to CybORG's (shared trunk, global grad clip, no busy masking) produces a similar reward plateau (-1,373 vs -1,658). The remaining gap is likely due to unmatched architecture and hyperparameter differences (see [Network Architecture](#network-architecture)). With separate actor and critic trunks and per-head grad clipping, jaxborg reaches -225.
+| Run          | Reward | Steps |
+| ------------ | -----: | ----- |
+| CybORG PPO   | -1,641 | 20M   |
+| jaxborg IPPO | -1,302 | 20M   |
 
 #### Action Distribution
 
 Both engines produce the same learned defensive strategy (decision steps only, filtering out busy ticks):
 
-| Action       | jaxborg (shared trunk) | CybORG |
-| ------------ | ---------------------: | -----: |
-| Analyse      |                  24.9% |  21.0% |
-| Remove       |                  28.9% |  23.3% |
-| Decoy        |                  27.0% |  21.9% |
-| Restore      |                  13.1% |   7.2% |
-| BlockTraffic |                   1.5% |   8.5% |
-| AllowTraffic |                   1.1% |  13.8% |
-| Sleep        |                   2.0% |   2.3% |
-| Monitor      |                   1.4% |   2.0% |
+| Action       | jaxborg | CybORG |
+| ------------ | ------: | -----: |
+| Analyse      |   26.5% |  24.7% |
+| Remove       |   23.3% |  21.8% |
+| Decoy        |   30.0% |  22.8% |
+| Restore      |    9.8% |   7.6% |
+| BlockTraffic |    3.2% |   4.0% |
+| AllowTraffic |    0.7% |  12.8% |
+| Sleep        |    2.5% |   2.4% |
+| Monitor      |    4.0% |   3.9% |
 
-Both policies learned balanced Analyse/Remove/Decoy (~21–29%) with minimal Sleep. The main divergence is traffic control: CybORG's dedicated agent-4 network specializes on Block/AllowTraffic (22% combined vs 2.6% in jaxborg), where jaxborg's single shared network cannot.
+Both policies learned balanced Analyse/Remove/Decoy (~22–30%) with minimal Sleep. The main divergence is AllowTraffic (12.8% CybORG vs 0.7% jaxborg).
 
 ## Setup
 
@@ -72,29 +68,32 @@ uv sync --group cuda         # GPU support (training)
 uv run pytest tests/ -v -n auto
 
 # Train jaxborg IPPO
-uv run python scripts/train/ippo_jax.py total_timesteps=50000000
+uv run python scripts/train/ippo_jax.py TOTAL_TIMESTEPS=50000000
 
 # Evaluate a trained policy (independent rollouts on both engines + TOST)
 JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
     --checkpoint jaxborg-exp/<run>/checkpoint_final.pkl \
-    --episodes 100 --stochastic
+    --episodes 100
 
 # Train CybORG PPO baseline (CPU-only, CleanRL)
 JAX_PLATFORMS=cpu uv run python scripts/train/ppo_cleanrl_cyborg.py \
-    --num-envs 48 --total-timesteps 20000000 --lr 3e-4 --gamma 0.99 \
-    --num-epochs 4 --ent-coef 0.01 --no-anneal-lr
+    --total-timesteps 20000000 --num-epochs 4 --num-minibatches 16 \
+    --no-anneal-lr
 ```
 
 Training output goes to `../jaxborg-exp/`.
 
 ## Network Architecture
 
-jaxborg and CybORG use different network architectures for IPPO/PPO, which accounts for the training performance gap (not the environment):
+Both engines use the same network architecture — a single shared-trunk actor-critic for all 5 blue agents:
 
-|                  | jaxborg IPPO                  | CybORG CleanRL PPO                             |
-| ---------------- | ----------------------------- | ---------------------------------------------- |
-| **Networks**     | 1 shared across all 5 agents  | 2 (agents 0–3 share one, agent 4 gets its own) |
-| **Obs dim**      | 210 for all agents            | 92 (agents 0–3), 210 (agent 4)                 |
-| **Action dim**   | 260 for all agents            | 82 (agents 0–3), 242 (agent 4)                 |
-| **Architecture** | Separate actor + critic heads | Shared trunk, split at final layer             |
-| **Params**       | ~530K                         | ~320K                                          |
+|                  | jaxborg IPPO (Flax/JAX)      | CybORG CleanRL PPO (PyTorch) |
+| ---------------- | ---------------------------- | ---------------------------- |
+| **Policy**       | 1 shared across all 5 agents | 1 shared across all 5 agents |
+| **Obs dim**      | 210                          | 210                          |
+| **Action dim**   | 242                          | 242                          |
+| **Architecture** | Shared trunk [256, 256] tanh | Shared trunk [256, 256] tanh |
+| **Heads**        | Single-layer actor + critic  | Single-layer actor + critic  |
+| **Params**       | ~182K                        | ~182K                        |
+
+Agents 0-3 each observe one subnet; agent 4 observes three (the full 210-dim vector). Agents 0-3 are zero-padded to 210 obs / 242 actions, with action masking to prevent invalid actions.

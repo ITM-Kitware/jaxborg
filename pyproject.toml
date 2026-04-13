@@ -47,7 +47,7 @@ sb3 = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-n auto"
+addopts = "-n auto --ignore=tests/l3/test_trained_blue_policy.py"
 markers = [
     "slow: integration/smoke tests that don't need to run after every core logic change",
 ]
