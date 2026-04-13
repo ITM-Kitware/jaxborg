@@ -88,6 +88,11 @@ def apply_all_actions_in_order(
         blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
     green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
 
+    # CybORG calls get_action() for ALL agents before any execute().
+    # Snapshot creation-time parameters from pre-execution state so red
+    # exploit actions see the same N that CybORG's get_action() would.
+    pre_execution_visible_sessions = state.red_server_session_count
+
     def step_actor(step_idx, carry_state):
         actor_slot = execution_order[step_idx]
         blue_id = jnp.clip(actor_slot, 0, NUM_BLUE_AGENTS - 1)
@@ -112,6 +117,7 @@ def apply_all_actions_in_order(
                     forced_primary_host=forced_primary_hosts[red_id],
                     forced_primary_pid=forced_primary_pids[red_id],
                     run_session_check=False,
+                    creation_visible_sessions_override=pre_execution_visible_sessions[red_id],
                 ),
                 s,
             ),
@@ -194,6 +200,15 @@ def apply_all_actions_typed(
     # --- Phase 2: Green agents ---
     # Use vmapped green in pure/training mode (faster, training-correct).
     # Fall back to sequential fori_loop for cyborg_bank mode (exact parity).
+
+    # CybORG's FSM calls get_action() for ALL agents BEFORE any execute().
+    # server_session (used for exploit 1/N roll) therefore reflects the
+    # previous step's observation — it does NOT include phishing sessions
+    # created in the current step.  Snapshot the pre-green count and pass
+    # it to the red phase so exploit creation-time N matches CybORG's
+    # get_action() timing.
+    pre_green_visible_sessions = state.red_server_session_count
+
     if use_green_vmap:
         from jaxborg.actions.green_vmap import apply_green_agents_vmapped
 
@@ -223,6 +238,7 @@ def apply_all_actions_typed(
             forced_primary_host=forced_primary_hosts[r],
             forced_primary_pid=forced_primary_pids[r],
             run_session_check=False,
+            creation_visible_sessions_override=pre_green_visible_sessions[r],
         )
 
     state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)

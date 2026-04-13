@@ -72,7 +72,7 @@ class CC4Const:
     use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
     red_pid_deltas: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed Host.create_pid deltas
     use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS, NUM_DECOY_TYPES) int32 — precomputed blue decoy pid deltas
+    blue_decoy_pid_deltas: chex.Array  # (MAX_STEPS, NUM_BLUE_AGENTS, NUM_DECOY_TYPES) int32
     use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
     red_privesc_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed privesc session choice index
     use_red_privesc_choices: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG

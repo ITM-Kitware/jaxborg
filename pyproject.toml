@@ -47,7 +47,7 @@ sb3 = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = ""
+addopts = "-n auto"
 markers = [
     "slow: integration/smoke tests that don't need to run after every core logic change",
 ]
