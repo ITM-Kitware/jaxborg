@@ -426,7 +426,7 @@ class TestGreenSourceSelection:
                 break
 
         if target_host is None:
-            pytest.skip("Need a subnet with at least two users and one server")
+            pytest.fail("Need a subnet with at least two users and one server")
 
         state = jax_state.replace(
             red_sessions=jax_state.red_sessions.at[0, user_source].set(True).at[1, server_source].set(True),

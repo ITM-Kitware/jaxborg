@@ -155,7 +155,7 @@ class TestApplyScan:
                 undiscovered = h
                 break
         if undiscovered is None:
-            pytest.skip("All hosts discovered")
+            pytest.fail("All hosts discovered")
 
         action_idx = encode_red_action("DiscoverNetworkServices", undiscovered, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -1012,7 +1012,7 @@ class TestDeferredScanSessionBinding:
             choice = (red_agent_id, restorable_hosts[0], restorable_hosts[1], target_candidates[0])
             break
         if choice is None:
-            pytest.skip("Need a subnet with source/anchor/target hosts")
+            pytest.fail("Need a subnet with source/anchor/target hosts")
         red_agent_id, source_host, anchor_host, target_host = choice
         red_agent_name = f"red_agent_{red_agent_id}"
 

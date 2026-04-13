@@ -108,7 +108,7 @@ def _find_non_ot_host(jax_const):
 def ot_host_privileged(jax_const):
     target = _find_ot_host(jax_const)
     if target is None:
-        pytest.skip("No OT host found")
+        pytest.fail("No OT host found")
     return _setup_privileged_state(jax_const, target), target
 
 
@@ -116,7 +116,7 @@ def ot_host_privileged(jax_const):
 def non_ot_host_privileged(jax_const):
     target = _find_non_ot_host(jax_const)
     if target is None:
-        pytest.skip("No non-OT host found")
+        pytest.fail("No non-OT host found")
     return _setup_privileged_state(jax_const, target), target
 
 
@@ -162,7 +162,7 @@ class TestApplyImpact:
     def test_impact_fails_without_privileged_access(self, jax_const):
         target = _find_ot_host(jax_const)
         if target is None:
-            pytest.skip("No OT host found")
+            pytest.fail("No OT host found")
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -185,7 +185,7 @@ class TestApplyImpact:
     def test_impact_fails_without_session(self, jax_const):
         target = _find_ot_host(jax_const)
         if target is None:
-            pytest.skip("No OT host found")
+            pytest.fail("No OT host found")
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -513,7 +513,7 @@ class TestDifferentialWithCybORG:
 
         target_h = self._find_non_ot_host_idx(const)
         if target_h is None:
-            pytest.skip("No non-OT host found")
+            pytest.fail("No non-OT host found")
 
         state, target_hostname = self._inject_privileged_session(cyborg_env, const, state, target_h)
 
@@ -610,7 +610,7 @@ class TestImpactRequiresOperational:
                 non_operational = h
                 break
         if non_operational is None:
-            pytest.skip("No non-operational host found")
+            pytest.fail("No non-operational host found")
 
         state = state.replace(
             red_sessions=state.red_sessions.at[0, non_operational].set(True),

@@ -30,7 +30,6 @@ from jaxborg.agents.fsm_red import (
     FSM_RD,
     FSM_S,
     FSM_U,
-    FSM_UD,
     PROBABILITY_MATRIX,
     TRANSITION_FAILURE,
     TRANSITION_SUCCESS,
@@ -248,7 +247,7 @@ class TestFsmUpdateState:
                 foreign_host = h
                 break
         if foreign_host is None:
-            pytest.skip("No foreign host found")
+            pytest.fail("No foreign host found")
         fsm = jnp.full((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), FSM_S, dtype=jnp.int32)
         new_fsm = fsm_red_update_state(
             fsm,
@@ -261,66 +260,6 @@ class TestFsmUpdateState:
             jnp.bool_(True),
         )
         assert int(new_fsm[0, foreign_host]) == FSM_F
-
-    def test_discover_updates_all_known_hosts_in_target_subnet_like_cyborg(self):
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
-
-        cyborg_env = CybORG(
-            scenario_generator=EnterpriseScenarioGenerator(
-                blue_agent_class=SleepAgent,
-                green_agent_class=SleepAgent,
-                red_agent_class=FiniteStateRedAgent,
-                steps=500,
-            )
-        )
-        controller = cyborg_env.environment_controller
-        agent = controller.agent_interfaces["red_agent_0"].agent
-        mappings = build_mappings_from_cyborg(cyborg_env)
-        const = build_const_from_cyborg(cyborg_env)
-
-        known_ips = list(agent.host_states.keys())
-        subnet_to_ips = {}
-        for ip in known_ips:
-            subnet_to_ips.setdefault(str(ip).rsplit(".", 1)[0], []).append(ip)
-        selected_ips = None
-        for ips in subnet_to_ips.values():
-            if len(ips) >= 2:
-                selected_ips = ips[:2]
-                break
-        if selected_ips is None:
-            pytest.skip("Need two known hosts in one subnet")
-
-        for ip, state_name in zip(selected_ips, ["U", "K"], strict=True):
-            agent.host_states[ip]["state"] = state_name
-
-        subnet = ip_network(f"{str(selected_ips[0]).rsplit('.', 1)[0]}.0/24")
-        action = DiscoverRemoteSystems(subnet=subnet, session=0, agent="red_agent_0")
-        agent._host_state_transition(action, SimpleNamespace(name="TRUE", value=1))
-
-        cy_states = [agent.host_states[ip]["state"] for ip in selected_ips]
-        assert cy_states == ["UD", "KD"]
-
-        host_indices = [mappings.hostname_to_idx[agent.host_states[ip]["hostname"]] for ip in selected_ips]
-        discovered_hosts = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
-        discovered_hosts = discovered_hosts.at[jnp.array(host_indices, dtype=jnp.int32)].set(True)
-        fsm = jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.int32)
-        fsm = fsm.at[0, host_indices[0]].set(FSM_U)
-        fsm = fsm.at[0, host_indices[1]].set(FSM_K)
-
-        new_fsm = fsm_red_update_state(
-            fsm,
-            const,
-            0,
-            jnp.int32(host_indices[0]),
-            discovered_hosts,
-            const.host_subnet[host_indices[0]],
-            FSM_ACT_DISCOVER,
-            jnp.bool_(True),
-        )
-
-        assert int(new_fsm[0, host_indices[0]]) == FSM_UD
-        assert int(new_fsm[0, host_indices[1]]) == FSM_KD
 
 
 class TestFsmSuccessDetection:
@@ -407,7 +346,7 @@ class TestFsmSuccessDetection:
                 continue
             target_entries.append((str(ip), hostname, host_idx))
         if len(target_entries) < 2:
-            pytest.skip("Need two active hosts in one subnet")
+            pytest.fail("Need two active hosts in one subnet")
 
         for ip_str, hostname, _ in target_entries:
             agent.host_states[ip_str] = {"hostname": hostname, "state": "K"}

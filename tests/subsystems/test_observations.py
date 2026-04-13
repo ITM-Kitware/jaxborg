@@ -180,7 +180,7 @@ class TestHostEvents:
         sid = int(jax_const.blue_obs_subnets[0, 0])
         host_idx = int(jax_const.obs_host_map[sid, 0])
         if host_idx >= GLOBAL_MAX_HOSTS:
-            pytest.skip("no active server host in first slot")
+            pytest.fail("no active server host in first slot")
 
         exploit = jax_state.host_exploit_detected.at[host_idx].set(True)
         state = jax_state.replace(host_exploit_detected=exploit)
@@ -194,7 +194,7 @@ class TestHostEvents:
         sid = int(jax_const.blue_obs_subnets[0, 0])
         host_idx = int(jax_const.obs_host_map[sid, 0])
         if host_idx >= GLOBAL_MAX_HOSTS:
-            pytest.skip("no active server host in first slot")
+            pytest.fail("no active server host in first slot")
 
         detected = jax_state.host_activity_detected.at[host_idx].set(True)
         state = jax_state.replace(host_activity_detected=detected)

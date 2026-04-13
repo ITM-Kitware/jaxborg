@@ -84,7 +84,7 @@ def _find_exploitable_host(jax_const, exclude_start=True):
 def exploited_host(jax_const):
     target = _find_exploitable_host(jax_const)
     if target is None:
-        pytest.skip("No exploitable host found")
+        pytest.fail("No exploitable host found")
     return _setup_exploited_state(jax_const, target), target
 
 
@@ -129,7 +129,7 @@ class TestApplyPrivesc:
     def test_privesc_fails_without_session(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
-            pytest.skip("No exploitable host found")
+            pytest.fail("No exploitable host found")
 
         state = create_initial_state()
         state = state.replace(host_services=jnp.array(jax_const.initial_services))
@@ -161,12 +161,12 @@ class TestApplyPrivesc:
     def test_privesc_discovers_host_info_links_on_success(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
-            pytest.skip("No exploitable host found")
+            pytest.fail("No exploitable host found")
 
         nh = int(jax_const.num_hosts)
         linked_host = next((h for h in range(nh) if h != target and jax_const.host_active[h]), None)
         if linked_host is None:
-            pytest.skip("No linked host candidate found")
+            pytest.fail("No linked host candidate found")
 
         host_info_links = jnp.zeros_like(jax_const.host_info_links).at[target, linked_host].set(True)
         const = jax_const.replace(host_info_links=host_info_links)
@@ -180,12 +180,12 @@ class TestApplyPrivesc:
     def test_privesc_sets_fsm_host_entered_for_info_links(self, jax_const):
         target = _find_exploitable_host(jax_const)
         if target is None:
-            pytest.skip("No exploitable host found")
+            pytest.fail("No exploitable host found")
 
         nh = int(jax_const.num_hosts)
         linked_host = next((h for h in range(nh) if h != target and jax_const.host_active[h]), None)
         if linked_host is None:
-            pytest.skip("No linked host candidate found")
+            pytest.fail("No linked host candidate found")
 
         host_info_links = jnp.zeros_like(jax_const.host_info_links).at[target, linked_host].set(True)
         const = jax_const.replace(host_info_links=host_info_links)
@@ -420,7 +420,7 @@ class TestDifferentialWithCybORG:
 
         linked_host_idxs = np.where(np.array(const.host_info_links[target_h]))[0].tolist()
         if not linked_host_idxs:
-            pytest.skip("Target host has no info-link hosts")
+            pytest.fail("Target host has no info-link hosts")
 
         action_space = cyborg_env.environment_controller.agent_interfaces["red_agent_0"].action_space
         known_before = {
@@ -432,7 +432,7 @@ class TestDifferentialWithCybORG:
 
         unseen_linked = [h for h in linked_host_idxs if h not in known_before and h not in jax_known_before]
         if not unseen_linked:
-            pytest.skip("No unseen info-link host available for differential assertion")
+            pytest.fail("No unseen info-link host available for differential assertion")
 
         privesc_action = PrivilegeEscalate(hostname=target_hostname, session=0, agent="red_agent_0")
         privesc_action.duration = 1
@@ -632,7 +632,7 @@ class TestDifferentialWithCybORG:
             and int(const.host_subnet[h]) == subnet_id
         ]
         if len(subnet_hosts) < 3:
-            pytest.skip("Need three hosts in source subnet")
+            pytest.fail("Need three hosts in source subnet")
         source_host = next(h for h in subnet_hosts if h != start_host)
         target_host = next(
             h

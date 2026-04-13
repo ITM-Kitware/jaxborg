@@ -189,7 +189,7 @@ class TestComputeRewards:
                 oa_host = h
                 break
         if oa_host is None:
-            pytest.skip("No operational_zone_a host found")
+            pytest.fail("No operational_zone_a host found")
 
         impact = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_).at[oa_host].set(True)
 

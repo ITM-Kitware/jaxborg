@@ -110,7 +110,7 @@ class TestApplyAggressiveScan:
                 undiscovered = h
                 break
         if undiscovered is None:
-            pytest.skip("All hosts discovered")
+            pytest.fail("All hosts discovered")
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", undiscovered, 0)
         new_state = _jit_apply_red(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
@@ -308,7 +308,7 @@ class TestApplyDiscoverDeception:
                 blue_agent_id = int(blue_agent.split("_")[-1])
                 break
         if target is None or target_hostname is None or blue_agent_id is None:
-            pytest.skip("Need a cross-subnet blue host that accepts Tomcat decoy")
+            pytest.fail("Need a cross-subnet blue host that accepts Tomcat decoy")
 
         target_subnet_name = cyborg_state.hostname_subnet_map[target_hostname].value
         start_subnet_name = cyborg_state.hostname_subnet_map[start_hostname].value
@@ -583,7 +583,7 @@ class TestDifferentialWithCybORG:
         active_service_sids = set(np.where(np.array(const.initial_services[target]))[0].tolist())
         inactive_service_sid = next((sid for sid in SERVICE_IDS.values() if sid not in active_service_sids), None)
         if inactive_service_sid is None:
-            pytest.skip("No inactive service slot available for this host")
+            pytest.fail("No inactive service slot available for this host")
 
         degrade_action = DegradeServices(hostname=target_hostname, session=0, agent="red_agent_0")
         degrade_action.duration = 1
@@ -624,7 +624,7 @@ class TestDifferentialWithCybORG:
                 blue_agent_id = int(blue_agent.split("_")[-1])
                 break
         if target_hostname is None:
-            pytest.skip("No blue host accepted a Tomcat decoy")
+            pytest.fail("No blue host accepted a Tomcat decoy")
 
         target = sorted_hosts.index(target_hostname)
         state = apply_blue_decoy(state, const, blue_agent_id, target, DECOY_IDS["Tomcat"])

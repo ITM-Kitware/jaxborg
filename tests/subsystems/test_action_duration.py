@@ -294,7 +294,7 @@ class TestSessionBindingFollowsUpdatedAnchor:
                 host_b = h
                 break
         if host_b < 0:
-            pytest.skip("Need at least 2 hosts in subnet for this test")
+            pytest.fail("Need at least 2 hosts in subnet for this test")
 
         # Find target to scan in the same subnet
         target_host = -1
@@ -308,7 +308,7 @@ class TestSessionBindingFollowsUpdatedAnchor:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("No scan target in same subnet")
+            pytest.fail("No scan target in same subnet")
 
         # Set up initial state with host_a as the abstract anchor session
         pid_a = jnp.int32(100)
@@ -431,7 +431,7 @@ class TestDiscoverDeceptionFailsAfterSessionDestroyed:
                 host_b = h
                 break
         if host_b < 0:
-            pytest.skip("Need at least 2 hosts in subnet")
+            pytest.fail("Need at least 2 hosts in subnet")
 
         # Find host_c: target for DiscoverDeception
         host_c = -1
@@ -440,7 +440,7 @@ class TestDiscoverDeceptionFailsAfterSessionDestroyed:
                 host_c = h
                 break
         if host_c < 0:
-            pytest.skip("Need a third host for deception target")
+            pytest.fail("Need a third host for deception target")
 
         # Set up: agent has sessions on host_a (anchor) and host_b (fallback)
         state = state.replace(
@@ -539,7 +539,7 @@ class TestScanFailsWhenSession0NotAbstract:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("No scan target in same subnet")
+            pytest.fail("No scan target in same subnet")
 
         # Set up: host_a has sessions, abstract flag True, but primary is NOT abstract
         state = state.replace(
@@ -600,7 +600,7 @@ class TestScanFailsWhenSession0Missing:
                 source_host = h
                 break
         if source_host < 0:
-            pytest.skip("No host covered by blue_agent_0")
+            pytest.fail("No host covered by blue_agent_0")
         target_subnet = int(const.host_subnet[source_host])
 
         target_host = -1
@@ -609,7 +609,7 @@ class TestScanFailsWhenSession0Missing:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("No scan target in same subnet")
+            pytest.fail("No scan target in same subnet")
 
         state = state.replace(
             red_sessions=state.red_sessions.at[agent_id, source_host].set(True),
@@ -663,7 +663,7 @@ class TestScanFailsWhenRemoveKillsPrimarySession:
                 source_host = h
                 break
         if source_host < 0:
-            pytest.skip("No host covered by blue_agent_0")
+            pytest.fail("No host covered by blue_agent_0")
         target_subnet = int(const.host_subnet[source_host])
 
         target_host = -1
@@ -672,7 +672,7 @@ class TestScanFailsWhenRemoveKillsPrimarySession:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("No scan target in same subnet")
+            pytest.fail("No scan target in same subnet")
 
         primary_pid = jnp.int32(101)
         other_pid = jnp.int32(202)
@@ -742,7 +742,7 @@ class TestExploitFailsWhenRemoveKillsPrimarySession:
                 source_host = h
                 break
         if source_host < 0:
-            pytest.skip("No host covered by blue_agent_0")
+            pytest.fail("No host covered by blue_agent_0")
         target_subnet = int(const.host_subnet[source_host])
 
         ssh_idx = SERVICE_IDS["SSHD"]
@@ -759,7 +759,7 @@ class TestExploitFailsWhenRemoveKillsPrimarySession:
             target_host = h
             break
         if target_host < 0:
-            pytest.skip("No same-subnet SSH target with a bruteforceable user")
+            pytest.fail("No same-subnet SSH target with a bruteforceable user")
 
         primary_pid = jnp.int32(101)
         other_pid = jnp.int32(202)
@@ -844,7 +844,7 @@ class TestSessionBindingToleratesPrimaryPidRowLag:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("Need a same-subnet scan target")
+            pytest.fail("Need a same-subnet scan target")
 
         primary_pid = jnp.int32(101)
         stale_pid_a = jnp.int32(201)
@@ -916,7 +916,7 @@ class TestSessionCheckToleratesPrimaryPidRowLag:
                 target_host = h
                 break
         if target_host < 0:
-            pytest.skip("Need a same-subnet scan target")
+            pytest.fail("Need a same-subnet scan target")
 
         primary_pid = jnp.int32(101)
         stale_pid_a = jnp.int32(201)
@@ -1027,7 +1027,7 @@ class TestReassignmentSetsPrimaryPidForNewlyActiveAgents:
         agent_1_subnet_hosts = jnp.where(const.red_agent_subnets[1, const.host_subnet], size=GLOBAL_MAX_HOSTS)[0]
         target_host = int(agent_1_subnet_hosts[0])
         if not bool(const.host_active[target_host]):
-            pytest.skip("No active host in agent 1's subnet")
+            pytest.fail("No active host in agent 1's subnet")
 
         test_pid = jnp.int32(5000)
         state = state.replace(

@@ -57,7 +57,7 @@ def test_apply_all_actions_in_order_changes_green_access_outcome_when_block_move
             break
 
     if chosen is None:
-        pytest.skip("Need a green-access route whose destination subnet can be blocked by a blue agent")
+        pytest.fail("Need a green-access route whose destination subnet can be blocked by a blue agent")
 
     blue_id, source_host, dest_host, src_sid, dst_sid = chosen
 

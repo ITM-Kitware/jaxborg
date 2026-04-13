@@ -343,7 +343,7 @@ class TestDifferentialWithCybORG:
                 target_cidr = subnet_cidr
                 break
         if target_subnet_name is None or target_subnet is None:
-            pytest.skip("Need a non-operational target subnet with a pingable host")
+            pytest.fail("Need a non-operational target subnet with a pingable host")
 
         block_obs = BlockTrafficZone(
             session=0,

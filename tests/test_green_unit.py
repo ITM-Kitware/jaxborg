@@ -63,7 +63,7 @@ class TestPrecomputedFP:
         }
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
-            pytest.skip("Host has no services")
+            pytest.fail("Host has no services")
         const = _make_precomputed_const(jax_state, jax_const, overrides)
         result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         # GreenLocalWork FP creates process_creation events (host_exploit_detected)
@@ -79,7 +79,7 @@ class TestPrecomputedFP:
         }
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
-            pytest.skip("Host has no services")
+            pytest.fail("Host has no services")
         const = _make_precomputed_const(jax_state, jax_const, overrides)
         result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         assert not result.host_activity_detected[h]
@@ -100,14 +100,14 @@ class TestPrecomputedPhishing:
         }
         has_service = bool(jnp.any(state.host_services[h]))
         if not has_service:
-            pytest.skip("Host has no services")
+            pytest.fail("Host has no services")
         const = _make_precomputed_const(state, jax_const, overrides)
         result = apply_green_agents(state, const, jax.random.PRNGKey(0))
         new_sessions = np.array(result.red_sessions) & ~np.array(jax_state.red_sessions)
         if np.any(new_sessions[:, h]):
             assert True
         else:
-            pytest.skip("Phishing red agent not reachable from this host")
+            pytest.fail("Phishing red agent not reachable from this host")
 
     def test_phishing_does_not_trigger_when_roll_above_threshold(self, jax_const, jax_state):
         h = _first_active_green_host(jax_const)
@@ -127,7 +127,7 @@ class TestPrecomputedReliability:
         h = _first_active_green_host(jax_const)
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
-            pytest.skip("Host has no services")
+            pytest.fail("Host has no services")
         degraded_reliability = jax_state.host_service_reliability.at[h].set(jnp.full(NUM_SERVICES, 50, dtype=jnp.int32))
         state = jax_state.replace(host_service_reliability=degraded_reliability)
         overrides = {
@@ -148,7 +148,7 @@ class TestPrecomputedReliability:
         }
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
-            pytest.skip("Host has no services")
+            pytest.fail("Host has no services")
         const = _make_precomputed_const(jax_state, jax_const, overrides)
         result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
         assert not result.green_lwf_this_step[h]
