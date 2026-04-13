@@ -42,6 +42,7 @@ def process_red_with_duration(
     forced_primary_pid: jnp.int32 = UNKNOWN_PRIMARY_PID,
     *,
     run_session_check: bool = True,
+    creation_visible_sessions_override: jnp.int32 | None = None,
 ) -> CC4State:
     is_busy = state.red_pending_ticks[agent_id] > 0
 
@@ -221,7 +222,14 @@ def process_red_with_duration(
     # Snapshot visible_sessions at creation time for the exploit 1/N roll.
     # CybORG's FSM picks from server_session which accumulates unique session
     # IDs monotonically — use the cumulative counter that mirrors this.
-    creation_visible_sessions = state.red_server_session_count[agent_id]
+    # When an override is provided, use it — this lets the caller snapshot
+    # the count before the green phase, matching CybORG's get_action() timing
+    # where server_session reflects the previous step's observation.
+    creation_visible_sessions = (
+        creation_visible_sessions_override
+        if creation_visible_sessions_override is not None
+        else state.red_server_session_count[agent_id]
+    )
     pending_visible_sessions = jnp.where(
         is_busy, state.red_pending_visible_sessions[agent_id], creation_visible_sessions
     )
