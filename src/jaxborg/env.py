@@ -194,6 +194,14 @@ def apply_all_actions_typed(
     # --- Phase 2: Green agents ---
     # Use vmapped green in pure/training mode (faster, training-correct).
     # Fall back to sequential fori_loop for cyborg_bank mode (exact parity).
+
+    # CybORG's FSM calls get_action() for ALL agents BEFORE any execute.
+    # server_session (used for exploit 1/N roll) therefore reflects the
+    # previous step's observation — it does NOT include phishing sessions
+    # created in the current step.  Snapshot the pre-green count so the
+    # red phase uses the same N that CybORG would.
+    pre_green_server_session_count = state.red_server_session_count
+
     if use_green_vmap:
         from jaxborg.actions.green_vmap import apply_green_agents_vmapped
 
@@ -210,6 +218,11 @@ def apply_all_actions_typed(
         state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
+    # Swap in the pre-green server_session_count so newly created exploit
+    # actions snapshot the same N that CybORG's get_action() would see.
+    post_green_server_session_count = state.red_server_session_count
+    state = state.replace(red_server_session_count=pre_green_server_session_count)
+
     red_order = jnp.arange(NUM_RED_AGENTS, dtype=jnp.int32)
 
     def red_step(i, carry_state):
@@ -226,6 +239,9 @@ def apply_all_actions_typed(
         )
 
     state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)
+
+    # Restore the post-green count (no red action modifies this field).
+    state = state.replace(red_server_session_count=post_green_server_session_count)
 
     # --- Post-step processing ---
 
