@@ -28,9 +28,9 @@ We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-side
 
 Stochastic, 95% confidence, Δ=±200:
 
-| Policy          | Episodes | jaxborg | CybORG |  Gap | 95% CI       | Verdict        |
-| --------------- | -------: | ------: | -----: | ---: | ------------ | -------------- |
-| IPPO 20M (pure) |       30 |  -1,280 |   -977 | -303 | [-476, -130] | NOT EQUIVALENT |
+| Policy          | Episodes | jaxborg | CybORG |  Gap | 95% CI       | Verdict            |
+| --------------- | -------: | ------: | -----: | ---: | ------------ | ------------------ |
+| IPPO 20M (pure) |      100 |  -1,204 | -1,066 | -138 | [-233, -43]  | NOT EQUIVALENT     |
 
 #### Training Comparison
 
