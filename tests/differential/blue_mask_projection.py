@@ -75,8 +75,9 @@ def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
 def comparison_blue_mask_in_jax_space(controller, agent_name, agent_idx, state, mappings, const):
     """Return the JAX mask for comparison with CybORG.
 
-    compute_blue_action_mask handles all masking including pending-action
-    lockout (Sleep-only while busy) and DeployDecoy host-slot encoding.
+    compute_blue_action_mask handles all masking including DeployDecoy
+    host-slot encoding.  The mask is static per topology (no busy override),
+    matching CybORG's BlueFixedActionWrapper.
     """
     return np.asarray(compute_blue_action_mask(const, agent_idx, state), dtype=np.bool_)
 

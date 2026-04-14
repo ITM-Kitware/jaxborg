@@ -184,7 +184,7 @@ def make_train(config):
     init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
 
     network_type = config.get("NETWORK_TYPE", "separate")
-    busy_masking = bool(config.get("BUSY_MASKING", True))
+    busy_masking = bool(config.get("BUSY_MASKING", False))
     grad_clip_mode = config.get("GRAD_CLIP_MODE", "per_head")
     norm_rewards = bool(config.get("NORM_REWARDS", False))
 

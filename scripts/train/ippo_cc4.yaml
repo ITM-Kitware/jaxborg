@@ -17,7 +17,7 @@ ACTIVATION: tanh
 HIDDEN_DIM: 256
 ANNEAL_LR: false
 NETWORK_TYPE: "shared"         # "separate" (ActorCritic) or "shared" (SharedActorCritic)
-BUSY_MASKING: true             # true = mask busy agents out of policy loss
+BUSY_MASKING: false            # false = train on all steps including busy (matches CybORG CC4)
 GRAD_CLIP_MODE: "global"       # "per_head" (separate actor/critic clip) or "global"
 REWARD_SCALE: 1.0
 NORM_REWARDS: true

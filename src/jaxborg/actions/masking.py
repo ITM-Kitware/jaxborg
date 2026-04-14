@@ -40,12 +40,11 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
     subnets via const.blue_obs_subnets[agent_id], and traffic dst indexes into
     the same 3 subnets.
 
-    Matches CybORG's BlueFixedActionWrapper masking: host/subnet validity,
-    router exclusion, and pending-action lockout.  When an agent has a
-    multi-tick action in progress (blue_pending_ticks > 0), only Sleep is
-    valid — CybORG silently continues the pending action regardless of the
-    agent's choice, and re-submitting a non-Sleep action would trigger a
-    duplicate action_cost charge in CybORG.
+    Matches CybORG's BlueFixedActionWrapper masking: host/subnet validity and
+    router exclusion.  The mask is static per topology — it does NOT change
+    based on pending-action (busy) state.  This matches CybORG, where the
+    wrapper returns the same mask every tick and silently discards any action
+    submitted while a multi-tick action is in progress.
     """
     agent_obs_subnets = const.blue_obs_subnets[agent_id]  # (3,) int, -1 = unused
 
@@ -104,12 +103,5 @@ def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | N
             traffic_flat,  # allow traffic
         ]
     )
-
-    # Pending-action lockout: only Sleep is valid while a multi-tick action
-    # is in progress.  Matches CybORG's BlueFixedActionWrapper behaviour.
-    if state is not None:
-        is_busy = state.blue_pending_ticks[agent_id] > 0
-        sleep_only = jnp.zeros_like(mask).at[0].set(True)
-        mask = jnp.where(is_busy, sleep_only, mask)
 
     return mask
