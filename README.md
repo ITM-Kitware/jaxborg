@@ -28,9 +28,9 @@ We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-side
 
 Stochastic, 95% confidence, Δ=±200:
 
-| Policy          | Episodes | jaxborg | CybORG |  Gap | 95% CI       | Verdict            |
-| --------------- | -------: | ------: | -----: | ---: | ------------ | ------------------ |
-| IPPO 20M (pure) |      100 |  -1,204 | -1,066 | -138 | [-233, -43]  | NOT EQUIVALENT     |
+| Policy               | Episodes | jaxborg | CybORG |  Gap | 95% CI          | Verdict        |
+| -------------------- | -------: | ------: | -----: | ---: | --------------- | -------------- |
+| IPPO 20M (cyborg_bank) |       30 |  -3,696 | -2,976 | -720 | [-1142, -297]   | NOT EQUIVALENT |
 
 #### Training Comparison
 
@@ -41,20 +41,20 @@ Stochastic, 95% confidence, Δ=±200:
 
 #### Action Distribution
 
-Both engines produce the same learned defensive strategy (decision steps only, filtering out busy ticks):
+Both engines produce the same learned defensive strategy (decision steps only, filtering out busy ticks; 30 episodes):
 
-| Action       | jaxborg | CybORG |
-| ------------ | ------: | -----: |
-| Analyse      |   26.5% |  24.7% |
-| Remove       |   23.3% |  21.8% |
-| Decoy        |   30.0% |  22.8% |
-| Restore      |    9.8% |   7.6% |
-| BlockTraffic |    3.2% |   4.0% |
-| AllowTraffic |    0.7% |  12.8% |
-| Sleep        |    2.5% |   2.4% |
-| Monitor      |    4.0% |   3.9% |
+| Action       | jaxborg | CybORG | Delta |
+| ------------ | ------: | -----: | ----: |
+| Analyse      |   20.9% |  21.1% | -0.2% |
+| Remove       |   22.1% |  22.5% | -0.4% |
+| Decoy        |   28.4% |  28.7% | -0.3% |
+| AllowTraffic |   19.1% |  18.4% | +0.7% |
+| BlockTraffic |    3.3% |   3.2% | +0.1% |
+| Restore      |    1.9% |   1.9% | +0.0% |
+| Sleep        |    2.3% |   2.2% | +0.1% |
+| Monitor      |    1.9% |   2.0% | -0.1% |
 
-Both policies learned balanced Analyse/Remove/Decoy (~22–30%) with minimal Sleep. The main divergence is AllowTraffic (12.8% CybORG vs 0.7% jaxborg).
+All action types within ~0.7% across backends.
 
 ## Setup
 

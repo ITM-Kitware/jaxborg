@@ -314,16 +314,12 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
 
 
 def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
-    """Project CybORG's live action mask into JAX canonical indices."""
-    controller = env.env.environment_controller
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is not None and pending["remaining_ticks"] > 0:
-        # Force Sleep during pending ticks to avoid CybORG re-charging
-        # action_cost for the resubmitted (silently dropped) action.
-        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-        jax_mask[BLUE_SLEEP] = True
-        return jnp.array(jax_mask)
+    """Project CybORG's live action mask into JAX canonical indices.
 
+    Returns the static mask regardless of busy state, matching CybORG's
+    BlueFixedActionWrapper which returns the same mask every tick.  CybORG
+    silently discards actions submitted during a pending multi-tick action.
+    """
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
     cyborg_mask = info[agent_name]["action_mask"]
     cyborg_actions = env.actions(agent_name)
@@ -383,16 +379,8 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
     """Fast version of mask projection using precomputed translation cache.
 
     Returns a numpy bool array (caller should stack and convert to jnp once).
+    Static mask — does not change for busy agents (matches CybORG).
     """
-    controller = wrapper.env.environment_controller
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is not None and pending["remaining_ticks"] > 0:
-        # Force Sleep during pending ticks to avoid CybORG re-charging
-        # action_cost for the resubmitted (silently dropped) action.
-        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
-        jax_mask[BLUE_SLEEP] = True
-        return jax_mask
-
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
     action_space = wrapper.get_action_space(agent_name)
     cyborg_mask = action_space["mask"]
@@ -411,16 +399,10 @@ def _live_blue_wrapper_mask_in_jax_space_cached(wrapper, agent_name, mappings, c
 
 
 def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
-    """Project BlueFlatWrapper's live action mask into JAX canonical indices."""
-    controller = wrapper.env.environment_controller
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is not None and pending["remaining_ticks"] > 0:
-        # Force Sleep during pending ticks to avoid CybORG re-charging
-        # action_cost for the resubmitted (silently dropped) action.
-        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-        jax_mask[BLUE_SLEEP] = True
-        return jnp.array(jax_mask)
+    """Project BlueFlatWrapper's live action mask into JAX canonical indices.
 
+    Static mask — does not change for busy agents (matches CybORG).
+    """
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
     action_space = wrapper.get_action_space(agent_name)
     cyborg_mask = action_space["mask"]
@@ -771,6 +753,7 @@ def _rollout_cyborg_single_episode(args_tuple):
     mask_cache = _build_cyborg_mask_cache(env, mappings, const)
     total = 0.0
     ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+    ep_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
     # Monkeypatch BlueRewardMachine to track per-component rewards
     import types as _types
@@ -840,6 +823,8 @@ def _rollout_cyborg_single_episode(args_tuple):
                 cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
                 actions[agent_name] = cyborg_action
                 ep_actions_by_agent[agent_idx].append(action_idx)
+                pending = ec.actions_in_progress.get(agent_name)
+                ep_busy_by_agent[agent_idx].append(1 if pending and pending["remaining_ticks"] > 0 else 0)
         else:
             from CybORG.Simulator.Actions import Sleep
 
@@ -848,7 +833,15 @@ def _rollout_cyborg_single_episode(args_tuple):
         observations, rewards, _, _, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
         total += mean(rewards.values())
 
-    return ep, total, ep_actions_by_agent, _component_log["ria"], _component_log["lwf"], _component_log["asf"]
+    return (
+        ep,
+        total,
+        ep_actions_by_agent,
+        _component_log["ria"],
+        _component_log["lwf"],
+        _component_log["asf"],
+        ep_busy_by_agent,
+    )
 
 
 def rollout_cyborg(
@@ -874,6 +867,7 @@ def rollout_cyborg(
         t0 = time.perf_counter()
         args_list = [(ep, checkpoint_path, deterministic, seed, bank_match_size) for ep in range(num_episodes)]
         all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        all_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         episode_rewards = [0.0] * num_episodes
         episode_ria = [0.0] * num_episodes
         episode_lwf = [0.0] * num_episodes
@@ -885,7 +879,7 @@ def rollout_cyborg(
         ctx = multiprocessing.get_context("spawn")
         try:
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
-                for ep, reward, ep_actions_by_agent, ria, lwf, asf in pool.map(
+                for ep, reward, ep_actions_by_agent, ria, lwf, asf, ep_busy_by_agent in pool.map(
                     _rollout_cyborg_single_episode, args_list
                 ):
                     episode_rewards[ep] = reward
@@ -894,6 +888,7 @@ def rollout_cyborg(
                     episode_asf[ep] = asf
                     for i in range(NUM_BLUE_AGENTS):
                         all_actions_by_agent[i].extend(ep_actions_by_agent[i])
+                        all_busy_by_agent[i].extend(ep_busy_by_agent[i])
                     print(f"  CybORG  ep {ep + 1}: reward={reward:.1f}", flush=True)
         finally:
             os.environ.pop("_JAXBORG_CYBORG_WORKER", None)
@@ -908,6 +903,7 @@ def rollout_cyborg(
             np.array(episode_ria),
             np.array(episode_lwf),
             np.array(episode_asf),
+            all_busy_by_agent,
         )
 
     # Fallback: sequential (no checkpoint path or parallel=False)
@@ -915,6 +911,7 @@ def rollout_cyborg(
     all_actions = []
     episode_rewards = []
     all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+    all_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
@@ -923,6 +920,7 @@ def rollout_cyborg(
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)
+        ec = inner.environment_controller
 
         rng = jax.random.PRNGKey(seed + ep)
         mask_cache = _build_cyborg_mask_cache(env, mappings, const)
@@ -955,6 +953,8 @@ def rollout_cyborg(
                     actions[agent_name] = cyborg_action
                     ep_actions.append(action_idx)
                     all_actions_by_agent[agent_idx].append(action_idx)
+                    pending = ec.actions_in_progress.get(agent_name)
+                    all_busy_by_agent[agent_idx].append(1 if pending and pending["remaining_ticks"] > 0 else 0)
             else:
                 # Episode done but continue stepping to match JAXborg step count.
                 # CybORG still processes green/red actions and returns rewards.
@@ -977,6 +977,7 @@ def rollout_cyborg(
         np.zeros(num_episodes),
         np.zeros(num_episodes),
         np.zeros(num_episodes),
+        all_busy_by_agent,
     )
 
 
@@ -1656,16 +1657,41 @@ def main():
             jax_future = pool.submit(_run_jaxborg)
             cyborg_future = pool.submit(_run_cyborg)
             jax_actions, jax_rewards, jax_results = jax_future.result()
-            cyborg_actions, cyborg_rewards, cyborg_actions_by_agent, cyborg_ria, cyborg_lwf, cyborg_asf = (
-                cyborg_future.result()
-            )
+            (
+                cyborg_actions,
+                cyborg_rewards,
+                cyborg_actions_by_agent,
+                cyborg_ria,
+                cyborg_lwf,
+                cyborg_asf,
+                cyborg_busy_by_agent,
+            ) = cyborg_future.result()
 
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
         ]
-        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg")
+        print_per_agent_action_dist(jax_pooled_by_agent, label="JAXborg (all steps)")
         print_trajectory_summary(jax_results[-1].trajectory, label=f"JAXborg ep {len(jax_results)}")
-        print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG")
+        print_per_agent_action_dist(cyborg_actions_by_agent, label="CybORG (all steps)")
+
+        # Decision-only distributions (filter out busy ticks)
+        jax_decision_by_agent = [
+            [a for ep in jax_results for a, b in zip(ep.actions_by_agent[i], ep.blue_busy_by_agent[i]) if b == 0]
+            for i in range(NUM_BLUE_AGENTS)
+        ]
+        cyborg_decision_by_agent = [
+            [a for a, b in zip(cyborg_actions_by_agent[i], cyborg_busy_by_agent[i]) if b == 0]
+            for i in range(NUM_BLUE_AGENTS)
+        ]
+        jax_total = sum(len(ep.actions_by_agent[0]) for ep in jax_results) * NUM_BLUE_AGENTS
+        jax_decisions = sum(len(agent) for agent in jax_decision_by_agent)
+        cyborg_total = sum(len(a) for a in cyborg_actions_by_agent)
+        cyborg_decisions = sum(len(a) for a in cyborg_decision_by_agent)
+        jax_busy_pct = 100.0 * (1.0 - jax_decisions / jax_total) if jax_total > 0 else 0.0
+        cyborg_busy_pct = 100.0 * (1.0 - cyborg_decisions / cyborg_total) if cyborg_total > 0 else 0.0
+        print(f"\n  Busy fraction: JAXborg {jax_busy_pct:.1f}%, CybORG {cyborg_busy_pct:.1f}% — filtered out below")
+        print_per_agent_action_dist(jax_decision_by_agent, label="JAXborg (decisions only)")
+        print_per_agent_action_dist(cyborg_decision_by_agent, label="CybORG (decisions only)")
 
         # Per-component reward breakdown
         if jax_results and hasattr(jax_results[0], "ria_total"):
