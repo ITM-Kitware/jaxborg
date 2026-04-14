@@ -365,6 +365,7 @@ def make_train(config):
             policy_mask = (1.0 - traj_batch.blue_busy).astype(jnp.float32)
         else:
             policy_mask = jnp.ones_like(traj_batch.blue_busy)
+
         # --- PPO update epochs ---
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
@@ -472,8 +473,7 @@ def make_train(config):
         loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
         # Raw episode return: sum of raw reward components over the rollout, mean over envs.
         raw_rollout_return = (
-            info_sums["reward_ria"] + info_sums["reward_lwf"]
-            + info_sums["reward_asf"] + info_sums["action_cost"]
+            info_sums["reward_ria"] + info_sums["reward_lwf"] + info_sums["reward_asf"] + info_sums["action_cost"]
         ).mean()
         # info_sums accumulated over NUM_STEPS; take mean over steps and envs.
         num_steps_f = jnp.float32(config["NUM_STEPS"])
