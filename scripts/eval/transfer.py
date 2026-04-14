@@ -313,28 +313,6 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
         return []
 
 
-def _live_cyborg_mask_in_jax_space(env, agent_name, info, mappings, const):
-    """Project CybORG's live action mask into JAX canonical indices.
-
-    Returns the static mask regardless of busy state, matching CybORG's
-    BlueFixedActionWrapper which returns the same mask every tick.  CybORG
-    silently discards actions submitted during a pending multi-tick action.
-    """
-    jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=bool)
-    cyborg_mask = info[agent_name]["action_mask"]
-    cyborg_actions = env.actions(agent_name)
-    cyborg_labels = env.action_labels(agent_name)
-    cyborg_state = controller.state
-
-    for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
-        if not valid:
-            continue
-        for jax_idx in _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
-            jax_mask[jax_idx] = True
-
-    return jnp.array(jax_mask)
-
-
 def _build_cyborg_mask_cache(wrapper, mappings, const):
     """Precompute CybORG-to-JAX action translation tables for all agents.
 
@@ -408,7 +386,7 @@ def _live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
     cyborg_mask = action_space["mask"]
     cyborg_actions = wrapper.actions(agent_name)
     cyborg_labels = wrapper.action_labels(agent_name)
-    cyborg_state = controller.state
+    cyborg_state = wrapper.env.environment_controller.state
 
     for action, valid, label in zip(cyborg_actions, cyborg_mask, cyborg_labels):
         if not valid:
