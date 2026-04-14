@@ -46,20 +46,12 @@ def cyborg_blue_action_to_jax_indices(action, label, agent_name, mappings, const
 def live_blue_wrapper_mask_in_jax_space(wrapper, agent_name, mappings, const):
     """Project BlueFlatWrapper's live action mask into JAX canonical indices.
 
-    Includes pending-action lockout: when a multi-tick action is in progress,
-    only Sleep is valid.  CybORG silently continues the pending action
-    regardless of the agent's choice, and re-submitting a non-Sleep action
-    would trigger a duplicate action_cost charge.
+    Returns the static mask regardless of busy state, matching CybORG's
+    BlueFixedActionWrapper which returns the same mask every tick.  CybORG
+    silently discards actions submitted while a multi-tick action is in
+    progress.
     """
     controller = wrapper.env.environment_controller
-
-    # Pending-action lockout — only Sleep while busy
-    pending = controller.actions_in_progress.get(agent_name)
-    if pending is not None and pending["remaining_ticks"] > 0:
-        jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
-        jax_mask[BLUE_SLEEP] = True
-        return jax_mask
-
     jax_mask = np.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=np.bool_)
     action_space = wrapper.get_action_space(agent_name)
     cyborg_actions = wrapper.actions(agent_name)
