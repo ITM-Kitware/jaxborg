@@ -1,6 +1,8 @@
 """Evaluate sleep and random baselines on CybORG."""
 
 import argparse
+import json
+from pathlib import Path
 from statistics import mean, stdev
 
 import numpy as np
@@ -45,7 +47,7 @@ def run_random_episode(env, rng):
     return total
 
 
-def evaluate(policy, seed, max_eps):
+def evaluate(policy, seed, max_eps, output_json=None):
     env = make_env(seed)
     rng = np.random.default_rng(seed)
     run_fn = run_sleep_episode if policy == "sleep" else run_random_episode
@@ -57,11 +59,26 @@ def evaluate(policy, seed, max_eps):
     if len(episode_rewards) > 1:
         print(f"stdev:     {stdev(episode_rewards):.4f}")
 
+    if output_json:
+        payload = {
+            "policy": policy,
+            "seed": seed,
+            "episodes": max_eps,
+            "mean": mean(episode_rewards),
+            "stdev": stdev(episode_rewards) if len(episode_rewards) > 1 else 0.0,
+            "per_episode": [float(x) for x in episode_rewards],
+        }
+        out = Path(output_json)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(payload, indent=2) + "\n")
+        print(f"wrote:     {out}")
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Evaluate sleep/random baselines on CybORG")
     parser.add_argument("--policy", choices=["sleep", "random"], default="sleep")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-eps", type=int, default=100)
+    parser.add_argument("--output-json", default=None, help="Write mean/stdev/per-episode to JSON")
     args = parser.parse_args()
-    evaluate(args.policy, args.seed, args.max_eps)
+    evaluate(args.policy, args.seed, args.max_eps, args.output_json)
