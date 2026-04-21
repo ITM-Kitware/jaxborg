@@ -66,8 +66,10 @@ uv sync --group cuda         # GPU support (training)
 ## Usage
 
 ```bash
-# Tests (use -n auto for parallel execution)
-uv run pytest tests/ -v -n auto
+# Tests (fast suite ~7 min; slow L3 fuzz excluded by default)
+uv run pytest            # default: -n auto -m 'not slow'
+uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
+uv run pytest -m ""      # everything
 
 # Train jaxborg IPPO
 uv run python scripts/train/ippo_jax.py TOTAL_TIMESTEPS=50000000

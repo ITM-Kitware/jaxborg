@@ -69,7 +69,8 @@ else:
         echo "Current monitored parity target reached after $i iterations."
         # Record L3 coverage in catalog
         uv run python -c "
-from tests.catalog import update_l3_coverage, print_coverage_summary
+import sys; sys.path.insert(0, 'scripts/dev')
+from catalog import update_l3_coverage, print_coverage_summary
 update_l3_coverage(seeds=$FUZZ_SEEDS, steps=$FUZZ_STEPS, clean=True)
 print('Recorded L3 coverage: ${FUZZ_SEEDS} seeds x ${FUZZ_STEPS} steps = CLEAN')
 print_coverage_summary()

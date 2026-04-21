@@ -27,6 +27,8 @@ from jaxborg.translate import cyborg_blue_to_jax
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
+pytestmark = pytest.mark.slow
+
 # --- CybORG PPO Agent (matches train_cleanrl_ppo.py) ---
 
 

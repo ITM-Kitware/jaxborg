@@ -10,8 +10,8 @@ CYBORG_PREFIX=".venv/lib/python3.11/site-packages"
 
 while true; do
     NEXT_JSON=$(uv run python -c "
-import json
-from tests.catalog import get_next_incomplete
+import json, sys; sys.path.insert(0, 'scripts/dev')
+from catalog import get_next_incomplete
 s = get_next_incomplete()
 if s is None:
     print('DONE')
@@ -94,7 +94,7 @@ Do NOT write tests that only check JAX in isolation. Every test must compare JAX
 6. Fix failures until tests pass.
 7. Run: uv run pytest tests/ -v to verify no regressions.
 8. Mark subsystem as passing:
-   uv run python -c \"from tests.catalog import mark_passing; mark_passing($ID)\"
+   uv run python -c \"import sys; sys.path.insert(0, 'scripts/dev'); from catalog import mark_passing; mark_passing($ID)\"
 9. Commit: git add -A && git commit -m 'subsystem $ID: $NAME'
 
 ## Constraints
@@ -103,7 +103,7 @@ Do NOT write tests that only check JAX in isolation. Every test must compare JAX
 - 5 blue agents, 6 red agents (hardcoded, no masking)
 - Use flax.struct.dataclass for state, jax.lax.cond for branching
 - Reference CC2 port at /home/paulhax/src/cyber/jaxmarl/integration/jaxmarl/environments/cage/ for patterns
-- pyproject.toml has pythonpath=[\".\"] so tests can import tests.catalog etc.
+- catalog bookkeeping lives in scripts/dev/catalog.py
 - Do not add comments describing what you changed
 - Prefer functional programming
 " \

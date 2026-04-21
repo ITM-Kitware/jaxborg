@@ -1749,7 +1749,10 @@ def main():
         tost_path.write_text(json.dumps(tost_result, indent=2) + "\n")
         print(f"Saved TOST result: {tost_path}")
         try:
-            from tests.catalog import update_l4_tost
+            import sys
+
+            sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "dev"))
+            from catalog import update_l4_tost
 
             update_l4_tost(
                 equivalent=tost_result["equivalent"],

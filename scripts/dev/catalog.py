@@ -358,7 +358,7 @@ def update_l4_tost(equivalent: bool, margin: float, mean_diff: float, episodes: 
     _save_status(status)
 
 
-VERIFICATION_STATUS_PATH = Path(__file__).parent.parent / ".agent_handoff" / "verification_status.json"
+VERIFICATION_STATUS_PATH = Path(__file__).parent.parent.parent / ".agent_handoff" / "verification_status.json"
 
 _VERIFICATION_LEVELS = ("l1", "l2", "l3", "l4")
 _DEFAULT_VERIFICATION = {lvl: {"status": "unknown", "iterations": 0} for lvl in _VERIFICATION_LEVELS}

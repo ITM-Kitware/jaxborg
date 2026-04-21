@@ -33,7 +33,9 @@ uv sync
 
 ```bash
 uv sync                                              # install deps
-uv run pytest tests/ -v  # all tests (~9 min)
+uv run pytest                                        # fast suite (~7 min, excludes `-m slow`)
+uv run pytest -m slow                                # slow L3 fuzz + full-episode parity (~40 min)
+uv run pytest -m ""                                  # everything
 uv run pytest tests/subsystems/test_red_discover.py -v     # single test file
 uv run pytest tests/subsystems/test_red_discover.py::TestClassName::test_name -v  # single test
 ```
@@ -67,8 +69,9 @@ Builds the static `CC4Const` from seed. Hardcoded subnet adjacency (NACLs), rout
 ## Testing
 
 ```bash
-uv run pytest tests/ -v          # all tests (~9 min)
-uv run pytest tests/ -v -x       # stop on first failure
+uv run pytest                    # fast suite (~7 min, excludes slow)
+uv run pytest -m slow            # slow-only (L3 rollouts, full-episode fuzz)
+uv run pytest -m "" -x           # everything, stop on first failure
 ```
 
 Test infrastructure lives in `tests/differential/` (harness, action translator, state comparator) for CybORG↔JAX comparison. CybORG source is at `.venv/lib/python3.11/site-packages/CybORG/`.
