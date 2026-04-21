@@ -68,7 +68,7 @@ dict never removes destroyed sessions — after Blue Restore, phantom IDs persis
 inflating N and making exploits fail more often. JAXborg replicates this via
 `red_server_session_count` (monotonic high-water mark updated end-of-step).
 In the harness, `red_exploit_session_choices` syncs the choice index from CybORG.
-See `docs/parity/cyborg_server_session_staleness.md` for details.
+See `CYBORG_DIFFERENCES.md` ("Exploit source-session selection") for details.
 
 ### The Sync Problem
 
