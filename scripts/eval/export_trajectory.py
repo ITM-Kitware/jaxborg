@@ -26,7 +26,10 @@ from torch.distributions import Categorical
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import EnterpriseMAE
+from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
 from CybORG.Simulator.Actions import Sleep
+from CybORG.Simulator.Actions.AbstractActions.Impact import Impact
+from CybORG.Simulator.Actions.GreenActions import GreenAccessService, GreenLocalWork
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 EPISODE_LENGTH = 500
@@ -310,6 +313,68 @@ def action_to_dict(action, step: int, state, success: str = "TRUE") -> dict:
     }
 
 
+def compute_reward_breakdown(cyborg, state, green_agents, red_agents) -> dict:
+    """Decompose the CybORG step reward into RIA/LWF/ASF/action_cost components.
+
+    Replicates BlueRewardMachine.calculate_reward() logic for RIA/LWF/ASF and
+    reads action_cost from the controller's per-component reward state.
+    """
+    phase_rewards = BlueRewardMachine("blue_agent_0").get_phase_rewards(state.mission_phase)
+    ria = 0.0
+    lwf = 0.0
+    asf = 0.0
+
+    for agent_name in green_agents + red_agents:
+        last = cyborg.get_last_action(agent_name)
+        action = last[0] if isinstance(last, list) and last else last
+        if action is None:
+            continue
+
+        if isinstance(action, Impact):
+            hostname = action.hostname
+        elif isinstance(action, (GreenAccessService, GreenLocalWork)):
+            hostname = state.ip_addresses.get(action.ip_address)
+            if hostname is None:
+                continue
+        else:
+            continue
+
+        subnet_raw = state.hostname_subnet_map.get(hostname)
+        if subnet_raw is None:
+            continue
+        subnet_name = subnet_raw.value if hasattr(subnet_raw, "value") else str(subnet_raw)
+        if subnet_name not in phase_rewards:
+            continue
+
+        if agent_name not in state.sessions:
+            continue
+        sessions = state.sessions[agent_name].values()
+        if len([s.ident for s in sessions if s.active]) == 0:
+            continue
+
+        obs = cyborg.get_observation(agent_name)
+        if not isinstance(obs, dict) or "success" not in obs:
+            continue
+        success = obs["success"]
+
+        zone = phase_rewards[subnet_name]
+        if "green" in agent_name and success == False:  # noqa: E712
+            if isinstance(action, GreenLocalWork):
+                lwf += zone["LWF"]
+            elif isinstance(action, GreenAccessService):
+                asf += zone["ASF"]
+        elif "red" in agent_name and success and isinstance(action, Impact):
+            ria += zone["RIA"]
+
+    # Action cost: CybORG charges -1 per blue Restore initiation.
+    # Read from the controller's per-component reward state.
+    ctrl = cyborg.environment_controller
+    blue_reward = ctrl.reward.get("Blue", {})
+    action_cost = float(blue_reward.get("action_cost", 0))
+
+    return {"ria": ria, "lwf": lwf, "asf": asf, "action_cost": action_cost}
+
+
 def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) -> dict:
     """Run one CybORG CC4 episode with SleepAgent blue and return the trajectory dict."""
     cyborg = make_env(seed, steps)
@@ -358,6 +423,7 @@ def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) 
 
         # Record step state
         compromise = get_host_compromise(state, red_agents)
+        breakdown = compute_reward_breakdown(cyborg, state, green_agents, red_agents)
 
         step_rewards = {}
         for agent in blue_agents:
@@ -375,6 +441,7 @@ def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) 
                 "host_compromise": compromise,
                 "rewards": step_rewards,
                 "cumulative_reward": {a: round(v, 4) for a, v in cumulative_rewards.items()},
+                "reward_breakdown": breakdown,
             }
         )
 
@@ -461,6 +528,7 @@ def run_episode_policy(
 
         # Record step state
         compromise = get_host_compromise(state, red_agents)
+        breakdown = compute_reward_breakdown(cyborg, state, green_agents, red_agents)
 
         step_rewards = {}
         reward_val = rewards.get(AGENT_IDS[0], 0.0)
@@ -476,6 +544,7 @@ def run_episode_policy(
                 "host_compromise": compromise,
                 "rewards": step_rewards,
                 "cumulative_reward": {a: round(v, 4) for a, v in cumulative_rewards.items()},
+                "reward_breakdown": breakdown,
             }
         )
 

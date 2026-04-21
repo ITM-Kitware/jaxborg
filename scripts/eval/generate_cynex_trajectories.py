@@ -39,6 +39,7 @@ from export_trajectory import (
     EPISODE_LENGTH,
     _build_trajectory_dict,
     action_to_dict,
+    compute_reward_breakdown,
     extract_subnet_metadata,
     extract_topology,
     get_host_compromise,
@@ -415,6 +416,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
 
         # Record step state
         compromise = get_host_compromise(state, red_agents)
+        breakdown = compute_reward_breakdown(cyborg, state, green_agents, red_agents)
         step_rewards = {}
         reward_val = rewards.get(AGENT_IDS[0], 0.0)
         for agent in blue_agents:
@@ -427,6 +429,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             "host_compromise": compromise,
             "rewards": step_rewards,
             "cumulative_reward": {a: round(v, 4) for a, v in cumulative_rewards.items()},
+            "reward_breakdown": breakdown,
         })
 
         if step % 100 == 0:

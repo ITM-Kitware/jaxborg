@@ -631,6 +631,7 @@ def rollout_jaxborg(
 
         ep_reward = np.zeros(NUM_BLUE_AGENTS)
         ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        ep_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         ep_step_rewards = []
         ep_trajectory = []
         cum_reward = 0.0
@@ -638,6 +639,9 @@ def rollout_jaxborg(
         for step in range(500):
             key, step_key = jax.random.split(key)
             act_keys = jax.random.split(key, NUM_BLUE_AGENTS)
+
+            # Record busy state before stepping
+            busy_np = np.asarray(env_state.state.blue_pending_ticks > 0)
 
             # Batched mask computation + policy inference (1 JIT call instead of 5)
             masks = _all_blue_masks(env_state.const, env_state.state)
@@ -649,6 +653,7 @@ def rollout_jaxborg(
             actions = {f"blue_{i}": actions_arr[i] for i in range(NUM_BLUE_AGENTS)}
             for i in range(NUM_BLUE_AGENTS):
                 ep_actions_by_agent[i].append(int(actions_np[i]))
+                ep_busy_by_agent[i].append(int(busy_np[i]))
 
             obs, env_state, rewards, dones, _ = env.step(step_key, env_state, actions)
 
@@ -689,6 +694,7 @@ def rollout_jaxborg(
         episode_results.append(
             EpisodeResult(
                 actions_by_agent=ep_actions_by_agent,
+                blue_busy_by_agent=ep_busy_by_agent,
                 rewards=ep_step_rewards,
                 cumulative_reward=cum_reward,
                 trajectory=ep_trajectory,
