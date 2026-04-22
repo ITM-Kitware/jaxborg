@@ -111,6 +111,8 @@ def run_episode(agent, env, deterministic):
     ep_reward = 0.0
     # Per-agent action type indices: [agent_idx][step] = type_idx
     per_agent_types = [[] for _ in range(NUM_AGENTS)]
+    # Per-agent busy flag: [agent_idx][step] = 0/1
+    per_agent_busy = [[] for _ in range(NUM_AGENTS)]
     # Per-phase action type indices: phase -> list of type_idx
     per_phase_types = {0: [], 1: [], 2: []}
     # Trajectory snapshots
@@ -143,6 +145,8 @@ def run_episode(agent, env, deterministic):
             type_idx = classify_action_label(label)
             per_agent_types[i].append(type_idx)
             per_phase_types[phase].append(type_idx)
+            pending = controller.actions_in_progress.get(agent_id)
+            per_agent_busy[i].append(1 if pending and pending["remaining_ticks"] > 0 else 0)
 
         obs, rew, term, trunc, info = env.step(actions)
         step_reward = rew[AGENT_IDS[0]]
@@ -161,7 +165,7 @@ def run_episode(agent, env, deterministic):
         if any(term.values()) or any(trunc.values()):
             break
 
-    return ep_reward, per_agent_types, per_phase_types, trajectory
+    return ep_reward, per_agent_types, per_phase_types, trajectory, per_agent_busy
 
 
 def print_action_dist_table(per_agent_types, label="CybORG"):
@@ -248,20 +252,33 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     episode_lengths = []
     # Accumulate across episodes
     all_per_agent_types = [[] for _ in range(NUM_AGENTS)]
+    all_per_agent_busy = [[] for _ in range(NUM_AGENTS)]
     all_per_phase_types = {0: [], 1: [], 2: []}
+    all_per_phase_agent_types = {
+        0: [[] for _ in range(NUM_AGENTS)],
+        1: [[] for _ in range(NUM_AGENTS)],
+        2: [[] for _ in range(NUM_AGENTS)],
+    }
 
     t0 = time.time()
     last_trajectory = None
     for ep in range(num_episodes):
-        ep_reward, per_agent_types, per_phase_types, trajectory = run_episode(agent, env, deterministic)
+        ep_reward, per_agent_types, per_phase_types, trajectory, per_agent_busy = run_episode(agent, env, deterministic)
         episode_rewards.append(ep_reward)
         episode_lengths.append(len(trajectory))
         last_trajectory = trajectory
 
         for i in range(NUM_AGENTS):
             all_per_agent_types[i].extend(per_agent_types[i])
+            all_per_agent_busy[i].extend(per_agent_busy[i])
         for phase in [0, 1, 2]:
             all_per_phase_types[phase].extend(per_phase_types[phase])
+        # Rebuild per-phase × per-agent decisions from the step-level snapshots
+        for step_idx, snap in enumerate(trajectory):
+            phase = snap["phase"]
+            for i in range(NUM_AGENTS):
+                if per_agent_busy[i][step_idx] == 0:
+                    all_per_phase_agent_types[phase][i].append(per_agent_types[i][step_idx])
 
         if verbose:
             print(f"  Episode {ep + 1}: reward={ep_reward:.1f}")
@@ -289,7 +306,17 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     print(f"{'=' * 60}")
 
     # Action distributions
-    print_action_dist_table(all_per_agent_types, label="CybORG")
+    print_action_dist_table(all_per_agent_types, label="CybORG (all steps)")
+
+    # Decisions-only filter (busy ticks removed)
+    total_steps = sum(len(a) for a in all_per_agent_types)
+    busy_steps = sum(b for agent_busy in all_per_agent_busy for b in agent_busy)
+    busy_pct = 100.0 * busy_steps / total_steps if total_steps else 0.0
+    print(f"\n  (busy fraction: {busy_pct:.1f}% — filtered out below)")
+    decision_by_agent = [
+        [t for t, b in zip(all_per_agent_types[i], all_per_agent_busy[i]) if b == 0] for i in range(NUM_AGENTS)
+    ]
+    print_action_dist_table(decision_by_agent, label="CybORG (decisions only)")
     print_phase_dist_table(all_per_phase_types)
     print_trajectory_summary(last_trajectory, label=f"CybORG ep {num_episodes}")
 
@@ -303,10 +330,16 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
     pooled = [t for agent in all_per_agent_types for t in agent]
     pooled_dist = action_distribution(pooled).tolist()
     per_agent_dists = [action_distribution(all_per_agent_types[i]).tolist() for i in range(NUM_AGENTS)]
+    per_agent_decision_dists = [action_distribution(decision_by_agent[i]).tolist() for i in range(NUM_AGENTS)]
     per_phase_dists = {}
     for phase in [0, 1, 2]:
         if all_per_phase_types[phase]:
             per_phase_dists[str(phase)] = action_distribution(all_per_phase_types[phase]).tolist()
+    per_phase_agent_dists = {}
+    for phase in [0, 1, 2]:
+        per_phase_agent_dists[str(phase)] = [
+            action_distribution(all_per_phase_agent_types[phase][i]).tolist() for i in range(NUM_AGENTS)
+        ]
 
     results = {
         "num_episodes": num_episodes,
@@ -317,10 +350,13 @@ def evaluate(model_dir, num_episodes=50, deterministic=False, tag="default", ver
         "mean_length": float(mean_len),
         "deterministic": deterministic,
         "all_rewards": [float(r) for r in episode_rewards],
+        "busy_fraction": float(busy_pct / 100.0),
         "action_type_names": ACTION_TYPE_NAMES,
         "pooled_action_dist": pooled_dist,
         "per_agent_action_dist": per_agent_dists,
+        "per_agent_action_dist_decisions": per_agent_decision_dists,
         "per_phase_action_dist": per_phase_dists,
+        "per_phase_agent_action_dist_decisions": per_phase_agent_dists,
     }
     results_path = model_dir / f"eval_results_{tag}.json"
     with open(results_path, "w") as f:

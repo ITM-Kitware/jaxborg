@@ -108,6 +108,13 @@ def action_distribution(actions):
     return counts / total if total > 0 else counts
 
 
+def l1_distribution_distance(p, q) -> float:
+    # Sum of absolute differences; 0 = identical, 2 = disjoint. Halve for "total variation".
+    p = np.asarray(p, dtype=float)
+    q = np.asarray(q, dtype=float)
+    return float(np.abs(p - q).sum())
+
+
 @dataclass
 class StepSnapshot:
     reward: float
@@ -738,6 +745,7 @@ def _rollout_cyborg_single_episode(args_tuple):
     total = 0.0
     ep_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
     ep_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+    ep_phase_per_step: list = []
 
     # Monkeypatch BlueRewardMachine to track per-component rewards
     import types as _types
@@ -786,6 +794,8 @@ def _rollout_cyborg_single_episode(args_tuple):
     brm.calculate_reward = _types.MethodType(_tracked_calculate, brm)
 
     for _ in range(500):
+        phase = int(ec.state.mission_phase)
+        ep_phase_per_step.append(phase)
         if env.agents:
             rng, *_rngs = jax.random.split(rng, NUM_BLUE_AGENTS + 1)
             act_keys = jnp.stack(_rngs)
@@ -825,6 +835,7 @@ def _rollout_cyborg_single_episode(args_tuple):
         _component_log["lwf"],
         _component_log["asf"],
         ep_busy_by_agent,
+        ep_phase_per_step,
     )
 
 
@@ -852,6 +863,7 @@ def rollout_cyborg(
         args_list = [(ep, checkpoint_path, deterministic, seed, bank_match_size) for ep in range(num_episodes)]
         all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         all_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
+        all_phase_per_step: list = [[] for _ in range(num_episodes)]
         episode_rewards = [0.0] * num_episodes
         episode_ria = [0.0] * num_episodes
         episode_lwf = [0.0] * num_episodes
@@ -863,13 +875,14 @@ def rollout_cyborg(
         ctx = multiprocessing.get_context("spawn")
         try:
             with ProcessPoolExecutor(max_workers=max_workers, mp_context=ctx) as pool:
-                for ep, reward, ep_actions_by_agent, ria, lwf, asf, ep_busy_by_agent in pool.map(
+                for ep, reward, ep_actions_by_agent, ria, lwf, asf, ep_busy_by_agent, ep_phase in pool.map(
                     _rollout_cyborg_single_episode, args_list
                 ):
                     episode_rewards[ep] = reward
                     episode_ria[ep] = ria
                     episode_lwf[ep] = lwf
                     episode_asf[ep] = asf
+                    all_phase_per_step[ep] = ep_phase
                     for i in range(NUM_BLUE_AGENTS):
                         all_actions_by_agent[i].extend(ep_actions_by_agent[i])
                         all_busy_by_agent[i].extend(ep_busy_by_agent[i])
@@ -888,6 +901,7 @@ def rollout_cyborg(
             np.array(episode_lwf),
             np.array(episode_asf),
             all_busy_by_agent,
+            all_phase_per_step,
         )
 
     # Fallback: sequential (no checkpoint path or parallel=False)
@@ -962,6 +976,7 @@ def rollout_cyborg(
         np.zeros(num_episodes),
         np.zeros(num_episodes),
         all_busy_by_agent,
+        [[] for _ in range(num_episodes)],
     )
 
 
@@ -1107,6 +1122,8 @@ def print_comparison_report(jax_actions, jax_rewards, cyborg_actions, cyborg_rew
     for name, jp, cp in zip(ACTION_TYPE_NAMES, jax_dist, cyborg_dist):
         delta = jp - cp
         print(f"{name:<14} {jp * 100:7.1f}% {cp * 100:7.1f}% {delta * 100:+7.1f}%")
+    l1 = l1_distribution_distance(jax_dist, cyborg_dist)
+    print(f"\nL1 distribution distance (pooled): {l1:.3f}  (0 = identical, 2 = disjoint)")
 
     print("\n" + "=" * 70)
     print("EPISODE REWARD COMPARISON")
@@ -1649,6 +1666,7 @@ def main():
                 cyborg_lwf,
                 cyborg_asf,
                 cyborg_busy_by_agent,
+                cyborg_phase_per_step,
             ) = cyborg_future.result()
 
         jax_pooled_by_agent = [
@@ -1676,6 +1694,69 @@ def main():
         print(f"\n  Busy fraction: JAXborg {jax_busy_pct:.1f}%, CybORG {cyborg_busy_pct:.1f}% — filtered out below")
         print_per_agent_action_dist(jax_decision_by_agent, label="JAXborg (decisions only)")
         print_per_agent_action_dist(cyborg_decision_by_agent, label="CybORG (decisions only)")
+
+        # Per-agent L1 distribution distance (decisions only)
+        print("\nPer-Agent L1 Distribution Distance (decisions only, JAXborg vs CybORG):")
+        print(f"{'Agent':<10} {'L1':>8}")
+        print("-" * 20)
+        for agent_idx in range(NUM_BLUE_AGENTS):
+            j_dist = action_distribution(jax_decision_by_agent[agent_idx])
+            c_dist = action_distribution(cyborg_decision_by_agent[agent_idx])
+            l1 = l1_distribution_distance(j_dist, c_dist)
+            print(f"{'blue_' + str(agent_idx):<10} {l1:8.3f}")
+        j_pooled = [a for agent in jax_decision_by_agent for a in agent]
+        c_pooled = [a for agent in cyborg_decision_by_agent for a in agent]
+        l1_pooled = l1_distribution_distance(action_distribution(j_pooled), action_distribution(c_pooled))
+        print("-" * 20)
+        print(f"{'POOLED':<10} {l1_pooled:8.3f}")
+
+        # Per-phase × per-agent action distribution (decisions only, both backends)
+        phase_names = {0: "Phase0", 1: "MissionA", 2: "MissionB"}
+        jax_phase_actions = {
+            0: [[] for _ in range(NUM_BLUE_AGENTS)],
+            1: [[] for _ in range(NUM_BLUE_AGENTS)],
+            2: [[] for _ in range(NUM_BLUE_AGENTS)],
+        }
+        for ep in jax_results:
+            if not ep.phase_per_step:
+                continue
+            for step_idx, phase in enumerate(ep.phase_per_step):
+                for i in range(NUM_BLUE_AGENTS):
+                    busy = ep.blue_busy_by_agent[i][step_idx] if ep.blue_busy_by_agent else 0
+                    if busy == 0:
+                        jax_phase_actions[phase][i].append(ep.actions_by_agent[i][step_idx])
+
+        # CybORG: phase_per_step and actions_by_agent are both stored per-step × agent
+        # cyborg_phase_per_step: [ep][step] -> phase; cyborg_actions_by_agent: [agent][ep*500 step]
+        cy_phase_actions = {
+            0: [[] for _ in range(NUM_BLUE_AGENTS)],
+            1: [[] for _ in range(NUM_BLUE_AGENTS)],
+            2: [[] for _ in range(NUM_BLUE_AGENTS)],
+        }
+        steps_per_ep = 500
+        for ep_idx, ep_phase in enumerate(cyborg_phase_per_step):
+            if not ep_phase:
+                continue
+            for step_idx, phase in enumerate(ep_phase):
+                abs_idx = ep_idx * steps_per_ep + step_idx
+                for i in range(NUM_BLUE_AGENTS):
+                    if abs_idx >= len(cyborg_actions_by_agent[i]):
+                        continue
+                    busy = cyborg_busy_by_agent[i][abs_idx] if cyborg_busy_by_agent[i] else 0
+                    if busy == 0:
+                        cy_phase_actions[phase][i].append(cyborg_actions_by_agent[i][abs_idx])
+
+        print("\nPer-Phase × Per-Agent L1 Distribution Distance (decisions only):")
+        print(f"{'Phase':<10} {'Agent':<8} {'L1':>8} {'N_jax':>8} {'N_cy':>8}")
+        print("-" * 46)
+        for phase in [0, 1, 2]:
+            for i in range(NUM_BLUE_AGENTS):
+                ja = jax_phase_actions[phase][i]
+                ca = cy_phase_actions[phase][i]
+                if not ja and not ca:
+                    continue
+                l1 = l1_distribution_distance(action_distribution(ja), action_distribution(ca))
+                print(f"{phase_names[phase]:<10} {'blue_' + str(i):<8} {l1:8.3f} {len(ja):>8} {len(ca):>8}")
 
         # Per-component reward breakdown
         if jax_results and hasattr(jax_results[0], "ria_total"):
