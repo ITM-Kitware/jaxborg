@@ -6,7 +6,6 @@ from statistics import mean, stdev
 import jax
 import jax.numpy as jnp
 
-from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 
@@ -24,13 +23,20 @@ def run_sleep_episode(env, key):
     return total
 
 
+def _sample_masked_uniform(key, mask):
+    # mask: bool array of length action_space; pick uniformly among True entries.
+    logits = jnp.where(mask, 0.0, -jnp.inf)
+    return jax.random.categorical(key, logits)
+
+
 def run_random_episode(env, key):
     obs, state = env.reset(key)
     total = 0.0
     for _ in range(EPISODE_LENGTH):
         key, act_key, step_key = jax.random.split(key, 3)
+        masks = env.get_avail_actions(state)
         actions = {
-            f"blue_{b}": jax.random.randint(jax.random.fold_in(act_key, b), (), 0, BLUE_ALLOW_TRAFFIC_END)
+            f"blue_{b}": _sample_masked_uniform(jax.random.fold_in(act_key, b), masks[f"blue_{b}"])
             for b in range(NUM_BLUE_AGENTS)
         }
         obs, state, rewards, dones, info = env.step(step_key, state, actions)
