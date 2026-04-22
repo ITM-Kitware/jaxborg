@@ -186,7 +186,97 @@ def print_trajectory_summary(trajectory, label="JAXborg ep"):
         )
 
 
+def _torch_state_dict_to_shared_actor_critic_params(state_dict, hidden_dim: int = 256) -> tuple:
+    """Convert a CleanRL PyTorch PPOAgent state_dict into Flax SharedActorCritic params.
+
+    Maps the PyTorch layout (features.0/2 + actor + critic, with weight as
+    `(out, in)`) to Flax @nn.compact's auto-named Dense_0..Dense_3 (kernel as
+    `(in, out)`). Both architectures use a 2-layer shared trunk plus single
+    actor and critic heads; this is a transpose-and-rename, no math.
+
+    Args:
+        state_dict: PyTorch dict with `features.0.weight`, `features.0.bias`,
+            `features.2.weight`, `features.2.bias`, `actor.weight`,
+            `actor.bias`, `critic.weight`, `critic.bias`. Tensors or ndarrays.
+        hidden_dim: trunk width (must match `state_dict` shapes).
+
+    Returns:
+        (obs_dim, action_dim, params_dict). `params_dict` is the nested
+        `{"params": {"Dense_0": {"kernel": ..., "bias": ...}, ...}}`
+        format consumed by `SharedActorCritic.apply`.
+    """
+    import numpy as _np
+
+    def _to_np(x):
+        if hasattr(x, "detach"):
+            return x.detach().cpu().numpy()
+        return _np.asarray(x)
+
+    f0_w = _to_np(state_dict["features.0.weight"])  # (hidden, obs_dim)
+    f0_b = _to_np(state_dict["features.0.bias"])
+    f1_w = _to_np(state_dict["features.2.weight"])  # (hidden, hidden)
+    f1_b = _to_np(state_dict["features.2.bias"])
+    a_w = _to_np(state_dict["actor.weight"])  # (action_dim, hidden)
+    a_b = _to_np(state_dict["actor.bias"])
+    c_w = _to_np(state_dict["critic.weight"])  # (1, hidden)
+    c_b = _to_np(state_dict["critic.bias"])
+
+    out_dim_f0, obs_dim = f0_w.shape
+    if out_dim_f0 != hidden_dim or f1_w.shape != (hidden_dim, hidden_dim):
+        raise ValueError(
+            f"hidden_dim mismatch: expected {hidden_dim}, got features.0={f0_w.shape}, features.2={f1_w.shape}"
+        )
+    action_dim = a_w.shape[0]
+
+    params = {
+        "params": {
+            "Dense_0": {"kernel": jnp.asarray(f0_w.T, dtype=jnp.float32), "bias": jnp.asarray(f0_b, dtype=jnp.float32)},
+            "Dense_1": {"kernel": jnp.asarray(f1_w.T, dtype=jnp.float32), "bias": jnp.asarray(f1_b, dtype=jnp.float32)},
+            "Dense_2": {"kernel": jnp.asarray(a_w.T, dtype=jnp.float32), "bias": jnp.asarray(a_b, dtype=jnp.float32)},
+            "Dense_3": {"kernel": jnp.asarray(c_w.T, dtype=jnp.float32), "bias": jnp.asarray(c_b, dtype=jnp.float32)},
+        }
+    }
+    return obs_dim, action_dim, params
+
+
+def _load_torch_checkpoint(path):
+    """Dispatch path for PyTorch CleanRL CC4 checkpoints.
+
+    Supports the unified single-PPOAgent format (post-73772a1; obs=210/act=242
+    with shared trunk). Earlier dual-agent format (`agent_small`/`agent_large`,
+    pre-73772a1) is rejected — those checkpoints used per-blue-agent networks
+    and don't map onto JAX's single-policy architecture without padding.
+    """
+    import torch  # local import: only needed for .pt files
+
+    ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    if isinstance(ckpt, dict) and "agent" in ckpt and isinstance(ckpt["agent"], dict):
+        sd = ckpt["agent"]
+    elif isinstance(ckpt, dict) and "features.0.weight" in ckpt:
+        sd = ckpt
+    elif isinstance(ckpt, dict) and ("agent_small" in ckpt or "agent_large" in ckpt):
+        raise ValueError(
+            f"Checkpoint {path} uses pre-unification dual-agent format "
+            f"(agent_small + agent_large). The unified single-policy "
+            f"checkpoints (e.g. checkpoint_cyborg_matched.pt) map onto JAX "
+            f"directly; the dual format would require a padding scheme."
+        )
+    else:
+        raise ValueError(f"Unrecognized PyTorch checkpoint structure at {path}: top-level keys={list(ckpt.keys())[:6]}")
+
+    obs_dim, action_dim, params = _torch_state_dict_to_shared_actor_critic_params(sd)
+    if action_dim != BLUE_ALLOW_TRAFFIC_END:
+        raise ValueError(
+            f"PyTorch checkpoint action_dim={action_dim} does not match JAX action space {BLUE_ALLOW_TRAFFIC_END}"
+        )
+    policy = SharedActorCritic(action_dim=action_dim, hidden_dim=256, activation="tanh")
+    return policy, params, "shared"
+
+
 def load_checkpoint(path):
+    if str(path).endswith((".pt", ".pth")):
+        return _load_torch_checkpoint(path)
+
     with open(path, "rb") as f:
         ckpt = pickle.load(f)
     nested_params = ckpt["params"].get("params", {})
