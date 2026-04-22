@@ -33,6 +33,122 @@ import numpy as np
 EPISODE_LENGTH = 500
 
 
+def _run_one_pair_synced(args: tuple) -> dict:
+    """Paired sleep episode under MATCHED green RNG via the differential harness.
+
+    CybORG steps first; the GreenRecorder captures each green agent's np_random
+    calls and converts them to the precomputed (steps, hosts, 8) buffer that
+    JAX consumes the same step. Both backends therefore sample the same service,
+    same reliability roll, same FP/phishing rolls on every host on every step.
+    Any residual paired reward gap with sync enabled MUST come from a real
+    env-mechanism divergence (not RNG-stream bias).
+    """
+    seed, track_lwf = args
+
+    import types as _types
+
+    import jax.numpy as jnp
+    from CybORG.Simulator.Actions import Impact as _Impact
+    from CybORG.Simulator.Actions.GreenActions import GreenAccessService as _GAS
+    from CybORG.Simulator.Actions.GreenActions import GreenLocalWork as _GLW
+
+    from jaxborg.actions.encoding import BLUE_SLEEP
+    from jaxborg.constants import NUM_BLUE_AGENTS
+    from tests.differential.harness import CC4DifferentialHarness
+
+    harness = CC4DifferentialHarness(
+        seed=seed,
+        max_steps=EPISODE_LENGTH,
+        sync_green_rng=True,
+        strict_random_sync=False,
+        check_rewards=True,
+        check_obs=False,
+        check_masks=False,
+    )
+    harness.reset()
+
+    # Per-step CybORG LWF failure counter, installed on BRM (after reset so
+    # that green_recorder's execute_action wrapper is already in place).
+    cy_lwf_per_step: list[int] = []
+    if track_lwf:
+        ec = harness.cyborg_env.environment_controller
+        brm = ec.team_reward_calculators["Blue"]["BlueRewardMachine"]
+        cy_lwf_counter = {"n": 0}
+
+        def _counting_calculate(self, current_state, action_dict, agent_observations, done, state):
+            self.phase_rewards = self.get_phase_rewards(state.mission_phase)
+            total = 0.0
+            lwf_n = 0
+            for agent_name, action in action_dict.items():
+                if not action:
+                    continue
+                act = action[0]
+                if isinstance(act, _Impact):
+                    hostname = act.hostname
+                elif isinstance(act, (_GAS, _GLW)):
+                    hostname = state.ip_addresses[act.ip_address]
+                else:
+                    continue
+                subnet_name = state.hostname_subnet_map[hostname].value
+                sessions = state.sessions[agent_name].values()
+                if len([s.ident for s in sessions if s.active]) > 0:
+                    success = agent_observations[agent_name].observations[0].data["success"]
+                    rz = self.phase_rewards[subnet_name]
+                    if "green" in agent_name and success == False:  # noqa: E712
+                        if isinstance(act, _GLW):
+                            total += rz["LWF"]
+                            lwf_n += 1
+                        elif isinstance(act, _GAS):
+                            total += rz["ASF"]
+                    elif "red" in agent_name and success and isinstance(act, _Impact):
+                        total += rz["RIA"]
+            cy_lwf_counter["n"] = lwf_n
+            return total
+
+        brm.calculate_reward = _types.MethodType(_counting_calculate, brm)
+    else:
+        cy_lwf_counter = None
+
+    sleep_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
+    per_step_jax_reward: list[float] = []
+    per_step_cy_reward: list[float] = []
+    jax_lwf_per_step: list[int] = []
+    n_reward_diffs = 0
+    worst_reward_diff = 0.0
+    for _ in range(EPISODE_LENGTH):
+        result = harness.full_step(sleep_actions)
+        jr = float(result.jax_rewards["total"])
+        cr = float(result.cyborg_rewards["total"])
+        per_step_jax_reward.append(jr)
+        per_step_cy_reward.append(cr)
+        if abs(jr - cr) > 1e-6:
+            n_reward_diffs += 1
+            worst_reward_diff = max(worst_reward_diff, abs(jr - cr))
+        if track_lwf:
+            jax_lwf_per_step.append(int(harness.jax_state.green_lwf_this_step.sum()))
+            cy_lwf_per_step.append(int(cy_lwf_counter["n"]))
+
+    jx_total = float(sum(per_step_jax_reward))
+    cy_total = float(sum(per_step_cy_reward))
+    result_dict = {
+        "seed": int(seed),
+        "cyborg_total": cy_total,
+        "jax_total": jx_total,
+        "diff": jx_total - cy_total,
+        "n_step_reward_diffs": n_reward_diffs,
+        "worst_step_reward_diff": worst_reward_diff,
+    }
+    if track_lwf:
+        jax_arr = jnp.array(jax_lwf_per_step)
+        cy_arr = jnp.array(cy_lwf_per_step)
+        diff_arr = jax_arr - cy_arr
+        result_dict["lwf_total_jax"] = int(jax_arr.sum())
+        result_dict["lwf_total_cyborg"] = int(cy_arr.sum())
+        result_dict["lwf_steps_diff"] = int(jnp.sum(diff_arr != 0))
+        result_dict["lwf_max_abs_step_diff"] = int(jnp.max(jnp.abs(diff_arr))) if diff_arr.size else 0
+    return result_dict
+
+
 def _run_one_pair(args: tuple) -> dict:
     """Worker: run paired sleep episode for one seed. Returns per-seed result.
 
@@ -205,17 +321,47 @@ def main():
         action="store_true",
         help="Track per-component (RIA/LWF/ASF, JAX action_cost) totals to localize the gap",
     )
+    parser.add_argument(
+        "--sync-green-rng",
+        action="store_true",
+        help=(
+            "Use the differential harness to drive both backends with matched green RNG "
+            "(green_recorder replays CybORG's per-step np_random calls into JAX's "
+            "precomputed green_randoms buffer). Any residual paired gap under this "
+            "flag is a real env-mechanism divergence, not RNG-stream bias."
+        ),
+    )
+    parser.add_argument(
+        "--track-lwf",
+        action="store_true",
+        help="With --sync-green-rng, additionally log per-step LWF failure counts on both backends.",
+    )
     args = parser.parse_args()
+
+    if args.track_components and args.sync_green_rng:
+        raise SystemExit("--track-components is incompatible with --sync-green-rng (harness path)")
+    if args.track_lwf and not args.sync_green_rng:
+        raise SystemExit("--track-lwf requires --sync-green-rng")
 
     seeds = list(range(args.seed_start, args.seed_start + args.seeds))
     print(f"Running paired sleep baseline: {len(seeds)} seeds × {EPISODE_LENGTH} steps × 2 backends")
-    print(f"Seeds: [{seeds[0]}..{seeds[-1]}], workers: {args.workers}, track_components={args.track_components}")
+    print(
+        f"Seeds: [{seeds[0]}..{seeds[-1]}], workers: {args.workers}, "
+        f"track_components={args.track_components}, sync_green_rng={args.sync_green_rng}, "
+        f"track_lwf={args.track_lwf}"
+    )
 
-    worker_args = [(s, args.track_components) for s in seeds]
+    if args.sync_green_rng:
+        runner = _run_one_pair_synced
+        worker_args = [(s, args.track_lwf) for s in seeds]
+    else:
+        runner = _run_one_pair
+        worker_args = [(s, args.track_components) for s in seeds]
+
     results: list[dict] = []
     if args.workers <= 1:
         for wa in worker_args:
-            r = _run_one_pair(wa)
+            r = runner(wa)
             results.append(r)
             print(
                 f"  seed={r['seed']:3d}  cyborg={r['cyborg_total']:9.1f}  "
@@ -224,7 +370,7 @@ def main():
     else:
         ctx = mp.get_context("spawn")
         with ProcessPoolExecutor(max_workers=args.workers, mp_context=ctx) as pool:
-            futures = {pool.submit(_run_one_pair, wa): wa[0] for wa in worker_args}
+            futures = {pool.submit(runner, wa): wa[0] for wa in worker_args}
             for fut in as_completed(futures):
                 r = fut.result()
                 results.append(r)
@@ -248,6 +394,22 @@ def main():
     print(f"JAXborg mean: {jx_arr.mean():9.2f} ± {jx_arr.std(ddof=1):8.2f}")
     print(f"diff (J-C):  mean={tost['mean_diff']:+8.2f}  stdev={diffs.std(ddof=1):.2f}")
     print(f"             90% CI=[{tost['ci_lower']:+.2f}, {tost['ci_upper']:+.2f}]  (alpha=0.05, 1-sided)")
+    if args.sync_green_rng:
+        total_step_reward_diffs = int(sum(r.get("n_step_reward_diffs", 0) for r in results))
+        worst_step = max((r.get("worst_step_reward_diff", 0.0) for r in results), default=0.0)
+        print(
+            f"Per-step reward diffs across {len(diffs)} eps × {EPISODE_LENGTH} steps: "
+            f"{total_step_reward_diffs} (worst |Δ| = {worst_step:.2e})"
+        )
+        if args.track_lwf:
+            lwf_jax = int(sum(r.get("lwf_total_jax", 0) for r in results))
+            lwf_cy = int(sum(r.get("lwf_total_cyborg", 0) for r in results))
+            lwf_steps_diff = int(sum(r.get("lwf_steps_diff", 0) for r in results))
+            lwf_max_abs = max((r.get("lwf_max_abs_step_diff", 0) for r in results), default=0)
+            print(
+                f"LWF event totals (across all eps): JAX={lwf_jax}  CybORG={lwf_cy}  "
+                f"Δ={lwf_jax - lwf_cy}    per-step diff count={lwf_steps_diff}  max |Δ_step|={lwf_max_abs}"
+            )
     print(
         f"TOST Δ=±{tost['margin']:.0f}: {'PASS' if tost['equivalent'] else 'FAIL'}  "
         f"p_upper={tost['p_upper']:.4f}  p_lower={tost['p_lower']:.4f}"
