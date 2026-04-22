@@ -30,7 +30,6 @@ def compute_reward_breakdown(
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
     blue_actions: chex.Array = None,
-    blue_pre_step_pending: chex.Array = None,
 ) -> RewardBreakdown:
     """Compute blue team shared reward for this step.
 
@@ -40,8 +39,7 @@ def compute_reward_breakdown(
         impact_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where red Impact succeeded
         green_lwf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenLocalWork failed
         green_asf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenAccessService failed
-        blue_actions: (NUM_BLUE_AGENTS,) int32 - encoded blue actions this step
-        blue_pre_step_pending: (NUM_BLUE_AGENTS,) int32 - pending ticks before this step
+        blue_actions: (NUM_BLUE_AGENTS,) int32 - caller-submitted blue actions this step
 
     Returns:
         RewardBreakdown with total reward and per-term counts.
@@ -59,12 +57,14 @@ def compute_reward_breakdown(
     lwf_reward = jnp.sum(green_lwf_hosts.astype(jnp.float32) * lwf_weights * active)
     asf_reward = jnp.sum(green_asf_hosts.astype(jnp.float32) * asf_weights * active)
 
-    # Action cost: CybORG charges -1 per Restore initiation (team-level).
-    # Only charged when the agent is not already in a pending multi-tick action.
-    if blue_actions is not None and blue_pre_step_pending is not None:
+    # Action cost mirrors CybORG's CC4 contract: -1 per caller-submitted
+    # Restore each step (SimulationController._step:310 sums
+    # `actions.get(agent, Action()).cost`), regardless of whether the agent
+    # is already busy executing a prior Restore. CC4's headline scorer
+    # inherits this via `BlueFixedActionWrapper.step`'s `sum(reward.values())`.
+    if blue_actions is not None:
         is_restore = (blue_actions >= BLUE_RESTORE_START) & (blue_actions < BLUE_RESTORE_END)
-        is_initiating = blue_pre_step_pending == 0
-        action_cost = -jnp.sum((is_restore & is_initiating).astype(jnp.float32))
+        action_cost = -jnp.sum(is_restore.astype(jnp.float32))
     else:
         action_cost = jnp.float32(0.0)
 
@@ -87,7 +87,6 @@ def compute_rewards(
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
     blue_actions: chex.Array = None,
-    blue_pre_step_pending: chex.Array = None,
 ) -> chex.Array:
     """Compute blue team shared reward for this step."""
     return compute_reward_breakdown(
@@ -97,7 +96,6 @@ def compute_rewards(
         green_lwf_hosts,
         green_asf_hosts,
         blue_actions,
-        blue_pre_step_pending,
     ).total
 
 

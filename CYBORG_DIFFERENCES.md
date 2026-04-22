@@ -128,15 +128,27 @@ JAXborg exercises its own N computation.
 - JAXborg: `src/jaxborg/actions/duration.py` (`process_red_with_duration`)
 - JAXborg: `src/jaxborg/state.py` (`red_abstract_session_count`, `red_pending_visible_sessions`)
 
-### `action_cost` not modeled
-CybORG's `SimulationController` adds an `action_cost` reward component that
-sums `action.cost` for each blue agent (e.g., Restore costs −1). JAXborg does
-not model this component — it uses only `BlueRewardMachine` for rewards. The
-eval pipeline (`scripts/eval/transfer.py`) extracts only `BlueRewardMachine`
-from CybORG rewards to match.
+### `action_cost` mirrors CybORG's caller-submission accounting
+CybORG's `SimulationController._step:310` sums `actions.get(agent, Action()).cost`
+across the caller-submitted action dict every step. With Restore's
+`duration == 5`, a policy that re-submits Restore on the 4 follow-up busy
+ticks is charged −1 per submission even though the busy ticks execute
+`Sleep()`. CC4's headline scorer
+(`BlueFixedActionWrapper.step:171–175`, `Evaluation/evaluation.py:110`)
+inherits this via `sum(reward.values())`.
+
+JAXborg now mirrors that contract in `compute_reward_breakdown`: −1 for
+every step a Restore action is submitted by the caller, regardless of busy
+state. Earlier versions gated on `is_initiating = (blue_pending_ticks == 0)`
+(charging only at logical-Restore initiation), which under-charged by ~+4
+per Restore episode and produced a +109..+175 directional headline-reward
+gap vs CybORG.
 
 - CybORG: `Simulator/SimulationController.py:310–311`
-- JAXborg: `src/jaxborg/rewards.py` (no `action_cost` term)
+- JAXborg: `src/jaxborg/rewards.py:62–69`
+- Regression test: `tests/differential/test_reward_cc4_contract.py`
+- Differential harness now compares `sum(controller.reward["Blue"].values())`
+  against the JAX full-contract reward (`tests/differential/harness.py:1167–1190`).
 
 ## Closed Workarounds
 

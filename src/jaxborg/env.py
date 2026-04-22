@@ -637,9 +637,6 @@ class CC4Env(MultiAgentEnv):
         no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         no_forced_pids = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        # Snapshot pending ticks before actions modify them (for action_cost).
-        blue_pre_step_pending = state.blue_pending_ticks
-
         execution_order = _cyborg_priority_execution_order(blue_action_arr)
         state = apply_all_actions_typed(
             state,
@@ -662,7 +659,6 @@ class CC4Env(MultiAgentEnv):
             state.green_lwf_this_step,
             state.green_asf_this_step,
             blue_actions=blue_action_arr,
-            blue_pre_step_pending=blue_pre_step_pending,
         )
         reward = reward_breakdown.total
 

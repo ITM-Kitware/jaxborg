@@ -184,8 +184,8 @@ def _jit_apply_blue_action(state, const, agent_id, action_idx):
 
 
 @jax.jit
-def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf):
-    return compute_rewards(state, const, impact_hosts, green_lwf, green_asf)
+def _jit_compute_rewards(state, const, impact_hosts, green_lwf, green_asf, blue_actions):
+    return compute_rewards(state, const, impact_hosts, green_lwf, green_asf, blue_actions=blue_actions)
 
 
 @jax.jit
@@ -1164,7 +1164,19 @@ class CC4DifferentialHarness:
         # Category A sync REMOVED: green_lwf_this_step / green_asf_this_step
         # JAX computes green failure events from its own green action logic.
 
-        # --- Reward comparison ---
+        # --- Reward comparison (full CC4 contract: BRM + action_cost) ---
+        # `caller_blue_action_arr` mirrors what CybORG's `controller.step`
+        # received in its `actions` dict — `BlueFixedActionWrapper` does the
+        # equivalent before invoking `parallel_step`. Passing the busy-masked
+        # array would suppress action_cost on every Restore busy tick and
+        # hide the leak that motivated this check.
+        caller_blue_action_arr = jnp.array(
+            [
+                blue_actions.get(b, BLUE_SLEEP) if blue_actions is not None else BLUE_SLEEP
+                for b in range(NUM_BLUE_AGENTS)
+            ],
+            dtype=jnp.int32,
+        )
         jax_reward = float(
             _jit_compute_rewards(
                 self.jax_state,
@@ -1172,9 +1184,10 @@ class CC4DifferentialHarness:
                 self.jax_state.red_impact_attempted,
                 self.jax_state.green_lwf_this_step,
                 self.jax_state.green_asf_this_step,
+                caller_blue_action_arr,
             )
         )
-        cyborg_reward = float(controller.reward.get("Blue", {}).get("BlueRewardMachine", 0.0))
+        cyborg_reward = float(sum(controller.reward.get("Blue", {}).values()))
 
         # --- Compare ---
         from tests.differential.state_comparator import StateDiff, compare_fast
