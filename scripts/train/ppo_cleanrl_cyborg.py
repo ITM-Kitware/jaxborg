@@ -710,8 +710,31 @@ def train(args):
     print(f"{'=' * 70}")
 
 
+def _load_config_defaults(argv):
+    """Pre-parse --config and return (yaml_defaults, remaining_argv).
+
+    Values from the YAML become argparse defaults (dests in snake_case).
+    Explicit CLI flags still override. Unknown keys raise.
+    """
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--config", type=str, default=None)
+    known, remaining = pre.parse_known_args(argv)
+    if known.config is None:
+        return {}, remaining
+    import yaml
+    with open(known.config) as f:
+        data = yaml.safe_load(f) or {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{known.config}: top-level must be a mapping")
+    return data, remaining
+
+
 def main():
+    import sys
+    yaml_defaults, remaining = _load_config_defaults(sys.argv[1:])
+
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for CybORG CC4")
+    parser.add_argument("--config", type=str, default=None, help="YAML with defaults (CLI flags still win)")
     parser.add_argument("--total-timesteps", type=int, default=5_000_000)
     parser.add_argument("--num-envs", type=int, default=48)
     parser.add_argument(
@@ -747,7 +770,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default="")
 
-    args = parser.parse_args()
+    if yaml_defaults:
+        valid = {a.dest for a in parser._actions}
+        unknown = set(yaml_defaults) - valid
+        if unknown:
+            raise ValueError(f"{sorted(unknown)}: not valid config keys")
+        parser.set_defaults(**yaml_defaults)
+    args = parser.parse_args(remaining)
     train(args)
 
 

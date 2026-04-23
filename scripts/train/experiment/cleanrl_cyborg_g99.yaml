@@ -1,0 +1,20 @@
+# CleanRL PPO on pure CybORG, gamma=0.99, 20M steps.
+# Companion baseline to pure_g99.yaml.
+# Consumed by ppo_cleanrl_cyborg.py --config <this file>.
+total_timesteps: 20000000
+num_envs: 48
+rollout_length: 500
+lr: 3.0e-4
+gamma: 0.99
+gae_lambda: 0.95
+num_epochs: 4
+num_minibatches: 16
+clip_coef: 0.2
+ent_coef: 0.01
+vf_coef: 0.5
+max_grad_norm: 0.5
+norm_rewards: true
+anneal_lr: false
+seed: 42
+tag: cyborg_g99
+checkpoint_every: 5000000
