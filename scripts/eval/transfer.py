@@ -1513,7 +1513,7 @@ def main():
     parser.add_argument("--mask-summary", action="store_true", help="Print per-agent mask breakdown")
     parser.add_argument(
         "--jax-topology-mode",
-        choices=("pure", "cyborg_bank"),
+        choices=("generative", "cyborg_bank"),
         default="cyborg_bank",
         help="JAX env topology mode for JAX-only or independent rollouts",
     )

@@ -29,7 +29,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         self,
         num_steps: int = 500,
         *,
-        topology_mode: str = "pure",
+        topology_mode: str = "generative",
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,

@@ -743,8 +743,8 @@ def main():
     parser.add_argument("--lr", type=float, default=3e-4, help="Learning rate")
     parser.add_argument("--gamma", type=float, default=0.99, help="Discount factor")
     parser.add_argument("--gae-lambda", type=float, default=0.95)
-    parser.add_argument("--num-epochs", type=int, default=10, help="SGD epochs per rollout")
-    parser.add_argument("--num-minibatches", type=int, default=8, help="Number of minibatches per epoch")
+    parser.add_argument("--num-epochs", type=int, default=4, help="SGD epochs per rollout")
+    parser.add_argument("--num-minibatches", type=int, default=16, help="Number of minibatches per epoch")
     parser.add_argument("--clip-coef", type=float, default=0.2)
     parser.add_argument("--ent-coef", type=float, default=0.01)
     parser.add_argument("--vf-coef", type=float, default=0.5)
@@ -753,7 +753,7 @@ def main():
         "--norm-rewards", action="store_true", default=True, help="Normalize rewards using running return stats"
     )
     parser.add_argument("--no-norm-rewards", dest="norm_rewards", action="store_false")
-    parser.add_argument("--anneal-lr", action="store_true", default=True)
+    parser.add_argument("--anneal-lr", action="store_true", default=False)
     parser.add_argument("--no-anneal-lr", dest="anneal_lr", action="store_false")
     parser.add_argument(
         "--target-kl", type=float, default=None, help="Target KL for early stopping (None = no early stopping)"

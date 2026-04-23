@@ -166,7 +166,7 @@ def make_train(config):
     num_envs = config.get("NUM_ENVS", 1)
     inner_env = FsmRedCC4Env(
         num_steps=500,
-        topology_mode=config.get("TOPOLOGY_MODE", "pure"),
+        topology_mode=config.get("TOPOLOGY_MODE", "generative"),
         topology_bank_size=config.get("TOPOLOGY_BANK_SIZE", 0),
         training_mode=bool(config.get("TRAINING_MODE", False)),
     )
@@ -529,8 +529,12 @@ def main(cfg):
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    save_dir = EXP_DIR / f"ippo_cc4_{timestamp}"
+    save_dir_cfg = config.get("SAVE_DIR")
+    if save_dir_cfg:
+        save_dir = Path(save_dir_cfg).resolve()
+    else:
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        save_dir = EXP_DIR / f"ippo_cc4_{timestamp}"
     save_dir.mkdir(parents=True, exist_ok=True)
 
     if mlflow_enabled:
@@ -571,7 +575,7 @@ def main(cfg):
     print(f"Num steps per rollout: {config['NUM_STEPS']}")
     print(f"Hidden dim: {config.get('HIDDEN_DIM', 256)}")
     print(f"Activation: {config['ACTIVATION']}")
-    print(f"Topology mode: {config.get('TOPOLOGY_MODE', 'pure')}")
+    print(f"Topology mode: {config.get('TOPOLOGY_MODE', 'generative')}")
     print(f"Reward normalization: {config.get('NORM_REWARDS', False)}")
     print("=" * 60, flush=True)
 

@@ -57,7 +57,7 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
         "LR": 3e-4,
         "REWARD_SCALE": 1.0,
         "SEED": 0,
-        "TOPOLOGY_MODE": "pure",
+        "TOPOLOGY_MODE": "generative",
         "TRAINING_MODE": True,
     }
 

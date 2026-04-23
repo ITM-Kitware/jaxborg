@@ -479,7 +479,7 @@ class CC4Env(MultiAgentEnv):
         self,
         num_steps: int = 500,
         *,
-        topology_mode: str = "pure",
+        topology_mode: str = "generative",
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
@@ -503,7 +503,7 @@ class CC4Env(MultiAgentEnv):
                 self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
             if sync_red_policy_bank:
                 self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
-        elif topology_mode != "pure":
+        elif topology_mode != "generative":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
 
         self.blue_agents = [f"blue_{i}" for i in range(NUM_BLUE_AGENTS)]
@@ -649,7 +649,7 @@ class CC4Env(MultiAgentEnv):
             no_forced_pids,
             execution_order,
             blue_keys,
-            use_green_vmap=(self.topology_mode == "pure"),
+            use_green_vmap=(self.topology_mode == "generative"),
         )
 
         reward_breakdown = compute_reward_breakdown(

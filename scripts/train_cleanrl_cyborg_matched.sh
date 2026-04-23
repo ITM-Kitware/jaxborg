@@ -13,7 +13,7 @@ echo "Start: $(date)"
 JAXBORG_EXP_DIR="$EXP_DIR" \
 uv run python scripts/train/ppo_cleanrl_cyborg.py \
   --total-timesteps 20000000 \
-  --num-envs 16 \
+  --num-envs 48 \
   --rollout-length 500 \
   --lr 3e-4 \
   --gamma 0.85 \
