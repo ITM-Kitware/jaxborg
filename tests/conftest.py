@@ -1,6 +1,8 @@
 import os
 from pathlib import Path
 
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
 _JAX_CACHE_DIR = Path.home() / ".cache" / "jaxborg" / "xla"
 os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
 os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", str(_JAX_CACHE_DIR))
