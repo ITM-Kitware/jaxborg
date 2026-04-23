@@ -254,6 +254,7 @@ class CC4DifferentialHarness:
         strict_random_sync=False,
         use_cyborg_blue_policy=False,
         strip_inactive_knowledge=False,
+        record_red_policy=False,
     ):
         self.seed = seed
         self.max_steps = max_steps
@@ -267,6 +268,12 @@ class CC4DifferentialHarness:
         self.strict_random_sync = strict_random_sync
         self.use_cyborg_blue_policy = use_cyborg_blue_policy
         self.strip_inactive_knowledge = strip_inactive_knowledge
+        self.record_red_policy = record_red_policy
+        self.red_policy_recorder = None
+        self.red_policy_mismatches: list[dict] = []
+        self.red_policy_compared: int = 0
+        self.red_eligibility_mismatches: list[dict] = []
+        self.red_eligibility_compared: int = 0
         self.cyborg_env = None
         self.jax_state = None
         self.jax_const = None
@@ -702,6 +709,20 @@ class CC4DifferentialHarness:
                 use_red_session_check_choices=jnp.array(True),
             )
 
+        if self.record_red_policy:
+            from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
+
+            self.red_policy_recorder = RedPolicyRecorder()
+            self.red_policy_recorder.install(self.cyborg_env, self.mappings)
+            self.jax_const = self.jax_const.replace(
+                red_policy_randoms=jnp.asarray(self.red_policy_recorder._tape),
+                use_red_policy_randoms=jnp.array(True),
+            )
+            self.red_policy_mismatches = []
+            self.red_policy_compared = 0
+            self.red_eligibility_mismatches = []
+            self.red_eligibility_compared = 0
+
         from tests.differential.state_comparator import (
             extract_cyborg_snapshot,
             extract_jax_snapshot,
@@ -876,12 +897,46 @@ class CC4DifferentialHarness:
         controller = self.cyborg_env.environment_controller
         self._assert_duration_parity(controller)
 
+        # --- Red-policy parity recording: pre-call CybORG's get_action on each
+        # active red agent to capture what CybORG *would* pick given its natural
+        # RNG stream. RedPolicyRecorder fills the tape at tape[step, agent, :].
+        # We save/restore controller.np_random around each call so the shared
+        # stream is not advanced (which would break the rest of the harness's
+        # RNG sync). After these pre-calls, jax_const.red_policy_randoms is
+        # refreshed so _jit_fsm_red_select_actions reads the just-captured tokens.
+        cyborg_pre_picks: dict[int, object] = {}
+        if use_fsm and self.record_red_policy and self.red_policy_recorder is not None:
+            pre_rng_state = controller.np_random.bit_generator.state
+            for r in range(NUM_RED_AGENTS):
+                agent_name = f"red_agent_{r}"
+                iface = controller.agent_interfaces.get(agent_name)
+                if iface is None or not getattr(iface, "active", False):
+                    continue
+                try:
+                    last_obs = controller.get_last_observation(agent_name)
+                    # AgentInterface.get_action handles action_space and delegates
+                    # to the inner agent's get_action (wrapped by RedPolicyRecorder).
+                    cyborg_pre_picks[r] = iface.get_action(last_obs)
+                except Exception as exc:
+                    cyborg_pre_picks[r] = exc
+            controller.np_random.bit_generator.state = pre_rng_state
+            self.jax_const = self.jax_const.replace(
+                red_policy_randoms=jnp.asarray(self.red_policy_recorder._tape),
+            )
+
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
             red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
                 _jit_fsm_red_select_actions(self.jax_state, self.jax_const, red_keys)
             )
             red_actions = {r: int(red_action_arr[r]) for r in range(NUM_RED_AGENTS)}
+
+            # --- Compare JAX picks to CybORG's pre-captured picks ---
+            if self.record_red_policy and cyborg_pre_picks:
+                self._compare_red_policy_picks(
+                    cyborg_pre_picks, fsm_actions_arr, target_hosts_arr, target_subnets_arr, eligible_arr
+                )
+                self._compare_red_eligibility(controller)
             target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
             target_subnets = [target_subnets_arr[r] for r in range(NUM_RED_AGENTS)]
             fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
@@ -1583,6 +1638,133 @@ class CC4DifferentialHarness:
         if call_idx != len(random_calls):
             return None
         return detected
+
+    def _compare_red_policy_picks(
+        self, cyborg_pre_picks, fsm_actions_arr, target_hosts_arr, target_subnets_arr, eligible_arr
+    ):
+        """Compare JAX's fsm_red_select_actions output against CybORG's pre-captured picks.
+
+        For each red agent that CybORG picked this step, compare the (fsm_action,
+        target_host_or_subnet) tuple. Any mismatch indicates JAX's red policy
+        logic diverges from CybORG's given matched RNG — an env-level parity bug.
+        """
+        from ipaddress import IPv4Address, IPv4Network
+
+        from jaxborg.cyborg_red_policy_recorder import _ACTION_NAME_TO_FSM
+
+        step = int(self.jax_state.time)
+        for r, picked in cyborg_pre_picks.items():
+            if isinstance(picked, Exception):
+                continue
+            cy_name = type(picked).__name__
+            cy_fsm = _ACTION_NAME_TO_FSM.get(cy_name, -1)
+            if cy_fsm < 0:
+                continue  # untracked action type (Sleep, InvalidAction, etc.)
+            cy_host_idx = -1
+            cy_subnet_idx = -1
+            ip = getattr(picked, "ip_address", None)
+            hostname = getattr(picked, "hostname", None)
+            subnet = getattr(picked, "subnet", None)
+            if hostname is not None and hostname in self.mappings.hostname_to_idx:
+                cy_host_idx = self.mappings.hostname_to_idx[hostname]
+            elif isinstance(ip, IPv4Address) and ip in self.mappings.ip_to_hostname:
+                cy_host_idx = self.mappings.hostname_to_idx[self.mappings.ip_to_hostname[ip]]
+            if isinstance(subnet, IPv4Network) and subnet in self.mappings.cidr_to_subnet_idx:
+                cy_subnet_idx = self.mappings.cidr_to_subnet_idx[subnet]
+
+            jax_fsm = int(fsm_actions_arr[r])
+            jax_host = int(target_hosts_arr[r])
+            jax_subnet = int(target_subnets_arr[r])
+            jax_eligible = bool(eligible_arr[r])
+
+            self.red_policy_compared += 1
+            if cy_fsm == 0:  # DiscoverRemoteSystems — compare action + subnet
+                agree = (jax_fsm == 0) and (jax_subnet == cy_subnet_idx)
+            else:
+                agree = (jax_fsm == cy_fsm) and (jax_host == cy_host_idx)
+            if not agree:
+                self.red_policy_mismatches.append(
+                    {
+                        "step": step,
+                        "red_agent": r,
+                        "cyborg_action": cy_name,
+                        "cyborg_fsm": cy_fsm,
+                        "cyborg_host_idx": cy_host_idx,
+                        "cyborg_subnet_idx": cy_subnet_idx,
+                        "jax_fsm": jax_fsm,
+                        "jax_host_idx": jax_host,
+                        "jax_subnet_idx": jax_subnet,
+                        "jax_eligible": jax_eligible,
+                    }
+                )
+
+    def _compare_red_eligibility(self, controller):
+        """Symmetric check: does JAX's eligible-host set match CybORG's host_states
+        membership for each red agent?
+
+        fup⁴'s pick comparison is asymmetric — it only catches JAX-smaller-eligibility
+        (when JAX doesn't think CybORG's picked host is eligible). This catches the
+        reverse: hosts JAX considers eligible that CybORG does not, and vice versa.
+
+        CybORG eligible = agent.host_states.keys() (minus F-state hosts).
+        JAX eligible    = fsm_host_entered[r, :] & (fsm_host_states[r, :] != FSM_F).
+
+        We compare the symmetric difference of the two index sets.
+        """
+        from jaxborg.agents.fsm_red import FSM_F
+        from jaxborg.constants import NUM_RED_AGENTS
+
+        step = int(self.jax_state.time)
+        fsm_entered = self.jax_state.fsm_host_entered
+        fsm_states = self.jax_state.fsm_host_states
+
+        for r in range(NUM_RED_AGENTS):
+            agent_name = f"red_agent_{r}"
+            iface = controller.agent_interfaces.get(agent_name)
+            if iface is None or not getattr(iface, "active", False):
+                continue
+            agent = getattr(iface, "agent", None)
+            if agent is None or not hasattr(agent, "host_states"):
+                continue
+
+            # JAX eligible indices
+            jax_eligible_indices = set()
+            for h in range(len(self.mappings.idx_to_hostname)):
+                if bool(fsm_entered[r, h]) and int(fsm_states[r, h]) != int(FSM_F):
+                    jax_eligible_indices.add(h)
+
+            # CybORG eligible indices (host_states.keys() minus F)
+            cy_eligible_indices = set()
+            for ip_str, entry in agent.host_states.items():
+                hostname = entry.get("hostname")
+                if hostname is None:
+                    from ipaddress import IPv4Address
+                    try:
+                        hostname = controller.state.ip_addresses.get(IPv4Address(ip_str))
+                    except (ValueError, TypeError):
+                        hostname = None
+                if hostname is None or hostname not in self.mappings.hostname_to_idx:
+                    continue
+                # Check F state — use CybORG's own state string if present
+                state_str = entry.get("state")
+                if state_str == "F":
+                    continue
+                cy_eligible_indices.add(self.mappings.hostname_to_idx[hostname])
+
+            self.red_eligibility_compared += 1
+            only_in_jax = jax_eligible_indices - cy_eligible_indices
+            only_in_cyborg = cy_eligible_indices - jax_eligible_indices
+            if only_in_jax or only_in_cyborg:
+                self.red_eligibility_mismatches.append(
+                    {
+                        "step": step,
+                        "red_agent": r,
+                        "only_in_jax": sorted(only_in_jax),
+                        "only_in_cyborg": sorted(only_in_cyborg),
+                        "jax_size": len(jax_eligible_indices),
+                        "cyborg_size": len(cy_eligible_indices),
+                    }
+                )
 
     def _drive_cyborg_fsm_agents(self):
         """Drive CybORG's FSM red agents to process their last observation.
