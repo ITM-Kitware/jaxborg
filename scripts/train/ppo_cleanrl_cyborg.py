@@ -484,8 +484,11 @@ def train(args):
                     # Forward pass
                     _, new_lp, ent, new_val = agent.get_action_and_value(mb_obs, mb_mask, mb_act)
 
-                    # PPO loss
-                    adv = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
+                    # PPO loss. unbiased=False (ddof=0) to match jnp.std default
+                    # used by `scripts/train/ippo_jax.py::_loss_fn`. Without it,
+                    # advantage normalization differs by sqrt(N/(N-1)) per minibatch
+                    # — see tests/differential/test_ppo_update_parity.py.
+                    adv = (mb_adv - mb_adv.mean()) / (mb_adv.std(unbiased=False) + 1e-8)
                     logratio = new_lp - mb_lp
                     ratio = logratio.exp()
                     pg_loss1 = -adv * ratio
@@ -528,10 +531,16 @@ def train(args):
             avg_approx_kl = epoch_approx_kl / max(n_minibatches_total, 1)
             avg_clipfrac = epoch_clipfrac / max(n_minibatches_total, 1)
 
-            # Compute explained variance
+            # Compute explained variance. unbiased=False (ddof=0) to match
+            # JAX's `jnp.var` default — keeps the diagnostic comparable across
+            # backends.
             with torch.no_grad():
-                y_var = b_ret.var()
-                explained_var = (1 - (b_ret - b_val).var() / (y_var + 1e-8)).item() if y_var > 1e-8 else 0.0
+                y_var = b_ret.var(unbiased=False)
+                explained_var = (
+                    (1 - (b_ret - b_val).var(unbiased=False) / (y_var + 1e-8)).item()
+                    if y_var > 1e-8
+                    else 0.0
+                )
 
             # Episode reward stats
             if completed_rewards:
