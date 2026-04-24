@@ -1,14 +1,13 @@
 """Evaluate a CleanRL-CybORG PPO checkpoint on CybORG CC4.
 
 Loads bare model weights saved by `scripts/train/ppo_cleanrl_cyborg.py`
-(`model_<tag>.pt`) via its PPOAgent class and rolls out N episodes on
+(`model_<tag>.pt`) via the shared PPOAgent class and rolls out N episodes on
 CybORG's EnterpriseMAE env with zero-padded obs/masks (matching training).
 """
 
 # ruff: noqa: E402
 
 import argparse
-import importlib.util
 import json
 import os
 import sys
@@ -23,6 +22,9 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
+sys.path.insert(0, str(ROOT / "scripts" / "train"))
+
+from ppo_cleanrl_agent import PPOAgent
 
 from jaxborg.constants import BLUE_OBS_SIZE
 
@@ -31,14 +33,6 @@ AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 OBS_DIM = BLUE_OBS_SIZE  # 210
 ACT_DIM = 242
 EPISODE_LENGTH = 500
-
-
-def _import_ppo_agent():
-    train_path = ROOT / "scripts" / "train" / "ppo_cleanrl_cyborg.py"
-    spec = importlib.util.spec_from_file_location("ppo_cleanrl_cyborg", train_path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod.PPOAgent
 
 
 def make_env(seed):
@@ -93,7 +87,6 @@ def rollout_episode(env, agent, device, deterministic=False):
 
 
 def evaluate(model_path, episodes, seed, deterministic, output_json):
-    PPOAgent = _import_ppo_agent()
     device = torch.device("cpu")
     agent = PPOAgent(OBS_DIM, ACT_DIM)
     state_dict = torch.load(model_path, map_location=device, weights_only=True)

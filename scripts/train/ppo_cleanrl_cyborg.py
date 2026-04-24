@@ -25,6 +25,7 @@ import argparse
 import json
 import os
 import signal
+import sys
 import time
 from multiprocessing import Pipe, Process
 from pathlib import Path
@@ -34,9 +35,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.distributions import Categorical
 
-from jaxborg.constants import BLUE_OBS_SIZE
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from ppo_cleanrl_agent import PPOAgent  # noqa: E402
+
+from jaxborg.constants import BLUE_OBS_SIZE  # noqa: E402
 
 # ── Environment setup ──────────────────────────────────────────────────────
 
@@ -138,60 +141,6 @@ class ParallelEnvs:
             proc.join(timeout=5)
             if proc.is_alive():
                 proc.terminate()
-
-
-# ── Neural network ────────────────────────────────────────────────────────
-
-
-class PPOAgent(nn.Module):
-    """Actor-critic network with action masking."""
-
-    def __init__(self, obs_dim, act_dim, hidden_dims=(256, 256)):
-        super().__init__()
-
-        # Shared feature extractor
-        layers = []
-        in_dim = obs_dim
-        for h in hidden_dims:
-            layers.append(nn.Linear(in_dim, h))
-            layers.append(nn.Tanh())
-            in_dim = h
-        self.features = nn.Sequential(*layers)
-
-        # Actor head
-        self.actor = nn.Linear(in_dim, act_dim)
-
-        # Critic head
-        self.critic = nn.Linear(in_dim, 1)
-
-        # Orthogonal initialization (CleanRL standard)
-        for layer in self.features:
-            if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(layer.weight, gain=np.sqrt(2))
-                nn.init.constant_(layer.bias, 0.0)
-        nn.init.orthogonal_(self.actor.weight, gain=0.01)
-        nn.init.constant_(self.actor.bias, 0.0)
-        nn.init.orthogonal_(self.critic.weight, gain=1.0)
-        nn.init.constant_(self.critic.bias, 0.0)
-
-    def get_value(self, obs):
-        features = self.features(obs)
-        return self.critic(features).squeeze(-1)
-
-    def get_action_and_value(self, obs, action_mask, action=None):
-        features = self.features(obs)
-        logits = self.actor(features)
-
-        # Apply action mask: set invalid actions to very negative
-        logits = logits + (action_mask.float() - 1.0) * 1e8
-
-        dist = Categorical(logits=logits)
-        if action is None:
-            action = dist.sample()
-        log_prob = dist.log_prob(action)
-        entropy = dist.entropy()
-        value = self.critic(features).squeeze(-1)
-        return action, log_prob, entropy, value
 
 
 # ── Reward normalizer ─────────────────────────────────────────────────────
@@ -722,6 +671,7 @@ def _load_config_defaults(argv):
     if known.config is None:
         return {}, remaining
     import yaml
+
     with open(known.config) as f:
         data = yaml.safe_load(f) or {}
     if not isinstance(data, dict):
@@ -731,6 +681,7 @@ def _load_config_defaults(argv):
 
 def main():
     import sys
+
     yaml_defaults, remaining = _load_config_defaults(sys.argv[1:])
 
     parser = argparse.ArgumentParser(description="CleanRL-style PPO for CybORG CC4")
