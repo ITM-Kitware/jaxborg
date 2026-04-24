@@ -41,7 +41,8 @@ def _import_ppo_agent():
     return mod.PPOAgent
 
 
-def make_env():
+def make_env(seed):
+    """Match transfer.py's per-episode seed convention (one fresh CybORG per ep)."""
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
@@ -53,7 +54,7 @@ def make_env():
         red_agent_class=FiniteStateRedAgent,
         steps=EPISODE_LENGTH,
     )
-    return EnterpriseMAE(CybORG(scenario_generator=sg))
+    return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
 
 
 def pad_obs_mask(obs_dict, info_dict):
@@ -102,9 +103,10 @@ def evaluate(model_path, episodes, seed, deterministic, output_json):
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    env = make_env()
     rewards = []
     for ep in range(episodes):
+        # Match transfer.py convention: seed=seed+ep, fresh CybORG per episode
+        env = make_env(seed + ep)
         r = rollout_episode(env, agent, device, deterministic=deterministic)
         rewards.append(r)
         print(f"  ep {ep + 1}/{episodes}: {r:.1f}", flush=True)
