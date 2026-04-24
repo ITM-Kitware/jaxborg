@@ -466,6 +466,8 @@ def train(args):
             epoch_entropy = 0.0
             epoch_approx_kl = 0.0
             epoch_clipfrac = 0.0
+            epoch_pre_clip_grad_norm = 0.0
+            epoch_grad_norm = 0.0
             n_minibatches_total = 0
 
             for epoch in range(args.num_epochs):
@@ -501,7 +503,13 @@ def train(args):
 
                     optimizer.zero_grad()
                     loss.backward()
-                    nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                    pre_clip_grad_norm = float(
+                        nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
+                    )
+                    # post-clip norm is implicit from `clip_grad_norm_`'s scale rule:
+                    # min(pre_clip, max_grad_norm). Matches JAX's
+                    # `grad_norm = pre_clip * min(1, max_norm/(pre_clip+1e-8))`.
+                    post_clip_grad_norm = min(pre_clip_grad_norm, args.max_grad_norm)
                     optimizer.step()
 
                     # Track metrics
@@ -514,6 +522,8 @@ def train(args):
                     epoch_entropy += entropy_loss.item()
                     epoch_approx_kl += approx_kl
                     epoch_clipfrac += clipfrac
+                    epoch_pre_clip_grad_norm += pre_clip_grad_norm
+                    epoch_grad_norm += post_clip_grad_norm
                     n_minibatches_total += 1
 
                 # Early stopping on KL
@@ -530,6 +540,8 @@ def train(args):
             avg_entropy = epoch_entropy / max(n_minibatches_total, 1)
             avg_approx_kl = epoch_approx_kl / max(n_minibatches_total, 1)
             avg_clipfrac = epoch_clipfrac / max(n_minibatches_total, 1)
+            avg_pre_clip_grad_norm = epoch_pre_clip_grad_norm / max(n_minibatches_total, 1)
+            avg_grad_norm = epoch_grad_norm / max(n_minibatches_total, 1)
 
             # Compute explained variance. unbiased=False (ddof=0) to match
             # JAX's `jnp.var` default — keeps the diagnostic comparable across
@@ -541,6 +553,22 @@ def train(args):
                     if y_var > 1e-8
                     else 0.0
                 )
+
+                # Rollout-level reward & value/target stats (match
+                # ippo_jax.py rollout_info schema field-for-field). Sourced
+                # from the post-scaling `rewards_all` and post-update
+                # `values_buf` / `b_ret`.
+                rew_t = rewards_all  # (num_steps, num_envs) post-scaling
+                std_step_reward = rew_t.std(unbiased=False).item()
+                mean_abs_step_reward = rew_t.abs().mean().item()
+                reward_min = rew_t.min().item()
+                reward_max = rew_t.max().item()
+                nonzero_reward_fraction = (rew_t != 0).float().mean().item()
+
+                value_mean = b_val.mean().item()
+                value_std = b_val.std(unbiased=False).item()
+                target_mean = b_ret.mean().item()
+                target_std = b_ret.std(unbiased=False).item()
 
             # Episode reward stats
             if completed_rewards:
@@ -567,7 +595,23 @@ def train(args):
                 "clipfrac": round(avg_clipfrac, 4),
                 "explained_var": round(float(explained_var), 4),
                 "lr": lr,
+                # ── Parity instrumentation (matches ippo_jax.py schema) ──
+                "pre_clip_grad_norm": round(float(avg_pre_clip_grad_norm), 6),
+                "grad_norm": round(float(avg_grad_norm), 6),
+                "std_step_reward": round(float(std_step_reward), 6),
+                "mean_abs_step_reward": round(float(mean_abs_step_reward), 6),
+                "reward_min": round(float(reward_min), 6),
+                "reward_max": round(float(reward_max), 6),
+                "nonzero_reward_fraction": round(float(nonzero_reward_fraction), 6),
+                "value_mean": round(float(value_mean), 6),
+                "value_std": round(float(value_std), 6),
+                "target_mean": round(float(target_mean), 6),
+                "target_std": round(float(target_std), 6),
             }
+            if reward_scaler is not None:
+                record["reward_norm_var"] = round(float(reward_scaler.var), 6)
+                record["reward_norm_mean"] = round(float(reward_scaler.mean), 6)
+                record["reward_norm_count"] = round(float(reward_scaler.count), 6)
             metrics_file.write(json.dumps(record) + "\n")
             metrics_file.flush()
 
