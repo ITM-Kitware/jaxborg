@@ -35,27 +35,31 @@ We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-side
 
 #### Training Comparison
 
-| Run          | Reward | Steps |
-| ------------ | -----: | ----- |
-| CybORG PPO   | -1,641 | 20M   |
-| jaxborg IPPO | -1,302 | 20M   |
+Matched-hyperparameter training (NUM_ENVS=48, 3 seeds, same shared-trunk actor-critic, identical PPO hparams). Reward is the mean training-time episode reward at 3M steps; each policy is on the env it trained against (the ~145-pt gap between the two columns reflects independent green-RNG host-selection between engines, not a parity bug — see [`docs/parity.md`](docs/parity.md)).
+
+| Run          |          Reward (mean ± σ across 3 seeds) | Steps |
+| ------------ | ----------------------------------------: | ----- |
+| CybORG PPO   | -1,854 ± 46                               | 3M    |
+| jaxborg IPPO | -1,998 ± 118                              | 3M    |
+
+When *both* policies are eval'd on the same env (CybORG) for 100 paired episodes per seed, the cross-policy gap is **+5.4 ± 58 pts** (n=300), TOST-equivalent at Δ=±200 — the two trained policies are statistically interchangeable.
 
 #### Action Distribution
 
-Both engines produce the same learned defensive strategy (decision steps only, filtering out busy ticks; 30 episodes):
+Both engines produce essentially the same learned defensive strategy. Pooled across 3 seeds × 5 blue agents × 100 eps each on CybORG env, decisions only (busy ticks filtered):
 
 | Action       | jaxborg | CybORG | Delta |
 | ------------ | ------: | -----: | ----: |
-| Analyse      |   20.9% |  21.1% | -0.2% |
-| Remove       |   22.1% |  22.5% | -0.4% |
-| Decoy        |   28.4% |  28.7% | -0.3% |
-| AllowTraffic |   19.1% |  18.4% | +0.7% |
-| BlockTraffic |    3.3% |   3.2% | +0.1% |
-| Restore      |    1.9% |   1.9% | +0.0% |
-| Sleep        |    2.3% |   2.2% | +0.1% |
-| Monitor      |    1.9% |   2.0% | -0.1% |
+| Analyse      |   21.2% |  19.9% | +1.3% |
+| Remove       |   20.0% |  18.9% | +1.2% |
+| Decoy        |   22.3% |  23.8% | -1.5% |
+| AllowTraffic |   15.1% |  13.9% | +1.2% |
+| BlockTraffic |   10.1% |  11.8% | -1.7% |
+| Restore      |    7.0% |   7.5% | -0.5% |
+| Sleep        |    2.2% |   1.9% | +0.2% |
+| Monitor      |    2.1% |   2.4% | -0.3% |
 
-All action types within ~0.7% across backends.
+All buckets within ~1.7%. Pooled L1 distribution distance = 0.079 (max 2.0). Action entropy is also matched: jaxborg 1.852 nats / CybORG 1.862 nats (Hill diversity 6.37 / 6.44 effective action types out of 8).
 
 ## Setup
 
