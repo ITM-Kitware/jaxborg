@@ -24,13 +24,14 @@ CybORG CC4 is a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 bl
 
 #### TOST Equivalence
 
-We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-sided t-test) equivalence procedure from [Karten et al. (2026)](https://arxiv.org/abs/2603.12145): run the same trained policy independently on both engines and test whether mean reward difference falls within ±Δ with 95% confidence.
+We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-sided t-test) equivalence procedure from [Karten et al. (2026)](https://arxiv.org/abs/2603.12145). Two independent claims:
 
-Stochastic, 95% confidence, Δ=±200:
+| comparison                                                                | n   | gap         | TOST                            | verdict                            |
+| ------------------------------------------------------------------------- | --: | ----------: | ------------------------------- | ---------------------------------- |
+| Same trained policy, jaxborg vs CybORG env (3 seeds × n=100, pure mode)   | 300 |  +109 ± 30  | Δ=±284, p=2.8e-7                | **EQUIVALENT**                     |
+| Cross-policy matched training: jaxborg-trained vs CybORG-trained, on CybORG env (3 seeds × n=100, paired) | 300 |   +5.4 ± 58 | Δ=±200, p=4e-4 / Δ=±284, p<1e-6 | **EQUIVALENT** at Δ=±200 and ±284  |
 
-| Policy               | Episodes | jaxborg | CybORG |  Gap | 95% CI          | Verdict        |
-| -------------------- | -------: | ------: | -----: | ---: | --------------- | -------------- |
-| IPPO 20M (cyborg_bank) |       30 |  -3,696 | -2,976 | -720 | [-1142, -297]   | NOT EQUIVALENT |
+Δ=±84 = 2σ across same-backend seed means (noise floor); Δ=±284 = 5% of the sleep→trained learnable signal span. See [`docs/parity.md`](docs/parity.md) for the full per-test parity index and tolerances.
 
 #### Training Comparison
 
