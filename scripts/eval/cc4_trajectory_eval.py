@@ -183,7 +183,9 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
 def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
     device = torch.device("cpu")
     agent = PPOAgent(OBS_DIM, ACT_DIM)
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
+    state_dict = torch.load(model_path, map_location=device, weights_only=False)
+    if isinstance(state_dict, dict) and "agent" in state_dict:
+        state_dict = state_dict["agent"]
     agent.load_state_dict(state_dict)
     agent.eval()
 
