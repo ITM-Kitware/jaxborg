@@ -26,13 +26,17 @@ covering:
 
 import json
 import math
+import os
 import re
 import statistics
 from collections import Counter
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
-EVALS = ROOT / "jaxborg-exp/matched_training_v2/evals"
+# Honor JAXBORG_EXP_DIR (project convention). Default to the canonical
+# sibling-of-repo location used in this experiment's artifacts.
+_DEFAULT_EXP = Path(__file__).resolve().parents[2].parent / "jaxborg-exp"
+EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", str(_DEFAULT_EXP))).resolve()
+EVALS = EXP_DIR / "matched_training_v2/evals"
 OUT_JSON = EVALS / "v2_audit_report.json"
 OUT_MD = EVALS / "v2_audit_report.md"
 
