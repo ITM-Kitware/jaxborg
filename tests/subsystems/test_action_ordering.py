@@ -130,7 +130,7 @@ def test_typed_path_matches_harness_path_execution_order(env_state):
     forced_primary_hosts = jnp.full(NUM_RED_AGENTS, -2, dtype=jnp.int32)
     forced_primary_pids = jnp.full(NUM_RED_AGENTS, -2, dtype=jnp.int32)
 
-    execution_order = _cyborg_priority_execution_order(blue_actions)
+    execution_order = _cyborg_priority_execution_order(blue_actions, TOTAL_ACTION_ACTOR_SLOTS)
 
     state_harness = apply_all_actions_in_order(
         state,
