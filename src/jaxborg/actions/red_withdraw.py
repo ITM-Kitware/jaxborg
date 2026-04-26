@@ -5,15 +5,15 @@ from jaxborg.actions.pids import recompute_host_max_pid
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def apply_withdraw(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     session_counts = effective_session_counts(state)
     has_session = session_counts[agent_id, target_host] > 0

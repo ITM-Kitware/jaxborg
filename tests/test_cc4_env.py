@@ -4,14 +4,14 @@ import pytest
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import CC4Env, CC4EnvState
+from jaxborg.env import ScenarioEnv, CC4EnvState
 
 pytestmark = pytest.mark.slow
 
 
 @pytest.fixture
 def env():
-    return CC4Env(num_steps=50)
+    return ScenarioEnv(num_steps=50)
 
 
 @pytest.fixture

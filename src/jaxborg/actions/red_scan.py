@@ -8,15 +8,15 @@ from jaxborg.actions.red_common import (
     sync_scan_memory_fields,
 )
 from jaxborg.constants import ACTIVITY_SCAN
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def apply_scan(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     is_discovered = state.red_discovered_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]

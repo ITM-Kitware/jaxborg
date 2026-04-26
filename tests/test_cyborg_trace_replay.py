@@ -98,7 +98,7 @@ class TestTraceFieldCoverage:
     """Verify the comparator covers critical state fields."""
 
     def test_state_comparator_field_coverage(self):
-        """Check that important CC4State fields are in ERROR or WARNING sets."""
+        """Check that important SimulatorState fields are in ERROR or WARNING sets."""
         critical_fields = {
             "host_compromised",
             "red_sessions",

@@ -7,7 +7,7 @@ from jaxborg.scenarios.config import ScenarioConfig
 
 
 @struct.dataclass
-class CC4Const:
+class SimulatorConst:
     host_active: chex.Array  # (num_hosts,) bool
     host_subnet: chex.Array  # (num_hosts,) int
     host_is_router: chex.Array  # (num_hosts,) bool
@@ -71,7 +71,7 @@ class CC4Const:
 
 
 @struct.dataclass
-class CC4State:
+class SimulatorState:
     time: int
     done: chex.Array  # scalar bool
     mission_phase: chex.Array  # scalar int
@@ -161,7 +161,7 @@ class CC4State:
     red_agent_active: chex.Array  # (num_red_agents,) bool — dynamically activated via session reassignment
 
 
-def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> CC4Const:
+def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorConst:
     n_hosts = cfg.num_hosts
     n_subnets = cfg.num_subnets
     n_blue = cfg.num_blue_agents
@@ -170,7 +170,7 @@ def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> CC4Const:
     n_decoys = cfg.num_decoy_types
     n_phases = cfg.mission_phases
     max_steps = cfg.max_steps
-    return CC4Const(
+    return SimulatorConst(
         host_active=jnp.zeros(n_hosts, dtype=jnp.bool_),
         host_subnet=jnp.zeros(n_hosts, dtype=jnp.int32),
         host_is_router=jnp.zeros(n_hosts, dtype=jnp.bool_),
@@ -230,14 +230,14 @@ def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> CC4Const:
     )
 
 
-def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> CC4State:
+def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
     n_hosts = cfg.num_hosts
     n_subnets = cfg.num_subnets
     n_blue = cfg.num_blue_agents
     n_red = cfg.num_red_agents
     n_services = cfg.num_services
     n_decoys = cfg.num_decoy_types
-    return CC4State(
+    return SimulatorState(
         time=0,
         done=jnp.array(False),
         mission_phase=jnp.array(0, dtype=jnp.int32),

@@ -30,7 +30,7 @@ from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.config import ScenarioConfig
-from jaxborg.state import CC4Const, CC4State, create_initial_state
+from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
 from jaxborg.scenarios.cc4.topology import (
     build_topology,
     cyborg_bank_index_from_key,
@@ -66,8 +66,8 @@ def _cyborg_priority_execution_order(blue_actions: jnp.ndarray, total_slots: int
 
 
 def apply_all_actions_in_order(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -76,7 +76,7 @@ def apply_all_actions_in_order(
     forced_primary_pids: jnp.ndarray,
     execution_order: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
-) -> CC4State:
+) -> SimulatorState:
     """Apply one CybORG step using an explicit chosen-action execution order."""
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
@@ -146,8 +146,8 @@ def apply_all_actions_in_order(
 
 
 def apply_all_actions_typed(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -158,7 +158,7 @@ def apply_all_actions_typed(
     blue_keys: jnp.ndarray = None,
     *,
     use_green_vmap: bool = True,
-) -> CC4State:
+) -> SimulatorState:
     """Apply one CybORG step using typed loops (no cond dispatch).
 
     Splits the monolithic fori_loop into 3 typed phases matching CybORG's
@@ -277,8 +277,8 @@ def apply_all_actions_typed(
 
 
 def apply_all_actions(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -286,13 +286,13 @@ def apply_all_actions(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
-) -> CC4State:
+) -> SimulatorState:
     """Apply all agent actions in CybORG's deterministic priority order.
 
     CybORG sorts by action priority (ControlTraffic=1, else=99) then
     executes in agent-interface insertion order within each tier.
 
-    Shared by CC4Env.step_env and the differential harness.
+    Shared by ScenarioEnv.step_env and the differential harness.
 
     Args:
         blue_actions: (num_blue_agents,) int32
@@ -328,11 +328,11 @@ def apply_all_actions(
 
 @struct.dataclass
 class CC4EnvState:
-    state: CC4State
-    const: CC4Const
+    state: SimulatorState
+    const: SimulatorConst
 
 
-def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
+def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorState:
     red_sessions = state.red_sessions
     red_session_count = state.red_session_count
     red_privilege = state.red_privilege
@@ -409,7 +409,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         )
         # CybORG pre-seeds aspace.ip_address with the start host at reset
         # for ALL agents (including initially inactive ones).  Always mark
-        # start host as discovered so CC4Env action replay has the correct
+        # start host as discovered so ScenarioEnv action replay has the correct
         # action space.  FsmRedCC4Env._strip_inactive_red_reset_knowledge
         # will clear this for inactive agents to match the FSM's host_states.
         red_discovered = red_discovered.at[r, start_host].set(True)
@@ -477,7 +477,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     )
 
 
-class CC4Env(MultiAgentEnv):
+class ScenarioEnv(MultiAgentEnv):
     def __init__(
         self,
         num_steps: int = 500,
@@ -524,7 +524,7 @@ class CC4Env(MultiAgentEnv):
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
 
-    def _select_const(self, key: chex.PRNGKey) -> CC4Const:
+    def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
         if self._const_bank is None:
             return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
 

@@ -16,10 +16,10 @@ from jaxborg.constants import (
     COMPROMISE_USER,
     MAX_TRACKED_SUSPICIOUS_PIDS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def apply_blue_remove(state: CC4State, const: CC4Const, agent_id: int, target_host: int, key=None) -> CC4State:
+def apply_blue_remove(state: SimulatorState, const: SimulatorConst, agent_id: int, target_host: int, key=None) -> SimulatorState:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
     suspicious_pid_row = state.blue_suspicious_pids[agent_id, target_host]
 

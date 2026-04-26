@@ -13,16 +13,16 @@ from jaxborg.actions.red_common import bound_source_is_abstract, sync_scan_memor
 from jaxborg.actions.rng import sample_red_privesc_choice
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def apply_privesc(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     session_counts = effective_session_counts(state)
     target_count = session_counts[agent_id, target_host]

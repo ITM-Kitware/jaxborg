@@ -64,7 +64,7 @@ def _init_worker():
 
 
 def _build_one_topology(seed: int, num_steps: int) -> dict:
-    """Build a single CC4Const from one CybORG seed; return as numpy dict."""
+    """Build a single SimulatorConst from one CybORG seed; return as numpy dict."""
     import jax
 
     # Prevent workers from grabbing GPU

@@ -21,7 +21,7 @@ from jaxborg.actions.red_impact import apply_impact
 from jaxborg.actions.red_privesc import apply_privesc
 from jaxborg.actions.red_scan_unified import apply_scan_unified
 from jaxborg.actions.red_withdraw import apply_withdraw
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 _RED_BRANCH_MAP = jnp.array(
     [0, 1, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 5, 2, 2, 6, 7, 8],
@@ -56,12 +56,12 @@ _SCAN_HAS_ROLL = jnp.array(
 
 
 def apply_red_action(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     action_idx: int,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     action_type, target_subnet, target_host = decode_red_action(action_idx, agent_id, const)
     k_agg, k_stealth, k_deception = jax.random.split(key, 3)
     k_exploit = jax.random.fold_in(key, 0xCC4)
@@ -88,7 +88,7 @@ def apply_red_action(
     return jax.lax.switch(branch_idx, branches, state)
 
 
-def apply_blue_action(state: CC4State, const: CC4Const, agent_id: int, action_idx: int, key=None) -> CC4State:
+def apply_blue_action(state: SimulatorState, const: SimulatorConst, agent_id: int, action_idx: int, key=None) -> SimulatorState:
     action_type, target_host, decoy_type, src_subnet, dst_subnet = decode_blue_action(action_idx, agent_id, const)
 
     branches = [

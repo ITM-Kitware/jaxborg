@@ -30,7 +30,7 @@ from jaxborg.constants import (
     SUBNET_IDS,
     TOTAL_ACTION_ACTOR_SLOTS,
 )
-from jaxborg.state import CC4Const
+from jaxborg.state import SimulatorConst
 from jaxborg.scenarios.cc4.topology_numpy import (
     _ROUTER_LINKS,
     BLUE_AGENT_SUBNETS,
@@ -59,10 +59,10 @@ def cyborg_bank_seed_from_seed(seed: int, bank_size: int) -> int:
     return int(cyborg_bank_index_from_key(key, bank_size))
 
 
-def build_const_from_cyborg(cyborg_env) -> CC4Const:
+def build_const_from_cyborg(cyborg_env) -> SimulatorConst:
     """Extract static topology from a live CybORG environment."""
     arrays = build_const_arrays_from_cyborg(cyborg_env)
-    return CC4Const(**{k: jnp.asarray(v) for k, v in arrays.items()})
+    return SimulatorConst(**{k: jnp.asarray(v) for k, v in arrays.items()})
 
 
 _BANK_CACHE_DIR = Path(__file__).resolve().parents[4] / ".bank_cache"
@@ -110,7 +110,7 @@ def _pool_workers(bank_size: int) -> int:
     return max(1, min(bank_size, cpus - 8, 56))
 
 
-def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+def _build_topology_bank(num_steps: int, bank_size: int) -> SimulatorConst:
     if bank_size >= _PARALLEL_THRESHOLD:
         from jaxborg.scenarios.cc4.topology_workers import _build_one_topology
 
@@ -120,7 +120,7 @@ def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
         with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
             dicts = list(pool.imap(worker_fn, range(bank_size)))
         stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
-        return CC4Const(**stacked)
+        return SimulatorConst(**stacked)
     else:
         from CybORG import CybORG
         from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
@@ -139,7 +139,7 @@ def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
             dicts.append(build_const_arrays_from_cyborg(cyborg))
 
     stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
-    return CC4Const(**stacked)
+    return SimulatorConst(**stacked)
 
 
 def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
@@ -231,7 +231,7 @@ def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
 
 
 @lru_cache(maxsize=None)
-def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
+def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> SimulatorConst:
     """Build (or load cached) bank of CybORG topologies for JAX resets."""
     if bank_size <= 0:
         raise ValueError(f"bank_size must be > 0, got {bank_size}")
@@ -309,7 +309,7 @@ def get_cyborg_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Arr
     return bank
 
 
-def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> CC4Const:
+def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> SimulatorConst:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
@@ -459,7 +459,7 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
 
     phase_boundaries = jnp.array(_compute_phase_boundaries(_compute_mission_phases(num_steps)))
 
-    return CC4Const(
+    return SimulatorConst(
         host_active=host_active,
         host_subnet=host_subnet.astype(jnp.int32),
         host_is_router=host_is_router,

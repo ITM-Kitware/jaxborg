@@ -171,9 +171,9 @@ class TestBusyBlueMask:
         regardless of busy state.  The env silently discards actions submitted
         while a multi-tick action is in progress.
         """
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
 
-        env = CC4Env(num_steps=100)
+        env = ScenarioEnv(num_steps=100)
         _, env_state = env.reset(jax.random.PRNGKey(42))
         const = env_state.const
         state = env_state.state

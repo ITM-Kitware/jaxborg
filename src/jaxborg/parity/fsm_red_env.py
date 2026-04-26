@@ -15,13 +15,13 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_select_actions,
 )
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import CC4Env, CC4EnvState
+from jaxborg.env import ScenarioEnv, CC4EnvState
 
 
 class FsmRedCC4Env(MultiAgentEnv):
     """Blue-only CC4 environment with internal FSM red agents.
 
-    Wraps CC4Env, computes red actions from FSM policy inside step_env,
+    Wraps ScenarioEnv, computes red actions from FSM policy inside step_env,
     and exposes only the 5 blue agents for training.
     """
 
@@ -34,7 +34,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
     ):
-        self._env = CC4Env(
+        self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
             topology_bank_size=topology_bank_size,
@@ -60,7 +60,7 @@ class FsmRedCC4Env(MultiAgentEnv):
 
         CybORG's controller action spaces may know additional hosts for inactive red
         agents at reset, but the FiniteStateRedAgent.host_states used by native
-        action selection does not. Keep the richer reset knowledge in CC4Env for
+        action selection does not. Keep the richer reset knowledge in ScenarioEnv for
         translated-action differential replay, but clear it in the native FSM env.
         """
         state = env_state.state

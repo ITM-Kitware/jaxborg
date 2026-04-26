@@ -30,24 +30,24 @@ from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 EXPLOIT_ROUTE_DETECTION_RATE = 0.95
 EXPLOIT_PROCESS_EVENT_DETECTION_RATE = 0.95
 UNKNOWN_PRIMARY_PID = jnp.int32(-2)
 
 
-def has_any_session(session_hosts: chex.Array, const: CC4Const) -> chex.Array:
+def has_any_session(session_hosts: chex.Array, const: SimulatorConst) -> chex.Array:
     return jnp.any(session_hosts & const.host_active)
 
 
-def has_abstract_session(state: CC4State, agent_id: int) -> chex.Array:
+def has_abstract_session(state: SimulatorState, agent_id: int) -> chex.Array:
     return jnp.any(state.red_session_is_abstract[agent_id] & state.red_sessions[agent_id])
 
 
 def select_bound_source_host(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
 ) -> chex.Array:
     """Return the host of the bound source session for red actions.
@@ -64,8 +64,8 @@ def select_bound_source_host(
 
 
 def bound_source_is_abstract(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
 ) -> chex.Array:
     source_host = select_bound_source_host(state, const, agent_id)
@@ -77,8 +77,8 @@ def bound_source_is_abstract(
 
 
 def can_reach_subnet(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_subnet: chex.Array,
 ) -> chex.Array:
@@ -93,8 +93,8 @@ def can_reach_subnet(
 
 
 def can_reach_subnet_from_source_host(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     source_host: chex.Array,
     target_subnet: chex.Array,
 ) -> chex.Array:
@@ -104,7 +104,7 @@ def can_reach_subnet_from_source_host(
     return source_active & ~state.blocked_zones[target_subnet, source_subnet]
 
 
-def scan_sources(state: CC4State) -> chex.Array:
+def scan_sources(state: SimulatorState) -> chex.Array:
     """Return scan-memory ownership matrix.
 
     CybORG tracks per-session source ownership for each scanned target through
@@ -121,10 +121,10 @@ def recompute_scanned_hosts_from_sources(source_matrix: chex.Array) -> chex.Arra
 
 
 def sync_scan_memory_fields(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     source_matrix: chex.Array | None = None,
-) -> CC4State:
+) -> SimulatorState:
     """Project scan-memory ownership onto active abstract source sessions.
 
     CybORG derives scanned-host memory from RedAbstractSession `ports` maps.
@@ -146,8 +146,8 @@ def sync_scan_memory_fields(
 
 
 def compute_visible_sessions(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
 ) -> chex.Array:
     """Count abstract sessions across all active hosts (CybORG's server_session size).
@@ -161,8 +161,8 @@ def compute_visible_sessions(
 
 
 def exploit_common_preconditions(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     key: chex.Array = None,
@@ -207,8 +207,8 @@ def exploit_common_preconditions(
 
 
 def select_scan_source_host(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
 ) -> chex.Array:
     """Choose source host for abstract red actions.
@@ -298,13 +298,13 @@ def select_new_primary_session_host(
 
 
 def apply_red_session_check(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     key: jax.Array,
     forced_primary_host: chex.Array = jnp.int32(-1),
     forced_primary_pid: chex.Array = UNKNOWN_PRIMARY_PID,
-) -> CC4State:
+) -> SimulatorState:
     """Ensure each active red agent has a valid primary-session anchor host."""
     session_counts = effective_session_counts(state)[agent_id]
     has_any_sessions = jnp.any((session_counts > 0) & const.host_active)
@@ -474,8 +474,8 @@ def apply_red_session_check(
 
 
 def select_scan_execution_source_host(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
 ) -> chex.Array:
@@ -606,13 +606,13 @@ def shortest_path_nodes(
 
 
 def apply_exploit_route_detection(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     enabled: chex.Array,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     """Mirror SSHBruteForce route-level network connection events."""
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
     path_nodes, path_len = shortest_path_nodes(const.data_links, const.host_active, source_host, target_host)
@@ -636,11 +636,11 @@ def apply_exploit_route_detection(
 
 
 def sample_sim_exploit_success_roll(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     enabled: chex.Array,
     key: jax.Array,
-) -> tuple[chex.Array, CC4State]:
+) -> tuple[chex.Array, SimulatorState]:
     """Mirror ExploitAction.sim_exploit success-rate RNG consumption.
 
     CC4 exploit success rates are effectively 1.0, but CybORG still consumes
@@ -660,11 +660,11 @@ def sample_sim_exploit_success_roll(
 
 
 def sample_exploit_process_event_roll(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     enabled: chex.Array,
     key: jax.Array,
-) -> tuple[chex.Array, CC4State]:
+) -> tuple[chex.Array, SimulatorState]:
     """Mirror ExploitAction process_creation event detection roll."""
 
     def _sample(state_in):
@@ -681,14 +681,14 @@ def sample_exploit_process_event_roll(
 
 
 def apply_exploit_success(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     success: chex.Array,
     key: jax.Array,
     process_event_detected: chex.Array | None = None,
-) -> CC4State:
+) -> SimulatorState:
     session_counts = effective_session_counts(state)
     had_count = session_counts[agent_id, target_host]
     new_count = jnp.where(success, had_count + 1, had_count)

@@ -32,7 +32,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     SERVICE_IDS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 FSM_K = 0
 FSM_KD = 1
@@ -202,8 +202,8 @@ def _pick_discover_subnet(state, const, agent_id, key):
 
 
 def fsm_red_get_action_and_info(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     key: jax.Array,
 ) -> tuple:
@@ -283,8 +283,8 @@ def fsm_red_get_action_and_info(
 
 
 def fsm_red_get_action(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     key: jax.Array,
 ) -> int:
@@ -341,8 +341,8 @@ def _select_one_agent(state, const, r, key):
 
 
 def fsm_red_select_actions(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     red_keys: jax.Array,
 ) -> tuple:
     """Select FSM red actions for all agents. Shared by training env and differential harness.
@@ -377,7 +377,7 @@ def fsm_red_select_actions(
     return red_actions, target_hosts, target_subnets, fsm_actions, eligible_flags, state
 
 
-def fsm_red_apply_delayed_update(state: CC4State) -> CC4State:
+def fsm_red_apply_delayed_update(state: SimulatorState) -> SimulatorState:
     """Apply the previously scheduled FSM hidden-state update at decision time."""
 
     def _apply(s):
@@ -390,9 +390,9 @@ def fsm_red_apply_delayed_update(state: CC4State) -> CC4State:
 
 
 def determine_fsm_success(
-    state_before: CC4State,
-    state_after: CC4State,
-    const: CC4Const,
+    state_before: SimulatorState,
+    state_after: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: jnp.ndarray,
     target_subnet: jnp.ndarray,
@@ -445,7 +445,7 @@ def determine_fsm_success(
 
 def fsm_red_update_state(
     fsm_states: jnp.ndarray,
-    const: CC4Const,
+    const: SimulatorConst,
     agent_id: int,
     target_host: jnp.ndarray,
     discovered_hosts: jnp.ndarray,
@@ -487,15 +487,15 @@ def fsm_red_update_state(
 
 
 def fsm_red_post_step_update(
-    state_before: CC4State,
-    state_after: CC4State,
-    const: CC4Const,
+    state_before: SimulatorState,
+    state_after: SimulatorState,
+    const: SimulatorConst,
     target_hosts: list,
     target_subnets: list,
     fsm_actions: list,
     eligible_flags: list,
     executed_flags: list | None = None,
-) -> CC4State:
+) -> SimulatorState:
     fsm_states = _compute_post_step_fsm_states(
         state_before,
         state_after,
@@ -510,9 +510,9 @@ def fsm_red_post_step_update(
 
 
 def _compute_post_step_fsm_states(
-    state_before: CC4State,
-    state_after: CC4State,
-    const: CC4Const,
+    state_before: SimulatorState,
+    state_after: SimulatorState,
+    const: SimulatorConst,
     target_hosts: list,
     target_subnets: list,
     fsm_actions: list,
@@ -571,15 +571,15 @@ def _compute_post_step_fsm_states(
 
 
 def fsm_red_schedule_post_step_update(
-    state_before: CC4State,
-    state_after: CC4State,
-    const: CC4Const,
+    state_before: SimulatorState,
+    state_after: SimulatorState,
+    const: SimulatorConst,
     target_hosts: list,
     target_subnets: list,
     fsm_actions: list,
     eligible_flags: list,
     executed_flags: list | None = None,
-) -> CC4State:
+) -> SimulatorState:
     """Compute the next FSM hidden state and schedule it for the next decision step.
 
     CybORG updates FiniteStateRedAgent host_states when the agent processes the
@@ -604,7 +604,7 @@ def fsm_red_schedule_post_step_update(
 
 
 def fsm_red_process_session_removal(
-    state: CC4State,
+    state: SimulatorState,
     agent_id: int,
 ) -> jnp.ndarray:
     fsm_states = state.fsm_host_states[agent_id]
@@ -617,7 +617,7 @@ def fsm_red_process_session_removal(
 
 
 def fsm_red_init_states(
-    const: CC4Const,
+    const: SimulatorConst,
     agent_id: int,
 ) -> jnp.ndarray:
     start_host = const.red_start_hosts[agent_id]

@@ -26,15 +26,15 @@ from jaxborg.actions.red_common import (
     select_bound_source_host,
     select_scan_execution_source_host,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 UNKNOWN_PRIMARY_HOST = jnp.int32(-2)
 UNKNOWN_PRIMARY_PID = jnp.int32(-2)
 
 
 def process_red_with_duration(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     action_idx: int,
     key: jax.Array,
@@ -43,7 +43,7 @@ def process_red_with_duration(
     *,
     run_session_check: bool = True,
     creation_visible_sessions_override: jnp.int32 | None = None,
-) -> CC4State:
+) -> SimulatorState:
     is_busy = state.red_pending_ticks[agent_id] > 0
 
     effective_action = jnp.where(is_busy, state.red_pending_action[agent_id], action_idx)
@@ -281,12 +281,12 @@ def process_red_with_duration(
 
 
 def process_blue_with_duration(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     action_idx: int,
     key=None,
-) -> CC4State:
+) -> SimulatorState:
     is_busy = state.blue_pending_ticks[agent_id] > 0
 
     effective_action = jnp.where(is_busy, state.blue_pending_action[agent_id], action_idx)

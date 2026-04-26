@@ -3,10 +3,10 @@ import jax.numpy as jnp
 from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import ABSTRACT_RANK_NONE, COMPROMISE_NONE
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def apply_blue_restore(state: CC4State, const: CC4Const, agent_id: int, target_host: int) -> CC4State:
+def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: int, target_host: int) -> SimulatorState:
     covers_host = const.blue_agent_hosts[agent_id, target_host]
     session_counts = effective_session_counts(state)
 
