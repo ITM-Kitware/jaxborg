@@ -31,7 +31,7 @@ from jaxborg.constants import (
     TOTAL_ACTION_ACTOR_SLOTS,
 )
 from jaxborg.state import CC4Const
-from jaxborg.topology_numpy import (
+from jaxborg.scenarios.cc4.topology_numpy import (
     _ROUTER_LINKS,
     BLUE_AGENT_SUBNETS,
     RED_AGENT_SUBNETS,
@@ -65,29 +65,34 @@ def build_const_from_cyborg(cyborg_env) -> CC4Const:
     return CC4Const(**{k: jnp.asarray(v) for k, v in arrays.items()})
 
 
-_BANK_CACHE_DIR = Path(__file__).resolve().parents[2] / ".bank_cache"
+_BANK_CACHE_DIR = Path(__file__).resolve().parents[4] / ".bank_cache"
+
+_THIS_DIR = Path(__file__).resolve().parent
+_PARITY_DIR = _THIS_DIR.parents[1] / "parity"
 
 
-def _hash_paths(*relative_paths: str) -> str:
+def _hash_paths(*absolute_paths: Path) -> str:
     digest = hashlib.md5()
-    root = Path(__file__).resolve().parent
-    for rel in relative_paths:
-        digest.update((root / rel).read_bytes())
+    for p in absolute_paths:
+        digest.update(p.read_bytes())
     return digest.hexdigest()[:12]
 
 
 def _topology_cache_key(num_steps: int, bank_size: int) -> str:
-    return f"steps{num_steps}_bank{bank_size}_{_hash_paths('topology.py')}"
+    return f"steps{num_steps}_bank{bank_size}_{_hash_paths(_THIS_DIR / 'topology.py')}"
 
 
 def _green_cache_key(num_steps: int, bank_size: int) -> str:
-    return f"steps{num_steps}_bank{bank_size}_{_hash_paths('topology.py', 'cyborg_green_recorder.py')}"
+    return (
+        f"steps{num_steps}_bank{bank_size}_"
+        f"{_hash_paths(_THIS_DIR / 'topology.py', _PARITY_DIR / 'cyborg_green_recorder.py')}"
+    )
 
 
 def _red_policy_cache_key(num_steps: int, bank_size: int) -> str:
     return (
         f"steps{num_steps}_bank{bank_size}_"
-        f"{_hash_paths('topology.py', 'cyborg_red_policy_recorder.py', 'agents/fsm_red.py')}"
+        f"{_hash_paths(_THIS_DIR / 'topology.py', _PARITY_DIR / 'cyborg_red_policy_recorder.py', _THIS_DIR / 'red_fsm.py')}"
     )
 
 
@@ -107,7 +112,7 @@ def _pool_workers(bank_size: int) -> int:
 
 def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
     if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.topology_workers import _build_one_topology
+        from jaxborg.scenarios.cc4.topology_workers import _build_one_topology
 
         workers = _pool_workers(bank_size)
         print(f"  Building topology bank ({bank_size} seeds, {workers} workers)...", flush=True)
@@ -139,7 +144,7 @@ def _build_topology_bank(num_steps: int, bank_size: int) -> CC4Const:
 
 def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.topology_workers import _build_one_green
+        from jaxborg.scenarios.cc4.topology_workers import _build_one_green
 
         workers = _pool_workers(bank_size)
         print(f"  Building green random bank ({bank_size} seeds, {workers} workers)...", flush=True)
@@ -153,8 +158,8 @@ def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
         from CybORG.Simulator.Actions import Sleep
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        from jaxborg.cyborg_green_recorder import GreenRecorder
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.cyborg_green_recorder import GreenRecorder
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         arrays = []
         for seed in range(bank_size):
@@ -184,7 +189,7 @@ def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
 
 def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
     if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.topology_workers import _build_one_red_policy
+        from jaxborg.scenarios.cc4.topology_workers import _build_one_red_policy
 
         workers = _pool_workers(bank_size)
         print(f"  Building red policy bank ({bank_size} seeds, {workers} workers)...", flush=True)
@@ -198,8 +203,8 @@ def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
         from CybORG.Simulator.Actions import Sleep
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         arrays = []
         for seed in range(bank_size):

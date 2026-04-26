@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.agents.fsm_red import FSM_R, FSM_U
+from jaxborg.scenarios.cc4.red_fsm import FSM_R, FSM_U
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_PRIVILEGED,

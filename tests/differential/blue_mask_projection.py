@@ -2,7 +2,7 @@ import numpy as np
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.translate import cyborg_blue_to_jax, describe_blue_action
+from jaxborg.parity.translate import cyborg_blue_to_jax, describe_blue_action
 
 
 def refresh_blue_wrapper_action_space(wrapper) -> None:

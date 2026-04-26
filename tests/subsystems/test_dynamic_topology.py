@@ -20,7 +20,7 @@ from jaxborg.constants import (
     SUBNET_NAMES,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
+from jaxborg.scenarios.cc4.topology import build_topology
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
@@ -251,7 +251,7 @@ class TestDifferentialHostCounts:
         return CybORG(scenario_generator=sg, seed=42)
 
     def test_host_count_matches_cyborg(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         cyborg_state = cyborg_env.environment_controller.state
@@ -259,7 +259,7 @@ class TestDifferentialHostCounts:
         assert int(jnp.sum(c.host_active)) == len(cyborg_state.hosts)
 
     def test_per_subnet_counts_match_cyborg(self, cyborg_env):
-        from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         cyborg_state = cyborg_env.environment_controller.state
@@ -280,7 +280,7 @@ class TestDifferentialHostCounts:
             assert jax_count == cyborg_count, f"Subnet {sid}: JAX={jax_count} CybORG={cyborg_count}"
 
     def test_inactive_slots_clean_in_cyborg_extracted(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         for h in range(int(c.num_hosts), GLOBAL_MAX_HOSTS):

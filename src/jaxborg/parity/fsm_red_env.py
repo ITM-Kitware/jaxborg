@@ -9,7 +9,7 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.agents.fsm_red import (
+from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
     fsm_red_select_actions,

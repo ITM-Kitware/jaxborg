@@ -34,7 +34,7 @@ from flax.training.train_state import TrainState
 
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import BLUE_OBS_SIZE
-from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.policy import SharedActorCritic
 
 # Real CC4 dims; small hidden + small rollout for fast test wall time.

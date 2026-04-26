@@ -71,7 +71,7 @@ class TestPhaseRewardsMatchCybORG:
         return CybORG(scenario_generator=sg, seed=42)
 
     def test_phase_rewards_match_cyborg(self, cyborg_env):
-        from jaxborg.topology import (
+        from jaxborg.scenarios.cc4.topology import (
             CYBORG_SUFFIX_TO_ID,
             build_const_from_cyborg,
         )
@@ -89,7 +89,7 @@ class TestPhaseRewardsMatchCybORG:
                 assert jax_pr[phase, sid, RIA] == rewards["RIA"], f"phase={phase} subnet={cyborg_name} RIA mismatch"
 
     def test_pure_topology_matches_cyborg_topology(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg, build_topology
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, build_topology
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
         pure_const = build_topology(jax.random.PRNGKey(42), num_steps=500)
@@ -237,7 +237,7 @@ class TestRewardsDifferential:
 
     def test_zero_reward_on_sleep_matches(self, cyborg_env):
         """Both envs should give 0 reward when all agents sleep."""
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()

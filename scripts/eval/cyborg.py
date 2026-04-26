@@ -15,8 +15,8 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
-from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
-from jaxborg.translate import (
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,

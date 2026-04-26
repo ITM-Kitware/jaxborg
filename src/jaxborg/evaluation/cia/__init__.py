@@ -1,6 +1,6 @@
 """CC4-aware CIA alignment metric — trajectory recording + post-hoc scoring."""
 
-from jaxborg.eval.cia.cc4_cia_metric import (
+from jaxborg.evaluation.cia.cc4_cia_metric import (
     CIA_COMPOSITE_WEIGHT,
     CIAEpisodeScore,
     cc4_host_weight,

@@ -7,7 +7,7 @@ identical episode repetition. The fix uses seed + ep without bank mapping.
 
 import jax
 
-from jaxborg.topology import cyborg_bank_index_from_key
+from jaxborg.scenarios.cc4.topology import cyborg_bank_index_from_key
 
 
 class TestEvalSeedUniqueness:

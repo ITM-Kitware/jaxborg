@@ -24,14 +24,14 @@ from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import apply_red_session_check
-from jaxborg.agents.fsm_red import fsm_red_init_states
+from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER, TOTAL_ACTION_ACTOR_SLOTS
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.config import ScenarioConfig
 from jaxborg.state import CC4Const, CC4State, create_initial_state
-from jaxborg.topology import (
+from jaxborg.scenarios.cc4.topology import (
     build_topology,
     cyborg_bank_index_from_key,
     get_cyborg_green_random_bank,

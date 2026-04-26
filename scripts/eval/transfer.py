@@ -53,11 +53,11 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
 from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
-from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
-from jaxborg.translate import (
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     describe_blue_action,
@@ -720,8 +720,8 @@ def _rollout_cyborg_single_episode(args_tuple):
     import numpy as np
 
     from jaxborg.constants import NUM_BLUE_AGENTS
-    from jaxborg.topology import build_const_from_cyborg
-    from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
     from scripts.eval.transfer import (
         _build_cyborg_mask_cache,
         _live_blue_wrapper_mask_in_jax_space_cached,
@@ -1399,7 +1399,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
     mappings = build_mappings_from_cyborg(inner)
 
     from jaxborg.actions.encoding import BLUE_ANALYSE_END
-    from jaxborg.topology import BLUE_AGENT_SUBNETS, SUBNET_IDS
+    from jaxborg.scenarios.cc4.topology import BLUE_AGENT_SUBNETS, SUBNET_IDS
 
     print("\nMASK VALIDATION (step 0):")
     for agent_idx, agent_name in enumerate(env.agents):

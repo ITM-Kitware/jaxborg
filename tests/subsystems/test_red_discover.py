@@ -23,7 +23,7 @@ from jaxborg.constants import (
     SUBNET_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import CYBORG_SUFFIX_TO_ID
+from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 
@@ -185,7 +185,7 @@ class TestDifferentialWithCybORG:
 
     @pytest.fixture
     def cyborg_and_jax(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()

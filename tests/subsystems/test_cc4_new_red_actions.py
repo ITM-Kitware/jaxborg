@@ -26,7 +26,7 @@ from jaxborg.actions.encoding import (
     decode_red_action,
     encode_red_action,
 )
-from jaxborg.agents.fsm_red import FSM_K, FSM_S
+from jaxborg.scenarios.cc4.red_fsm import FSM_K, FSM_S
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     COMPROMISE_NONE,
@@ -39,7 +39,7 @@ from jaxborg.constants import (
     SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from tests.conftest import setup_red_agent_session
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))

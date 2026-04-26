@@ -33,7 +33,7 @@ from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.policy import ActorCritic, SharedActorCritic
 
 
