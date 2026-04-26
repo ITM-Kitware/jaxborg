@@ -3,7 +3,6 @@ import jax.numpy as jnp
 from flax import struct
 
 from jaxborg.actions.encoding import BLUE_RESTORE_END, BLUE_RESTORE_START
-from jaxborg.constants import MISSION_PHASES
 from jaxborg.state import CC4Const, CC4State
 
 LWF = 0
@@ -102,6 +101,6 @@ def compute_rewards(
 def advance_mission_phase(state: CC4State, const: CC4Const) -> CC4State:
     """Update mission_phase based on current time step."""
     new_phase = jnp.int32(0)
-    for p in range(1, MISSION_PHASES):
+    for p in range(1, const.phase_boundaries.shape[0]):
         new_phase = jnp.where(state.time >= const.phase_boundaries[p], jnp.int32(p), new_phase)
     return state.replace(mission_phase=new_phase)
