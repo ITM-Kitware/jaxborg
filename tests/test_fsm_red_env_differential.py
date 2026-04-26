@@ -751,7 +751,7 @@ class TestFsmRedEnvDifferential:
 
         from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
         from jaxborg.constants import COMPROMISE_PRIVILEGED, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
         from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_red_to_jax
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
@@ -784,7 +784,7 @@ class TestFsmRedEnvDifferential:
 
             agent.get_action = _wrap_get_action(original_get_action, agent_name)
 
-        jax_env = CC4Env(num_steps=THREE_STEP_TRACE_STEPS, topology_mode="cyborg_bank", topology_bank_size=1)
+        jax_env = ScenarioEnv(num_steps=THREE_STEP_TRACE_STEPS, topology_mode="cyborg_bank", topology_bank_size=1)
         loop_key = jax.random.PRNGKey(seed)
         _, jax_state = jax_env.reset(loop_key)
 
@@ -838,7 +838,7 @@ class TestFsmRedEnvDifferential:
 
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import COMPROMISE_NONE, NUM_BLUE_AGENTS
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
         from jaxborg.parity.translate import build_mappings_from_cyborg
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
@@ -871,7 +871,7 @@ class TestFsmRedEnvDifferential:
 
             agent.get_action = _wrap_get_action(original_get_action, agent_name)
 
-        jax_env = CC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
+        jax_env = ScenarioEnv(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
         loop_key = jax.random.PRNGKey(seed)
         _, jax_state = jax_env.reset(loop_key)
 
@@ -920,7 +920,7 @@ class TestFsmRedEnvDifferential:
 
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import COMPROMISE_NONE, NUM_BLUE_AGENTS
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
         from jaxborg.parity.translate import build_mappings_from_cyborg
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
@@ -953,7 +953,7 @@ class TestFsmRedEnvDifferential:
 
             agent.get_action = _wrap_get_action(original_get_action, agent_name)
 
-        jax_env = CC4Env(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
+        jax_env = ScenarioEnv(num_steps=500, topology_mode="cyborg_bank", topology_bank_size=1)
         loop_key = jax.random.PRNGKey(seed)
         _, jax_state = jax_env.reset(loop_key)
 

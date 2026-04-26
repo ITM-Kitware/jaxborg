@@ -19,10 +19,10 @@ from jaxborg.constants import (
     MAX_TRACKED_SESSION_PIDS,
     NUM_RED_AGENTS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State:
+def reassign_cross_subnet_sessions(state: SimulatorState, const: SimulatorConst) -> SimulatorState:
     owner_mask = const.red_agent_subnets
     any_owner = jnp.any(owner_mask, axis=0)
     subnet_owner = jnp.where(any_owner, jnp.argmax(owner_mask, axis=0), -1)

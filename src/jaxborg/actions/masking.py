@@ -10,7 +10,7 @@ from jaxborg.constants import (
     OBS_VECTOR_HOSTS_PER_SUBNET,
     SERVICE_IDS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarray) -> jnp.ndarray:
@@ -33,7 +33,7 @@ def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarra
     return per_type.any(axis=0)
 
 
-def compute_blue_action_mask(const: CC4Const, agent_id: int, state: CC4State | None = None) -> jnp.ndarray:
+def compute_blue_action_mask(const: SimulatorConst, agent_id: int, state: SimulatorState | None = None) -> jnp.ndarray:
     """Return bool mask of valid actions for a blue agent.
 
     Uses agent-relative encoding: host slots index into the agent's 3 observed

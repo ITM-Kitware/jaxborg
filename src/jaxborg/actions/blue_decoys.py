@@ -4,7 +4,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import allocate_host_pid_from_delta
 from jaxborg.actions.rng import sample_blue_decoy_pid_delta, sample_blue_decoy_type_choice
 from jaxborg.constants import DECOY_IDS, SERVICE_IDS
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def host_decoy_compatibility_mask(host_services: jnp.ndarray, host_decoys: jnp.ndarray) -> jnp.ndarray:
@@ -30,8 +30,8 @@ def host_decoy_compatibility_mask(host_services: jnp.ndarray, host_decoys: jnp.n
 
 
 def apply_blue_decoy(
-    state: CC4State, const: CC4Const, agent_id: int, target_host: int, decoy_type: int, key=None
-) -> CC4State:
+    state: SimulatorState, const: SimulatorConst, agent_id: int, target_host: int, decoy_type: int, key=None
+) -> SimulatorState:
     if key is None:
         key = jax.random.PRNGKey(0)
     k1, k2 = jax.random.split(key)

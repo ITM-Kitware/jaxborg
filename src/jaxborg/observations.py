@@ -8,7 +8,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 CYBORG_POS_TO_JAX_ID = jnp.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=jnp.int32)
 
@@ -20,8 +20,8 @@ SUBNET_BLOCK_SIZE = NUM_SUBNETS * 3 + OBS_VECTOR_HOSTS_PER_SUBNET * 2
 
 
 def _subnet_block(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     subnet_id: int,
 ) -> chex.Array:
     cyborg_pos = JAX_ID_TO_CYBORG_POS[subnet_id]
@@ -58,7 +58,7 @@ def _subnet_block(
     )
 
 
-def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
+def get_blue_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) -> chex.Array:
     mission_phase = state.mission_phase.astype(jnp.float32)
 
     n_obs_subnets = const.blue_obs_subnets.shape[1]
@@ -93,5 +93,5 @@ def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
     return obs
 
 
-def get_red_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
+def get_red_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) -> chex.Array:
     return jnp.zeros(BLUE_OBS_SIZE, dtype=jnp.float32)

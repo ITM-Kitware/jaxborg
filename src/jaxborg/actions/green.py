@@ -21,7 +21,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     SUBNET_IDS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 FP_DETECTION_RATE = 0.01
 PHISHING_ERROR_RATE = 0.01
@@ -44,13 +44,13 @@ _CYBORG_GENERATION_SUBNET_ORDER = (
 )
 
 
-def _ordered_green_hosts(const: CC4Const) -> jax.Array:
+def _ordered_green_hosts(const: SimulatorConst) -> jax.Array:
     inactive_keys = const.num_green_agents + jnp.arange(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
     order_keys = jnp.where(const.green_agent_active, const.green_agent_host, inactive_keys)
     return jnp.argsort(order_keys)
 
 
-def _cyborg_host_iteration_ranks(const: CC4Const) -> jax.Array:
+def _cyborg_host_iteration_ranks(const: SimulatorConst) -> jax.Array:
     host_ranks = jnp.full(GLOBAL_MAX_HOSTS, jnp.int32(GLOBAL_MAX_HOSTS * 2), dtype=jnp.int32)
     next_rank = jnp.int32(0)
     host_indices = jnp.arange(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
@@ -107,8 +107,8 @@ def _cyborg_host_iteration_ranks(const: CC4Const) -> jax.Array:
 
 
 def _find_phishing_red_agent(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     host_idx: jnp.int32,
     key: jax.Array,
 ) -> jnp.int32:
@@ -144,11 +144,11 @@ def _find_phishing_red_agent(
 
 
 def _apply_single_green(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     host_idx: jnp.int32,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     k1, k2, k3, k4, k5, k_svc, k_rel, k_phish_src, k_pid = jax.random.split(key, 9)
     t = state.time
 
@@ -427,7 +427,7 @@ def _apply_single_green(
     )
 
 
-def apply_green_agents(state: CC4State, const: CC4Const, key: jax.Array) -> CC4State:
+def apply_green_agents(state: SimulatorState, const: SimulatorConst, key: jax.Array) -> SimulatorState:
     keys = jax.random.split(key, GLOBAL_MAX_HOSTS)
     host_order = _ordered_green_hosts(const)
 
@@ -451,11 +451,11 @@ def apply_green_agents(state: CC4State, const: CC4Const, key: jax.Array) -> CC4S
 
 
 def apply_green_agent_action(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     host_idx: jnp.int32,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     """Apply one green host action if that host owns an active green agent."""
     is_active = const.green_agent_active[host_idx] & const.green_agents_active
     new_state = _apply_single_green(state, const, host_idx, key)

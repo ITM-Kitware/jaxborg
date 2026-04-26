@@ -8,7 +8,7 @@ from jaxborg.actions.green import GREEN_ACCESS_SERVICE
 from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_BLUE_AGENTS, NUM_GREEN_RANDOM_FIELDS, NUM_RED_AGENTS
 from jaxborg.env import (
     TOTAL_ACTION_ACTOR_SLOTS,
-    CC4Env,
+    ScenarioEnv,
     _cyborg_priority_execution_order,
     apply_all_actions_in_order,
     apply_all_actions_typed,
@@ -22,7 +22,7 @@ def _move_slots_to_front(*front_slots: int) -> jnp.ndarray:
 
 @pytest.fixture(scope="module")
 def env_state():
-    env = CC4Env()
+    env = ScenarioEnv()
     _, out = env.reset(jax.random.PRNGKey(42))
     return out
 

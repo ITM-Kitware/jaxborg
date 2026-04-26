@@ -285,9 +285,9 @@ class TestCybORGStructuralParity:
 
 class TestAutoResetIntegration:
     def test_auto_reset_produces_new_topology(self):
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
 
-        env = CC4Env(num_steps=1)
+        env = ScenarioEnv(num_steps=1)
         key = jax.random.PRNGKey(0)
         obs, state = env.reset(key)
         original_num_hosts = int(state.const.num_hosts)

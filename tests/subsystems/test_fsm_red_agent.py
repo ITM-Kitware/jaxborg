@@ -562,7 +562,7 @@ class TestFsmDiscoverSuccessFlag:
 
 
 def _make_trivial_const():
-    """Build a minimal CC4Const for unit tests that don't need full topology."""
+    """Build a minimal SimulatorConst for unit tests that don't need full topology."""
     from jaxborg.scenarios.cc4.topology import build_topology
 
     return build_topology(jnp.array([42, 0], dtype=jnp.uint32), num_steps=10)

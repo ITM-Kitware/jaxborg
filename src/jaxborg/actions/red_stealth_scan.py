@@ -10,18 +10,18 @@ from jaxborg.actions.red_common import (
 )
 from jaxborg.actions.rng import sample_detection_random
 from jaxborg.constants import ACTIVITY_SCAN
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 STEALTH_DETECTION_RATE = 0.25
 
 
 def apply_stealth_scan(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     is_discovered = state.red_discovered_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]
@@ -38,10 +38,10 @@ def apply_stealth_scan(
         source_matrix,
     )
 
-    def with_roll(s: CC4State):
+    def with_roll(s: SimulatorState):
         return sample_detection_random(s, const, key)
 
-    def without_roll(s: CC4State):
+    def without_roll(s: SimulatorState):
         return jnp.float32(1.0), s
 
     rand_val, state = jax.lax.cond(success, with_roll, without_roll, state)

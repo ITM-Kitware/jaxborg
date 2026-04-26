@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import struct
 
 from jaxborg.actions.encoding import BLUE_RESTORE_END, BLUE_RESTORE_START
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 LWF = 0
 ASF = 1
@@ -23,8 +23,8 @@ class RewardBreakdown:
 
 
 def compute_reward_breakdown(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     impact_hosts: chex.Array,
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
@@ -33,8 +33,8 @@ def compute_reward_breakdown(
     """Compute blue team shared reward for this step.
 
     Args:
-        state: current CC4State (uses mission_phase, host_subnet)
-        const: CC4Const (uses phase_rewards, host_active)
+        state: current SimulatorState (uses mission_phase, host_subnet)
+        const: SimulatorConst (uses phase_rewards, host_active)
         impact_hosts: (GLOBAL_MAX_HOSTS,) bool - hosts where red Impact succeeded
         green_lwf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenLocalWork failed
         green_asf_hosts: (GLOBAL_MAX_HOSTS,) bool - source hosts where GreenAccessService failed
@@ -80,8 +80,8 @@ def compute_reward_breakdown(
 
 
 def compute_rewards(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     impact_hosts: chex.Array,
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
@@ -98,7 +98,7 @@ def compute_rewards(
     ).total
 
 
-def advance_mission_phase(state: CC4State, const: CC4Const) -> CC4State:
+def advance_mission_phase(state: SimulatorState, const: SimulatorConst) -> SimulatorState:
     """Update mission_phase based on current time step."""
     new_phase = jnp.int32(0)
     for p in range(1, const.phase_boundaries.shape[0]):

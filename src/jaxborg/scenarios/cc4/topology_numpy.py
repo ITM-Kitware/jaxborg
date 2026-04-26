@@ -441,7 +441,7 @@ def _build_comms_policy() -> np.ndarray:
 def build_const_arrays_from_cyborg(cyborg_env) -> dict:
     """Extract static topology from a live CybORG environment.
 
-    Returns a plain dict of numpy arrays with keys matching CC4Const field names.
+    Returns a plain dict of numpy arrays with keys matching SimulatorConst field names.
     """
     state = cyborg_env.environment_controller.state
     scenario = state.scenario

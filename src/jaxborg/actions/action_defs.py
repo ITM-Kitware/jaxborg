@@ -18,7 +18,7 @@ from jaxborg.constants import (
 )
 
 if TYPE_CHECKING:
-    from jaxborg.state import CC4Const
+    from jaxborg.state import SimulatorConst
 
 # ---------------------------------------------------------------------------
 # Red action ranges
@@ -177,7 +177,7 @@ def encode_red_action(action_name: str, target: int, agent_id: int) -> int:
     raise NotImplementedError(f"Unknown red action {action_name}")
 
 
-def _global_host_to_relative_slot(const: CC4Const, global_host: int, agent_id: int) -> int:
+def _global_host_to_relative_slot(const: SimulatorConst, global_host: int, agent_id: int) -> int:
     """Convert a global host index to an agent-relative slot.
 
     Returns relative_subnet_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot_within,
@@ -205,7 +205,7 @@ def _global_host_to_relative_slot(const: CC4Const, global_host: int, agent_id: i
     return -1
 
 
-def _abs_subnet_to_relative(const: CC4Const, subnet_id: int, agent_id: int) -> int:
+def _abs_subnet_to_relative(const: SimulatorConst, subnet_id: int, agent_id: int) -> int:
     """Convert an absolute subnet ID to an agent-relative index (0, 1, or 2).
 
     Returns -1 if the subnet is not in the agent's observed subnets.
@@ -221,7 +221,7 @@ def encode_blue_action(
     target_host: int,
     agent_id: int,
     *,
-    const: CC4Const = None,
+    const: SimulatorConst = None,
     src_subnet: int = -1,
     dst_subnet: int = -1,
 ) -> int:

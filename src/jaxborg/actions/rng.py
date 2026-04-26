@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
 
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def sample_detection_random(state: CC4State, const: CC4Const, key: jax.Array):
+def sample_detection_random(state: SimulatorState, const: SimulatorConst, key: jax.Array):
     """Return (random_float, updated_state). Uses precomputed sequence if enabled, else JAX RNG."""
     return jax.lax.cond(
         const.use_detection_randoms,
@@ -14,14 +14,14 @@ def sample_detection_random(state: CC4State, const: CC4Const, key: jax.Array):
     )
 
 
-def _from_sequence(state: CC4State, const: CC4Const):
+def _from_sequence(state: SimulatorState, const: SimulatorConst):
     idx = state.detection_random_index
     val = const.detection_randoms[idx]
     new_state = state.replace(detection_random_index=idx + 1)
     return val, new_state
 
 
-def sample_green_random(const: CC4Const, time, host_idx, field_idx, key, *, int_range=None):
+def sample_green_random(const: SimulatorConst, time, host_idx, field_idx, key, *, int_range=None):
     """Return a random value. Uses precomputed green_randoms if enabled, else JAX RNG.
 
     When int_range is provided, returns an int32 in [0, int_range).
@@ -48,7 +48,7 @@ def sample_green_random(const: CC4Const, time, host_idx, field_idx, key, *, int_
     return jax.lax.cond(const.use_green_randoms, from_precomputed, from_rng, None)
 
 
-def sample_red_policy_random(const: CC4Const, time, agent_id, field_idx, key):
+def sample_red_policy_random(const: SimulatorConst, time, agent_id, field_idx, key):
     """Return a precomputed red-policy choice token encoded in [0, 1), else JAX uniform."""
 
     def from_precomputed(_):
@@ -60,7 +60,7 @@ def sample_red_policy_random(const: CC4Const, time, agent_id, field_idx, key):
     return jax.lax.cond(const.use_red_policy_randoms, from_precomputed, from_rng, None)
 
 
-def sample_red_pid_delta(const: CC4Const, time, agent_id, key):
+def sample_red_pid_delta(const: SimulatorConst, time, agent_id, key):
     """Return Host.create_pid delta in [1, 9] for exploit session creation."""
 
     def from_precomputed(_):
@@ -72,7 +72,7 @@ def sample_red_pid_delta(const: CC4Const, time, agent_id, key):
     return jax.lax.cond(const.use_red_pid_deltas, from_precomputed, from_rng, None)
 
 
-def sample_red_privesc_choice(const: CC4Const, time, agent_id, key, num_sessions):
+def sample_red_privesc_choice(const: SimulatorConst, time, agent_id, key, num_sessions):
     """Return privesc session choice index in [0, num_sessions).
 
     Uses precomputed CybORG choice if available, else JAX RNG."""
@@ -86,7 +86,7 @@ def sample_red_privesc_choice(const: CC4Const, time, agent_id, key, num_sessions
     return jax.lax.cond(const.use_red_privesc_choices, from_precomputed, from_rng, None)
 
 
-def sample_red_session_check_choice(const: CC4Const, time, agent_id, key, num_sessions_on_host):
+def sample_red_session_check_choice(const: SimulatorConst, time, agent_id, key, num_sessions_on_host):
     """Return session-check within-host slot index in [0, num_sessions_on_host).
 
     CybORG's RedSessionCheck picks a random session via np_random.choice(all_sessions).
@@ -108,7 +108,7 @@ def sample_red_session_check_choice(const: CC4Const, time, agent_id, key, num_se
     return jax.lax.cond(const.use_red_session_check_choices, from_precomputed, from_rng, None)
 
 
-def sample_exploit_session_choice(const: CC4Const, time, agent_id, key, visible_sessions):
+def sample_exploit_session_choice(const: SimulatorConst, time, agent_id, key, visible_sessions):
     """Return exploit session choice index in [0, visible_sessions).
 
     CybORG's FSM picks uniformly from server_session (abstract sessions in
@@ -126,7 +126,7 @@ def sample_exploit_session_choice(const: CC4Const, time, agent_id, key, visible_
     return jax.lax.cond(const.use_red_exploit_session_choices, from_precomputed, from_rng, None)
 
 
-def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility, key):
+def sample_blue_decoy_type_choice(const: SimulatorConst, time, agent_id, compatibility, key):
     """Return a compatible decoy type index, selected randomly from available types.
 
     Uses precomputed CybORG choice if available, else JAX RNG from the
@@ -146,7 +146,7 @@ def sample_blue_decoy_type_choice(const: CC4Const, time, agent_id, compatibility
     return jax.lax.cond(const.use_blue_decoy_type_choices, from_precomputed, from_fallback_rng, None)
 
 
-def sample_blue_decoy_pid_delta(const: CC4Const, time, agent_id, key, respawn_index=0):
+def sample_blue_decoy_pid_delta(const: SimulatorConst, time, agent_id, key, respawn_index=0):
     """Return Host.create_pid delta in [1, 9] for blue decoy process creation.
 
     respawn_index selects which precomputed delta to use when multiple decoys
