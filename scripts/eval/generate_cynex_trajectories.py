@@ -214,7 +214,7 @@ def _build_mask_cache(wrapper, mappings, const):
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
     """Translate a single CybORG action to JAX indices (from transfer.py)."""
 
-    from jaxborg.translate import cyborg_blue_to_jax
+    from jaxborg.parity.translate import cyborg_blue_to_jax
     try:
         jax_idx = cyborg_blue_to_jax(action, agent_name, mappings, const=const)
         return [jax_idx]
@@ -316,8 +316,8 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     import jax.numpy as jnp
 
 
-    from jaxborg.topology import build_const_from_cyborg
-    from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
 
     # Create env with BlueFlatWrapper (same as transfer.py)
     wrapper = make_cyborg_env(seed, steps)

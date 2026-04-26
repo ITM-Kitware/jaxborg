@@ -15,7 +15,7 @@ from jaxborg.constants import (
     SUBNET_IDS,
     SUBNET_NAMES,
 )
-from jaxborg.topology import (
+from jaxborg.scenarios.cc4.topology import (
     BLUE_AGENT_SUBNETS,
     CYBORG_SUFFIX_TO_ID,
     _compute_mission_phases,
@@ -224,14 +224,14 @@ class TestPureToplogy:
 
 class TestDifferentialWithCybORG:
     def test_host_count_matches(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
         assert int(c.num_hosts) == len(state.hosts)
 
     def test_subnet_assignment_matches(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
@@ -242,7 +242,7 @@ class TestDifferentialWithCybORG:
             assert int(c.host_subnet[idx]) == expected_sid, f"Mismatch for {hostname}"
 
     def test_host_types_match(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
@@ -260,7 +260,7 @@ class TestDifferentialWithCybORG:
                 assert c.host_is_user[idx]
 
     def test_respond_to_ping_matches(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
@@ -270,7 +270,7 @@ class TestDifferentialWithCybORG:
             assert bool(c.host_respond_to_ping[idx]) == expected, f"Mismatch for {hostname}"
 
     def test_data_links_match_cyborg(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
@@ -289,7 +289,7 @@ class TestDifferentialWithCybORG:
 
     def test_services_match_cyborg(self, cyborg_env):
         from jaxborg.constants import SERVICE_IDS
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = cyborg_env.environment_controller.state
@@ -305,7 +305,7 @@ class TestDifferentialWithCybORG:
     def test_red_agent_0_only_active_at_reset(self, cyborg_env):
         from jaxborg.env import _init_red_state
         from jaxborg.state import create_initial_state
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
@@ -317,7 +317,7 @@ class TestDifferentialWithCybORG:
             assert not bool(state.red_agent_active[r]), f"red_agent_{r} should not be active at reset"
 
     def test_green_count_matches(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
@@ -325,7 +325,7 @@ class TestDifferentialWithCybORG:
         assert int(c.num_green_agents) == cyborg_green_count
 
     def test_phase_boundaries_match(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
@@ -335,7 +335,7 @@ class TestDifferentialWithCybORG:
             cumulative += phase_len
 
     def test_allowed_subnet_pairs_match(self, cyborg_env):
-        from jaxborg.topology import _compute_allowed_subnet_pairs, build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import _compute_allowed_subnet_pairs, build_const_from_cyborg
 
         c = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
@@ -343,8 +343,8 @@ class TestDifferentialWithCybORG:
         np.testing.assert_array_equal(np.array(c.allowed_subnet_pairs), expected)
 
     def test_host_order_matches_cyborg(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         build_const_from_cyborg(cyborg_env)
         mappings = build_mappings_from_cyborg(cyborg_env)
@@ -352,8 +352,8 @@ class TestDifferentialWithCybORG:
         assert hostnames == sorted(hostnames), f"Host ordering is not alphabetical: {hostnames[:10]}..."
 
     def test_initial_foothold_privilege_matches_cyborg(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         mappings = build_mappings_from_cyborg(cyborg_env)
         const = build_const_from_cyborg(cyborg_env)

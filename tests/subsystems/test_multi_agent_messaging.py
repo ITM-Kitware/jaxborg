@@ -13,7 +13,7 @@ from jaxborg.constants import (
 )
 from jaxborg.observations import SUBNET_BLOCK_SIZE, get_blue_obs
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
 OBS_SIZE = 210
 NUM_MESSAGES = 4

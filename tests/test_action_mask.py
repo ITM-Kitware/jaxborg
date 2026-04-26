@@ -22,7 +22,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.topology import build_topology
+from jaxborg.scenarios.cc4.topology import build_topology
 
 
 class TestActionMaskShape:

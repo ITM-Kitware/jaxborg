@@ -36,8 +36,8 @@ from jaxborg.constants import (
 )
 from jaxborg.rewards import ASF, compute_reward_breakdown
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg, build_topology
-from jaxborg.translate import build_mappings_from_cyborg
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, build_topology
+from jaxborg.parity.translate import build_mappings_from_cyborg
 
 
 @pytest.fixture
@@ -234,7 +234,7 @@ class TestDifferentialGreen:
         return CybORG(scenario_generator=sg, seed=42)
 
     def test_green_agent_count_matches(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         scenario = cyborg_env.environment_controller.state.scenario
@@ -242,7 +242,7 @@ class TestDifferentialGreen:
         assert int(const.num_green_agents) == cyborg_green_count
 
     def test_green_agents_on_user_hosts(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         for h in range(int(const.num_hosts)):
@@ -439,7 +439,7 @@ class TestGreenSourceSelection:
 
     def test_fp_rate_within_statistical_bounds(self, cyborg_env):
         """Run many steps with only green active, check FP rate is statistically consistent."""
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()

@@ -10,7 +10,7 @@ from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import SERVICE_IDS
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from tests.differential.blue_mask_projection import (
     format_action_index_set,
     live_blue_wrapper_mask_in_jax_space,
@@ -22,7 +22,7 @@ class TestActionMaskDifferential:
     def test_masks_match_cyborg(self, cyborg_env):
         from CybORG.Agents.Wrappers import BlueFlatWrapper
 
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
         wrapped.reset()
@@ -49,7 +49,7 @@ class TestActionMaskDifferential:
     def test_valid_action_counts_match(self, cyborg_env):
         from CybORG.Agents.Wrappers import BlueFlatWrapper
 
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         wrapped = BlueFlatWrapper(cyborg_env, pad_spaces=True)
         wrapped.reset()

@@ -7,7 +7,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.constants import NUM_BLUE_AGENTS
-from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
 EPISODE_LENGTH = 500
 

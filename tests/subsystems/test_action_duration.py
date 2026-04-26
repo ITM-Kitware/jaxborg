@@ -159,7 +159,7 @@ class TestFsmRedEnvDurationTicks:
 
     @pytest.fixture(scope="class")
     def fsm_env_and_state(self):
-        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
         env = FsmRedCC4Env(num_steps=100)
         key = jax.random.PRNGKey(42)

@@ -58,7 +58,7 @@ def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
     """Run episodes in JaxBorg and return per-episode cumulative rewards."""
     from jaxborg.actions.masking import compute_blue_action_mask
     from jaxborg.constants import NUM_BLUE_AGENTS
-    from jaxborg.fsm_red_env import FsmRedCC4Env
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
     from jaxborg.policy import ActorCritic
 
     env = FsmRedCC4Env(num_steps=num_steps)

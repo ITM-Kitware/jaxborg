@@ -20,7 +20,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
-from jaxborg.eval.cia import score_trajectory_file
+from jaxborg.evaluation.cia import score_trajectory_file
 
 
 def _stderr(xs):

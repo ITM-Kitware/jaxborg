@@ -9,7 +9,7 @@ action selection diverges despite identical states.
 import numpy as np
 import pytest
 
-from jaxborg.agents.fsm_red import (
+from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_AGGRESSIVE_SCAN,
     FSM_ACT_DEGRADE,
     FSM_ACT_DISCOVER,

@@ -10,7 +10,7 @@ from jaxborg.constants import (
     NUM_SUBNETS,
     SERVICE_IDS,
 )
-from jaxborg.translate import CC4Mappings
+from jaxborg.parity.translate import CC4Mappings
 from tests.differential.harness import StateDiff, StateSnapshot
 
 _DECOY_SVC_TO_IDX = {"haraka": 0, "apache2": 1, "tomcat": 2, "vsftpd": 3}

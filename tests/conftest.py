@@ -15,7 +15,7 @@ import pytest  # noqa: E402
 from jaxborg.actions import apply_blue_action, apply_red_action  # noqa: E402
 from jaxborg.constants import NUM_BLUE_AGENTS, SUBNET_IDS  # noqa: E402
 from jaxborg.state import CC4State  # noqa: E402
-from jaxborg.topology import build_topology  # noqa: E402
+from jaxborg.scenarios.cc4.topology import build_topology  # noqa: E402
 
 jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
@@ -99,7 +99,7 @@ def cyborg_env_sleep42():
 @pytest.fixture(scope="session")
 def cyborg_const_sleep42(cyborg_env_sleep42):
     """CC4Const extracted from the all-SleepAgent CybORG env (seed=42)."""
-    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     return build_const_from_cyborg(cyborg_env_sleep42)
 
@@ -123,6 +123,6 @@ def cyborg_env_default42():
 @pytest.fixture(scope="session")
 def cyborg_const_default42(cyborg_env_default42):
     """CC4Const extracted from the default-agent CybORG env (seed=42)."""
-    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     return build_const_from_cyborg(cyborg_env_default42)

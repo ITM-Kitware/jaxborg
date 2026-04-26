@@ -79,7 +79,7 @@ class TestPhaseTransitionsMatchCybORG:
         return CybORG(scenario_generator=sg, seed=42)
 
     def test_phase_boundaries_match_cyborg(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         cyborg_state = cyborg_env.environment_controller.state
@@ -98,7 +98,7 @@ class TestPhaseTransitionsMatchCybORG:
             )
 
     def test_phase_transitions_match_cyborg_over_episode(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         cyborg_state = cyborg_env.environment_controller.state
@@ -130,7 +130,7 @@ class TestPhaseDifferential:
 
     def test_phase_boundaries_via_harness(self, cyborg_env):
         """Use the differential harness to compare phase at each boundary step."""
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         const = build_const_from_cyborg(cyborg_env)
         boundaries = np.array(const.phase_boundaries)

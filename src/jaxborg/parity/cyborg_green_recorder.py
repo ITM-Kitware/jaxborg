@@ -20,7 +20,7 @@ from jaxborg.constants import (
     NUM_SERVICES,
     SERVICE_IDS,
 )
-from jaxborg.recording_rng import RecordingNPRandom
+from jaxborg.parity.recording_rng import RecordingNPRandom
 
 GREEN_SLEEP_JAX = 0
 GREEN_LOCAL_WORK_JAX = 1

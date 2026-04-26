@@ -36,7 +36,7 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.agents.fsm_red import (
+from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_init_states,
     fsm_red_schedule_post_step_update,
@@ -53,8 +53,8 @@ from jaxborg.constants import (
 from jaxborg.env import apply_all_actions
 from jaxborg.rewards import advance_mission_phase, compute_rewards
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg
-from jaxborg.translate import (
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,
@@ -710,7 +710,7 @@ class CC4DifferentialHarness:
             )
 
         if self.record_red_policy:
-            from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
+            from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
 
             self.red_policy_recorder = RedPolicyRecorder()
             self.red_policy_recorder.install(self.cyborg_env, self.mappings)
@@ -1650,7 +1650,7 @@ class CC4DifferentialHarness:
         """
         from ipaddress import IPv4Address, IPv4Network
 
-        from jaxborg.cyborg_red_policy_recorder import _ACTION_NAME_TO_FSM
+        from jaxborg.parity.cyborg_red_policy_recorder import _ACTION_NAME_TO_FSM
 
         step = int(self.jax_state.time)
         for r, picked in cyborg_pre_picks.items():
@@ -1711,7 +1711,7 @@ class CC4DifferentialHarness:
 
         We compare the symmetric difference of the two index sets.
         """
-        from jaxborg.agents.fsm_red import FSM_F
+        from jaxborg.scenarios.cc4.red_fsm import FSM_F
         from jaxborg.constants import NUM_RED_AGENTS
 
         step = int(self.jax_state.time)

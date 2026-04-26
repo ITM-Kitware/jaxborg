@@ -34,7 +34,7 @@ def cyborg_sleep_env():
 
 @pytest.fixture
 def jax_fsm_env():
-    from jaxborg.fsm_red_env import FsmRedCC4Env
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
     return FsmRedCC4Env(num_steps=500)
 
@@ -42,9 +42,9 @@ def jax_fsm_env():
 @pytest.fixture
 def jax_env_from_cyborg(cyborg_sleep_env):
     from jaxborg.env import CC4EnvState, _init_red_state
-    from jaxborg.fsm_red_env import FsmRedCC4Env
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
     from jaxborg.state import create_initial_state
-    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     inner_cyborg = cyborg_sleep_env.env
     const = build_const_from_cyborg(inner_cyborg)
@@ -60,7 +60,7 @@ def jax_env_from_cyborg(cyborg_sleep_env):
 def _translate_logged_red_actions(logged_actions, mappings):
     from jaxborg.actions.encoding import RED_SLEEP
     from jaxborg.constants import NUM_RED_AGENTS
-    from jaxborg.translate import cyborg_red_to_jax
+    from jaxborg.parity.translate import cyborg_red_to_jax
 
     red_actions = {}
     for agent_id in range(NUM_RED_AGENTS):
@@ -74,7 +74,7 @@ def _translate_logged_red_actions(logged_actions, mappings):
 
 def _correct_pending_generic_red_exploits(jax_env_state, cyborg, mappings):
     from jaxborg.actions.encoding import encode_red_action
-    from jaxborg.translate import cyborg_red_to_jax
+    from jaxborg.parity.translate import cyborg_red_to_jax
 
     red_pending_action = jax_env_state.state.red_pending_action
 
@@ -105,7 +105,7 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
     from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyVsftpd import VsftpdDecoyFactory
 
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
-    from jaxborg.translate import cyborg_blue_to_jax
+    from jaxborg.parity.translate import cyborg_blue_to_jax
 
     decoy_factory_actions = (
         (HarakaDecoyFactory(), "DeployDecoy_HarakaSMPT"),
@@ -197,9 +197,9 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
         from jaxborg.actions.masking import compute_blue_action_mask
         from jaxborg.constants import NUM_BLUE_AGENTS
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg, cyborg_blue_to_jax
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -277,8 +277,8 @@ class TestFsmRedEnvDifferential:
         from CybORG.Agents.Wrappers import BlueFlatWrapper
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -335,9 +335,9 @@ class TestFsmRedEnvDifferential:
     def test_independent_rollout_bank_seed_mapping_matches_reset_seed_3(self):
         """Independent transfer must use the same cached CybORG bank member as the JAX reset key."""
         from jaxborg.actions.masking import compute_blue_action_mask
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 3
@@ -379,10 +379,10 @@ class TestFsmRedEnvDifferential:
         """Native bank-backed red policy should match CybORG's first red_0 action."""
         from CybORG.Simulator.Actions import Sleep
 
-        from jaxborg.agents.fsm_red import fsm_red_apply_delayed_update, fsm_red_select_actions
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
         from jaxborg.constants import NUM_RED_AGENTS
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg, jax_red_to_cyborg
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
@@ -435,7 +435,7 @@ class TestFsmRedEnvDifferential:
 
     def test_cyborg_bank_runtime_does_not_preload_sleep_red_policy_tape_by_default(self):
         """cyborg_bank runtime should not inject a Sleep-rollout red-policy tape by default."""
-        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
         seed = 4
         bank_size = 5
@@ -453,8 +453,8 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Actions import Sleep
 
         from jaxborg.actions.encoding import encode_blue_action
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
@@ -490,9 +490,9 @@ class TestFsmRedEnvDifferential:
 
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import NUM_BLUE_AGENTS
-        from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg
         from scripts.eval.transfer import make_cyborg_env
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
@@ -570,8 +570,8 @@ class TestFsmRedEnvDifferential:
 
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -615,10 +615,10 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.actions.encoding import BLUE_SLEEP
-        from jaxborg.agents.fsm_red import fsm_red_apply_delayed_update
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update
         from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -677,10 +677,10 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.actions.encoding import BLUE_SLEEP
-        from jaxborg.agents.fsm_red import fsm_red_apply_delayed_update, fsm_red_select_actions
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
         from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
-        from jaxborg.fsm_red_env import FsmRedCC4Env
-        from jaxborg.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.translate import build_mappings_from_cyborg, jax_red_to_cyborg
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -752,7 +752,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import BLUE_SLEEP, RED_SLEEP
         from jaxborg.constants import COMPROMISE_PRIVILEGED, NUM_BLUE_AGENTS, NUM_RED_AGENTS
         from jaxborg.env import CC4Env
-        from jaxborg.translate import build_mappings_from_cyborg, cyborg_red_to_jax
+        from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_red_to_jax
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
         seed = 0
@@ -839,7 +839,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import COMPROMISE_NONE, NUM_BLUE_AGENTS
         from jaxborg.env import CC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
         seed = 0
@@ -921,7 +921,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import BLUE_SLEEP
         from jaxborg.constants import COMPROMISE_NONE, NUM_BLUE_AGENTS
         from jaxborg.env import CC4Env
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
         from tests.differential.state_comparator import compare_snapshots, extract_cyborg_snapshot, extract_jax_snapshot
 
         seed = 0

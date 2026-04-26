@@ -13,8 +13,8 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.constants import MISSION_PHASES, NUM_SUBNETS, SUBNET_NAMES
-from jaxborg.topology import build_const_from_cyborg, build_topology
-from jaxborg.topology_numpy import (
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, build_topology
+from jaxborg.scenarios.cc4.topology_numpy import (
     _build_allowed_subnet_pairs_pure,
     _build_phase_rewards,
     _build_phase_rewards_from_cyborg,
