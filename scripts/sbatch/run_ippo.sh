@@ -27,7 +27,16 @@ fi
 
 EXPERIMENT="$1"
 WORKDIR=$(git rev-parse --show-toplevel)
-EXP_DIR="${JAXBORG_EXP_DIR:-$WORKDIR/../jaxborg-exp}"
+# Worktree layout has $WORKDIR two levels above jaxborg-exp/ (e.g.
+# .../jaxborg/kernel-split → .../jaxborg-exp); standalone repo has it one
+# level up. Prefer the existing one; fall back to the legacy default.
+if [ -n "${JAXBORG_EXP_DIR:-}" ]; then
+  EXP_DIR="$JAXBORG_EXP_DIR"
+elif [ -d "$WORKDIR/../../jaxborg-exp" ]; then
+  EXP_DIR="$WORKDIR/../../jaxborg-exp"
+else
+  EXP_DIR="$WORKDIR/../jaxborg-exp"
+fi
 
 # Self-submit: if not yet under slurm, resubmit via sbatch with computed --output
 if [ -z "${SLURM_JOB_ID:-}" ]; then
