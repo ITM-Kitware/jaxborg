@@ -483,12 +483,18 @@ class CC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        vary_router_links: bool = False,
+        vary_phase_rewards: bool = False,
+        topology_fixed_key: int | None = None,
     ):
         self.num_steps = num_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
         self.training_mode = training_mode
+        self.vary_router_links = vary_router_links
+        self.vary_phase_rewards = vary_phase_rewards
+        self.topology_fixed_key = topology_fixed_key
         self._const_bank = None
         self._green_random_bank = None
         self._red_policy_random_bank = None
@@ -521,7 +527,17 @@ class CC4Env(MultiAgentEnv):
 
     def _select_const(self, key: chex.PRNGKey) -> CC4Const:
         if self._const_bank is None:
-            return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
+            # gen-fixed control arm: override the reset key with a deterministic
+            # one so every episode draws the same topology.
+            if self.topology_fixed_key is not None:
+                key = jax.random.PRNGKey(self.topology_fixed_key)
+            return build_topology(
+                key,
+                num_steps=self.num_steps,
+                training_mode=self.training_mode,
+                vary_router_links=self.vary_router_links,
+                vary_phase_rewards=self.vary_phase_rewards,
+            )
 
         bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return jax.tree.map(lambda x: x[bank_idx], self._const_bank)

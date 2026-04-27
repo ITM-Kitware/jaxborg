@@ -226,7 +226,14 @@ def load_checkpoint(path):
     raise ValueError(f"Unrecognized checkpoint format: nested params keys={sorted(nested_params.keys())}")
 
 
-def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
+def _make_jax_eval_env(
+    topology_mode: str,
+    topology_bank_size: int,
+    *,
+    vary_router_links: bool = False,
+    vary_phase_rewards: bool = False,
+    topology_fixed_key: int | None = None,
+):
     if topology_mode == "cyborg_bank":
         if topology_bank_size <= 0:
             raise ValueError(f"topology_bank_size must be > 0 for cyborg_bank, got {topology_bank_size}")
@@ -235,7 +242,13 @@ def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
             topology_mode=topology_mode,
             topology_bank_size=topology_bank_size,
         )
-    return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS, topology_mode=topology_mode)
+    return FsmRedCC4Env(
+        num_steps=DEFAULT_NUM_STEPS,
+        topology_mode=topology_mode,
+        vary_router_links=vary_router_links,
+        vary_phase_rewards=vary_phase_rewards,
+        topology_fixed_key=topology_fixed_key,
+    )
 
 
 def policy_dist(policy, params, policy_kind, obs_jax, mask):
@@ -512,6 +525,9 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
             "reward_ria": info["reward_ria"],
             "reward_lwf": info["reward_lwf"],
             "reward_asf": info["reward_asf"],
+            # Axis B / CIA scoring: per-step state needed to derive CIA events.
+            "host_compromised": compromised,  # (GLOBAL_MAX_HOSTS,) int
+            "red_impact_attempted": st.red_impact_attempted,  # (GLOBAL_MAX_HOSTS,) bool
         }
 
         return (params, key, new_env_state, new_obs), step_data

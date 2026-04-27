@@ -32,7 +32,6 @@ from jaxborg.constants import (
 )
 from jaxborg.state import CC4Const
 from jaxborg.topology_numpy import (
-    _ROUTER_LINKS,
     BLUE_AGENT_SUBNETS,
     RED_AGENT_SUBNETS,
     _build_allowed_subnet_pairs_pure,
@@ -44,7 +43,26 @@ from jaxborg.topology_numpy import (
     _compute_phase_boundaries,
     _subnet_nacl_adjacency,
     build_const_arrays_from_cyborg,
+    get_phase_rewards_bank,
+    get_router_link_bank,
 )
+
+# Eagerly materialize the JAX-side router-link bank as a module constant.
+# Building inside build_topology (which is traced) and caching to a global
+# would leak a tracer; computing once at import time gives JAX a concrete
+# constant that gets inlined during JIT compilation.
+_ROUTER_LINK_BANK_JNP: jax.Array = jnp.asarray(get_router_link_bank())
+
+# Axis C: phase-reward bank materialized eagerly for the same reason.
+_PHASE_REWARDS_BANK_JNP: jax.Array = jnp.asarray(get_phase_rewards_bank())
+
+
+def _router_link_bank_jnp() -> jax.Array:
+    return _ROUTER_LINK_BANK_JNP
+
+
+def _phase_rewards_bank_jnp() -> jax.Array:
+    return _PHASE_REWARDS_BANK_JNP
 
 
 def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
@@ -304,7 +322,14 @@ def get_cyborg_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Arr
     return bank
 
 
-def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> CC4Const:
+def build_topology(
+    key: jax.Array,
+    num_steps: int = 500,
+    *,
+    training_mode: bool = False,
+    vary_router_links: bool = False,
+    vary_phase_rewards: bool = False,
+) -> CC4Const:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
@@ -313,8 +338,20 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
 
     Host indices follow alphabetical hostname ordering (same as build_const_from_cyborg):
     subnets ordered by CYBORG_SUBNET_SUFFIX, within each subnet: router < servers < users.
+
+    Axis B: when ``vary_router_links=True``, the inter-router (subnet-to-subnet)
+    backbone topology is sampled per reset key from the precomputed bank in
+    :func:`jaxborg.topology_numpy.get_router_link_bank` (default tree + extra
+    candidate edges). When False, bank entry 0 (default tree) is used and the
+    behavior matches the legacy static ``_ROUTER_LINKS`` dict.
+
+    Axis C: when ``vary_phase_rewards=True``, the per-(phase, subnet, component)
+    reward landscape is sampled per reset key from the precomputed bank in
+    :func:`jaxborg.topology_numpy.get_phase_rewards_bank` (default matrix +
+    variants reassigning which subnet is the high-value target in phases 1, 2).
+    When False, bank entry 0 (the default) is used.
     """
-    k_counts, k_services, k_red, k_pids = jax.random.split(key, 4)
+    k_counts, k_services, k_red, k_pids, k_router, k_phase = jax.random.split(key, 6)
     k_users, k_servers = jax.random.split(k_counts)
 
     n_users = jax.random.randint(k_users, (8,), 3, 11)
@@ -378,17 +415,32 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
         sid = int(_ALPHA_SUBNET_ORDER_NP[alpha_i])
         subnet_router_idx = subnet_router_idx.at[sid].set(starts[alpha_i])
 
+    # Axis B: select router-to-router adjacency matrix.
+    # Bank[0] is the default tree (matches legacy _ROUTER_LINKS exactly).
+    router_bank = _router_link_bank_jnp()
+    bank_size = router_bank.shape[0]
+    bank_idx = jax.lax.cond(
+        vary_router_links,
+        lambda: jax.random.randint(k_router, (), 0, bank_size, dtype=jnp.int32),
+        lambda: jnp.int32(0),
+    )
+    router_adj = router_bank[bank_idx]  # (NUM_SUBNETS, NUM_SUBNETS) bool
+
     data_links = jnp.zeros((GLOBAL_MAX_HOSTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
     router_of = subnet_router_idx[host_subnet]
     is_regular = host_active & ~host_is_router & ~host_is_internet
     data_links = data_links.at[j, router_of].set(is_regular)
     data_links = data_links.at[router_of, j].set(is_regular)
-    for src_name, neighbor_names in _ROUTER_LINKS.items():
-        src_r = subnet_router_idx[SUBNET_IDS[src_name]]
-        for dst_name in neighbor_names:
-            dst_r = subnet_router_idx[SUBNET_IDS[dst_name]]
-            data_links = data_links.at[src_r, dst_r].set(True)
-            data_links = data_links.at[dst_r, src_r].set(True)
+
+    # Apply inter-router edges from the selected router_adj matrix. Vectorized
+    # scatter over the (NUM_SUBNETS, NUM_SUBNETS) grid: for each (i, j), if
+    # router_adj[i, j] is True, set data_links at (router_idx[i], router_idx[j]).
+    sub_i, sub_j = jnp.meshgrid(jnp.arange(NUM_SUBNETS), jnp.arange(NUM_SUBNETS), indexing="ij")
+    src_h = subnet_router_idx[sub_i.flatten()]
+    dst_h = subnet_router_idx[sub_j.flatten()]
+    adj_flat = router_adj.flatten()
+    existing_dl = data_links[src_h, dst_h]
+    data_links = data_links.at[src_h, dst_h].set(existing_dl | adj_flat)
 
     blue_agent_hosts = jnp.zeros((NUM_BLUE_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_)
     for i, snames in enumerate(BLUE_AGENT_SUBNETS):
@@ -418,15 +470,19 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     for alpha_i in range(8):
         sid = int(_ALPHA_SUBNET_ORDER_NP[alpha_i])
         server0_idx = server0_idx.at[sid].set(starts[alpha_i] + 1)
-    for src_name, neighbor_names in _ROUTER_LINKS.items():
-        if src_name == "INTERNET":
-            continue
-        src_s0 = server0_idx[SUBNET_IDS[src_name]]
-        for dst_name in neighbor_names:
-            if dst_name == "INTERNET":
-                continue
-            dst_s0 = server0_idx[SUBNET_IDS[dst_name]]
-            host_info_links = host_info_links.at[src_s0, dst_s0].set(True)
+
+    # Axis B: vectorized server0-to-server0 link installation.  Skip pairs
+    # where either endpoint is INTERNET (no server0 there).  router_adj is the
+    # same matrix selected above for data_links.
+    s0_valid = server0_idx >= 0  # (NUM_SUBNETS,)
+    valid_pair = s0_valid[:, None] & s0_valid[None, :]
+    info_adj = router_adj & valid_pair  # (NUM_SUBNETS, NUM_SUBNETS) bool
+    s0_safe = jnp.maximum(server0_idx, 0)  # clamp -1 → 0; masked False below
+    src_s0 = s0_safe[sub_i.flatten()]
+    dst_s0 = s0_safe[sub_j.flatten()]
+    info_flat = info_adj.flatten()
+    existing_info = host_info_links[src_s0, dst_s0]
+    host_info_links = host_info_links.at[src_s0, dst_s0].set(existing_info | info_flat)
 
     green_agent_host, green_agent_active, num_green_agents = _build_green_agent_map_jax(
         host_active=host_active,
@@ -454,6 +510,17 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
 
     phase_boundaries = jnp.array(_compute_phase_boundaries(_compute_mission_phases(num_steps)))
 
+    # Axis C: select phase_rewards from the precomputed bank.  Bank[0] is the
+    # default matrix (matches legacy _build_phase_rewards exactly).
+    phase_rewards_bank = _phase_rewards_bank_jnp()
+    pr_bank_size = phase_rewards_bank.shape[0]
+    pr_bank_idx = jax.lax.cond(
+        vary_phase_rewards,
+        lambda: jax.random.randint(k_phase, (), 0, pr_bank_size, dtype=jnp.int32),
+        lambda: jnp.int32(0),
+    )
+    phase_rewards = phase_rewards_bank[pr_bank_idx]
+
     return CC4Const(
         host_active=host_active,
         host_subnet=host_subnet.astype(jnp.int32),
@@ -477,7 +544,7 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
         green_agent_host=green_agent_host,
         green_agent_active=green_agent_active,
         num_green_agents=num_green_agents,
-        phase_rewards=_PHASE_REWARDS,
+        phase_rewards=phase_rewards,
         phase_boundaries=phase_boundaries,
         allowed_subnet_pairs=_ALLOWED_SUBNET_PAIRS,
         obs_host_map=obs_host_map,

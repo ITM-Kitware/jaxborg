@@ -164,11 +164,19 @@ def make_train(config):
     all inside one XLA program.
     """
     num_envs = config.get("NUM_ENVS", 1)
+    topo_fixed_key_cfg = config.get("TOPOLOGY_FIXED_KEY", None)
+    if topo_fixed_key_cfg is not None and str(topo_fixed_key_cfg).lower() not in {"none", "null", ""}:
+        topo_fixed_key_cfg = int(topo_fixed_key_cfg)
+    else:
+        topo_fixed_key_cfg = None
     inner_env = FsmRedCC4Env(
         num_steps=500,
         topology_mode=config.get("TOPOLOGY_MODE", "generative"),
         topology_bank_size=config.get("TOPOLOGY_BANK_SIZE", 0),
         training_mode=bool(config.get("TRAINING_MODE", False)),
+        vary_router_links=bool(config.get("VARY_ROUTER_LINKS", False)),
+        vary_phase_rewards=bool(config.get("VARY_PHASE_REWARDS", False)),
+        topology_fixed_key=topo_fixed_key_cfg,
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents  # 5

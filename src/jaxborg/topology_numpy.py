@@ -42,6 +42,115 @@ _ROUTER_LINKS = {
     "OFFICE_NETWORK": ["PUBLIC_ACCESS_ZONE"],
 }
 
+
+# Axis B (env-diversity for CEC): per-key router topology variation.
+# We keep the default tree above as the always-present base, then per reset key
+# sample a subset of these candidate edges to add. Each candidate is a
+# plausible "extra" inter-router edge that could exist via misconfiguration or
+# design choice in a real enterprise network. See plans/jax/cc4/prompts/phase1-plan.md.
+ROUTER_LINK_CANDIDATE_EDGE_NAMES: tuple[tuple[str, str], ...] = (
+    ("RESTRICTED_ZONE_A", "RESTRICTED_ZONE_B"),
+    ("ADMIN_NETWORK", "RESTRICTED_ZONE_A"),
+    ("ADMIN_NETWORK", "RESTRICTED_ZONE_B"),
+    ("OFFICE_NETWORK", "RESTRICTED_ZONE_A"),
+    ("OFFICE_NETWORK", "RESTRICTED_ZONE_B"),
+    ("CONTRACTOR_NETWORK", "PUBLIC_ACCESS_ZONE"),
+    ("CONTRACTOR_NETWORK", "ADMIN_NETWORK"),
+    ("CONTRACTOR_NETWORK", "OFFICE_NETWORK"),
+    ("OPERATIONAL_ZONE_A", "OPERATIONAL_ZONE_B"),
+    ("OPERATIONAL_ZONE_A", "RESTRICTED_ZONE_B"),
+    ("OPERATIONAL_ZONE_B", "RESTRICTED_ZONE_A"),
+    ("INTERNET", "ADMIN_NETWORK"),
+)
+NUM_ROUTER_LINK_CANDIDATES = len(ROUTER_LINK_CANDIDATE_EDGE_NAMES)
+
+
+def _default_router_adj() -> np.ndarray:
+    """Symmetric (NUM_SUBNETS, NUM_SUBNETS) bool adjacency for the default tree."""
+    adj = np.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
+    for src_name, neighbors in _ROUTER_LINKS.items():
+        si = SUBNET_IDS[src_name]
+        for dst_name in neighbors:
+            di = SUBNET_IDS[dst_name]
+            adj[si, di] = True
+            adj[di, si] = True
+    return adj
+
+
+def _bfs_reachable(adj: np.ndarray, start: int) -> np.ndarray:
+    """Boolean (NUM_SUBNETS,) of which subnets are reachable from `start`."""
+    n = adj.shape[0]
+    visited = np.zeros(n, dtype=bool)
+    visited[start] = True
+    frontier = [start]
+    while frontier:
+        nxt = []
+        for u in frontier:
+            for v in range(n):
+                if adj[u, v] and not visited[v]:
+                    visited[v] = True
+                    nxt.append(v)
+        frontier = nxt
+    return visited
+
+
+def _validate_router_adj(adj: np.ndarray) -> bool:
+    """All required CC4 connectivity invariants for axis B router topologies.
+
+    1. Every subnet reachable from INTERNET (red entry connectivity).
+    2. OPERATIONAL_ZONE_A reachable from CONTRACTOR_NETWORK (red_agent_0 must be
+       able to reach phase-1 high-value target).
+    3. OPERATIONAL_ZONE_B reachable from CONTRACTOR_NETWORK (phase-2 target).
+    """
+    S = SUBNET_IDS
+    from_internet = _bfs_reachable(adj, S["INTERNET"])
+    if not from_internet.all():
+        return False
+    from_contractor = _bfs_reachable(adj, S["CONTRACTOR_NETWORK"])
+    if not from_contractor[S["OPERATIONAL_ZONE_A"]]:
+        return False
+    if not from_contractor[S["OPERATIONAL_ZONE_B"]]:
+        return False
+    return True
+
+
+def _build_router_link_bank() -> np.ndarray:
+    """Enumerate all 2^k candidate-edge subsets, return a stack of valid adjacencies.
+
+    Bank entry 0 is always the default tree (no extra edges) so the
+    vary_router_links=False / topology_fixed_key=0 path matches legacy behavior.
+    """
+    base = _default_router_adj()
+    cand = ROUTER_LINK_CANDIDATE_EDGE_NAMES
+    n_cand = len(cand)
+    cand_pairs = [(SUBNET_IDS[a], SUBNET_IDS[b]) for a, b in cand]
+    valid: list[np.ndarray] = [base.copy()]
+    for mask in range(1, 1 << n_cand):
+        adj = base.copy()
+        for k in range(n_cand):
+            if mask & (1 << k):
+                a, b = cand_pairs[k]
+                adj[a, b] = True
+                adj[b, a] = True
+        if _validate_router_adj(adj):
+            valid.append(adj)
+    return np.stack(valid, axis=0)
+
+
+_ROUTER_LINK_BANK_CACHE: np.ndarray | None = None
+
+
+def get_router_link_bank() -> np.ndarray:
+    """Cached (N_valid, NUM_SUBNETS, NUM_SUBNETS) bool router-adjacency bank.
+
+    Bank[0] is the default tree. All entries pass the connectivity validator.
+    """
+    global _ROUTER_LINK_BANK_CACHE
+    if _ROUTER_LINK_BANK_CACHE is None:
+        _ROUTER_LINK_BANK_CACHE = _build_router_link_bank()
+    return _ROUTER_LINK_BANK_CACHE
+
+
 BLUE_AGENT_SUBNETS = [
     ["RESTRICTED_ZONE_A"],
     ["OPERATIONAL_ZONE_A"],
@@ -254,6 +363,83 @@ def _build_phase_rewards() -> np.ndarray:
     pr[2, S["INTERNET"]] = [0, 0, 0]
 
     return pr
+
+
+# Axis C (env-diversity for CEC): per-key phase-reward variation.
+# We pick a "primary target" subnet for each of mission phases 1 and 2 (the
+# zone that gets the high-value [-10, 0, -10] reward profile).  Defaults
+# correspond to OPERATIONAL_ZONE_A (phase 1) and OPERATIONAL_ZONE_B (phase 2);
+# variants choose ordered pairs from the candidate set below.
+PHASE_REWARDS_PRIMARY_TARGET_NAMES: tuple[str, ...] = (
+    "ADMIN_NETWORK",
+    "OFFICE_NETWORK",
+    "OPERATIONAL_ZONE_A",
+    "OPERATIONAL_ZONE_B",
+    "RESTRICTED_ZONE_A",
+    "RESTRICTED_ZONE_B",
+)
+NUM_PHASE_REWARDS_PRIMARY_TARGETS = len(PHASE_REWARDS_PRIMARY_TARGET_NAMES)
+
+
+def _build_phase_rewards_variant(phase1_target_sid: int, phase2_target_sid: int) -> np.ndarray:
+    """Return a (MISSION_PHASES, NUM_SUBNETS, 3) variant of the default phase-rewards.
+
+    Starts from :func:`_build_phase_rewards` and re-assigns the high-value
+    ``[-10, 0, -10]`` profile in phase 1 (resp. 2) to ``phase1_target_sid``
+    (resp. ``phase2_target_sid``). The original op-zone (OPERATIONAL_ZONE_A in
+    phase 1, OPERATIONAL_ZONE_B in phase 2) is reset to ``[-1, -1, -1]`` (the
+    non-target value the other op-zone already has by default).
+
+    Passing the original op-zones reproduces the default matrix exactly.
+    """
+    S = SUBNET_IDS
+    pr = _build_phase_rewards().copy()
+    high = np.array([-10.0, 0.0, -10.0], dtype=np.float32)
+    inactive = np.array([-1.0, -1.0, -1.0], dtype=np.float32)
+
+    # Phase 1: original primary is OPERATIONAL_ZONE_A.
+    pr[1, S["OPERATIONAL_ZONE_A"]] = inactive
+    pr[1, phase1_target_sid] = high
+
+    # Phase 2: original primary is OPERATIONAL_ZONE_B.
+    pr[2, S["OPERATIONAL_ZONE_B"]] = inactive
+    pr[2, phase2_target_sid] = high
+
+    return pr
+
+
+def _build_phase_rewards_bank() -> np.ndarray:
+    """Build the full phase-rewards bank.
+
+    Bank entry 0 is exactly :func:`_build_phase_rewards` so that the
+    ``vary_phase_rewards=False`` path matches legacy behavior. Remaining
+    entries enumerate ordered pairs ``(phase1_target, phase2_target)`` drawn
+    from :data:`PHASE_REWARDS_PRIMARY_TARGET_NAMES` with the two targets
+    distinct (6 × 5 = 30 ordered pairs → 31-entry bank).
+    """
+    entries: list[np.ndarray] = [_build_phase_rewards()]
+    candidate_sids = [SUBNET_IDS[name] for name in PHASE_REWARDS_PRIMARY_TARGET_NAMES]
+    for p1 in candidate_sids:
+        for p2 in candidate_sids:
+            if p1 == p2:
+                continue
+            entries.append(_build_phase_rewards_variant(p1, p2))
+    return np.stack(entries, axis=0).astype(np.float32)
+
+
+_PHASE_REWARDS_BANK_CACHE: np.ndarray | None = None
+
+
+def get_phase_rewards_bank() -> np.ndarray:
+    """Cached (N, MISSION_PHASES, NUM_SUBNETS, 3) float32 phase-rewards bank.
+
+    ``bank[0]`` equals :func:`_build_phase_rewards`. Remaining entries are
+    valid variants per :func:`_build_phase_rewards_variant`.
+    """
+    global _PHASE_REWARDS_BANK_CACHE
+    if _PHASE_REWARDS_BANK_CACHE is None:
+        _PHASE_REWARDS_BANK_CACHE = _build_phase_rewards_bank()
+    return _PHASE_REWARDS_BANK_CACHE
 
 
 def _build_phase_rewards_from_cyborg(cyborg_env) -> np.ndarray:

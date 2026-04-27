@@ -26,4 +26,13 @@ MLFLOW_ENABLED: true
 CHECKPOINT_EVERY_UPDATES: 50
 TOPOLOGY_MODE: generative
 TRAINING_MODE: true
+# Axis B (CEC env-diversity): per-key router-topology variation.
+# false = default tree only (gen-base); true = sample from validated bank (gen-router).
+VARY_ROUTER_LINKS: false
+# Axis C (CEC env-diversity): per-key phase-reward variation.
+# false = default phase rewards (legacy); true = sample from variant bank.
+VARY_PHASE_REWARDS: false
+# gen-fixed control arm: integer seed → constant reset key for build_topology
+# (single topology re-used every episode). null = normal per-key reset.
+TOPOLOGY_FIXED_KEY: null
 SAVE_DIR: null                 # null = auto-timestamp under $JAXBORG_EXP_DIR; else explicit path
