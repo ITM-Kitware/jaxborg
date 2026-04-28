@@ -13,3 +13,4 @@ mlruns/
 .agent_handoff/
 .jax_cache/
 slurm-*.out
+scripts/dev/catalog_status.json
