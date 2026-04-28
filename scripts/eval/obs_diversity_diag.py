@@ -51,12 +51,16 @@ def collect_obs(env, num_episodes, fixed_key, key_seed_base):
         for t in range(50):
             arr = jnp.stack([obs_d[a] for a in env.agents])
             obs_per_step.append(np.asarray(arr))
-            mask = jnp.stack([env_state.action_mask[a] for a in env.agents]) if hasattr(env_state, "action_mask") else None
+            mask = (
+                jnp.stack([env_state.action_mask[a] for a in env.agents]) if hasattr(env_state, "action_mask") else None
+            )
             if mask is None:
                 # fall back: sample actions uniformly across full action space
                 k = jax.random.PRNGKey(ep * 1000 + t)
                 act_keys = jax.random.split(k, env.num_agents)
-                acts = jnp.array([jax.random.randint(ak, (), 0, env.action_space(a).n) for ak, a in zip(act_keys, env.agents)])
+                acts = jnp.array(
+                    [jax.random.randint(ak, (), 0, env.action_space(a).n) for ak, a in zip(act_keys, env.agents)]
+                )
             else:
                 k = jax.random.PRNGKey(ep * 1000 + t)
                 acts = random_actions(env, k, mask)
@@ -83,7 +87,7 @@ def main():
     print("collecting gen-base (varying keys) ...", flush=True)
     obs_varied = collect_obs(env, args.episodes, None, args.seed_base + 10000)
 
-    print(f"\n=== obs distribution comparison ===")
+    print("\n=== obs distribution comparison ===")
     print(f"obs shape: {obs_fixed.shape}, dim={obs_fixed.shape[-1]}")
     mean_fixed = obs_fixed.mean(axis=0)
     mean_varied = obs_varied.mean(axis=0)
@@ -91,16 +95,18 @@ def main():
     std_varied = obs_varied.std(axis=0)
 
     abs_diff = np.abs(mean_fixed - mean_varied)
-    pooled_std = np.sqrt((std_fixed ** 2 + std_varied ** 2) / 2 + 1e-9)
+    pooled_std = np.sqrt((std_fixed**2 + std_varied**2) / 2 + 1e-9)
     cohen_d = abs_diff / pooled_std
 
-    print(f"\nper-feature drift (top 10 by |mean_fixed - mean_varied| / pooled_std):")
+    print("\nper-feature drift (top 10 by |mean_fixed - mean_varied| / pooled_std):")
     top = np.argsort(-cohen_d)[:10]
     for idx in top:
-        print(f"  feat[{idx:4d}]  mean_fixed={mean_fixed[idx]:+.4f}  mean_varied={mean_varied[idx]:+.4f}  "
-              f"std_fix={std_fixed[idx]:.4f}  std_var={std_varied[idx]:.4f}  d={cohen_d[idx]:.3f}")
+        print(
+            f"  feat[{idx:4d}]  mean_fixed={mean_fixed[idx]:+.4f}  mean_varied={mean_varied[idx]:+.4f}  "
+            f"std_fix={std_fixed[idx]:.4f}  std_var={std_varied[idx]:.4f}  d={cohen_d[idx]:.3f}"
+        )
 
-    print(f"\noverall:")
+    print("\noverall:")
     print(f"  features with cohen_d > 0.1:  {int((cohen_d > 0.1).sum())}/{len(cohen_d)}")
     print(f"  features with cohen_d > 0.3:  {int((cohen_d > 0.3).sum())}/{len(cohen_d)}")
     print(f"  max cohen_d: {cohen_d.max():.3f}")

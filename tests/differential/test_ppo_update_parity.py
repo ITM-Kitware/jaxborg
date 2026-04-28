@@ -84,8 +84,12 @@ def _torch_to_flax_params(torch_agent: TinyPPOAgent) -> dict:
     """Convert TinyPPOAgent state_dict → SharedActorCritic params pytree.
 
     Flax Dense uses kernel (in, out); torch Linear uses weight (out, in).
-    Flax @nn.compact ordering puts the four Dense layers as
+    Flax @nn.compact ordering puts the actor+critic Dense layers as
     Dense_0..Dense_3 in source-call order: trunk1, trunk2, actor, critic.
+    Phase 2 added a 5th Dense (message head, Dense_4) — the loss does not
+    consume it, but the params dict needs to contain something so
+    network.apply does not raise.  We seed Dense_4 from network.init so the
+    layer is present without affecting actor/critic gradients.
     """
     sd = torch_agent.state_dict()
 
@@ -95,14 +99,19 @@ def _torch_to_flax_params(torch_agent: TinyPPOAgent) -> dict:
             "bias": jnp.asarray(sd[b_key].numpy().copy()),
         }
 
-    return {
+    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    init_params = network.init(jax.random.PRNGKey(0), jnp.zeros((OBS_DIM,), dtype=jnp.float32))
+
+    params = {
         "params": {
+            **{k: v for k, v in init_params["params"].items()},
             "Dense_0": _kw("fc1.weight", "fc1.bias"),
             "Dense_1": _kw("fc2.weight", "fc2.bias"),
             "Dense_2": _kw("actor.weight", "actor.bias"),
             "Dense_3": _kw("critic.weight", "critic.bias"),
         }
     }
+    return params
 
 
 def _make_minibatch(seed: int = 0):
@@ -159,7 +168,9 @@ def _torch_loss(agent, obs, actions, mask, old_logp, mb_adv_np, mb_ret_np):
 def _jax_loss(params, network, obs, actions, mask, old_logp, mb_adv, mb_targets, mb_value_old):
     """Mirrors ippo_jax.py::_loss_fn (no busy mask, no value clipping)."""
     gae = (mb_adv - mb_adv.mean()) / (mb_adv.std() + 1e-8)
-    pi, value = network.apply(params, obs, mask)
+    # Phase 2 SharedActorCritic returns (pi, value, message); message is not
+    # consumed by the loss.
+    pi, value, _ = network.apply(params, obs, mask)
     log_prob = pi.log_prob(actions)
 
     # Unmasked (busy_masking=False) → policy_weight all 1s.
@@ -197,7 +208,7 @@ def test_forward_pass_parity():
         logp_t = dist_t.log_prob(torch.from_numpy(actions)).numpy()
         ent_t = dist_t.entropy().numpy()
 
-    pi, val_j = network.apply(flax_params, jnp.asarray(obs), jnp.asarray(mask))
+    pi, val_j, _ = network.apply(flax_params, jnp.asarray(obs), jnp.asarray(mask))
     logp_j = np.asarray(pi.log_prob(jnp.asarray(actions)))
     ent_j = np.asarray(pi.entropy())
 

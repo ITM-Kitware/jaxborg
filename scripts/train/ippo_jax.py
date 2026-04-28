@@ -33,6 +33,7 @@ from jaxmarl.wrappers.baselines import LogWrapper
 from omegaconf import OmegaConf
 
 from jaxborg.actions.masking import compute_blue_action_mask
+from jaxborg.constants import MESSAGE_LENGTH, NUM_BLUE_AGENTS
 from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.policy import ActorCritic, SharedActorCritic
 
@@ -176,8 +177,11 @@ def make_train(config):
         training_mode=bool(config.get("TRAINING_MODE", False)),
         vary_router_links=bool(config.get("VARY_ROUTER_LINKS", False)),
         vary_phase_rewards=bool(config.get("VARY_PHASE_REWARDS", False)),
+        vary_mission_profile=bool(config.get("VARY_MISSION_PROFILE", False)),
+        vary_subnet_pairs=bool(config.get("VARY_SUBNET_PAIRS", False)),
         topology_fixed_key=topo_fixed_key_cfg,
     )
+    blue_comms = bool(config.get("BLUE_COMMS", False))
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents  # 5
     config["NUM_ACTORS"] = num_agents * num_envs
@@ -269,7 +273,7 @@ def make_train(config):
             # Flatten (num_envs, num_agents) for network, then reshape back
             flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
             flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
-            pi, value = network.apply(train_state.params, flat_obs, flat_avail)
+            pi, value, msg = network.apply(train_state.params, flat_obs, flat_avail)
 
             action_flat = pi.sample(seed=_rng)
             log_prob_flat = pi.log_prob(action_flat)
@@ -277,8 +281,28 @@ def make_train(config):
             action = action_flat.reshape(num_envs, num_agents)
             log_prob = log_prob_flat.reshape(num_envs, num_agents)
             value = value.reshape(num_envs, num_agents)
+            # msg shape: (num_envs * num_agents, MESSAGE_LENGTH).  Reshape to
+            # (num_envs, NUM_BLUE_AGENTS, MESSAGE_LENGTH) and broadcast across
+            # the recipient axis to fill state.messages.  num_agents ==
+            # NUM_BLUE_AGENTS in this trainer.
+            msg_per_sender = msg.reshape(num_envs, num_agents, MESSAGE_LENGTH)
 
             env_act = {agents[i]: action[:, i] for i in range(num_agents)}
+
+            if blue_comms:
+                # Broadcast each sender's message to all recipient slots in
+                # the (sender, recipient, MESSAGE_LENGTH) state.messages
+                # array.  obs-side wiring at observations.py:82-87 already
+                # skips the diagonal, so writing self → self is harmless.
+                msg_broadcast = jnp.broadcast_to(
+                    msg_per_sender[:, :, None, :],
+                    (num_envs, NUM_BLUE_AGENTS, NUM_BLUE_AGENTS, MESSAGE_LENGTH),
+                )
+                env_state = env_state.replace(
+                    env_state=env_state.env_state.replace(
+                        state=env_state.env_state.state.replace(messages=msg_broadcast),
+                    ),
+                )
 
             rng, _rng = jax.random.split(rng)
             step_keys = jax.random.split(_rng, num_envs)
@@ -347,7 +371,7 @@ def make_train(config):
         # traj_batch shapes: (NUM_STEPS, num_envs, num_agents, ...)
         last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
         flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
-        _, last_val = network.apply(train_state.params, flat_last_obs)
+        _, last_val, _ = network.apply(train_state.params, flat_last_obs)
         last_val = last_val.reshape(num_envs, num_agents)
 
         def _get_advantages(gae_and_next_value, gae_inputs):
@@ -382,7 +406,7 @@ def make_train(config):
                 def _loss_fn(params, traj_batch, gae, targets, policy_mask):
                     # Per-minibatch advantage normalization (matches CybORG)
                     gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
+                    pi, value, _ = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
                     log_prob = pi.log_prob(traj_batch.action)
                     policy_weight = policy_mask.astype(jnp.float32)
                     policy_count = jnp.maximum(policy_weight.sum(), 1.0)

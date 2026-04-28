@@ -86,6 +86,13 @@ class CC4Const:
     red_exploit_session_choices: chex.Array  # (MAX_STEPS, NUM_RED_AGENTS) int32 — precomputed session choice index
     use_red_exploit_session_choices: chex.Array  # scalar bool — True = use precomputed session choice
 
+    # Phase 2 mission-objective family: bookkeeping for which CIA-multiplier
+    # profile this episode used (0 = default balanced).  Read by eval scripts.
+    mission_profile_index: chex.Array  # scalar int32
+    # Phase 2 axis D: which allowed_subnet_pairs bank entry this episode used
+    # (0 = default policy).  Read by eval scripts.
+    subnet_pairs_bank_index: chex.Array  # scalar int32
+
 
 @struct.dataclass
 class CC4State:
@@ -236,6 +243,8 @@ def create_initial_const() -> CC4Const:
         use_green_host_order=jnp.array(False),
         red_exploit_session_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_exploit_session_choices=jnp.array(False),
+        mission_profile_index=jnp.int32(0),
+        subnet_pairs_bank_index=jnp.int32(0),
     )
 
 

@@ -17,8 +17,26 @@ import statistics
 import sys
 from pathlib import Path
 
-ARMS = ("gen-fixed", "gen-base", "gen-router", "gen-router-rewards")
-TESTBEDS = ("train", "heldout", "heldout_fsm")
+ARMS = (
+    # Phase 1
+    "gen-fixed",
+    "gen-base",
+    "gen-router",
+    "gen-router-rewards",
+    # Phase 2
+    "gen-fixed-nomsg",
+    "gen-fixed-msg",
+    "gen-mission-nomsg",
+    "gen-mission-msg",
+)
+TESTBEDS = (
+    "train",
+    "heldout",
+    "heldout_fsm",
+    "per_mission",
+    "heldout_unseen",
+    "heldout_thinner",
+)
 METRICS = ("reward", "C_mean", "I_mean", "A_mean", "R_mean")
 
 

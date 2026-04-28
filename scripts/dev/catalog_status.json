@@ -24,7 +24,7 @@
   "l4_tost": {
     "equivalent": false,
     "margin": 200.0,
-    "mean_diff": 49.5,
+    "mean_diff": -33.90000000000009,
     "episodes": 10
   }
 }

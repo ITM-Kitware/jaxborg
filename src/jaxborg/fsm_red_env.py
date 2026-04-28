@@ -35,6 +35,8 @@ class FsmRedCC4Env(MultiAgentEnv):
         training_mode: bool = False,
         vary_router_links: bool = False,
         vary_phase_rewards: bool = False,
+        vary_mission_profile: bool = False,
+        vary_subnet_pairs: bool = False,
         topology_fixed_key: int | None = None,
     ):
         self._env = CC4Env(
@@ -45,6 +47,8 @@ class FsmRedCC4Env(MultiAgentEnv):
             training_mode=training_mode,
             vary_router_links=vary_router_links,
             vary_phase_rewards=vary_phase_rewards,
+            vary_mission_profile=vary_mission_profile,
+            vary_subnet_pairs=vary_subnet_pairs,
             topology_fixed_key=topology_fixed_key,
         )
         self.agents = list(self._env.blue_agents)

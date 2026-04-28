@@ -427,6 +427,25 @@ def _build_phase_rewards_bank() -> np.ndarray:
     return np.stack(entries, axis=0).astype(np.float32)
 
 
+# Phase 2 mission-objective family: per-key sampling of the CIA-component
+# multiplier triple (LWF, ASF, RIA).  bank[0] is the default (1, 1, 1) so the
+# vary_mission_profile=False path matches legacy behavior.  The remaining three
+# entries each privilege one CIA dimension while damping the others.
+MISSION_PROFILE_MULTIPLIERS: tuple[tuple[float, float, float], ...] = (
+    # (LWF, ASF, RIA)
+    (1.0, 1.0, 1.0),  # default — balanced
+    (1.0, 3.0, 0.5),  # availability-heavy: amplify ASF, dampen RIA
+    (3.0, 1.0, 1.0),  # productivity-heavy: amplify LWF
+    (0.5, 0.5, 3.0),  # confidentiality-integrity-heavy: amplify RIA
+)
+NUM_MISSION_PROFILES = len(MISSION_PROFILE_MULTIPLIERS)
+
+
+def get_mission_profile_multipliers() -> np.ndarray:
+    """(NUM_MISSION_PROFILES, 3) float32 multipliers in (LWF, ASF, RIA) order."""
+    return np.asarray(MISSION_PROFILE_MULTIPLIERS, dtype=np.float32)
+
+
 _PHASE_REWARDS_BANK_CACHE: np.ndarray | None = None
 
 
@@ -512,6 +531,122 @@ def _build_allowed_subnet_pairs_pure() -> np.ndarray:
             pairs[phase_idx, si, di] = True
             pairs[phase_idx, di, si] = True
     return pairs
+
+
+# Axis D (Phase 2 OOD eval): per-key allowed_subnet_pairs variation.  Bank[0]
+# is the default policy matrix above so vary_subnet_pairs=False reproduces
+# legacy behavior.  Remaining entries permute the per-phase policies and
+# rotate which mission phase carries which policy, then validate that the
+# default green-allowable communication links survive (the ones referenced
+# by the comms_policy bypass list — RZ_A↔OZ_A, RZ_B↔OZ_B, plus a baseline
+# of CN-anchored links).
+def _required_pairs_per_phase() -> list[set[tuple[int, int]]]:
+    """Pairs that MUST be allowed in every phase to keep green plays solvable.
+
+    Common base set — the comms-bypass uplinks that the always-active green
+    flows depend on.  Per-phase op-zone uplinks are deliberately *not*
+    required, so axis-D permutations can rotate which mission phase carries
+    which op-zone link.
+    """
+    S = SUBNET_IDS
+    base = {
+        (S["PUBLIC_ACCESS_ZONE"], S["CONTRACTOR_NETWORK"]),
+        (S["ADMIN_NETWORK"], S["CONTRACTOR_NETWORK"]),
+        (S["OFFICE_NETWORK"], S["CONTRACTOR_NETWORK"]),
+        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_A"]),
+        (S["PUBLIC_ACCESS_ZONE"], S["RESTRICTED_ZONE_B"]),
+    }
+    return [base, base, base]
+
+
+def _phase_pairs_set(pairs: np.ndarray, phase_idx: int) -> set[tuple[int, int]]:
+    out: set[tuple[int, int]] = set()
+    for i in range(NUM_SUBNETS):
+        for j in range(NUM_SUBNETS):
+            if pairs[phase_idx, i, j]:
+                out.add((i, j))
+                out.add((j, i))
+    return out
+
+
+def _validate_subnet_pairs(pairs: np.ndarray) -> bool:
+    required = _required_pairs_per_phase()
+    for phase_idx, req in enumerate(required):
+        present = _phase_pairs_set(pairs, phase_idx)
+        for si, di in req:
+            if (si, di) not in present:
+                return False
+    return True
+
+
+def _build_subnet_pairs_bank() -> np.ndarray:
+    """Bank of validated allowed_subnet_pairs matrices.
+
+    Bank[0] is the default :func:`_build_allowed_subnet_pairs_pure`.  Remaining
+    entries rotate the three per-phase policies and add a swapped variant
+    where phase 1 and phase 2 use each other's primary op-zone link.  Each
+    candidate is validated against :func:`_required_pairs_per_phase`.
+    """
+    S = SUBNET_IDS
+    default = _build_allowed_subnet_pairs_pure()
+
+    # Decompose default into per-phase policies (sets of (si,di) ordered pairs
+    # — matrix is symmetric by construction so we keep both directions).
+    phase_sets = [
+        {(i, j) for i in range(NUM_SUBNETS) for j in range(NUM_SUBNETS) if default[k, i, j]}
+        for k in range(MISSION_PHASES)
+    ]
+
+    def assemble(per_phase_sets: list[set[tuple[int, int]]]) -> np.ndarray:
+        arr = np.zeros((MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS), dtype=bool)
+        for k, s in enumerate(per_phase_sets):
+            for si, di in s:
+                arr[k, si, di] = True
+                arr[k, di, si] = True
+        return arr
+
+    candidates: list[np.ndarray] = [default]
+
+    # Variant 1: rotate (phase 0 → 1 → 2 → 0).
+    candidates.append(assemble([phase_sets[2], phase_sets[0], phase_sets[1]]))
+    # Variant 2: reverse rotate.
+    candidates.append(assemble([phase_sets[1], phase_sets[2], phase_sets[0]]))
+
+    # Variant 3: swap phase 1 ↔ phase 2 op-zone connectivity.
+    swapped = [set(s) for s in phase_sets]
+    pair_a = (S["OPERATIONAL_ZONE_A"], S["RESTRICTED_ZONE_A"])
+    pair_b = (S["OPERATIONAL_ZONE_B"], S["RESTRICTED_ZONE_B"])
+    swapped[1].discard(pair_a)
+    swapped[1].discard(pair_a[::-1])
+    swapped[1].add(pair_b)
+    swapped[1].add(pair_b[::-1])
+    swapped[2].discard(pair_b)
+    swapped[2].discard(pair_b[::-1])
+    swapped[2].add(pair_a)
+    swapped[2].add(pair_a[::-1])
+    candidates.append(assemble(swapped))
+
+    # Variant 4: union — phase 0 always sees every link from any phase.
+    union_p0 = phase_sets[0] | phase_sets[1] | phase_sets[2]
+    candidates.append(assemble([union_p0, phase_sets[1], phase_sets[2]]))
+
+    valid = [c for c in candidates if _validate_subnet_pairs(c)]
+    return np.stack(valid, axis=0)
+
+
+_SUBNET_PAIRS_BANK_CACHE: np.ndarray | None = None
+
+
+def get_subnet_pairs_bank() -> np.ndarray:
+    """Cached (N, MISSION_PHASES, NUM_SUBNETS, NUM_SUBNETS) bool bank.
+
+    ``bank[0]`` reproduces :func:`_build_allowed_subnet_pairs_pure`.  Remaining
+    entries pass :func:`_validate_subnet_pairs`.
+    """
+    global _SUBNET_PAIRS_BANK_CACHE
+    if _SUBNET_PAIRS_BANK_CACHE is None:
+        _SUBNET_PAIRS_BANK_CACHE = _build_subnet_pairs_bank()
+    return _SUBNET_PAIRS_BANK_CACHE
 
 
 def _build_green_agent_map_numpy(
@@ -838,4 +973,6 @@ def build_const_arrays_from_cyborg(cyborg_env) -> dict:
         "use_green_host_order": np.array(False),
         "red_exploit_session_choices": np.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=np.int32),
         "use_red_exploit_session_choices": np.array(False),
+        "mission_profile_index": np.int32(0),
+        "subnet_pairs_bank_index": np.int32(0),
     }

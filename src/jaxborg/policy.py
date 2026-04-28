@@ -10,6 +10,8 @@ import jax.numpy as jnp
 import numpy as np
 from flax.linen.initializers import constant, orthogonal
 
+from jaxborg.constants import MESSAGE_LENGTH
+
 
 class ActorHead(nn.Module):
     action_dim: int
@@ -31,6 +33,22 @@ class ActorHead(nn.Module):
             action_logits = action_logits - (unavail_actions * 1e10)
 
         return distrax.Categorical(logits=action_logits)
+
+
+class MessageHead(nn.Module):
+    hidden_dim: int = 256
+    activation: str = "tanh"
+
+    @nn.compact
+    def __call__(self, x):
+        activation = nn.relu if self.activation == "relu" else nn.tanh
+
+        h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(x)
+        h = activation(h)
+        h = nn.Dense(self.hidden_dim, kernel_init=orthogonal(np.sqrt(2)), bias_init=constant(0.0))(h)
+        h = activation(h)
+        msg = nn.Dense(MESSAGE_LENGTH, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
+        return jnp.tanh(msg)
 
 
 class CriticHead(nn.Module):
@@ -65,6 +83,10 @@ class ActorCritic(nn.Module):
             hidden_dim=self.hidden_dim,
             activation=self.activation,
         )
+        self.message_head = MessageHead(
+            hidden_dim=self.hidden_dim,
+            activation=self.activation,
+        )
 
     def actor(self, x, avail_actions=None):
         return self.actor_head(x, avail_actions)
@@ -72,10 +94,14 @@ class ActorCritic(nn.Module):
     def critic(self, x):
         return self.critic_head(x)
 
+    def message(self, x):
+        return self.message_head(x)
+
     def __call__(self, x, avail_actions=None):
         pi = self.actor_head(x, avail_actions)
         value = self.critic_head(x)
-        return pi, value
+        message = self.message_head(x)
+        return pi, value, message
 
 
 class SharedActorCritic(nn.Module):
@@ -110,15 +136,23 @@ class SharedActorCritic(nn.Module):
         value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(trunk)
         value = jnp.squeeze(value, axis=-1)
 
-        return pi, value
+        # Message projection (single layer, tanh-bounded)
+        message = nn.Dense(MESSAGE_LENGTH, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(trunk)
+        message = jnp.tanh(message)
+
+        return pi, value, message
 
     def actor(self, x, avail_actions=None):
-        pi, _ = self(x, avail_actions)
+        pi, _, _ = self(x, avail_actions)
         return pi
 
     def critic(self, x):
-        _, value = self(x)
+        _, value, _ = self(x)
         return value
+
+    def message(self, x):
+        _, _, msg = self(x)
+        return msg
 
 
 class LegacyActor(nn.Module):

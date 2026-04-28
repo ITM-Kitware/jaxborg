@@ -1739,6 +1739,7 @@ class CC4DifferentialHarness:
                 hostname = entry.get("hostname")
                 if hostname is None:
                     from ipaddress import IPv4Address
+
                     try:
                         hostname = controller.state.ip_addresses.get(IPv4Address(ip_str))
                     except (ValueError, TypeError):

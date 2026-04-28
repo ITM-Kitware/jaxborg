@@ -503,9 +503,7 @@ def train(args):
 
                     optimizer.zero_grad()
                     loss.backward()
-                    pre_clip_grad_norm = float(
-                        nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm)
-                    )
+                    pre_clip_grad_norm = float(nn.utils.clip_grad_norm_(agent.parameters(), args.max_grad_norm))
                     # post-clip norm is implicit from `clip_grad_norm_`'s scale rule:
                     # min(pre_clip, max_grad_norm). Matches JAX's
                     # `grad_norm = pre_clip * min(1, max_norm/(pre_clip+1e-8))`.
@@ -549,9 +547,7 @@ def train(args):
             with torch.no_grad():
                 y_var = b_ret.var(unbiased=False)
                 explained_var = (
-                    (1 - (b_ret - b_val).var(unbiased=False) / (y_var + 1e-8)).item()
-                    if y_var > 1e-8
-                    else 0.0
+                    (1 - (b_ret - b_val).var(unbiased=False) / (y_var + 1e-8)).item() if y_var > 1e-8 else 0.0
                 )
 
                 # Rollout-level reward & value/target stats (match

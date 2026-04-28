@@ -43,8 +43,10 @@ from jaxborg.topology_numpy import (
     _compute_phase_boundaries,
     _subnet_nacl_adjacency,
     build_const_arrays_from_cyborg,
+    get_mission_profile_multipliers,
     get_phase_rewards_bank,
     get_router_link_bank,
+    get_subnet_pairs_bank,
 )
 
 # Eagerly materialize the JAX-side router-link bank as a module constant.
@@ -56,6 +58,10 @@ _ROUTER_LINK_BANK_JNP: jax.Array = jnp.asarray(get_router_link_bank())
 # Axis C: phase-reward bank materialized eagerly for the same reason.
 _PHASE_REWARDS_BANK_JNP: jax.Array = jnp.asarray(get_phase_rewards_bank())
 
+# Phase 2 mission-profile multipliers and axis-D subnet-pairs bank.
+_MISSION_PROFILE_MULTIPLIERS_JNP: jax.Array = jnp.asarray(get_mission_profile_multipliers())
+_SUBNET_PAIRS_BANK_JNP: jax.Array = jnp.asarray(get_subnet_pairs_bank())
+
 
 def _router_link_bank_jnp() -> jax.Array:
     return _ROUTER_LINK_BANK_JNP
@@ -63,6 +69,14 @@ def _router_link_bank_jnp() -> jax.Array:
 
 def _phase_rewards_bank_jnp() -> jax.Array:
     return _PHASE_REWARDS_BANK_JNP
+
+
+def _mission_profile_multipliers_jnp() -> jax.Array:
+    return _MISSION_PROFILE_MULTIPLIERS_JNP
+
+
+def _subnet_pairs_bank_jnp() -> jax.Array:
+    return _SUBNET_PAIRS_BANK_JNP
 
 
 def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
@@ -329,6 +343,8 @@ def build_topology(
     training_mode: bool = False,
     vary_router_links: bool = False,
     vary_phase_rewards: bool = False,
+    vary_mission_profile: bool = False,
+    vary_subnet_pairs: bool = False,
 ) -> CC4Const:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
@@ -351,7 +367,7 @@ def build_topology(
     variants reassigning which subnet is the high-value target in phases 1, 2).
     When False, bank entry 0 (the default) is used.
     """
-    k_counts, k_services, k_red, k_pids, k_router, k_phase = jax.random.split(key, 6)
+    k_counts, k_services, k_red, k_pids, k_router, k_phase, k_mission, k_subnet_pairs = jax.random.split(key, 8)
     k_users, k_servers = jax.random.split(k_counts)
 
     n_users = jax.random.randint(k_users, (8,), 3, 11)
@@ -521,6 +537,30 @@ def build_topology(
     )
     phase_rewards = phase_rewards_bank[pr_bank_idx]
 
+    # Phase 2 mission-objective family: scale phase_rewards by per-component
+    # multipliers (LWF, ASF, RIA).  Bank[0] is (1,1,1) so vary_mission_profile
+    # disabled reproduces legacy behavior exactly.
+    mission_profile_bank = _mission_profile_multipliers_jnp()
+    mp_bank_size = mission_profile_bank.shape[0]
+    mp_bank_idx = jax.lax.cond(
+        vary_mission_profile,
+        lambda: jax.random.randint(k_mission, (), 0, mp_bank_size, dtype=jnp.int32),
+        lambda: jnp.int32(0),
+    )
+    mp_multipliers = mission_profile_bank[mp_bank_idx]  # (3,) for (LWF, ASF, RIA)
+    phase_rewards = phase_rewards * mp_multipliers[None, None, :]
+
+    # Phase 2 axis D: select allowed_subnet_pairs from the precomputed bank.
+    # Bank[0] is the default policy (matches _build_allowed_subnet_pairs_pure).
+    subnet_pairs_bank = _subnet_pairs_bank_jnp()
+    sp_bank_size = subnet_pairs_bank.shape[0]
+    sp_bank_idx = jax.lax.cond(
+        vary_subnet_pairs,
+        lambda: jax.random.randint(k_subnet_pairs, (), 0, sp_bank_size, dtype=jnp.int32),
+        lambda: jnp.int32(0),
+    )
+    allowed_subnet_pairs = subnet_pairs_bank[sp_bank_idx]
+
     return CC4Const(
         host_active=host_active,
         host_subnet=host_subnet.astype(jnp.int32),
@@ -546,7 +586,7 @@ def build_topology(
         num_green_agents=num_green_agents,
         phase_rewards=phase_rewards,
         phase_boundaries=phase_boundaries,
-        allowed_subnet_pairs=_ALLOWED_SUBNET_PAIRS,
+        allowed_subnet_pairs=allowed_subnet_pairs,
         obs_host_map=obs_host_map,
         blue_obs_subnets=_BLUE_OBS_SUBNETS,
         comms_policy=_COMMS_POLICY,
@@ -616,6 +656,8 @@ def build_topology(
             dtype=jnp.int32,
         ),
         use_red_exploit_session_choices=jnp.array(False),
+        mission_profile_index=mp_bank_idx,
+        subnet_pairs_bank_index=sp_bank_idx,
     )
 
 

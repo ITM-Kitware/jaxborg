@@ -12,9 +12,7 @@ Covers:
 """
 
 import jax
-import jax.numpy as jnp
 import numpy as np
-import pytest
 
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_SUBNETS, SUBNET_IDS
 from jaxborg.topology import build_topology

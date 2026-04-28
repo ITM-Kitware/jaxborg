@@ -49,6 +49,7 @@ from jaxborg.constants import (
     COMPROMISE_PRIVILEGED,
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MESSAGE_LENGTH,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
@@ -475,14 +476,23 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 
         def _fwd(params, obs_flat, mask_flat):
             return policy.apply(params, obs_flat, mask_flat, method=ActorCritic.actor).logits
+
+        def _msg_fwd(params, obs_flat):
+            return policy.apply(params, obs_flat, method=ActorCritic.message)
     elif policy_kind == "shared":
 
         def _fwd(params, obs_flat, mask_flat):
             return policy.apply(params, obs_flat, mask_flat, method=SharedActorCritic.actor).logits
+
+        def _msg_fwd(params, obs_flat):
+            return policy.apply(params, obs_flat, method=SharedActorCritic.message)
     else:
 
         def _fwd(params, obs_flat, mask_flat):
             return policy.apply(params, obs_flat, mask_flat).logits
+
+        def _msg_fwd(params, obs_flat):
+            return jnp.zeros((MESSAGE_LENGTH,), dtype=jnp.float32)
 
     def _env_step(carry, _):
         params, key, env_state, obs = carry
@@ -495,6 +505,9 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 
         # Batched policy inference (params passed through, not closed over)
         logits = jax.vmap(_fwd, in_axes=(None, 0, 0))(params, obs_stack, masks)
+        # Phase 2: also evaluate the message head per agent.  Emits zeros for
+        # legacy actor-only checkpoints.
+        messages_step = jax.vmap(_msg_fwd, in_axes=(None, 0))(params, obs_stack)
 
         key, _rng = jax.random.split(key)
         if deterministic:
@@ -528,6 +541,8 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
             # Axis B / CIA scoring: per-step state needed to derive CIA events.
             "host_compromised": compromised,  # (GLOBAL_MAX_HOSTS,) int
             "red_impact_attempted": st.red_impact_attempted,  # (GLOBAL_MAX_HOSTS,) bool
+            # Phase 2: per-step blue-agent messages (NUM_BLUE_AGENTS, MESSAGE_LENGTH).
+            "messages": messages_step,
         }
 
         return (params, key, new_env_state, new_obs), step_data

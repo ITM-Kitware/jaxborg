@@ -32,6 +32,15 @@ VARY_ROUTER_LINKS: false
 # Axis C (CEC env-diversity): per-key phase-reward variation.
 # false = default phase rewards (legacy); true = sample from variant bank.
 VARY_PHASE_REWARDS: false
+# Phase 2 mission-objective family: per-key sampling of the CIA-component
+# multipliers (availability-heavy, productivity-heavy, etc).
+VARY_MISSION_PROFILE: false
+# Phase 2 axis D: per-key allowed_subnet_pairs variation (eval-only by default).
+VARY_SUBNET_PAIRS: false
+# Phase 2 blue cooperation channel.  When true, the network's message head
+# output is broadcast into state.messages each step so obs(t+1) carries
+# msg(t).  When false, messages stay zero (silent baseline).
+BLUE_COMMS: false
 # gen-fixed control arm: integer seed → constant reset key for build_topology
 # (single topology re-used every episode). null = normal per-key reset.
 TOPOLOGY_FIXED_KEY: null

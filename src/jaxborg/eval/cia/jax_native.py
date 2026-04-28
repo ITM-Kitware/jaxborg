@@ -38,11 +38,11 @@ from __future__ import annotations
 import numpy as np
 
 from jaxborg.actions.action_defs import (
+    BLUE_ACTION_HOST_SLOTS,
     BLUE_REMOVE_END,
     BLUE_REMOVE_START,
     BLUE_RESTORE_END,
     BLUE_RESTORE_START,
-    BLUE_ACTION_HOST_SLOTS,
 )
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
@@ -51,8 +51,8 @@ from jaxborg.constants import (
 from jaxborg.eval.cia.cc4_cia_metric import (
     AVAIL_MULTIPLIER,
     CIA_COMPOSITE_WEIGHT,
-    CIAEpisodeScore,
     RESTORATION_WEIGHT,
+    CIAEpisodeScore,
 )
 
 # Host-weight buckets — match cc4_host_weight regex rules but keyed by
@@ -206,11 +206,7 @@ def score_jax_episode(
         c = float(np.dot(C, weights) / Z)
         i = float(np.dot(I, weights) / Z)
         a = float(np.dot(A, weights) / Z)
-        r = (
-            CIA_COMPOSITE_WEIGHT["C"] * c
-            + CIA_COMPOSITE_WEIGHT["I"] * i
-            + CIA_COMPOSITE_WEIGHT["A"] * a
-        )
+        r = CIA_COMPOSITE_WEIGHT["C"] * c + CIA_COMPOSITE_WEIGHT["I"] * i + CIA_COMPOSITE_WEIGHT["A"] * a
         cs.append(c)
         is_.append(i)
         as_.append(a)
