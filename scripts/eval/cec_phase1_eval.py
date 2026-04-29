@@ -95,6 +95,25 @@ ARM_CONFIGS = {
         vary_mission_profile=True,
         topology_fixed_key=None,
     ),
+    # ── Phase 3 arms (10x amplify-only mission bank × goal visibility) ───
+    # Both arms use the new 10x bank and per-key mission profile sampling.
+    # The only difference is whether the multiplier triple is appended to
+    # blue obs (obs_mission_goal).  No comms head — Phase 2 found it
+    # collapses at 20M.
+    "gen-mission-10x-hidden": dict(
+        vary_router_links=False,
+        vary_phase_rewards=False,
+        vary_mission_profile=True,
+        obs_mission_goal=False,
+        topology_fixed_key=None,
+    ),
+    "gen-mission-10x-visible": dict(
+        vary_router_links=False,
+        vary_phase_rewards=False,
+        vary_mission_profile=True,
+        obs_mission_goal=True,
+        topology_fixed_key=None,
+    ),
 }
 
 TESTBEDS = {
