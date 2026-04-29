@@ -4,7 +4,7 @@ import pytest
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, RED_WITHDRAW_END
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import ScenarioEnv, CC4EnvState
+from jaxborg.env import ScenarioEnv, ScenarioEnvState
 
 pytestmark = pytest.mark.slow
 
@@ -24,7 +24,7 @@ def reset_data(env):
 class TestCC4EnvSmoke:
     def test_reset_returns_obs_and_state(self, env, reset_data):
         obs, state = reset_data
-        assert isinstance(state, CC4EnvState)
+        assert isinstance(state, ScenarioEnvState)
         assert len(obs) == NUM_BLUE_AGENTS + NUM_RED_AGENTS
         for b in range(NUM_BLUE_AGENTS):
             assert obs[f"blue_{b}"].shape == (BLUE_OBS_SIZE,)
@@ -42,7 +42,7 @@ class TestCC4EnvSmoke:
 
         obs2, state2, rewards, dones, info = env.step(key, state, actions)
 
-        assert isinstance(state2, CC4EnvState)
+        assert isinstance(state2, ScenarioEnvState)
         for agent in env.agents:
             assert agent in obs2
             assert agent in rewards

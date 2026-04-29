@@ -15,7 +15,7 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_select_actions,
 )
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import ScenarioEnv, CC4EnvState
+from jaxborg.env import ScenarioEnv, ScenarioEnvState
 
 
 class FsmRedCC4Env(MultiAgentEnv):
@@ -49,13 +49,13 @@ class FsmRedCC4Env(MultiAgentEnv):
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
 
-    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         obs, env_state = self._env.reset(key)
         env_state = self._strip_inactive_red_reset_knowledge(env_state)
         blue_obs = {a: obs[a] for a in self.agents}
         return blue_obs, env_state
 
-    def _strip_inactive_red_reset_knowledge(self, env_state: CC4EnvState) -> CC4EnvState:
+    def _strip_inactive_red_reset_knowledge(self, env_state: ScenarioEnvState) -> ScenarioEnvState:
         """Match native FiniteStateRedAgent reset knowledge.
 
         CybORG's controller action spaces may know additional hosts for inactive red
@@ -75,16 +75,16 @@ class FsmRedCC4Env(MultiAgentEnv):
             red_primary_pid=jnp.where(inactive, jnp.int32(-1), state.red_primary_pid),
             fsm_host_entered=jnp.where(inactive[:, None], False, state.fsm_host_entered),
         )
-        return CC4EnvState(state=state, const=env_state.const)
+        return ScenarioEnvState(state=state, const=env_state.const)
 
     @partial(jax.jit, static_argnums=[0])
     def step(
         self,
         key: chex.PRNGKey,
-        state: CC4EnvState,
+        state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
         reset_state=None,
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         key, key_reset = jax.random.split(key)
         obs_st, states_st, rewards, dones, infos = self.step_env(key, state, actions)
 
@@ -111,9 +111,9 @@ class FsmRedCC4Env(MultiAgentEnv):
     def step_env(
         self,
         key: chex.PRNGKey,
-        env_state: CC4EnvState,
+        env_state: ScenarioEnvState,
         blue_actions: Dict[str, chex.Array],
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         key, key_red = jax.random.split(key)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
 
@@ -132,7 +132,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         target_subnets = [target_subnets_arr[r] for r in range(NUM_RED_AGENTS)]
         fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
         eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
-        env_state = CC4EnvState(state=state, const=env_state.const)
+        env_state = ScenarioEnvState(state=state, const=env_state.const)
 
         all_actions = {**blue_actions, **red_actions}
         obs, env_state, rewards, dones, info = self._env.step_env(key, env_state, all_actions)
@@ -151,7 +151,7 @@ class FsmRedCC4Env(MultiAgentEnv):
                 discovered.at[r, start_h].set(False),
                 discovered,
             )
-        env_state = CC4EnvState(
+        env_state = ScenarioEnvState(
             state=env_state.state.replace(red_discovered_hosts=discovered),
             const=env_state.const,
         )
@@ -168,7 +168,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             eligible_flags,
             executed_flags,
         )
-        env_state = CC4EnvState(state=new_state, const=env_state.const)
+        env_state = ScenarioEnvState(state=new_state, const=env_state.const)
 
         blue_obs = {a: obs[a] for a in self.agents}
         blue_rewards = {a: rewards[a] for a in self.agents}
@@ -178,16 +178,16 @@ class FsmRedCC4Env(MultiAgentEnv):
         return blue_obs, env_state, blue_rewards, blue_dones, info
 
     @partial(jax.jit, static_argnums=[0])
-    def _get_blue_obs(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def _get_blue_obs(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         obs = self._env.get_obs(env_state)
         return {a: obs[a] for a in self.agents}
 
     @partial(jax.jit, static_argnums=[0])
-    def get_obs(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_obs(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         return self._get_blue_obs(env_state)
 
     @partial(jax.jit, static_argnums=[0])
-    def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         return {
             f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state) for i in range(NUM_BLUE_AGENTS)
         }
