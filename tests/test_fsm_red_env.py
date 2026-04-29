@@ -4,7 +4,7 @@ import pytest
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS
-from jaxborg.env import CC4EnvState
+from jaxborg.env import ScenarioEnvState
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
 pytestmark = pytest.mark.slow
@@ -38,7 +38,7 @@ class TestFsmRedEnvSmoke:
 
     def test_reset_returns_blue_only(self, env, reset_data):
         obs, state = reset_data
-        assert isinstance(state, CC4EnvState)
+        assert isinstance(state, ScenarioEnvState)
         assert len(obs) == NUM_BLUE_AGENTS
         for b in range(NUM_BLUE_AGENTS):
             assert f"blue_{b}" in obs

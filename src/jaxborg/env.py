@@ -327,7 +327,7 @@ def apply_all_actions(
 
 
 @struct.dataclass
-class CC4EnvState:
+class ScenarioEnvState:
     state: SimulatorState
     const: SimulatorConst
 
@@ -480,7 +480,7 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
 class ScenarioEnv(MultiAgentEnv):
     def __init__(
         self,
-        num_steps: int = 500,
+        num_steps: Optional[int] = None,
         *,
         topology_mode: str = "generative",
         topology_bank_size: int = 0,
@@ -489,7 +489,7 @@ class ScenarioEnv(MultiAgentEnv):
         scenario_config: ScenarioConfig = CC4_CONFIG,
     ):
         self.cfg = scenario_config
-        self.num_steps = num_steps
+        self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
@@ -498,16 +498,16 @@ class ScenarioEnv(MultiAgentEnv):
         self._green_random_bank = None
         self._red_policy_random_bank = None
         if topology_mode == "cyborg_bank":
-            self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
+            self._const_bank = get_cyborg_topology_bank(self.num_steps, topology_bank_size)
             # Green random bank encodes CybORG's specific green agent decisions
             # for a reference trajectory.  Always load in non-training mode so
             # green phishing/LWF decisions match CybORG.  In training mode tokens
             # become stale when blue actions change services, so only load when
             # explicitly syncing the full policy bank.
             if not training_mode or sync_red_policy_bank:
-                self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+                self._green_random_bank = get_cyborg_green_random_bank(self.num_steps, topology_bank_size)
             if sync_red_policy_bank:
-                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
+                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(self.num_steps, topology_bank_size)
         elif topology_mode != "generative":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
 
@@ -545,7 +545,7 @@ class ScenarioEnv(MultiAgentEnv):
         bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return self._red_policy_random_bank[bank_idx]
 
-    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
         red_policy_randoms = self._select_red_policy_randoms(key)
@@ -560,12 +560,12 @@ class ScenarioEnv(MultiAgentEnv):
         )
         state = _init_red_state(const, state)
 
-        env_state = CC4EnvState(state=state, const=const)
+        env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
         return obs, env_state
 
     @partial(jax.jit, static_argnums=[0])
-    def _reset_state(self, env_state: CC4EnvState, key: chex.PRNGKey) -> CC4EnvState:
+    def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
@@ -580,16 +580,16 @@ class ScenarioEnv(MultiAgentEnv):
             host_max_pid=const.host_initial_max_pid,
         )
         state = _init_red_state(const, state)
-        return CC4EnvState(state=state, const=const)
+        return ScenarioEnvState(state=state, const=const)
 
     @partial(jax.jit, static_argnums=[0])
     def step(
         self,
         key: chex.PRNGKey,
-        state: CC4EnvState,
+        state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
         reset_state: Optional[State] = None,
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         key, key_reset = jax.random.split(key)
         obs_st, states_st, rewards, dones, infos = self.step_env(key, state, actions)
 
@@ -615,9 +615,9 @@ class ScenarioEnv(MultiAgentEnv):
     def step_env(
         self,
         key: chex.PRNGKey,
-        env_state: CC4EnvState,
+        env_state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         state = env_state.state
         const = env_state.const
         n_blue = self.cfg.num_blue_agents
@@ -674,7 +674,7 @@ class ScenarioEnv(MultiAgentEnv):
         done = state.time >= const.max_steps
         state = state.replace(done=jnp.array(done))
 
-        env_state = CC4EnvState(state=state, const=const)
+        env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
 
         rewards = {}
@@ -700,7 +700,7 @@ class ScenarioEnv(MultiAgentEnv):
         return obs, env_state, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
-    def get_obs(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_obs(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         state = env_state.state
         const = env_state.const
         obs = {}
@@ -711,7 +711,7 @@ class ScenarioEnv(MultiAgentEnv):
         return obs
 
     @partial(jax.jit, static_argnums=[0])
-    def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         masks = {}
         for i in range(self.cfg.num_blue_agents):
             masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i, env_state.state)
