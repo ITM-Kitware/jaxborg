@@ -487,6 +487,7 @@ class CC4Env(MultiAgentEnv):
         vary_phase_rewards: bool = False,
         vary_mission_profile: bool = False,
         vary_subnet_pairs: bool = False,
+        obs_mission_goal: bool = False,
         topology_fixed_key: int | None = None,
     ):
         self.num_steps = num_steps
@@ -498,6 +499,7 @@ class CC4Env(MultiAgentEnv):
         self.vary_phase_rewards = vary_phase_rewards
         self.vary_mission_profile = vary_mission_profile
         self.vary_subnet_pairs = vary_subnet_pairs
+        self.obs_mission_goal = obs_mission_goal
         self.topology_fixed_key = topology_fixed_key
         self._const_bank = None
         self._green_random_bank = None
@@ -543,10 +545,12 @@ class CC4Env(MultiAgentEnv):
                 vary_phase_rewards=self.vary_phase_rewards,
                 vary_mission_profile=self.vary_mission_profile,
                 vary_subnet_pairs=self.vary_subnet_pairs,
+                obs_mission_goal=self.obs_mission_goal,
             )
 
         bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
-        return jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+        const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+        return const.replace(obs_mission_goal=jnp.array(self.obs_mission_goal))
 
     def _select_green_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
         if self._green_random_bank is None:

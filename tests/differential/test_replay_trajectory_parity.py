@@ -38,7 +38,7 @@ from jaxborg.fsm_red_env import FsmRedCC4Env
 from jaxborg.policy import SharedActorCritic
 
 # Real CC4 dims; small hidden + small rollout for fast test wall time.
-OBS_DIM = BLUE_OBS_SIZE  # 210
+OBS_DIM = BLUE_OBS_SIZE  # 213 = 210 base + 3 Phase 3 mission-multiplier slots
 ACT_DIM = 242
 HIDDEN_DIM = 64
 

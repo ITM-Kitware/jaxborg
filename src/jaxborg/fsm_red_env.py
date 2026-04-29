@@ -37,6 +37,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         vary_phase_rewards: bool = False,
         vary_mission_profile: bool = False,
         vary_subnet_pairs: bool = False,
+        obs_mission_goal: bool = False,
         topology_fixed_key: int | None = None,
     ):
         self._env = CC4Env(
@@ -49,6 +50,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             vary_phase_rewards=vary_phase_rewards,
             vary_mission_profile=vary_mission_profile,
             vary_subnet_pairs=vary_subnet_pairs,
+            obs_mission_goal=obs_mission_goal,
             topology_fixed_key=topology_fixed_key,
         )
         self.agents = list(self._env.blue_agents)

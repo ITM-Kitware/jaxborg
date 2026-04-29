@@ -20,7 +20,8 @@ from jaxborg.observations import JAX_ID_TO_CYBORG_POS, get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import BLUE_AGENT_SUBNETS, build_const_from_cyborg
 
-OBS_SIZE = 210
+OBS_SIZE = 213  # 210 base + 3 Phase 3 mission-multiplier slots
+CYBORG_OBS_SIZE = 210  # CybORG BlueFlatWrapper obs size — JAX matches on the first 210 dims
 NUM_MESSAGES = 4
 SUBNET_BLOCK_SIZE = 59
 NUM_HQ_SUBNETS = 3
@@ -279,15 +280,19 @@ class TestDifferentialWithCybORG:
             cyborg_obs = observations[agent_name]
             jax_obs = np.array(get_blue_obs(state, const, agent_id))
 
-            assert cyborg_obs.shape == jax_obs.shape, (
-                f"{agent_name}: CybORG shape {cyborg_obs.shape} vs JAX shape {jax_obs.shape}"
-            )
+            # JAX obs has 3 extra Phase 3 mission-multiplier slots at the end;
+            # parity comparison only covers the first CYBORG_OBS_SIZE dims.
+            assert cyborg_obs.shape == (CYBORG_OBS_SIZE,)
+            assert jax_obs.shape == (OBS_SIZE,)
 
             np.testing.assert_array_equal(
                 cyborg_obs,
-                jax_obs,
+                jax_obs[:CYBORG_OBS_SIZE],
                 err_msg=f"{agent_name}: initial obs mismatch",
             )
+            # With the default (build_const_from_cyborg) const, obs_mission_goal
+            # is False, so the trailing slots are zero.
+            np.testing.assert_array_equal(jax_obs[CYBORG_OBS_SIZE:], np.zeros(3))
 
     def test_obs_after_sleep_steps(self, cyborg_and_jax):
         wrapped_env, const, state = cyborg_and_jax
@@ -304,17 +309,17 @@ class TestDifferentialWithCybORG:
 
             np.testing.assert_array_equal(
                 cyborg_obs,
-                jax_obs,
+                jax_obs[:CYBORG_OBS_SIZE],
                 err_msg=f"{agent_name} step {step}: obs mismatch",
             )
 
-    def test_obs_size_is_210(self, cyborg_and_jax):
+    def test_obs_sizes_match_expected(self, cyborg_and_jax):
         wrapped_env, const, state = cyborg_and_jax
         observations, _ = wrapped_env.reset()
 
         for agent_id in range(NUM_BLUE_AGENTS):
             agent_name = f"blue_agent_{agent_id}"
-            assert observations[agent_name].shape == (OBS_SIZE,), (
+            assert observations[agent_name].shape == (CYBORG_OBS_SIZE,), (
                 f"{agent_name}: CybORG obs size {observations[agent_name].shape}"
             )
             jax_obs = get_blue_obs(state, const, agent_id)
@@ -392,7 +397,7 @@ class TestDifferentialWithCybORG:
                 jax_obs = np.array(get_blue_obs(state, const, agent_id))
                 np.testing.assert_array_equal(
                     cyborg_obs,
-                    jax_obs,
+                    jax_obs[:CYBORG_OBS_SIZE],
                     err_msg=f"seed={seed} {agent_name}: initial obs mismatch",
                 )
 
@@ -427,7 +432,8 @@ class TestBlueObsDifferential:
                 agent_name = f"blue_agent_{agent_id}"
                 cyborg_obs = observations[agent_name]
                 jax_obs = np.array(get_blue_obs(state, const, agent_id))
-                assert cyborg_obs.shape == jax_obs.shape, f"seed={seed} {agent_name}: shape mismatch"
+                assert cyborg_obs.shape == (CYBORG_OBS_SIZE,)
+                assert jax_obs.shape == (OBS_SIZE,)
 
 
 class TestActionMaskAcrossSteps:
@@ -457,3 +463,38 @@ class TestActionMaskAcrossSteps:
         for agent_idx in range(NUM_BLUE_AGENTS):
             jax_mask = np.array(compute_blue_action_mask(const, agent_idx))
             assert jax_mask.sum() > 0, f"Agent {agent_idx} has no valid actions after 5 steps"
+
+
+class TestPhase3MissionGoalSlots:
+    """Phase 3: trailing 3 obs slots carry mission_multipliers when obs_mission_goal=True."""
+
+    def _build(self, *, obs_mission_goal: bool, vary_mission_profile: bool = True, seed: int = 7):
+        from jaxborg.topology import build_topology
+
+        const = build_topology(
+            jax.random.PRNGKey(seed),
+            num_steps=10,
+            vary_mission_profile=vary_mission_profile,
+            obs_mission_goal=obs_mission_goal,
+        )
+        state = create_initial_state().replace(host_services=const.initial_services)
+        return const, state
+
+    def test_hidden_flag_writes_zeros(self):
+        const, state = self._build(obs_mission_goal=False)
+        for agent_id in range(NUM_BLUE_AGENTS):
+            obs = np.array(get_blue_obs(state, const, agent_id))
+            np.testing.assert_array_equal(obs[-3:], np.zeros(3, dtype=np.float32))
+
+    def test_visible_flag_writes_multipliers(self):
+        const, state = self._build(obs_mission_goal=True)
+        expected = np.asarray(const.mission_multipliers, dtype=np.float32)
+        for agent_id in range(NUM_BLUE_AGENTS):
+            obs = np.array(get_blue_obs(state, const, agent_id))
+            np.testing.assert_array_equal(obs[-3:], expected)
+
+    def test_obs_size_constant_regardless_of_flag(self):
+        for flag in [False, True]:
+            const, state = self._build(obs_mission_goal=flag)
+            obs = get_blue_obs(state, const, 0)
+            assert obs.shape == (OBS_SIZE,)

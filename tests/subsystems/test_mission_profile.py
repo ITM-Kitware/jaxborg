@@ -24,6 +24,31 @@ def test_multiplier_bank_matches_constant():
     np.testing.assert_array_equal(mults, np.asarray(MISSION_PROFILE_MULTIPLIERS, dtype=np.float32))
 
 
+def test_phase3_amplify_only_bank():
+    """Phase 3 bank: amplify-only (1.0/10.0), no damping. Each non-default profile
+    privileges exactly one CIA component at 10x with off-axis components at 1.0."""
+    mults = np.asarray(get_mission_profile_multipliers(), dtype=np.float32)
+    expected = np.array(
+        [
+            [1.0, 1.0, 1.0],
+            [1.0, 10.0, 1.0],
+            [10.0, 1.0, 1.0],
+            [1.0, 1.0, 10.0],
+        ],
+        dtype=np.float32,
+    )
+    np.testing.assert_array_equal(mults, expected)
+
+
+def test_const_carries_mission_multipliers():
+    """build_topology populates const.mission_multipliers with the chosen bank entry."""
+    bank = np.asarray(get_mission_profile_multipliers(), dtype=np.float32)
+    for seed in range(16):
+        c = build_topology(jax.random.PRNGKey(seed), vary_mission_profile=True)
+        idx = int(c.mission_profile_index)
+        np.testing.assert_array_equal(np.asarray(c.mission_multipliers), bank[idx])
+
+
 def test_default_path_phase_rewards_unchanged():
     """vary_mission_profile=False reproduces the legacy phase_rewards."""
     default = np.asarray(_build_phase_rewards())

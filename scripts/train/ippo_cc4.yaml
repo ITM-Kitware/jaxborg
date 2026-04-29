@@ -37,6 +37,10 @@ VARY_PHASE_REWARDS: false
 VARY_MISSION_PROFILE: false
 # Phase 2 axis D: per-key allowed_subnet_pairs variation (eval-only by default).
 VARY_SUBNET_PAIRS: false
+# Phase 3: append the (LWF, ASF, RIA) mission multiplier triple to blue obs.
+# false = appended slots are zero (control); true = exposes the goal so the agent
+# can condition policy on it (treatment).  Obs vector size is constant either way.
+OBS_MISSION_GOAL: false
 # Phase 2 blue cooperation channel.  When true, the network's message head
 # output is broadcast into state.messages each step so obs(t+1) carries
 # msg(t).  When false, messages stay zero (silent baseline).

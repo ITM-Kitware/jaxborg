@@ -80,4 +80,5 @@ BLUE_OBS_SIZE = (
     1
     + 3 * (NUM_SUBNETS + NUM_SUBNETS + NUM_SUBNETS + OBS_VECTOR_HOSTS_PER_SUBNET + OBS_VECTOR_HOSTS_PER_SUBNET)
     + NUM_MESSAGES * MESSAGE_LENGTH
+    + 3  # Phase 3: mission-multiplier triple (LWF, ASF, RIA), zeros when obs_mission_goal=False
 )

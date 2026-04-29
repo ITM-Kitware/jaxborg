@@ -15,7 +15,7 @@ from jaxborg.observations import SUBNET_BLOCK_SIZE, get_blue_obs
 from jaxborg.state import create_initial_state
 from jaxborg.topology import build_const_from_cyborg
 
-OBS_SIZE = 210
+OBS_SIZE = 213  # 210 base + 3 Phase 3 mission-multiplier slots
 NUM_MESSAGES = 4
 MESSAGE_SECTION_SIZE = NUM_MESSAGES * MESSAGE_LENGTH
 
@@ -360,9 +360,13 @@ class TestDifferentialMessages:
                 jax_obs[:jax_msg_start],
                 err_msg=f"{agent_name}: pre-message obs mismatch after step",
             )
+            # JAX obs has 3 extra Phase 3 mission-multiplier slots at the very
+            # end; trim to compare only the dims that match CybORG.
+            cyborg_post = observations[agent_name][cyborg_msg_end:]
+            jax_post = jax_obs[jax_msg_end : jax_msg_end + cyborg_post.shape[0]]
             np.testing.assert_array_equal(
-                observations[agent_name][cyborg_msg_end:],
-                jax_obs[jax_msg_end:],
+                cyborg_post,
+                jax_post,
                 err_msg=f"{agent_name}: non-message obs mismatch after step",
             )
 

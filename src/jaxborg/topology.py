@@ -345,6 +345,7 @@ def build_topology(
     vary_phase_rewards: bool = False,
     vary_mission_profile: bool = False,
     vary_subnet_pairs: bool = False,
+    obs_mission_goal: bool = False,
 ) -> CC4Const:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
@@ -657,6 +658,8 @@ def build_topology(
         ),
         use_red_exploit_session_choices=jnp.array(False),
         mission_profile_index=mp_bank_idx,
+        mission_multipliers=mp_multipliers,
+        obs_mission_goal=jnp.array(obs_mission_goal),
         subnet_pairs_bank_index=sp_bank_idx,
     )
 

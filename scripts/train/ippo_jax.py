@@ -179,6 +179,7 @@ def make_train(config):
         vary_phase_rewards=bool(config.get("VARY_PHASE_REWARDS", False)),
         vary_mission_profile=bool(config.get("VARY_MISSION_PROFILE", False)),
         vary_subnet_pairs=bool(config.get("VARY_SUBNET_PAIRS", False)),
+        obs_mission_goal=bool(config.get("OBS_MISSION_GOAL", False)),
         topology_fixed_key=topo_fixed_key_cfg,
     )
     blue_comms = bool(config.get("BLUE_COMMS", False))

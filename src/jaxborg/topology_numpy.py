@@ -427,16 +427,18 @@ def _build_phase_rewards_bank() -> np.ndarray:
     return np.stack(entries, axis=0).astype(np.float32)
 
 
-# Phase 2 mission-objective family: per-key sampling of the CIA-component
+# Phase 3 mission-objective family: per-key sampling of the CIA-component
 # multiplier triple (LWF, ASF, RIA).  bank[0] is the default (1, 1, 1) so the
 # vary_mission_profile=False path matches legacy behavior.  The remaining three
-# entries each privilege one CIA dimension while damping the others.
+# entries each privilege one CIA dimension at 10x with off-axis components held
+# at 1.0 (amplify-only, no damping — see Phase 3 spike 1: per-profile reward
+# swing is dominated by amplification, damping contributes <1%).
 MISSION_PROFILE_MULTIPLIERS: tuple[tuple[float, float, float], ...] = (
     # (LWF, ASF, RIA)
     (1.0, 1.0, 1.0),  # default — balanced
-    (1.0, 3.0, 0.5),  # availability-heavy: amplify ASF, dampen RIA
-    (3.0, 1.0, 1.0),  # productivity-heavy: amplify LWF
-    (0.5, 0.5, 3.0),  # confidentiality-integrity-heavy: amplify RIA
+    (1.0, 10.0, 1.0),  # availability-heavy: amplify ASF
+    (10.0, 1.0, 1.0),  # productivity-heavy: amplify LWF
+    (1.0, 1.0, 10.0),  # CI-heavy: amplify RIA
 )
 NUM_MISSION_PROFILES = len(MISSION_PROFILE_MULTIPLIERS)
 
@@ -974,5 +976,7 @@ def build_const_arrays_from_cyborg(cyborg_env) -> dict:
         "red_exploit_session_choices": np.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=np.int32),
         "use_red_exploit_session_choices": np.array(False),
         "mission_profile_index": np.int32(0),
+        "mission_multipliers": np.ones(3, dtype=np.float32),
+        "obs_mission_goal": np.array(False),
         "subnet_pairs_bank_index": np.int32(0),
     }

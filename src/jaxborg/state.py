@@ -89,6 +89,13 @@ class CC4Const:
     # Phase 2 mission-objective family: bookkeeping for which CIA-multiplier
     # profile this episode used (0 = default balanced).  Read by eval scripts.
     mission_profile_index: chex.Array  # scalar int32
+    # Phase 3: the actual (LWF, ASF, RIA) multiplier triple for this episode,
+    # available at obs construction time so the agent can condition on the goal
+    # when obs_mission_goal=True.
+    mission_multipliers: chex.Array  # (3,) float32
+    # Phase 3: when True, get_blue_obs appends mission_multipliers to obs;
+    # when False, appends zeros.  Obs size is constant regardless of flag.
+    obs_mission_goal: chex.Array  # scalar bool
     # Phase 2 axis D: which allowed_subnet_pairs bank entry this episode used
     # (0 = default policy).  Read by eval scripts.
     subnet_pairs_bank_index: chex.Array  # scalar int32
@@ -244,6 +251,8 @@ def create_initial_const() -> CC4Const:
         red_exploit_session_choices=jnp.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=jnp.int32),
         use_red_exploit_session_choices=jnp.array(False),
         mission_profile_index=jnp.int32(0),
+        mission_multipliers=jnp.ones(3, dtype=jnp.float32),
+        obs_mission_goal=jnp.array(False),
         subnet_pairs_bank_index=jnp.int32(0),
     )
 

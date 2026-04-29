@@ -91,6 +91,12 @@ def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
     obs = obs.at[1 : 1 + 3 * SUBNET_BLOCK_SIZE].set(subnet_section)
     message_start = jnp.int32(1) + subnet_len
     obs = jax.lax.dynamic_update_slice(obs, message_section, (message_start,))
+    goal_slots = jnp.where(
+        const.obs_mission_goal,
+        const.mission_multipliers,
+        jnp.zeros(3, dtype=jnp.float32),
+    )
+    obs = obs.at[BLUE_OBS_SIZE - 3 :].set(goal_slots)
     return obs
 
 
