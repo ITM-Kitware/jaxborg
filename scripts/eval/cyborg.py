@@ -1,6 +1,7 @@
 """Evaluate a JAXborg-trained policy in pure CybORG."""
 
 import argparse
+import json
 import pickle
 from pathlib import Path
 from statistics import mean, stdev
@@ -10,8 +11,16 @@ import jax.numpy as jnp
 import numpy as np
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+from CybORG.Agents.SimpleAgents.FSMRedVariants import DiscoveryFSRed
+from CybORG.Agents.SimpleAgents.RandomSelectRedAgent import RandomSelectRedAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
+RED_AGENT_CLASSES = {
+    "fsm": FiniteStateRedAgent,
+    "discovery": DiscoveryFSRed,
+    "random": RandomSelectRedAgent,
+}
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
@@ -25,12 +34,13 @@ from jaxborg.translate import (
 EPISODE_LENGTH = 500
 
 
-def make_env(seed=None, bank_match_size=None):
+def make_env(seed=None, bank_match_size=None, red_agent="fsm"):
     actual_seed = cyborg_bank_seed_from_seed(seed, bank_match_size) if bank_match_size is not None else seed
+    red_cls = RED_AGENT_CLASSES[red_agent]
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
+        red_agent_class=red_cls,
         steps=EPISODE_LENGTH,
     )
     cyborg = CybORG(sg, "sim", seed=actual_seed)
@@ -180,7 +190,20 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     return observations, rewards, terminated, truncated, info
 
 
-def run_episode(env, policy, params, policy_kind, deterministic, rng):
+def _policy_input_dim(params):
+    """Read the first Dense kernel's input dim — works for current/shared/legacy."""
+    nested = params.get("params", {})
+    for key in ("Dense_0", "trunk_0", "actor_dense_0"):
+        if key in nested and "kernel" in nested[key]:
+            return nested[key]["kernel"].shape[0]
+    # Fall back: walk and grab any first kernel
+    for v in nested.values():
+        if isinstance(v, dict) and "kernel" in v:
+            return v["kernel"].shape[0]
+    return None
+
+
+def run_episode(env, policy, params, policy_kind, deterministic, rng, obs_pad_tail=None):
     observations, _ = env.reset()
     inner_cyborg = env.env
     const = build_const_from_cyborg(inner_cyborg)
@@ -195,6 +218,8 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
         for agent_idx, agent_name in enumerate(env.agents):
             obs_vec = observations[agent_name]
             obs_jax = jnp.array(obs_vec, dtype=jnp.float32)
+            if obs_pad_tail is not None and obs_pad_tail.size > 0:
+                obs_jax = jnp.concatenate([obs_jax, obs_pad_tail])
 
             mask = _live_cyborg_mask_in_jax_space(env, agent_name, mappings, const, lookup=action_lookups[agent_name])
 
@@ -217,22 +242,65 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng):
     return total
 
 
-def evaluate(checkpoint_path, episodes, seed, deterministic, bank_match_size=None):
+def evaluate(
+    checkpoint_path,
+    episodes,
+    seed,
+    deterministic,
+    bank_match_size=None,
+    red_agent="fsm",
+    output=None,
+    mission_multipliers=(0.0, 0.0, 0.0),
+):
     policy, params, policy_kind = load_checkpoint(checkpoint_path)
     rng = jax.random.PRNGKey(seed if seed is not None else 0)
 
+    # Auto-pad CybORG's 210-dim obs to whatever the policy expects.
+    expected_dim = _policy_input_dim(params)
+    obs_pad_tail = None
+    if expected_dim is not None and expected_dim > 210:
+        pad_size = expected_dim - 210
+        if pad_size != len(mission_multipliers):
+            raise ValueError(
+                f"Policy expects {expected_dim}-dim obs (pad {pad_size}); "
+                f"--mission-multipliers must have {pad_size} values"
+            )
+        obs_pad_tail = jnp.array(mission_multipliers, dtype=jnp.float32)
+        print(f"Padding CybORG obs 210 -> {expected_dim} with {list(mission_multipliers)}")
+
     episode_rewards = []
     for ep in range(episodes):
-        env = make_env(seed=seed + ep, bank_match_size=bank_match_size)
+        env = make_env(seed=seed + ep, bank_match_size=bank_match_size, red_agent=red_agent)
         rng, _rng = jax.random.split(rng)
-        reward = run_episode(env, policy, params, policy_kind, deterministic, _rng)
+        reward = run_episode(env, policy, params, policy_kind, deterministic, _rng, obs_pad_tail=obs_pad_tail)
         episode_rewards.append(reward)
         print(f"Episode {ep + 1}: {reward:.4f}")
 
+    mean_r = mean(episode_rewards)
+    sd_r = stdev(episode_rewards) if len(episode_rewards) > 1 else 0.0
     print(f"\nepisodes:  {episodes}")
-    print(f"mean:      {mean(episode_rewards):.4f}")
+    print(f"mean:      {mean_r:.4f}")
     if len(episode_rewards) > 1:
-        print(f"stdev:     {stdev(episode_rewards):.4f}")
+        print(f"stdev:     {sd_r:.4f}")
+
+    if output is not None:
+        Path(output).parent.mkdir(parents=True, exist_ok=True)
+        Path(output).write_text(
+            json.dumps(
+                {
+                    "checkpoint": str(checkpoint_path),
+                    "red_agent": red_agent,
+                    "episodes": episodes,
+                    "rewards": episode_rewards,
+                    "mean": mean_r,
+                    "stdev": sd_r,
+                    "seed": seed,
+                    "deterministic": deterministic,
+                    "bank_match_size": bank_match_size,
+                },
+                indent=2,
+            )
+        )
 
 
 def build_arg_parser():
@@ -243,6 +311,13 @@ def build_arg_parser():
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--stochastic", action="store_true")
     parser.add_argument("--bank-match-size", type=int, default=32, help="Topology bank size for seed matching")
+    parser.add_argument("--red-agent", choices=sorted(RED_AGENT_CLASSES.keys()), default="fsm")
+    parser.add_argument("--output", default=None, help="Optional JSON path for summary")
+    parser.add_argument(
+        "--mission-multipliers",
+        default="0,0,0",
+        help="Comma-separated values to append to obs (matches Phase 3 mission_multipliers slots).",
+    )
     return parser
 
 
@@ -254,7 +329,17 @@ def main(argv=None):
     deterministic = not args.stochastic
     if args.deterministic:
         deterministic = True
-    evaluate(args.checkpoint, args.episodes, args.seed, deterministic, args.bank_match_size)
+    mission_mult = tuple(float(x) for x in args.mission_multipliers.split(","))
+    evaluate(
+        args.checkpoint,
+        args.episodes,
+        args.seed,
+        deterministic,
+        args.bank_match_size,
+        red_agent=args.red_agent,
+        output=args.output,
+        mission_multipliers=mission_mult,
+    )
 
 
 if __name__ == "__main__":
