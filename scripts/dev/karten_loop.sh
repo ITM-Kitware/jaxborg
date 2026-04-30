@@ -270,6 +270,7 @@ run_l4_train_and_eval() {
 
     echo "  L4 Step 1: Training IPPO (${TRAIN_TIMESTEPS} steps, ${TRAIN_NUM_ENVS} envs)..."
     local train_seed=$((RANDOM % 1000))
+    local train_tag="karten_loop_$(date +%Y%m%d_%H%M)_seed${train_seed}"
 
     # Unset CPU-only vars for GPU training
     (
@@ -278,21 +279,18 @@ run_l4_train_and_eval() {
         export JAX_COMPILATION_CACHE_DIR="${HOME}/.cache/jaxborg/xla"
         export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
         srun --gres=gpu:1 --mem=64G --partition=community --comment="${KARTEN_JOB_TAG}" \
-            uv run python scripts/train/ippo_jax.py \
-                TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
-                NUM_ENVS="$TRAIN_NUM_ENVS" \
-                TOPOLOGY_MODE="$TOPOLOGY_MODE" \
-                +TOPOLOGY_BANK_SIZE="$TOPOLOGY_BANK_SIZE" \
-                SEED="$train_seed" \
-                hydra.run.dir="$round_dir/hydra" \
-                hydra.job.chdir=True
+            uv run python scripts/train/algorithms/ippo_jax.py \
+                --recipe default --seed "$train_seed" --tag "$train_tag" \
+                --total-timesteps "$TRAIN_TIMESTEPS" \
+                --num-envs "$TRAIN_NUM_ENVS" \
+                --topology-mode "$TOPOLOGY_MODE" \
+                --topology-bank-size "$TOPOLOGY_BANK_SIZE"
     ) >> "${HANDOFF_DIR}/test_output.txt" 2>&1
 
-    # Find latest checkpoint
-    local checkpoint
-    checkpoint=$(ls -t "${EXP_DIR}"/ippo_cc4*/checkpoint_final.pkl 2>/dev/null | head -1)
-    if [[ -z "$checkpoint" ]]; then
-        echo "ERROR: No checkpoint found after training" >> "${HANDOFF_DIR}/test_output.txt"
+    # Locate checkpoint produced by the new layout
+    local checkpoint="${EXP_DIR}/ippo_jax/${train_tag}/model_${train_tag}.pkl"
+    if [[ ! -f "$checkpoint" ]]; then
+        echo "ERROR: No checkpoint found at $checkpoint" >> "${HANDOFF_DIR}/test_output.txt"
         return 1
     fi
     cp "$checkpoint" "$round_dir/checkpoint_final.pkl"

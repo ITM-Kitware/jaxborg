@@ -28,11 +28,11 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts" / "train"))
-
-from ppo_cleanrl_agent import PPOAgent
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from jaxborg.constants import BLUE_OBS_SIZE
+from jaxborg.evaluation.cyborg_runner import load_torch_policy
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -133,9 +133,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
             obs_t = torch.from_numpy(obs).to(device)
             mask_t = torch.from_numpy(mask).to(device)
             if deterministic:
-                feats = agent.features(obs_t)
-                logits = agent.actor(feats) + (mask_t - 1.0) * 1e8
-                act = logits.argmax(dim=-1).cpu().numpy()
+                act = agent.deterministic_action(obs_t, mask_t).cpu().numpy()
             else:
                 a, _, _, _ = agent.get_action_and_value(obs_t, mask_t)
                 act = a.cpu().numpy()
@@ -182,10 +180,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
 
 def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
     device = torch.device("cpu")
-    agent = PPOAgent(OBS_DIM, ACT_DIM)
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    agent.load_state_dict(state_dict)
-    agent.eval()
+    agent, _recipe = load_torch_policy(model_path)
 
     torch.manual_seed(seed)
     np.random.seed(seed)

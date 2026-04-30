@@ -1,6 +1,0 @@
-total_timesteps: 100000
-learning_rate: 3.0e-4
-n_steps: 500
-batch_size: 64
-seed: 42
-model_save_path: models/ppo_baseline_short

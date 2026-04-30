@@ -75,8 +75,13 @@ def plot(jax_path, sb3_log_dir, output, num_agents=5):
 if __name__ == "__main__":
     exp_dir = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
+    # New layout writes to $EXP_DIR/ippo_jax/<tag>/metrics.jsonl. Pick the
+    # most-recent run as the default; user can override with --jax-metrics.
+    _candidates = sorted(exp_dir.glob("ippo_jax/*/metrics.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+    _default_jax_metrics = _candidates[0] if _candidates else exp_dir / "ippo_jax" / "metrics.jsonl"
+
     parser = argparse.ArgumentParser(description="Plot reward curve comparison")
-    parser.add_argument("--jax-metrics", type=Path, default=exp_dir / "ippo_cc4" / "metrics.jsonl")
+    parser.add_argument("--jax-metrics", type=Path, default=_default_jax_metrics)
     parser.add_argument("--sb3-logs", type=Path, default=Path("logs/ppo"))
     parser.add_argument("--output", type=Path, default=exp_dir / "comparison.png")
     args = parser.parse_args()

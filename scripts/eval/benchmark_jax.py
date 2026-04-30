@@ -35,7 +35,7 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
 
     # Import after JAX env vars are set
 
-    # --- Config (matches ippo_cc4.yaml defaults) ---
+    # --- Config (mirrors recipes/default.yaml; this script is a standalone benchmark, not a recipe consumer) ---
     config = {
         "NUM_ENVS": 1024,
         "NUM_STEPS": 500,

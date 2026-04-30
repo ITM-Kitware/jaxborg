@@ -76,18 +76,30 @@ uv run pytest            # default: -n auto -m 'not slow'
 uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
 uv run pytest -m ""      # everything
 
-# Train jaxborg IPPO
-uv run python scripts/train/ippo_jax.py TOTAL_TIMESTEPS=50000000
+# Train jaxborg IPPO (recipe-driven; see `recipes/<name>.yaml`)
+./scripts/train/run.sh jax default 42
 
-# Evaluate a trained policy (independent rollouts on both engines + TOST)
+# Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
+./scripts/train/run.sh cleanrl default 42
+
+# Multi-seed sweep (3 seeds, parallel for cleanrl, sequential under srun for jax)
+./scripts/train/run_seeds.sh cleanrl default 3 0
+./scripts/train/run_seeds.sh jax default 3 0
+
+# Evaluate any policy on CybORG via recipe sidecar
+# (.pt → torch state_dict; .pkl → JAX Flax params with action translation)
+uv run python scripts/eval/eval_recipe.py \
+    --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
+    --episodes 10 --seeds 42-141
+
+uv run python scripts/eval/eval_recipe.py \
+    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
+    --episodes 10 --seeds 42-141
+
+# Independent rollouts on both engines + TOST (JAX checkpoints only)
 JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
-    --checkpoint jaxborg-exp/<run>/checkpoint_final.pkl \
+    --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
     --episodes 100
-
-# Train CybORG PPO baseline (CPU-only, CleanRL)
-JAX_PLATFORMS=cpu uv run python scripts/train/ppo_cleanrl_cyborg.py \
-    --total-timesteps 20000000 --num-epochs 4 --num-minibatches 16 \
-    --no-anneal-lr
 ```
 
 Training output goes to `../jaxborg-exp/`.

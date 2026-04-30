@@ -8,8 +8,9 @@ and compare:
   2. Post-Adam-step parameters    (≤1e-4 tolerance)
 
 The two loss bodies are inlined faithfully from
-`scripts/train/ippo_jax.py::_loss_fn` (default config, no busy mask, no
-value clipping) and `scripts/train/ppo_cleanrl_cyborg.py` PPO update.
+`scripts/train/algorithms/ippo_jax.py::_loss_fn` (default config, no busy
+mask, no value clipping) and `scripts/train/algorithms/ippo_cyborg.py` PPO
+update.
 
 This test fails if the two loss math implementations diverge on identical
 inputs — isolating the −227 pt matched-training gap from rollout
@@ -35,7 +36,7 @@ from flax.training.train_state import TrainState
 
 from jaxborg.policy import SharedActorCritic
 
-# Align with `scripts/train/ppo_cleanrl_agent.py::PPOAgent`.
+# Align with `src/jaxborg/policies/shared_actor_critic.py` (torch factory).
 HIDDEN_DIM = 32
 OBS_DIM = 16
 ACT_DIM = 8
@@ -74,7 +75,7 @@ class TinyPPOAgent(nn.Module):
         h = torch.tanh(self.fc1(obs))
         h = torch.tanh(self.fc2(h))
         logits = self.actor(h)
-        # Match ppo_cleanrl_agent.py masking convention.
+        # Match policies/shared_actor_critic.py masking convention.
         logits = logits + (action_mask.float() - 1.0) * 1e8
         value = self.critic(h).squeeze(-1)
         return logits, value
@@ -325,7 +326,7 @@ def test_advantage_normalization_ddof_audit():
 
     This test demonstrates the bias direction (torch.std > jnp.std) and
     the magnitude. It also verifies that `unbiased=False` brings the two
-    into byte-equivalence — the fix applied to `ppo_cleanrl_cyborg.py`.
+    into byte-equivalence — the fix applied to `algorithms/ippo_cyborg.py`.
     """
     rng = np.random.default_rng(0)
     for n in (128, 7500):

@@ -60,25 +60,23 @@ for round in $(seq 1 "$MAX_ROUNDS"); do
     # --- 1. Train from scratch ---
     echo ""
     echo "--- Step 1: Training IPPO ($TRAIN_TIMESTEPS steps, $TRAIN_NUM_ENVS envs, topology=$TOPOLOGY_MODE) ---"
-    uv run python scripts/train/ippo_jax.py \
-        TOTAL_TIMESTEPS="$TRAIN_TIMESTEPS" \
-        NUM_ENVS="$TRAIN_NUM_ENVS" \
-        TOPOLOGY_MODE="$TOPOLOGY_MODE" \
-        +TOPOLOGY_BANK_SIZE=32 \
-        SEED="$round" \
-        hydra.run.dir="$ROUND_DIR/hydra" \
-        hydra.job.chdir=True
+    TRAIN_TAG="transfer_loop_round${round}"
+    uv run python scripts/train/algorithms/ippo_jax.py \
+        --recipe default --seed "$round" --tag "$TRAIN_TAG" \
+        --total-timesteps "$TRAIN_TIMESTEPS" \
+        --num-envs "$TRAIN_NUM_ENVS" \
+        --topology-mode "$TOPOLOGY_MODE" \
+        --topology-bank-size 32
 
-    # Training writes to EXP_DIR/ippo_cc4_{timestamp}/; find latest checkpoint
-    CHECKPOINT=$(ls -t "$EXP_DIR"/ippo_cc4*/checkpoint_final.pkl 2>/dev/null | head -1)
-    if [ -z "$CHECKPOINT" ]; then
-        echo "ERROR: No checkpoint found in $EXP_DIR/ippo_cc4*/"
+    CHECKPOINT="$EXP_DIR/ippo_jax/$TRAIN_TAG/model_${TRAIN_TAG}.pkl"
+    if [ ! -f "$CHECKPOINT" ]; then
+        echo "ERROR: model checkpoint not found at $CHECKPOINT"
         exit 1
     fi
     TRAIN_SRC="$(dirname "$CHECKPOINT")"
     cp "$CHECKPOINT" "$ROUND_DIR/checkpoint_final.pkl"
     cp "$TRAIN_SRC/metrics.jsonl" "$ROUND_DIR/metrics.jsonl" 2>/dev/null || true
-    cp "$TRAIN_SRC/config.json" "$ROUND_DIR/config.json" 2>/dev/null || true
+    cp "$TRAIN_SRC/recipe_${TRAIN_TAG}.yaml" "$ROUND_DIR/recipe.yaml" 2>/dev/null || true
 
     # --- 2. Eval on JAXborg + CybORG (includes TOST) ---
     echo ""
