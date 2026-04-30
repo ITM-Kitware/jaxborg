@@ -1,8 +1,0 @@
-# @package _global_
-# Pure topology, gamma=0.99 (yaml defaults), 20M steps.
-# Produced the best JAXborg run in the 2026-04-12 batch:
-# internal -1302, 100ep stoch -1204, transfer gap -138 (borderline TOST).
-TOTAL_TIMESTEPS: 20000000
-SEED: 42
-MLFLOW_ENABLED: false
-CHECKPOINT_EVERY_UPDATES: 10

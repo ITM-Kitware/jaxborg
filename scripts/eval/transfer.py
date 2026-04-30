@@ -1878,11 +1878,12 @@ def main():
         except Exception as e:
             print(f"(Skipped reward plot: {e})")
 
-        metrics_path = EXP_DIR / "ippo_cc4" / "metrics.jsonl"
-        if metrics_path.exists():
-            plot_training_curves(metrics_path, output_dir / "training_curves.png")
+        # New layout: metrics live under $EXP_DIR/ippo_jax/<tag>/metrics.jsonl
+        candidates = sorted(EXP_DIR.glob("ippo_jax/*/metrics.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            plot_training_curves(candidates[0], output_dir / "training_curves.png")
         else:
-            print(f"No metrics file at {metrics_path}, skipping training curves")
+            print(f"No metrics file under {EXP_DIR}/ippo_jax/*/, skipping training curves")
 
 
 if __name__ == "__main__":

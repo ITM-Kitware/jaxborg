@@ -3,8 +3,8 @@
 Builds a small rollout from `FsmRedCC4Env` (real CC4 obs / action masks /
 rewards / dones), then feeds the same flattened minibatch into:
 
-  - the JAX `_loss_fn` body inlined from `scripts/train/ippo_jax.py`
-  - the torch loss body inlined from `scripts/train/ppo_cleanrl_cyborg.py`
+  - the JAX `_loss_fn` body inlined from `scripts/train/algorithms/ippo_jax.py`
+  - the torch loss body inlined from `scripts/train/algorithms/ippo_cyborg.py`
     (post-`unbiased=False` ddof fix)
 
 with **identical** initial params (Flax SharedActorCritic init →
