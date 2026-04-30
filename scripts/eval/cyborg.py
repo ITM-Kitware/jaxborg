@@ -203,7 +203,43 @@ def _policy_input_dim(params):
     return None
 
 
-def run_episode(env, policy, params, policy_kind, deterministic, rng, obs_pad_tail=None):
+def _capture_agent_records(unwrap, agent_ids):
+    """Snapshot last action + observation success for each agent (for CIA scoring)."""
+    out = {}
+    for ag in agent_ids:
+        try:
+            actions = unwrap.get_last_action(ag) or []
+            obs = unwrap.get_observation(ag)
+        except Exception:
+            continue
+        if not actions:
+            continue
+        action = actions[0]
+        success = None
+        if isinstance(obs, dict):
+            s = obs.get("success")
+            if s is not None:
+                success = s.name if hasattr(s, "name") else str(s)
+        host = getattr(action, "hostname", None)
+        ip = getattr(action, "ip_address", None)
+        if host is None and ip is not None:
+            try:
+                host = unwrap.environment_controller.state.ip_addresses.get(ip)
+            except Exception:
+                host = None
+        out[ag] = {
+            "cls": action.__class__.__name__,
+            "host": host,
+            "ip": str(ip) if ip is not None else None,
+            "success": success,
+        }
+    return out
+
+
+def run_episode(
+    env, policy, params, policy_kind, deterministic, rng,
+    obs_pad_tail=None, traj_writer=None, traj_meta=None,
+):
     observations, _ = env.reset()
     inner_cyborg = env.env
     const = build_const_from_cyborg(inner_cyborg)
@@ -212,8 +248,18 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng, obs_pad_ta
     # Precompute action translation tables (once per episode, ~600x faster per step)
     action_lookups = {agent_name: _build_action_lookup(env, agent_name, mappings, const) for agent_name in env.agents}
 
+    if traj_writer is not None:
+        ec = inner_cyborg.environment_controller
+        hosts = list(ec.state.hosts.keys())
+        header = {"type": "header", "hosts": hosts, **(traj_meta or {})}
+        traj_writer.write(json.dumps(header) + "\n")
+
+    red_ids: list[str] = []
+    blue_ids: list[str] = []
+    green_ids: list[str] = []
+
     total = 0.0
-    for _ in range(EPISODE_LENGTH):
+    for t in range(EPISODE_LENGTH):
         actions = {}
         for agent_idx, agent_name in enumerate(env.agents):
             obs_vec = observations[agent_name]
@@ -235,9 +281,36 @@ def run_episode(env, policy, params, policy_kind, deterministic, rng, obs_pad_ta
             actions[agent_name] = cyborg_action
 
         observations, rewards, terminations, truncations, _ = _raw_cyborg_step_with_flat_obs(env, actions=actions)
-        total += mean(rewards.values())
+        step_reward = mean(rewards.values())
+        total += step_reward
+
+        if traj_writer is not None:
+            ec = inner_cyborg.environment_controller
+            if not red_ids:
+                red_ids = sorted(a for a in ec.action.keys() if a.startswith("red_agent_"))
+                blue_ids = sorted(a for a in ec.action.keys() if a.startswith("blue_agent_"))
+                green_ids = sorted(a for a in ec.action.keys() if a.startswith("green_agent_"))
+            try:
+                phase = ec.state.mission_phase
+            except Exception:
+                phase = None
+            record = {
+                "type": "step",
+                "t": t,
+                "phase": phase,
+                "reward": step_reward,
+                "red": _capture_agent_records(inner_cyborg, red_ids),
+                "blue": _capture_agent_records(inner_cyborg, blue_ids),
+                "green": _capture_agent_records(inner_cyborg, green_ids),
+            }
+            traj_writer.write(json.dumps(record) + "\n")
+
         if terminations.get("__all__", False) or truncations.get("__all__", False):
             break
+
+    if traj_writer is not None:
+        footer = {"type": "footer", "total_reward": total, "steps": t + 1}
+        traj_writer.write(json.dumps(footer) + "\n")
 
     return total
 
@@ -251,6 +324,7 @@ def evaluate(
     red_agent="fsm",
     output=None,
     mission_multipliers=(0.0, 0.0, 0.0),
+    trajectory_dir=None,
 ):
     policy, params, policy_kind = load_checkpoint(checkpoint_path)
     rng = jax.random.PRNGKey(seed if seed is not None else 0)
@@ -268,11 +342,33 @@ def evaluate(
         obs_pad_tail = jnp.array(mission_multipliers, dtype=jnp.float32)
         print(f"Padding CybORG obs 210 -> {expected_dim} with {list(mission_multipliers)}")
 
+    if trajectory_dir is not None:
+        Path(trajectory_dir).mkdir(parents=True, exist_ok=True)
+
     episode_rewards = []
     for ep in range(episodes):
         env = make_env(seed=seed + ep, bank_match_size=bank_match_size, red_agent=red_agent)
         rng, _rng = jax.random.split(rng)
-        reward = run_episode(env, policy, params, policy_kind, deterministic, _rng, obs_pad_tail=obs_pad_tail)
+        traj_writer = None
+        if trajectory_dir is not None:
+            traj_path = Path(trajectory_dir) / f"ep{ep:04d}_seed{seed + ep}.jsonl"
+            traj_writer = traj_path.open("w")
+        traj_meta = {
+            "checkpoint": str(checkpoint_path),
+            "red_agent": red_agent,
+            "seed": seed + ep,
+            "episode": ep,
+        }
+        try:
+            reward = run_episode(
+                env, policy, params, policy_kind, deterministic, _rng,
+                obs_pad_tail=obs_pad_tail,
+                traj_writer=traj_writer,
+                traj_meta=traj_meta,
+            )
+        finally:
+            if traj_writer is not None:
+                traj_writer.close()
         episode_rewards.append(reward)
         print(f"Episode {ep + 1}: {reward:.4f}")
 
@@ -318,6 +414,11 @@ def build_arg_parser():
         default="0,0,0",
         help="Comma-separated values to append to obs (matches Phase 3 mission_multipliers slots).",
     )
+    parser.add_argument(
+        "--trajectory-dir",
+        default=None,
+        help="If set, write one .jsonl trajectory per episode (for post-hoc CIA scoring).",
+    )
     return parser
 
 
@@ -339,6 +440,7 @@ def main(argv=None):
         red_agent=args.red_agent,
         output=args.output,
         mission_multipliers=mission_mult,
+        trajectory_dir=args.trajectory_dir,
     )
 
 
