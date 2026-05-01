@@ -34,7 +34,7 @@ import torch
 import torch.nn as nn
 from flax.training.train_state import TrainState
 
-from jaxborg.policy import SharedActorCritic
+from jaxborg.policies import make_jax_policy
 
 # Align with `src/jaxborg/policies/shared_actor_critic.py` (torch factory).
 HIDDEN_DIM = 32
@@ -82,7 +82,7 @@ class TinyPPOAgent(nn.Module):
 
 
 def _torch_to_flax_params(torch_agent: TinyPPOAgent) -> dict:
-    """Convert TinyPPOAgent state_dict → SharedActorCritic params pytree.
+    """Convert TinyPPOAgent state_dict → "shared" arch params pytree.
 
     Flax Dense uses kernel (in, out); torch Linear uses weight (out, in).
     Flax @nn.compact ordering puts the four Dense layers as
@@ -188,7 +188,7 @@ def test_forward_pass_parity():
     torch.manual_seed(0)
     agent = TinyPPOAgent()
     flax_params = _torch_to_flax_params(agent)
-    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    network = make_jax_policy("shared", action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, hidden_layers=2, activation="tanh")
 
     obs, actions, mask, *_ = _make_minibatch(seed=0)
 
@@ -216,7 +216,7 @@ def test_ppo_minibatch_update_parity():
     torch.manual_seed(0)
     agent = TinyPPOAgent()
     flax_params = _torch_to_flax_params(agent)
-    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    network = make_jax_policy("shared", action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, hidden_layers=2, activation="tanh")
 
     obs, actions, mask, old_lp, mb_adv, mb_ret, mb_val_old = _make_minibatch(seed=0)
 
