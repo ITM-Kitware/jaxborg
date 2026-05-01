@@ -105,7 +105,10 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
     num_envs = int(cr.get("num_envs", 48))
     rollout_length = int(cr.get("rollout_length", train["episode_length"]))
     per_rollout = num_envs * rollout_length
-    rollouts_per_update = max(1, math.ceil(int(train["buffer_size"]) / per_rollout))
+    if "num_rollouts_per_update" in cr:
+        rollouts_per_update = int(cr["num_rollouts_per_update"])
+    else:
+        rollouts_per_update = max(1, math.ceil(int(train["buffer_size"]) / per_rollout))
 
     return {
         "lr": float(core["lr"]),
