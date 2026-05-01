@@ -13,7 +13,6 @@ Usage:
 """
 
 import os
-import pickle
 from pathlib import Path
 
 import jax
@@ -23,8 +22,8 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import NUM_BLUE_AGENTS
+from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 from jaxborg.observations import get_blue_obs
-from jaxborg.policy import ActorCritic, LegacyActor
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 
@@ -68,42 +67,13 @@ def _get_checkpoint_path() -> Path | None:
 # --- Policy loading ---
 
 
-def _load_policy(checkpoint_path: Path):
-    """Load policy and params from checkpoint. Returns (policy, params, kind)."""
-    with open(checkpoint_path, "rb") as f:
-        ckpt = pickle.load(f)
+def _make_inference_fn(checkpoint_path: Path):
+    """Build a JIT-compiled deterministic inference function from a recipe checkpoint."""
+    policy, params, _recipe = load_jax_checkpoint(checkpoint_path)
 
-    nested_params = ckpt["params"].get("params", {})
-
-    if "actor_head" in nested_params:
-        policy = ActorCritic(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "current"
-
-    if "Dense_0" in nested_params:
-        policy = LegacyActor(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "legacy"
-
-    raise ValueError(f"Unrecognized checkpoint: {sorted(nested_params.keys())}")
-
-
-def _make_inference_fn(policy, params, policy_kind):
-    """Build a JIT-compiled deterministic inference function."""
-    if policy_kind == "current":
-
-        def _fwd(o, m):
-            return policy.apply(params, o, m, method=ActorCritic.actor).logits
-    else:
-
-        def _fwd(o, m):
-            return policy.apply(params, o, m).logits
+    def _fwd(o, m):
+        pi, _ = policy.apply(params, o, m)
+        return pi.logits
 
     @jax.jit
     def batched_step(obs_stack, mask_stack):
@@ -126,8 +96,7 @@ if CHECKPOINT_PATH is None:
 
 def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
     """Run a single episode with the trained policy driving blue actions."""
-    policy, params, kind = _load_policy(checkpoint_path)
-    inference_fn = _make_inference_fn(policy, params, kind)
+    inference_fn = _make_inference_fn(checkpoint_path)
 
     harness = CC4DifferentialHarness(
         seed=seed,

@@ -7,7 +7,7 @@ rewards / dones), then feeds the same flattened minibatch into:
   - the torch loss body inlined from `scripts/train/algorithms/ippo_cyborg.py`
     (post-`unbiased=False` ddof fix)
 
-with **identical** initial params (Flax SharedActorCritic init →
+with **identical** initial params (Flax "shared" arch init →
 converted to torch PPOAgent weights) and asserts:
 
   - per-tensor gradients within ≤1e-4
@@ -35,7 +35,7 @@ from flax.training.train_state import TrainState
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-from jaxborg.policy import SharedActorCritic
+from jaxborg.policies import make_jax_policy
 
 # Real CC4 dims; small hidden + small rollout for fast test wall time.
 OBS_DIM = BLUE_OBS_SIZE  # 210
@@ -247,7 +247,7 @@ def _jax_loss(params, network, obs, actions, mask, old_logp, mb_adv, mb_targets)
 @pytest.mark.slow
 def test_replay_minibatch_update_parity():
     """Real CC4 rollout fed through both PPO update bodies → identical update."""
-    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    network = make_jax_policy("shared", action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, hidden_layers=2, activation="tanh")
     init_key = jax.random.PRNGKey(123)
     init_x = jnp.zeros((OBS_DIM,), dtype=jnp.float32)
     flax_params = network.init(init_key, init_x)

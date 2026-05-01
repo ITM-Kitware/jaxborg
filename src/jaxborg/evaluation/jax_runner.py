@@ -47,13 +47,11 @@ def make_env(seed: int | None = None, bank_match_size: int | None = None):
 def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
     """Load a Flax `.pkl` and return (policy_module, params, recipe).
 
-    Tries the recipe sidecar first; falls back to key-based architecture
-    detection on the params tree for legacy checkpoints.
+    Requires a recipe sidecar next to the checkpoint. Pre-refactor
+    checkpoints without sidecars are no longer supported — re-train
+    under the recipe-driven layout.
     """
-    import warnings
-
     from jaxborg.checkpoint import read_sidecar
-    from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
 
     p = Path(path)
     if not p.is_file():
@@ -62,76 +60,24 @@ def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
         ckpt = pickle.load(f)
 
     params = ckpt["params"]
-    nested = params.get("params", {})
     action_dim = ckpt.get("action_dim", BLUE_ALLOW_TRAFFIC_END)
     hidden_dim = ckpt.get("hidden_dim", 256)
     activation = ckpt.get("activation", "tanh")
 
-    try:
-        recipe = read_sidecar(p)
-    except FileNotFoundError:
-        recipe = None
-
-    if recipe is not None:
-        arch = recipe["arch"]
-        policy = make_jax_policy(
-            arch["name"],
-            action_dim=action_dim,
-            hidden_dim=int(arch.get("hidden_dim", hidden_dim)),
-            hidden_layers=int(arch.get("hidden_layers", 2)),
-            activation=arch.get("activation", activation),
-        )
-        return policy, params, recipe
-
-    # Legacy fallback — infer arch from param tree shape.
-    warnings.warn(
-        f"No recipe sidecar next to {p}; falling back to key-based arch detection. "
-        "Re-train under the new layout to remove this fallback.",
-        DeprecationWarning,
-        stacklevel=2,
+    recipe = read_sidecar(p)
+    arch = recipe["arch"]
+    policy = make_jax_policy(
+        arch["name"],
+        action_dim=action_dim,
+        hidden_dim=int(arch.get("hidden_dim", hidden_dim)),
+        hidden_layers=int(arch.get("hidden_layers", 2)),
+        activation=arch.get("activation", activation),
     )
-    if "actor_head" in nested:
-        policy = ActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation=activation)
-        kind = "current"
-    elif "Dense_0" in nested:
-        if action_dim != BLUE_ALLOW_TRAFFIC_END:
-            raise ValueError(
-                f"Legacy checkpoint action_dim={action_dim} incompatible with current {BLUE_ALLOW_TRAFFIC_END}"
-            )
-        if sum(1 for k in nested if k.startswith("Dense_")) >= 4:
-            policy = SharedActorCritic(action_dim=action_dim, hidden_dim=hidden_dim, activation=activation)
-            kind = "shared"
-        else:
-            policy = LegacyActor(action_dim=action_dim, hidden_dim=hidden_dim, activation=activation)
-            kind = "legacy"
-    else:
-        raise ValueError(f"Unrecognized checkpoint format: nested keys={sorted(nested.keys())}")
-
-    legacy_recipe = {
-        "meta": {"name": "legacy", "source": f"fallback (no sidecar; kind={kind})"},
-        "algorithm": "ippo",
-        "arch": {
-            "name": "shared" if kind in ("shared", "legacy") else "separate",
-            "hidden_dim": hidden_dim,
-            "hidden_layers": 2,
-            "activation": activation,
-        },
-    }
-    return policy, params, legacy_recipe
+    return policy, params, recipe
 
 
 def _policy_dist(policy: Any, params: dict, obs_jax, mask):
-    """Run actor head — works for ActorCritic, SharedActorCritic, LegacyActor, and the new factories."""
-    from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
-
-    # Old shared/separate exposed an explicit `actor` method
-    if isinstance(policy, ActorCritic):
-        return policy.apply(params, obs_jax, mask, method=ActorCritic.actor)
-    if isinstance(policy, SharedActorCritic):
-        return policy.apply(params, obs_jax, mask, method=SharedActorCritic.actor)
-    if isinstance(policy, LegacyActor):
-        return policy.apply(params, obs_jax, mask)
-    # New factories return (pi, value) from __call__
+    """Run actor head on a recipe-driven Flax policy module."""
     pi, _ = policy.apply(params, obs_jax, mask)
     return pi
 
