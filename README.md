@@ -102,7 +102,25 @@ JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
     --episodes 100
 ```
 
-Training output goes to `../jaxborg-exp/`.
+Training output goes to `$JAXBORG_EXP_DIR` (defaults to `../jaxborg-exp/`).
+
+## Recipes
+
+A recipe is a single YAML under `recipes/` that drives both backends. The `algorithm:` key picks the trainer (`scripts/train/algorithms/<algorithm>_<backend>.py`); `arch.name` picks the policy from the `src/jaxborg/policies/` registry; `core` / `train` / `jax` / `cleanrl` sections project to backend-specific PPO config.
+
+```yaml
+# recipes/default.yaml — Matched-Training v2 baseline
+algorithm: ippo
+core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
+arch:    {name: shared, hidden_dim: 256, hidden_layers: 2}
+train:   {episode_length: 500, total_timesteps: 3000000}
+jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
+cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
+```
+
+Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and `transfer.py` — pre-sidecar checkpoints no longer load.
+
+Add a new arch: drop a module under `src/jaxborg/policies/` exporting `JAX_FACTORY` + `TORCH_FACTORY`, register it in `policies/__init__.py`, then reference it as `arch.name: <new>` in any recipe.
 
 ## Network Architecture
 
