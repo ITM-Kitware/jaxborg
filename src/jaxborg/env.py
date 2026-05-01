@@ -154,7 +154,7 @@ def apply_all_actions_typed(
     red_keys: jnp.ndarray,
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
-    execution_order: jnp.ndarray,
+    execution_order: jnp.ndarray | None = None,
     blue_keys: jnp.ndarray = None,
     *,
     use_green_vmap: bool = True,
@@ -170,10 +170,9 @@ def apply_all_actions_typed(
     then by insertion order (blue 0-4, green hosts, red 0-5). After traffic-control
     blue agents, the order is always: remaining blue → green → red.
     """
+    del execution_order  # Accepted for API compat with apply_all_actions_in_order; this path derives ordering internally.
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
-    n_hosts = const.host_active.shape[0]
-    green_keys = jax.random.split(key_green, n_hosts)
 
     # CybORG sorts actions by priority (ControlTraffic=1, else=99) then
     # executes in deterministic agent-interface insertion order within each
@@ -192,11 +191,10 @@ def apply_all_actions_typed(
     if blue_keys is None:
         blue_keys = jax.random.split(jax.random.PRNGKey(0), n_blue)
 
-    def blue_step(i, carry_state):
+    # n_blue is small (5) and static; unroll for stronger XLA fusion / no while carrier.
+    for i in range(n_blue):
         b = blue_order[i]
-        return process_blue_with_duration(carry_state, const, b, blue_actions[b], blue_keys[b])
-
-    state = jax.lax.fori_loop(0, n_blue, blue_step, state)
+        state = process_blue_with_duration(state, const, b, blue_actions[b], blue_keys[b])
 
     # --- Phase 2: Green agents ---
     # Use vmapped green in pure/training mode (faster, training-correct).
@@ -217,6 +215,8 @@ def apply_all_actions_typed(
     else:
         from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
 
+        n_hosts = const.host_active.shape[0]
+        green_keys = jax.random.split(key_green, n_hosts)
         green_host_order = _ordered_green_hosts(const)
 
         def green_step(i, carry_state):
@@ -226,12 +226,10 @@ def apply_all_actions_typed(
         state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
-    red_order = jnp.arange(n_red, dtype=jnp.int32)
-
-    def red_step(i, carry_state):
-        r = red_order[i]
-        return process_red_with_duration(
-            carry_state,
+    # red_order = arange so r == i; n_red is small (6) and static — unroll directly.
+    for r in range(n_red):
+        state = process_red_with_duration(
+            state,
             const,
             r,
             red_actions[r],
@@ -241,8 +239,6 @@ def apply_all_actions_typed(
             run_session_check=False,
             creation_visible_sessions_override=pre_green_visible_sessions[r],
         )
-
-    state = jax.lax.fori_loop(0, n_red, red_step, state)
 
     # --- Post-step processing ---
 
@@ -255,16 +251,12 @@ def apply_all_actions_typed(
 
     state = reassign_cross_subnet_sessions(state, const)
 
-    def monitor_step(b, carry_state):
-        return apply_blue_monitor(carry_state, const, b)
+    for b in range(n_blue):
+        state = apply_blue_monitor(state, const, b)
 
-    state = jax.lax.fori_loop(0, n_blue, monitor_step, state)
-
-    def session_check_step(r, carry_state):
+    for r in range(n_red):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
-        return apply_red_session_check(carry_state, const, r, session_check_key)
-
-    state = jax.lax.fori_loop(0, n_red, session_check_step, state)
+        state = apply_red_session_check(state, const, r, session_check_key)
 
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
@@ -645,7 +637,6 @@ class ScenarioEnv(MultiAgentEnv):
         no_forced = jnp.full(n_red, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         no_forced_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        execution_order = _cyborg_priority_execution_order(blue_action_arr, n_blue + n_hosts + n_red)
         state = apply_all_actions_typed(
             state,
             const,
@@ -655,7 +646,7 @@ class ScenarioEnv(MultiAgentEnv):
             red_keys,
             no_forced,
             no_forced_pids,
-            execution_order,
+            None,
             blue_keys,
             use_green_vmap=(self.topology_mode == "generative"),
         )
