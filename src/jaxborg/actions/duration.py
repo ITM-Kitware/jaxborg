@@ -239,12 +239,14 @@ def process_red_with_duration(
         red_pending_visible_sessions=state.red_pending_visible_sessions.at[agent_id].set(pending_visible_sessions),
     )
 
-    new_state = jax.lax.cond(
-        can_execute,
-        lambda s: apply_red_action(s, const, agent_id, effective_action, effective_key),
-        lambda s: s,
-        state_with_source,
-    )
+    # Gate execution by rewriting the action to RED_SLEEP (idx=0) when the action
+    # cannot execute.  RED_SLEEP maps to branch 0 in apply_red_action's switch
+    # (lambda s: s, a true no-op), so this is behaviorally identical to the
+    # original lax.cond gate but removes a hard cond barrier that prevented XLA
+    # from fusing the surrounding pending-field state.replace with the inner
+    # switch's traced branches.
+    gated_action = jnp.where(can_execute, effective_action, jnp.int32(0))
+    new_state = apply_red_action(state_with_source, const, agent_id, gated_action, effective_key)
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
     final_source_kind = jnp.where(should_execute, PENDING_SOURCE_KIND_NONE, effective_source_kind)
@@ -298,12 +300,13 @@ def process_blue_with_duration(
     new_ticks = current_ticks - 1
     should_execute = new_ticks <= 0
 
-    new_state = jax.lax.cond(
-        should_execute,
-        lambda s: apply_blue_action(s, const, agent_id, effective_action, key),
-        lambda s: s,
-        state,
-    )
+    # Gate execution by rewriting the action to BLUE_SLEEP (idx=0) when not yet
+    # ready.  BLUE_SLEEP maps to branch 0 in apply_blue_action's switch
+    # (lambda s: s, a true no-op), so this is behaviorally identical to the
+    # original lax.cond gate but removes a cond barrier blocking fusion with the
+    # surrounding pending-field state.replace.
+    gated_action = jnp.where(should_execute, effective_action, jnp.int32(0))
+    new_state = apply_blue_action(state, const, agent_id, gated_action, key)
 
     final_ticks = jnp.where(should_execute, jnp.int32(0), new_ticks)
     new_state = new_state.replace(
