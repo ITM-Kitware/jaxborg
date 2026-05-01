@@ -10,6 +10,7 @@ from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.blue_monitor import apply_blue_monitor
+from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.encoding import (
     BLUE_ACTION_TYPE_MONITOR,
     BLUE_ACTION_TYPE_SLEEP,
@@ -19,10 +20,13 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
     encode_red_action,
 )
+from jaxborg.actions.pids import PROCESS_EVENT_NO_PID, append_pid_to_row_allow_duplicates
 from jaxborg.constants import (
     ACTIVITY_NONE,
     ACTIVITY_SCAN,
+    COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
+    MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     SERVICE_IDS,
 )
@@ -106,6 +110,37 @@ def _find_host_in_subnet(const, subnet_name, exclude_router=True):
             continue
         return h
     return None
+
+
+def _find_blue_covered_host(const):
+    for h in range(int(const.num_hosts)):
+        if not bool(const.host_active[h]) or bool(const.host_is_router[h]):
+            continue
+        for b in range(NUM_BLUE_AGENTS):
+            if bool(const.blue_agent_hosts[b, h]):
+                return h, b
+    return None, None
+
+
+def _apply_blue_monitor_with_reference_pid_ingest(state, const, agent_id):
+    """Monitor with the pre-optimization suspicious-PID append loop.
+
+    CybORG stores VelociraptorServer.sus_pids as a Python list and Monitor
+    appends process-creation PIDs to that list.  This local reference keeps the
+    rest of apply_blue_monitor unchanged and swaps in that append-only ingest.
+    """
+    covers = const.blue_agent_hosts[agent_id]
+    updated_rows = state.blue_suspicious_pids[agent_id]
+
+    for h in range(int(const.host_active.shape[0])):
+        row = updated_rows[h]
+        for slot in range(MAX_TRACKED_SUSPICIOUS_PIDS):
+            row = append_pid_to_row_allow_duplicates(row, state.host_process_creation_pids[h, slot])
+        updated_rows = updated_rows.at[h].set(jnp.where(covers[h], row, state.blue_suspicious_pids[agent_id, h]))
+
+    monitored = apply_blue_monitor(state, const, agent_id=agent_id)
+    blue_suspicious_pids = state.blue_suspicious_pids.at[agent_id].set(updated_rows)
+    return monitored.replace(blue_suspicious_pids=blue_suspicious_pids)
 
 
 class TestBlueActionEncoding:
@@ -224,6 +259,103 @@ class TestApplyBlueMonitor:
         )
         # Events should NOT be cleared on uncovered hosts
         assert int(new_state.host_process_creation_pids[uncovered, 0]) == 9999
+
+    def test_suspicious_pid_ingest_matches_cyborg_list_append_for_reachable_rows(self, jax_const):
+        target, blue_idx = _find_blue_covered_host(jax_const)
+        assert target is not None
+        assert blue_idx is not None
+
+        state = _make_jax_state(jax_const)
+        existing_a = 6100
+        existing_b = 6101
+        new_a = 6200
+        new_b = 6201
+        suspicious_row = jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32).at[0].set(existing_a).at[1].set(
+            existing_b
+        )
+        event_row = (
+            jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32)
+            .at[0]
+            .set(new_a)
+            .at[1]
+            .set(PROCESS_EVENT_NO_PID)
+            .at[2]
+            .set(new_b)
+        )
+        state = state.replace(
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target].set(suspicious_row),
+            host_process_creation_pids=state.host_process_creation_pids.at[target].set(event_row),
+        )
+
+        monitored = apply_blue_monitor(state, jax_const, agent_id=blue_idx)
+        expected = (
+            jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32)
+            .at[0]
+            .set(existing_a)
+            .at[1]
+            .set(existing_b)
+            .at[2]
+            .set(new_a)
+            .at[3]
+            .set(new_b)
+        )
+
+        np.testing.assert_array_equal(
+            np.asarray(monitored.blue_suspicious_pids[blue_idx, target]),
+            np.asarray(expected),
+        )
+        assert np.all(np.asarray(monitored.host_process_creation_pids[target]) == -1)
+
+    def test_monitor_remove_outcome_matches_reference_pid_ingest(self, jax_const):
+        target, blue_idx = _find_blue_covered_host(jax_const)
+        assert target is not None
+        assert blue_idx is not None
+
+        pid_a = 6300
+        pid_b = 6301
+        pid_c = 6302
+        base_state = _make_jax_state(jax_const)
+        state = base_state.replace(
+            red_sessions=jnp.zeros_like(base_state.red_sessions),
+            red_session_count=jnp.zeros_like(base_state.red_session_count),
+            red_privilege=jnp.zeros_like(base_state.red_privilege),
+        )
+        state = state.replace(
+            red_sessions=state.red_sessions.at[0, target].set(True),
+            red_session_count=state.red_session_count.at[0, target].set(3),
+            red_session_pids=state.red_session_pids.at[0, target, 0]
+            .set(pid_a)
+            .at[0, target, 1]
+            .set(pid_b)
+            .at[0, target, 2]
+            .set(pid_c),
+            red_privilege=state.red_privilege.at[0, target].set(COMPROMISE_USER),
+            host_compromised=state.host_compromised.at[target].set(COMPROMISE_USER),
+            blue_suspicious_pids=state.blue_suspicious_pids.at[blue_idx, target, 0]
+            .set(pid_a)
+            .at[blue_idx, target, 1]
+            .set(pid_c),
+            host_process_creation_pids=state.host_process_creation_pids.at[target, 0].set(pid_b),
+        )
+
+        optimized = apply_blue_monitor(state, jax_const, agent_id=blue_idx)
+        reference = _apply_blue_monitor_with_reference_pid_ingest(state, jax_const, blue_idx)
+        optimized_after_remove = apply_blue_remove(optimized, jax_const, blue_idx, target)
+        reference_after_remove = apply_blue_remove(reference, jax_const, blue_idx, target)
+
+        for field in (
+            "red_sessions",
+            "red_session_count",
+            "red_session_pids",
+            "red_privilege",
+            "host_compromised",
+            "host_suspicious_process",
+        ):
+            np.testing.assert_array_equal(
+                np.asarray(getattr(optimized_after_remove, field)),
+                np.asarray(getattr(reference_after_remove, field)),
+                err_msg=field,
+            )
 
 
 class TestDifferentialWithCybORG:
