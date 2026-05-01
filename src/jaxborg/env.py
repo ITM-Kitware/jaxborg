@@ -351,53 +351,39 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
     for r in range(n_red):
         start_host = const.red_start_hosts[r]
         is_active = red_agent_active[r]
-        red_sessions = jnp.where(
-            is_active,
-            red_sessions.at[r, start_host].set(True),
-            red_sessions,
+        # Push is_active into scalar/row/column-scoped scatters: when False, the
+        # scatter writes the prior value back (no-op).  Avoids materializing full
+        # (NUM_RED, GLOBAL_MAX_HOSTS, ...) arrays under both branches of jnp.where
+        # for each of the ~15 fields below.  Behavior is identical.
+        red_sessions = red_sessions.at[r, start_host].set(
+            jnp.where(is_active, True, red_sessions[r, start_host])
         )
-        red_session_count = jnp.where(
-            is_active,
-            red_session_count.at[r, start_host].set(1),
-            red_session_count,
+        red_session_count = red_session_count.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(1), red_session_count[r, start_host])
         )
-        red_session_is_abstract = jnp.where(
-            is_active,
-            red_session_is_abstract.at[r, start_host].set(True),
-            red_session_is_abstract,
+        red_session_is_abstract = red_session_is_abstract.at[r, start_host].set(
+            jnp.where(is_active, True, red_session_is_abstract[r, start_host])
         )
-        red_abstract_host_rank = jnp.where(
-            is_active,
-            red_abstract_host_rank.at[r, start_host].set(0),
-            red_abstract_host_rank,
+        red_abstract_host_rank = red_abstract_host_rank.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(0), red_abstract_host_rank[r, start_host])
         )
-        red_next_abstract_rank = jnp.where(
-            is_active,
-            red_next_abstract_rank.at[r].set(1),
-            red_next_abstract_rank,
+        red_next_abstract_rank = red_next_abstract_rank.at[r].set(
+            jnp.where(is_active, jnp.int32(1), red_next_abstract_rank[r])
         )
         pid_row = red_session_pids[r, start_host]
-        red_session_pids = jnp.where(
-            is_active,
-            red_session_pids.at[r, start_host].set(append_pid_to_row(pid_row, red_next_pid)),
-            red_session_pids,
+        red_session_pids = red_session_pids.at[r, start_host].set(
+            jnp.where(is_active, append_pid_to_row(pid_row, red_next_pid), pid_row)
         )
         abstract_pid_row = red_session_abstract_pids[r, start_host]
-        red_session_abstract_pids = jnp.where(
-            is_active,
-            red_session_abstract_pids.at[r, start_host].set(append_pid_to_row(abstract_pid_row, red_next_pid)),
-            red_session_abstract_pids,
+        red_session_abstract_pids = red_session_abstract_pids.at[r, start_host].set(
+            jnp.where(is_active, append_pid_to_row(abstract_pid_row, red_next_pid), abstract_pid_row)
         )
-        red_primary_pid = jnp.where(
-            is_active,
-            red_primary_pid.at[r].set(red_next_pid),
-            red_primary_pid,
+        red_primary_pid = red_primary_pid.at[r].set(
+            jnp.where(is_active, red_next_pid, red_primary_pid[r])
         )
         red_next_pid = jnp.where(is_active, red_next_pid + 1, red_next_pid)
-        red_privilege = jnp.where(
-            is_active,
-            red_privilege.at[r, start_host].set(COMPROMISE_USER),
-            red_privilege,
+        red_privilege = red_privilege.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(COMPROMISE_USER), red_privilege[r, start_host])
         )
         # CybORG pre-seeds aspace.ip_address with the start host at reset
         # for ALL agents (including initially inactive ones).  Always mark
@@ -405,38 +391,35 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         # action space.  FsmRedCC4Env._strip_inactive_red_reset_knowledge
         # will clear this for inactive agents to match the FSM's host_states.
         red_discovered = red_discovered.at[r, start_host].set(True)
-        host_compromised = jnp.where(
-            is_active,
-            host_compromised.at[start_host].set(jnp.maximum(host_compromised[start_host], COMPROMISE_USER)),
-            host_compromised,
+        host_compromised = host_compromised.at[start_host].set(
+            jnp.where(
+                is_active,
+                jnp.maximum(host_compromised[start_host], COMPROMISE_USER),
+                host_compromised[start_host],
+            )
         )
-        fsm_states = jnp.where(
-            is_active,
-            fsm_states.at[r].set(fsm_red_init_states(const, r)),
-            fsm_states,
+        fsm_states = fsm_states.at[r].set(
+            jnp.where(is_active, fsm_red_init_states(const, r), fsm_states[r])
         )
-        fsm_host_entered = jnp.where(
-            is_active,
-            fsm_host_entered.at[r, start_host].set(True),
-            fsm_host_entered,
+        fsm_host_entered = fsm_host_entered.at[r, start_host].set(
+            jnp.where(is_active, True, fsm_host_entered[r, start_host])
         )
-        red_scan_anchor_host = jnp.where(
-            is_active,
-            red_scan_anchor_host.at[r].set(start_host),
-            red_scan_anchor_host,
+        red_scan_anchor_host = red_scan_anchor_host.at[r].set(
+            jnp.where(is_active, start_host, red_scan_anchor_host[r])
         )
         initially_scanned = const.red_initial_scanned_hosts[r]
-        red_scanned_source_hosts = jnp.where(
-            is_active,
-            red_scanned_source_hosts.at[r, :, start_host].set(initially_scanned),
-            red_scanned_source_hosts,
+        prior_scan_col = red_scanned_source_hosts[r, :, start_host]
+        red_scanned_source_hosts = red_scanned_source_hosts.at[r, :, start_host].set(
+            jnp.where(is_active, initially_scanned, prior_scan_col)
         )
         # Record scan-owning PID for initial knowledge sourced from start_host.
         has_initial_scan = jnp.any(initially_scanned)
-        red_scan_source_pid = jnp.where(
-            is_active & has_initial_scan,
-            red_scan_source_pid.at[r, start_host].set(red_primary_pid[r]),
-            red_scan_source_pid,
+        red_scan_source_pid = red_scan_source_pid.at[r, start_host].set(
+            jnp.where(
+                is_active & has_initial_scan,
+                red_primary_pid[r],
+                red_scan_source_pid[r, start_host],
+            )
         )
 
     # CybORG's server_session dict gets one entry per active agent at reset
