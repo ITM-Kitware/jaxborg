@@ -47,7 +47,7 @@ train:
   total_timesteps: 3000000
 
 jax:
-  num_envs: 1024
+  num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)
   num_minibatches: 16
   update_epochs: 4
   topology_mode: generative
@@ -56,5 +56,6 @@ jax:
 cleanrl:
   num_envs: 48
   rollout_length: 500
+  num_rollouts_per_update: 1   # 48*500=24000 steps/update → ~125 updates @ 3M; matches Matched-v2 (2026-04-25)
   num_minibatches: 16
   num_epochs: 4
