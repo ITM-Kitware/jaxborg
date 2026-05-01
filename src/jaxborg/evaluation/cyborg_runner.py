@@ -2,8 +2,8 @@
 
 Used by `scripts/eval/eval_recipe.py` for the `.pt` (torch state_dict)
 path. JAX `.pkl` checkpoints take the parallel path through
-`jaxborg.eval.jax_runner` (same target environment, different model loader
-and action translation).
+`jaxborg.evaluation.jax_runner` (same target environment, different model
+loader and action translation).
 """
 
 from __future__ import annotations
