@@ -291,7 +291,8 @@ def apply_green_agents_vmapped(
         valid = valid & ~any_red_on_host_now
 
         # Allocate PID
-        new_pid = carry_state.host_max_pid[h] + delta
+        prev_host_max_pid = carry_state.host_max_pid[h]
+        new_pid = prev_host_max_pid + delta
 
         # Session creation
         session_counts = effective_session_counts(carry_state)
@@ -315,43 +316,72 @@ def apply_green_agents_vmapped(
         agent_has_no_sessions = ~jnp.any(carry_state.red_sessions[red_idx])
         should_set_anchor = valid & (carry_state.red_scan_anchor_host[red_idx] < 0) & agent_has_no_sessions
 
-        new_state = carry_state.replace(
-            red_sessions=carry_state.red_sessions.at[red_idx, h].set(True),
-            red_session_count=session_counts.at[red_idx, h].set(new_count),
+        # Push the `valid` gate from a full-state jnp.where down into each
+        # individual row/scalar scatter so XLA does not need to materialize a
+        # full-state select for every field on every iteration.  When valid is
+        # False each scatter writes the original value back at its index
+        # (no-op).
+        prev_red_sessions_row = carry_state.red_sessions[red_idx, h]
+        prev_abs_count_row = carry_state.red_abstract_session_count[red_idx, h]
+        prev_server_count = carry_state.red_server_session_count[red_idx]
+        prev_is_abstract_row = carry_state.red_session_is_abstract[red_idx, h]
+        prev_next_abstract = carry_state.red_next_abstract_rank[red_idx]
+        prev_privilege_row = carry_state.red_privilege[red_idx, h]
+        prev_host_compromised_row = carry_state.host_compromised[h]
+        prev_anchor = carry_state.red_scan_anchor_host[red_idx]
+
+        new_pids_row = jnp.where(valid, append_pid_to_row(pid_row, new_pid), pid_row)
+        new_abstract_pids_row = jnp.where(
+            valid, append_pid_to_row(abstract_row, new_pid), abstract_row
+        )
+
+        return carry_state.replace(
+            red_sessions=carry_state.red_sessions.at[red_idx, h].set(
+                jnp.where(valid, True, prev_red_sessions_row)
+            ),
+            red_session_count=carry_state.red_session_count.at[red_idx, h].set(
+                jnp.where(valid, new_count, carry_state.red_session_count[red_idx, h])
+            ),
             red_abstract_session_count=carry_state.red_abstract_session_count.at[red_idx, h].set(
-                carry_state.red_abstract_session_count[red_idx, h] + 1
+                jnp.where(valid, prev_abs_count_row + 1, prev_abs_count_row)
             ),
             # CybORG's server_session dict grows by one entry for each new
             # RedAbstractSession (phishing).  Increment the cumulative counter.
             red_server_session_count=carry_state.red_server_session_count.at[red_idx].set(
-                carry_state.red_server_session_count[red_idx] + 1
+                jnp.where(valid, prev_server_count + 1, prev_server_count)
             ),
-            red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(True),
-            red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(assigned_rank),
-            red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(next_rank + 1),
-            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(append_pid_to_row(pid_row, new_pid)),
+            red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(
+                jnp.where(valid, True, prev_is_abstract_row)
+            ),
+            red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(
+                jnp.where(valid, assigned_rank, abstract_rank_before)
+            ),
+            red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(
+                jnp.where(valid, prev_next_abstract + 1, prev_next_abstract)
+            ),
+            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(new_pids_row),
             red_session_abstract_pids=carry_state.red_session_abstract_pids.at[red_idx, h].set(
-                append_pid_to_row(abstract_row, new_pid)
+                new_abstract_pids_row
             ),
-            red_next_pid=jnp.maximum(carry_state.red_next_pid, new_pid + 1),
-            host_max_pid=carry_state.host_max_pid.at[h].set(jnp.maximum(carry_state.host_max_pid[h], new_pid)),
+            red_next_pid=jnp.where(
+                valid, jnp.maximum(carry_state.red_next_pid, new_pid + 1), carry_state.red_next_pid
+            ),
+            host_max_pid=carry_state.host_max_pid.at[h].set(
+                jnp.where(valid, jnp.maximum(prev_host_max_pid, new_pid), prev_host_max_pid)
+            ),
             red_privilege=carry_state.red_privilege.at[red_idx, h].set(
-                jnp.maximum(carry_state.red_privilege[red_idx, h], COMPROMISE_USER)
+                jnp.where(valid, jnp.maximum(prev_privilege_row, COMPROMISE_USER), prev_privilege_row)
             ),
             host_compromised=carry_state.host_compromised.at[h].set(
-                jnp.maximum(carry_state.host_compromised[h], COMPROMISE_USER)
+                jnp.where(
+                    valid,
+                    jnp.maximum(prev_host_compromised_row, COMPROMISE_USER),
+                    prev_host_compromised_row,
+                )
             ),
-            red_scan_anchor_host=jnp.where(
-                should_set_anchor,
-                carry_state.red_scan_anchor_host.at[red_idx].set(h),
-                carry_state.red_scan_anchor_host,
+            red_scan_anchor_host=carry_state.red_scan_anchor_host.at[red_idx].set(
+                jnp.where(should_set_anchor, h, prev_anchor)
             ),
-        )
-
-        return jax.tree.map(
-            lambda new, old: jnp.where(valid, new, old),
-            new_state,
-            carry_state,
         )
 
     state = jax.lax.fori_loop(0, MAX_PHISHING_PER_STEP, _apply_phishing, state)
