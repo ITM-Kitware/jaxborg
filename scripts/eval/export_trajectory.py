@@ -21,8 +21,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
-
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import EnterpriseMAE
@@ -31,6 +29,7 @@ from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Actions.AbstractActions.Impact import Impact
 from CybORG.Simulator.Actions.GreenActions import GreenAccessService, GreenLocalWork
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+from torch.distributions import Categorical
 
 EPISODE_LENGTH = 500
 NUM_AGENTS = 5
@@ -59,7 +58,7 @@ class PPOAgent(nn.Module):
     def get_action(self, obs, action_mask, deterministic=False):
         features = self.features(obs)
         logits = self.actor(features)
-        logits = logits + (action_mask.float() - 1.0) * 1e8
+        logits = logits + (action_mask.float() - 1.0) * 1e10
         if deterministic:
             return logits.argmax(dim=-1)
         dist = Categorical(logits=logits)

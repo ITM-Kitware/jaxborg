@@ -97,7 +97,7 @@ class _TorchSharedActorCritic(tnn.Module):
         action: torch.Tensor | None = None,
     ):
         feat = self.features(obs)
-        logits = self.actor(feat) + (action_mask.float() - 1.0) * 1e8
+        logits = self.actor(feat) + (action_mask.float() - 1.0) * 1e10
         dist = Categorical(logits=logits)
         if action is None:
             action = dist.sample()
@@ -107,7 +107,7 @@ class _TorchSharedActorCritic(tnn.Module):
         return action, log_prob, entropy, value
 
     def deterministic_action(self, obs: torch.Tensor, action_mask: torch.Tensor) -> torch.Tensor:
-        logits = self.actor(self.features(obs)) + (action_mask.float() - 1.0) * 1e8
+        logits = self.actor(self.features(obs)) + (action_mask.float() - 1.0) * 1e10
         return logits.argmax(dim=-1)
 
 
