@@ -36,12 +36,6 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.scenarios.cc4.red_fsm import (
-    fsm_red_apply_delayed_update,
-    fsm_red_init_states,
-    fsm_red_schedule_post_step_update,
-    fsm_red_select_actions,
-)
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
@@ -51,15 +45,21 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.env import apply_all_actions
-from jaxborg.rewards import advance_mission_phase, compute_rewards
-from jaxborg.state import create_initial_state
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,
     jax_red_to_cyborg,
 )
+from jaxborg.rewards import advance_mission_phase, compute_rewards
+from jaxborg.scenarios.cc4.red_fsm import (
+    fsm_red_apply_delayed_update,
+    fsm_red_init_states,
+    fsm_red_schedule_post_step_update,
+    fsm_red_select_actions,
+)
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.state import create_initial_state
 from tests.differential.blue_mask_projection import (
     comparison_blue_mask_in_jax_space,
     format_action_index_set,
@@ -1711,8 +1711,8 @@ class CC4DifferentialHarness:
 
         We compare the symmetric difference of the two index sets.
         """
-        from jaxborg.scenarios.cc4.red_fsm import FSM_F
         from jaxborg.constants import NUM_RED_AGENTS
+        from jaxborg.scenarios.cc4.red_fsm import FSM_F
 
         step = int(self.jax_state.time)
         fsm_entered = self.jax_state.fsm_host_entered

@@ -9,8 +9,8 @@ from CybORG.Simulator.Actions.ConcreteActions.DecoyActions.DecoyHarakaSMPT impor
 from jaxborg.actions.encoding import encode_blue_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import SERVICE_IDS
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.state import create_initial_state
 from tests.differential.blue_mask_projection import (
     format_action_index_set,
     live_blue_wrapper_mask_in_jax_space,

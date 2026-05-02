@@ -2,13 +2,13 @@ import pytest
 
 from jaxborg.actions.encoding import BLUE_MONITOR, BLUE_SLEEP, encode_blue_action
 from jaxborg.constants import NUM_BLUE_AGENTS
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,
     jax_blue_to_cyborg_wrapper_action,
 )
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
 
 @pytest.fixture

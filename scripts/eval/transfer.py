@@ -52,15 +52,15 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     describe_blue_action,
     jax_blue_to_cyborg,
 )
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
 from tests.differential.harness import CC4DifferentialHarness
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -475,7 +475,7 @@ def make_scan_eval_fn(env, policy, deterministic):
 def rollout_jaxborg_scan(
     policy,
     params,
-    
+
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -564,7 +564,7 @@ def rollout_jaxborg_scan(
 def rollout_jaxborg(
     policy,
     params,
-    
+
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -666,8 +666,8 @@ def _rollout_cyborg_single_episode(args_tuple):
     import numpy as np
 
     from jaxborg.constants import NUM_BLUE_AGENTS
-    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
     from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
     from scripts.eval.transfer import (
         _build_cyborg_mask_cache,
         _live_blue_wrapper_mask_in_jax_space_cached,
@@ -788,7 +788,7 @@ def _rollout_cyborg_single_episode(args_tuple):
 def rollout_cyborg(
     policy,
     params,
-    
+
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -1490,7 +1490,7 @@ def main():
         jax_actions, jax_rewards, jax_results = rollout_fn(
             policy,
             params,
-            
+
             args.episodes,
             deterministic,
             seed=args.seed,
@@ -1579,7 +1579,7 @@ def main():
             return rollout_fn(
                 policy,
                 params,
-                
+
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1592,7 +1592,7 @@ def main():
             return rollout_cyborg(
                 policy,
                 params,
-                
+
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1750,7 +1750,7 @@ def main():
         ) = rollout_matched_transfer(
             policy,
             params,
-            
+
             args.episodes,
             deterministic,
             seed=args.seed,

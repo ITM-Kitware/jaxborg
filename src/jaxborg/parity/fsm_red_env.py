@@ -9,13 +9,13 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
+from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.env import ScenarioEnv, ScenarioEnvState
 from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
     fsm_red_select_actions,
 )
-from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.env import ScenarioEnv, ScenarioEnvState
 
 
 class FsmRedCC4Env(MultiAgentEnv):

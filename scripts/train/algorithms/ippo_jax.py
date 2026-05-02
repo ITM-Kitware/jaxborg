@@ -48,9 +48,9 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.checkpoint import write_sidecar
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_jax

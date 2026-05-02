@@ -152,11 +152,17 @@ def _install_component_monkeypatch(env, log: dict):
                 rz = self.phase_rewards[subnet_name]
                 if "green" in agent_name and success == False:  # noqa: E712 -- numpy.bool_ identity vs equality
                     if isinstance(act, _GLW):
-                        r = rz["LWF"]; reward_list.append(r); log["lwf"] += r
+                        r = rz["LWF"]
+                        reward_list.append(r)
+                        log["lwf"] += r
                     elif isinstance(act, _GAS):
-                        r = rz["ASF"]; reward_list.append(r); log["asf"] += r
+                        r = rz["ASF"]
+                        reward_list.append(r)
+                        log["asf"] += r
                 elif "red" in agent_name and success and isinstance(act, _Impact):
-                    r = rz["RIA"]; reward_list.append(r); log["ria"] += r
+                    r = rz["RIA"]
+                    reward_list.append(r)
+                    log["ria"] += r
         return sum(reward_list)
 
     brm.calculate_reward = types.MethodType(_tracked_calculate, brm)
@@ -252,9 +258,14 @@ def audit(model_path, episodes, seed, output_json):
             per_step_busy[i].extend(out["busy_by_agent"][i])
             per_step_action_type[i].extend(out["action_type_by_agent"][i])
         per_step_phase.extend(out["phase_per_step"])
-        print(f"  ep {ep + 1}/{episodes}: r={out['reward']:.1f}  RIA={out['ria']:.0f}  LWF={out['lwf']:.0f}  ASF={out['asf']:.0f}", flush=True)
+        print(
+            f"  ep {ep + 1}/{episodes}: r={out['reward']:.1f}  RIA={out['ria']:.0f}  "
+            f"LWF={out['lwf']:.0f}  ASF={out['asf']:.0f}",
+            flush=True,
+        )
 
-    m = mean(per_ep_reward); s = stdev(per_ep_reward) if len(per_ep_reward) > 1 else 0.0
+    m = mean(per_ep_reward)
+    s = stdev(per_ep_reward) if len(per_ep_reward) > 1 else 0.0
     print(f"\nmodel:        {model_path}")
     print(f"mean reward:  {m:.2f} ± {s:.2f}")
     print(f"mean RIA:     {mean(per_ep_ria):.1f}")

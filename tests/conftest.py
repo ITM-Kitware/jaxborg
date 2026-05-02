@@ -14,8 +14,8 @@ import pytest  # noqa: E402
 
 from jaxborg.actions import apply_blue_action, apply_red_action  # noqa: E402
 from jaxborg.constants import NUM_BLUE_AGENTS, SUBNET_IDS  # noqa: E402
-from jaxborg.state import SimulatorState  # noqa: E402
 from jaxborg.scenarios.cc4.topology import build_topology  # noqa: E402
+from jaxborg.state import SimulatorState  # noqa: E402
 
 jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))

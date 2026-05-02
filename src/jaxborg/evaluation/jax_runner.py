@@ -20,9 +20,9 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
+from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import make_jax_policy
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
-from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 
 EPISODE_LENGTH = 500
 
