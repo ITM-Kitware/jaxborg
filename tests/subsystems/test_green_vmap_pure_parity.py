@@ -82,51 +82,71 @@ def test_vmap_matches_sequential_with_two_phishings_same_step():
     selection depends on the first's newly-created red session.
 
     Mechanism: pre-populate `green_randoms` so that two green agents on
-    different hosts in the same subnet both roll GREEN_LOCAL_WORK with
-    high success and a phishing trigger. The second's `_find_phishing_red_agent`
-    must see the red_session created by the first.
+    different hosts in the same subnet both roll GREEN_LOCAL_WORK with a
+    valid service, succeed, and trigger phishing. With `use_green_randoms=True`
+    the recorded fields drive the decision; field 5 (precomputed source) is
+    set to 0, which decodes to -1 after the `precomputed_src - 1` shift and
+    routes both paths through live `_find_phishing_red_agent` derivation.
+    The second host's source agent therefore depends on the first's
+    newly-created red session — the precise ordering case the regression
+    guards against.
     """
     state, const = _fresh_state()
 
-    # Find two active green hosts in the same subnet.
-    active_greens = [int(h) for h in range(GLOBAL_MAX_HOSTS) if bool(const.green_agent_active[h])]
+    # Need two greens in the same subnet, each with at least one active
+    # service (otherwise local-work cannot succeed and phishing never fires).
+    active_services_np = np.asarray(state.host_services)
+    candidates = [
+        int(h) for h in range(GLOBAL_MAX_HOSTS) if bool(const.green_agent_active[h]) and active_services_np[h].any()
+    ]
     pair = None
-    for i, h1 in enumerate(active_greens):
+    for i, h1 in enumerate(candidates):
         s1 = int(const.host_subnet[h1])
-        for h2 in active_greens[i + 1 :]:
+        for h2 in candidates[i + 1 :]:
             if int(const.host_subnet[h2]) == s1:
                 pair = (h1, h2)
                 break
         if pair:
             break
-    assert pair is not None, "test fixture: need two active greens in same subnet"
+    assert pair is not None, "fixture: need two greens in same subnet with active services"
     host_a, host_b = pair
+    svc_a = int(np.flatnonzero(active_services_np[host_a])[0])
+    svc_b = int(np.flatnonzero(active_services_np[host_b])[0])
 
-    # Pre-populate green_randoms: t=0 for both hosts, GREEN_LOCAL_WORK,
-    # service-token=0 (some service), reliability roll=0 (always succeed),
-    # phish-roll below PHISHING_ERROR_RATE so phishing triggers,
-    # source agent: 0 (1+0 in field 5 means red_agent_0 in CybORG-record convention,
-    # but since we want pure-mode to exercise live derivation, leave field 5 = 0
-    # meaning "no precomputed source").
     randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
-    for h in (host_a, host_b):
-        randoms[0, h, 0] = (GREEN_LOCAL_WORK + 0.5) / NUM_GREEN_ACTIONS  # action
-        randoms[0, h, 1] = 0  # service token = first
-        randoms[0, h, 2] = 0  # reliability roll = always succeed
-        randoms[0, h, 3] = 0.5  # FP roll (>0.01 => no FP)
-        randoms[0, h, 4] = PHISHING_ERROR_RATE * 0.1  # phish-roll < threshold => trigger
-        randoms[0, h, 5] = 0  # no precomputed source => exercise live derivation
-        randoms[0, h, 6] = 0.5  # access FP roll
-        randoms[0, h, 7] = 1  # pid delta
+    for h, svc in ((host_a, svc_a), (host_b, svc_b)):
+        # field 0 (action): floor(v * NUM_GREEN_ACTIONS) → GREEN_LOCAL_WORK
+        randoms[0, h, 0] = (GREEN_LOCAL_WORK + 0.5) / NUM_GREEN_ACTIONS
+        # field 1 (service token): with use_green_randoms=True, used as int directly
+        randoms[0, h, 1] = svc
+        # field 2 (reliability roll, int_range=100): 0 < reliability=100 → succeed
+        randoms[0, h, 2] = 0.0
+        # field 3 (FP roll, float): >= 0.01 → no FP
+        randoms[0, h, 3] = 0.5
+        # field 4 (phishing roll, float): < 0.01 → trigger phishing
+        randoms[0, h, 4] = PHISHING_ERROR_RATE * 0.1
+        # field 5 (precomputed source agent): 0 → -1 after shift → live derivation
+        randoms[0, h, 5] = 0
+        # field 6 (access FP roll): >= 0.01 → no FP
+        randoms[0, h, 6] = 0.5
+        # field 7 (pid delta, int_range=9 then +1): floor(0.5*9)+1 = 5
+        randoms[0, h, 7] = 0.5
 
-    const_pure = const.replace(
+    const_recorded = const.replace(
         green_randoms=jnp.array(randoms),
-        use_green_randoms=jnp.array(False),  # pure mode
+        use_green_randoms=jnp.array(True),
     )
 
     key = jax.random.PRNGKey(99)
-    state_seq = apply_green_agents(state, const_pure, key)
-    state_vmap = apply_green_agents_vmapped(state, const_pure, key)
+    state_seq = apply_green_agents(state, const_recorded, key)
+    state_vmap = apply_green_agents_vmapped(state, const_recorded, key)
+
+    # Sanity: both paths must actually create ≥2 new sessions, otherwise
+    # the test isn't exercising the two-phishing edge case at all.
+    new_seq = int(jnp.sum(state_seq.red_session_count) - jnp.sum(state.red_session_count))
+    new_vmap = int(jnp.sum(state_vmap.red_session_count) - jnp.sum(state.red_session_count))
+    assert new_seq >= 2, f"fixture failed to create two sequential sessions (got {new_seq})"
+    assert new_vmap >= 2, f"fixture failed to create two vmap sessions (got {new_vmap})"
 
     diffs = _state_diff(state_seq, state_vmap)
     assert not diffs, f"two-phishing same-step divergence: {diffs}"
