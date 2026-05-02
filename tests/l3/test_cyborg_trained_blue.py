@@ -49,7 +49,7 @@ class PPOAgent(nn.Module):
         features = self.features(x)
         logits = self.actor(features)
         if action_mask is not None:
-            logits = logits + (action_mask.float() - 1.0) * 1e8
+            logits = logits + (action_mask.float() - 1.0) * 1e10
         dist = Categorical(logits=logits)
         if action is None:
             action = dist.sample()
@@ -58,7 +58,7 @@ class PPOAgent(nn.Module):
     def get_deterministic_action(self, x, action_mask):
         features = self.features(x)
         logits = self.actor(features)
-        logits = logits + (action_mask.float() - 1.0) * 1e8
+        logits = logits + (action_mask.float() - 1.0) * 1e10
         return logits.argmax(dim=-1)
 
 

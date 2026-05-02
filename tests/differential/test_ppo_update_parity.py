@@ -76,7 +76,7 @@ class TinyPPOAgent(nn.Module):
         h = torch.tanh(self.fc2(h))
         logits = self.actor(h)
         # Match policies/shared_actor_critic.py masking convention.
-        logits = logits + (action_mask.float() - 1.0) * 1e8
+        logits = logits + (action_mask.float() - 1.0) * 1e10
         value = self.critic(h).squeeze(-1)
         return logits, value
 
@@ -110,9 +110,8 @@ def _make_minibatch(seed: int = 0):
     """Random fixed minibatch: matches what ppo_cleanrl_cyborg.py mb_* tensors look like."""
     rng = np.random.default_rng(seed)
     obs = rng.standard_normal((BATCH, OBS_DIM)).astype(np.float32)
-    # All actions valid (mask=1 everywhere). Avoids needing to handle the
-    # `1e8 vs 1e10` mask-fill convention asymmetry — that's a separate
-    # documented deviation tested elsewhere.
+    # All actions valid (mask=1 everywhere) so the test stays focused on PPO
+    # update math rather than invalid-action masking.
     mask = np.ones((BATCH, ACT_DIM), dtype=np.float32)
     actions = rng.integers(low=0, high=ACT_DIM, size=BATCH).astype(np.int64)
     old_logp = rng.standard_normal(BATCH).astype(np.float32) * 0.1 - np.log(ACT_DIM)

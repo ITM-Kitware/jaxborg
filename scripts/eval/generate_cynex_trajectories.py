@@ -20,7 +20,6 @@ Usage:
 import argparse
 import json
 import time
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +32,6 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
 from export_trajectory import (
     EPISODE_LENGTH,
     _build_trajectory_dict,
@@ -75,7 +73,7 @@ def _load_torch_model(path: str):
         def get_action(self, obs, action_mask, deterministic=False):
             features = self.features(obs)
             logits = self.actor(features)
-            logits = logits + (action_mask.float() - 1.0) * 1e8
+            logits = logits + (action_mask.float() - 1.0) * 1e10
             if deterministic:
                 return logits.argmax(dim=-1)
             dist = Categorical(logits=logits)
@@ -96,6 +94,7 @@ def _load_jax_model(path: str):
     # Lazy imports so the script works without JAX when only using --model-pt
     import distrax
     import jax
+
     from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 
     policy, params, recipe = load_jax_checkpoint(path)
@@ -136,7 +135,6 @@ def _build_mask_cache(wrapper, mappings, const):
     """Precompute CybORG-to-JAX action translation tables (from transfer.py)."""
 
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
-    from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 
     controller = wrapper.env.environment_controller
     cyborg_state = controller.state
@@ -212,13 +210,14 @@ def _get_jax_mask(wrapper, agent_name, mask_cache):
 def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
     """Filter no-op traffic actions from mask (from transfer.py)."""
     import jax.numpy as jnp
-    from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
+
     from jaxborg.actions.encoding import (
         BLUE_ALLOW_TRAFFIC_END,
         BLUE_ALLOW_TRAFFIC_START,
         BLUE_BLOCK_TRAFFIC_END,
         BLUE_BLOCK_TRAFFIC_START,
     )
+    from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
 
     offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
     src_offset = offsets // BLUE_MAX_OBSERVED_SUBNETS
@@ -240,6 +239,7 @@ def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
 def _cyborg_blocked_zones(controller):
     """Extract CybORG block state as (NUM_SUBNETS, NUM_SUBNETS) bool array."""
     import jax.numpy as jnp
+
     from jaxborg.constants import CYBORG_SUFFIX_TO_ID, NUM_SUBNETS
 
     blocked = jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
@@ -274,9 +274,8 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     import jax
     import jax.numpy as jnp
 
-
-    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
     from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     # Create env with BlueFlatWrapper (same as transfer.py)
     wrapper = make_cyborg_env(seed, steps)

@@ -134,7 +134,7 @@ class _TorchSeparateActorCritic(tnn.Module):
         action_mask: torch.Tensor,
         action: torch.Tensor | None = None,
     ):
-        logits = self.actor(self.actor_features(obs)) + (action_mask.float() - 1.0) * 1e8
+        logits = self.actor(self.actor_features(obs)) + (action_mask.float() - 1.0) * 1e10
         dist = Categorical(logits=logits)
         if action is None:
             action = dist.sample()
@@ -144,7 +144,7 @@ class _TorchSeparateActorCritic(tnn.Module):
         return action, log_prob, entropy, value
 
     def deterministic_action(self, obs: torch.Tensor, action_mask: torch.Tensor) -> torch.Tensor:
-        logits = self.actor(self.actor_features(obs)) + (action_mask.float() - 1.0) * 1e8
+        logits = self.actor(self.actor_features(obs)) + (action_mask.float() - 1.0) * 1e10
         return logits.argmax(dim=-1)
 
 
