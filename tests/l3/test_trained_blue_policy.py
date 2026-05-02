@@ -9,10 +9,12 @@ inference, and feeds the chosen actions to BOTH CybORG and JAX via the harness.
 Any state divergence is a real bug.
 
 Usage:
-    BLUE_CHECKPOINT=/path/to/checkpoint.pkl uv run pytest tests/l3/test_trained_blue_policy.py -v -x -n auto
+    JAXBORG_POLICY_CHECKPOINT=/path/to/model_<tag>.pkl \
+        uv run pytest -o addopts="" -m "" tests/l3/test_trained_blue_policy.py -v -x -n auto
 """
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 import jax
@@ -25,51 +27,18 @@ from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 from jaxborg.observations import get_blue_obs
 from tests.differential.harness import CC4DifferentialHarness
-from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
+from tests.differential.state_comparator import format_diffs
 
-pytestmark = pytest.mark.skip(reason="excluded from default suite; needs retrained checkpoint")
-
-
-# --- Checkpoint discovery ---
-
-_DEFAULT_CHECKPOINT_DIRS = [
-    Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")),
-    Path.home() / "src" / "cyber" / "jaxborg-exp",
-]
-
-
-def _find_latest_checkpoint() -> Path | None:
-    """Find the most recent .pkl checkpoint across experiment dirs."""
-    best = None
-    best_mtime = 0
-    for exp_dir in _DEFAULT_CHECKPOINT_DIRS:
-        if not exp_dir.exists():
-            continue
-        for pkl in exp_dir.rglob("checkpoint_*.pkl"):
-            mtime = pkl.stat().st_mtime
-            if mtime > best_mtime:
-                best = pkl
-                best_mtime = mtime
-    return best
-
-
-def _get_checkpoint_path() -> Path | None:
-    """Get checkpoint from env var or auto-discover latest."""
-    env_path = os.environ.get("BLUE_CHECKPOINT")
-    if env_path:
-        p = Path(env_path)
-        if p.exists():
-            return p
-        return None
-    return _find_latest_checkpoint()
+pytestmark = pytest.mark.slow
 
 
 # --- Policy loading ---
 
 
-def _make_inference_fn(checkpoint_path: Path):
+@lru_cache(maxsize=4)
+def _make_inference_fn(checkpoint_path: str):
     """Build a JIT-compiled deterministic inference function from a recipe checkpoint."""
-    policy, params, _recipe = load_jax_checkpoint(checkpoint_path)
+    policy, params, _recipe = load_jax_checkpoint(Path(checkpoint_path))
 
     def _fwd(o, m):
         pi, _ = policy.apply(params, o, m)
@@ -85,18 +54,21 @@ def _make_inference_fn(checkpoint_path: Path):
 
 # --- Test ---
 
-CHECKPOINT_PATH = _get_checkpoint_path()
+CHECKPOINT_ENV = "JAXBORG_POLICY_CHECKPOINT"
+CHECKPOINT_PATH = Path(os.environ[CHECKPOINT_ENV]).expanduser() if os.environ.get(CHECKPOINT_ENV) else None
 SEEDS = list(range(100))
 STEPS = 500
 
 skip_reason = None
 if CHECKPOINT_PATH is None:
-    skip_reason = "No checkpoint found. Set BLUE_CHECKPOINT=/path/to/checkpoint.pkl"
+    skip_reason = f"Set {CHECKPOINT_ENV}=/path/to/model_<tag>.pkl"
+elif not CHECKPOINT_PATH.exists():
+    skip_reason = f"{CHECKPOINT_ENV} does not exist: {CHECKPOINT_PATH}"
 
 
-def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
+def _run_trained_episode(seed, max_steps, checkpoint_path):
     """Run a single episode with the trained policy driving blue actions."""
-    inference_fn = _make_inference_fn(checkpoint_path)
+    inference_fn = _make_inference_fn(str(checkpoint_path))
 
     harness = CC4DifferentialHarness(
         seed=seed,
@@ -125,11 +97,7 @@ def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
         # Step both envs with the same blue actions
         result = harness.full_step(blue_actions=actions)
 
-        # mismatch_mode="all" treats warnings as errors
-        if strict:
-            error_diffs = result.diffs
-        else:
-            error_diffs = [d for d in result.diffs if d.field_name in _ERROR_FIELDS]
+        error_diffs = result.diffs
         if error_diffs:
             d = error_diffs[0]
             detail = format_diffs(result.diffs)
@@ -144,7 +112,7 @@ def _run_trained_episode(seed, max_steps, checkpoint_path, strict=False):
 
 @pytest.mark.skipif(skip_reason is not None, reason=skip_reason or "")
 class TestTrainedBluePolicy:
-    """Run trained IPPO policy through differential harness.
+    """Run trained IPPO policy through strict differential harness.
 
     The policy makes correlated action sequences that exercise specific
     blue action combinations (analyse→remove→restore, decoy placement,
@@ -154,12 +122,3 @@ class TestTrainedBluePolicy:
     @pytest.mark.parametrize("seed", SEEDS, ids=[f"seed_{s:02d}" for s in SEEDS])
     def test_episode(self, seed):
         _run_trained_episode(seed=seed, max_steps=STEPS, checkpoint_path=CHECKPOINT_PATH)
-
-
-@pytest.mark.skipif(skip_reason is not None, reason=skip_reason or "")
-class TestTrainedBluePolicyStrict:
-    """Same as above but warnings are treated as errors (mismatch_mode=all)."""
-
-    @pytest.mark.parametrize("seed", list(range(10)), ids=[f"seed_{s:02d}" for s in range(10)])
-    def test_episode_strict(self, seed):
-        _run_trained_episode(seed=seed, max_steps=STEPS, checkpoint_path=CHECKPOINT_PATH, strict=True)
