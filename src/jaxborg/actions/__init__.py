@@ -88,7 +88,13 @@ def apply_red_action(
     return jax.lax.switch(branch_idx, branches, state)
 
 
-def apply_blue_action(state: SimulatorState, const: SimulatorConst, agent_id: int, action_idx: int, key=None) -> SimulatorState:
+def apply_blue_action(
+    state: SimulatorState,
+    const: SimulatorConst,
+    agent_id: int,
+    action_idx: int,
+    key=None,
+) -> SimulatorState:
     action_type, target_host, decoy_type, src_subnet, dst_subnet = decode_blue_action(action_idx, agent_id, const)
 
     branches = [

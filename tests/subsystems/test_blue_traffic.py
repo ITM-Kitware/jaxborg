@@ -17,8 +17,8 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, NUM_SUBNETS, SUBNET_IDS
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.state import create_initial_state
 
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 

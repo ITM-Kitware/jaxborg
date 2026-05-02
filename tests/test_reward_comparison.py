@@ -53,8 +53,8 @@ def cyborg_flat_env():
 def jax_fsm_from_cyborg(cyborg_flat_env):
     from jaxborg.env import ScenarioEnvState, _init_red_state
     from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-    from jaxborg.state import create_initial_state
     from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.state import create_initial_state
 
     const = build_const_from_cyborg(cyborg_flat_env.env)
     state = create_initial_state()

@@ -24,13 +24,11 @@ from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import apply_red_session_check
-from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER, TOTAL_ACTION_ACTOR_SLOTS
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
-from jaxborg.scenarios.config import ScenarioConfig
-from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
+from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.scenarios.cc4.topology import (
     build_topology,
     cyborg_bank_index_from_key,
@@ -38,6 +36,8 @@ from jaxborg.scenarios.cc4.topology import (
     get_cyborg_red_policy_random_bank,
     get_cyborg_topology_bank,
 )
+from jaxborg.scenarios.config import ScenarioConfig
+from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
 
 
 def _frontload_order(front_slots: tuple[int, ...], total_slots: int = TOTAL_ACTION_ACTOR_SLOTS) -> jnp.ndarray:
@@ -170,7 +170,8 @@ def apply_all_actions_typed(
     then by insertion order (blue 0-4, green hosts, red 0-5). After traffic-control
     blue agents, the order is always: remaining blue → green → red.
     """
-    del execution_order  # Accepted for API compat with apply_all_actions_in_order; this path derives ordering internally.
+    # Accepted for API compat with apply_all_actions_in_order; this path derives ordering internally.
+    del execution_order
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
 

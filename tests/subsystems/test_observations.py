@@ -17,8 +17,8 @@ from jaxborg.constants import (
     SUBNET_IDS,
 )
 from jaxborg.observations import JAX_ID_TO_CYBORG_POS, get_blue_obs
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import BLUE_AGENT_SUBNETS, build_const_from_cyborg
+from jaxborg.state import create_initial_state
 
 OBS_SIZE = 210
 NUM_MESSAGES = 4
