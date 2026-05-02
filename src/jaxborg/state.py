@@ -64,8 +64,6 @@ class SimulatorConst:
     use_red_session_check_choices: chex.Array  # scalar bool — use precomputed session-check
     blue_decoy_type_choices: chex.Array  # (max_steps, num_blue_agents) int32 — precomputed decoy type index
     use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
-    green_host_order: chex.Array  # (max_steps, total_action_actor_slots) int32 — per-step full execution order
-    use_green_host_order: chex.Array  # scalar bool — True = use CybORG-synced order, False = default order
     red_exploit_session_choices: chex.Array  # (max_steps, num_red_agents) int32 — precomputed session choice index
     use_red_exploit_session_choices: chex.Array  # scalar bool — True = use precomputed session choice
 
@@ -223,8 +221,6 @@ def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorConst:
         use_red_session_check_choices=jnp.array(False),
         blue_decoy_type_choices=jnp.zeros((max_steps, n_blue), dtype=jnp.int32),
         use_blue_decoy_type_choices=jnp.array(False),
-        green_host_order=jnp.zeros((max_steps, cfg.total_action_actor_slots), dtype=jnp.int32),
-        use_green_host_order=jnp.array(False),
         red_exploit_session_choices=jnp.zeros((max_steps, n_red), dtype=jnp.int32),
         use_red_exploit_session_choices=jnp.array(False),
     )
@@ -284,16 +280,10 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         ),
         red_next_abstract_rank=jnp.zeros(n_red, dtype=jnp.int32),
         red_session_pids=jnp.full((n_red, n_hosts, cfg.max_tracked_session_pids), -1, dtype=jnp.int32),
-        red_session_abstract_pids=jnp.full(
-            (n_red, n_hosts, cfg.max_tracked_session_pids), -1, dtype=jnp.int32
-        ),
-        red_session_privileged_pids=jnp.full(
-            (n_red, n_hosts, cfg.max_tracked_session_pids), -1, dtype=jnp.int32
-        ),
+        red_session_abstract_pids=jnp.full((n_red, n_hosts, cfg.max_tracked_session_pids), -1, dtype=jnp.int32),
+        red_session_privileged_pids=jnp.full((n_red, n_hosts, cfg.max_tracked_session_pids), -1, dtype=jnp.int32),
         red_next_pid=jnp.array(5000, dtype=jnp.int32),
-        blue_suspicious_pids=jnp.full(
-            (n_blue, n_hosts, cfg.max_tracked_suspicious_pids), -1, dtype=jnp.int32
-        ),
+        blue_suspicious_pids=jnp.full((n_blue, n_hosts, cfg.max_tracked_suspicious_pids), -1, dtype=jnp.int32),
         host_process_creation_pids=jnp.full((n_hosts, cfg.max_tracked_suspicious_pids), -1, dtype=jnp.int32),
         host_decoy_process_pids=jnp.full((n_hosts, n_decoys), -1, dtype=jnp.int32),
         host_orphaned_decoy_max_pid=jnp.zeros(n_hosts, dtype=jnp.int32),

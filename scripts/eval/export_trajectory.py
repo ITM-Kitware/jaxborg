@@ -183,13 +183,9 @@ def extract_topology(cyborg: CybORG) -> dict:
         system_info = {
             "Hostname": hostname,
             "OSType": host.os_type.name if hasattr(host.os_type, "name") else str(host.os_type),
-            "OSDistribution": host.distribution.name
-            if hasattr(host.distribution, "name")
-            else str(host.distribution),
+            "OSDistribution": host.distribution.name if hasattr(host.distribution, "name") else str(host.distribution),
             "OSVersion": host.version.name if hasattr(host.version, "name") else str(host.version),
-            "Architecture": host.architecture.name
-            if hasattr(host.architecture, "name")
-            else str(host.architecture),
+            "Architecture": host.architecture.name if hasattr(host.architecture, "name") else str(host.architecture),
         }
 
         topology[hostname] = {
@@ -453,9 +449,17 @@ def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) 
             break
 
     return _build_trajectory_dict(
-        episode_num, seed, actual_steps, "SleepAgent",
-        blue_agents, red_agents, green_agents,
-        topology, subnet_metadata, agent_actions, step_states,
+        episode_num,
+        seed,
+        actual_steps,
+        "SleepAgent",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
     )
 
 
@@ -560,16 +564,32 @@ def run_episode_policy(
             break
 
     return _build_trajectory_dict(
-        episode_num, seed, actual_steps, "PPO",
-        blue_agents, red_agents, green_agents,
-        topology, subnet_metadata, agent_actions, step_states,
+        episode_num,
+        seed,
+        actual_steps,
+        "PPO",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
     )
 
 
 def _build_trajectory_dict(
-    episode_num, seed, actual_steps, blue_agent_name,
-    blue_agents, red_agents, green_agents,
-    topology, subnet_metadata, agent_actions, step_states,
+    episode_num,
+    seed,
+    actual_steps,
+    blue_agent_name,
+    blue_agents,
+    red_agents,
+    green_agents,
+    topology,
+    subnet_metadata,
+    agent_actions,
+    step_states,
 ) -> dict:
     """Build the V2 trajectory dict from collected episode data."""
     # Build flattened backward-compat arrays (interleaved all blue / all red)

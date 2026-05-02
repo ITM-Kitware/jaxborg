@@ -22,7 +22,6 @@ from jaxborg.constants import (
     SERVICE_NAMES,
     SUBNET_IDS,
     SUBNET_NAMES,
-    TOTAL_ACTION_ACTOR_SLOTS,
 )
 
 _ROUTER_LINKS = {
@@ -648,8 +647,6 @@ def build_const_arrays_from_cyborg(cyborg_env) -> dict:
         "use_red_session_check_choices": np.array(False),
         "blue_decoy_type_choices": np.zeros((MAX_STEPS, NUM_BLUE_AGENTS), dtype=np.int32),
         "use_blue_decoy_type_choices": np.array(False),
-        "green_host_order": np.zeros((MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS), dtype=np.int32),
-        "use_green_host_order": np.array(False),
         "red_exploit_session_choices": np.zeros((MAX_STEPS, NUM_RED_AGENTS), dtype=np.int32),
         "use_red_exploit_session_choices": np.array(False),
     }
