@@ -24,37 +24,42 @@ CybORG CC4 is a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 bl
 
 #### TOST Equivalence
 
-We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-sided t-test) equivalence procedure from [Karten et al. (2026)](https://arxiv.org/abs/2603.12145): run the same trained policy independently on both engines and test whether mean reward difference falls within ±Δ with 95% confidence.
+We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-sided t-test) equivalence procedure from [Karten et al. (2026)](https://arxiv.org/abs/2603.12145). Two independent claims:
 
-Stochastic, 95% confidence, Δ=±200:
+| comparison                                                                | n   | gap         | TOST                            | verdict                            |
+| ------------------------------------------------------------------------- | --: | ----------: | ------------------------------- | ---------------------------------- |
+| Same trained policy, jaxborg vs CybORG env (3 seeds × n=100, pure mode)   | 300 |  +109 ± 30  | Δ=±284, p=2.8e-7                | **EQUIVALENT**                     |
+| Cross-policy matched training: jaxborg-trained vs CybORG-trained, on CybORG env (3 seeds × n=100, paired) | 300 |   +5.4 ± 58 | Δ=±200, p=4e-4 / Δ=±284, p<1e-6 | **EQUIVALENT** at Δ=±200 and ±284  |
 
-| Policy               | Episodes | jaxborg | CybORG |  Gap | 95% CI          | Verdict        |
-| -------------------- | -------: | ------: | -----: | ---: | --------------- | -------------- |
-| IPPO 20M (cyborg_bank) |       30 |  -3,696 | -2,976 | -720 | [-1142, -297]   | NOT EQUIVALENT |
+Δ=±84 = 2σ across same-backend seed means (noise floor); Δ=±284 = 5% of the sleep→trained learnable signal span. See [`docs/parity.md`](docs/parity.md) for the full per-test parity index and tolerances.
 
 #### Training Comparison
 
-| Run          | Reward | Steps |
-| ------------ | -----: | ----- |
-| CybORG PPO   | -1,641 | 20M   |
-| jaxborg IPPO | -1,302 | 20M   |
+Matched-hyperparameter training (NUM_ENVS=48, 3 seeds, same shared-trunk actor-critic, identical PPO hparams). Reward is the mean training-time episode reward at 3M steps; each policy is on the env it trained against (the ~145-pt gap between the two columns reflects independent green-RNG host-selection between engines, not a parity bug — see [`docs/parity.md`](docs/parity.md)).
+
+| Run          |          Reward (mean ± σ across 3 seeds) | Steps |
+| ------------ | ----------------------------------------: | ----- |
+| CybORG PPO   | -1,854 ± 46                               | 3M    |
+| jaxborg IPPO | -1,998 ± 118                              | 3M    |
+
+When *both* policies are eval'd on the same env (CybORG) for 100 paired episodes per seed, the cross-policy gap is **+5.4 ± 58 pts** (n=300), TOST-equivalent at Δ=±200 — the two trained policies are statistically interchangeable.
 
 #### Action Distribution
 
-Both engines produce the same learned defensive strategy (decision steps only, filtering out busy ticks; 30 episodes):
+Both engines produce essentially the same learned defensive strategy. Pooled across 3 seeds × 5 blue agents × 100 eps each on CybORG env, decisions only (busy ticks filtered):
 
 | Action       | jaxborg | CybORG | Delta |
 | ------------ | ------: | -----: | ----: |
-| Analyse      |   20.9% |  21.1% | -0.2% |
-| Remove       |   22.1% |  22.5% | -0.4% |
-| Decoy        |   28.4% |  28.7% | -0.3% |
-| AllowTraffic |   19.1% |  18.4% | +0.7% |
-| BlockTraffic |    3.3% |   3.2% | +0.1% |
-| Restore      |    1.9% |   1.9% | +0.0% |
-| Sleep        |    2.3% |   2.2% | +0.1% |
-| Monitor      |    1.9% |   2.0% | -0.1% |
+| Analyse      |   21.2% |  19.9% | +1.3% |
+| Remove       |   20.0% |  18.9% | +1.2% |
+| Decoy        |   22.3% |  23.8% | -1.5% |
+| AllowTraffic |   15.1% |  13.9% | +1.2% |
+| BlockTraffic |   10.1% |  11.8% | -1.7% |
+| Restore      |    7.0% |   7.5% | -0.5% |
+| Sleep        |    2.2% |   1.9% | +0.2% |
+| Monitor      |    2.1% |   2.4% | -0.3% |
 
-All action types within ~0.7% across backends.
+All buckets within ~1.7%. Pooled L1 distribution distance = 0.079 (max 2.0). Action entropy is also matched: jaxborg 1.852 nats / CybORG 1.862 nats (Hill diversity 6.37 / 6.44 effective action types out of 8).
 
 ## Setup
 
@@ -71,21 +76,51 @@ uv run pytest            # default: -n auto -m 'not slow'
 uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
 uv run pytest -m ""      # everything
 
-# Train jaxborg IPPO
-uv run python scripts/train/ippo_jax.py TOTAL_TIMESTEPS=50000000
+# Train jaxborg IPPO (recipe-driven; see `recipes/<name>.yaml`)
+./scripts/train/run.sh jax default 42
 
-# Evaluate a trained policy (independent rollouts on both engines + TOST)
+# Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
+./scripts/train/run.sh cleanrl default 42
+
+# Multi-seed sweep (3 seeds, parallel for cleanrl, sequential under srun for jax)
+./scripts/train/run_seeds.sh cleanrl default 3 0
+./scripts/train/run_seeds.sh jax default 3 0
+
+# Evaluate any policy on CybORG via recipe sidecar
+# (.pt → torch state_dict; .pkl → JAX Flax params with action translation)
+uv run python scripts/eval/eval_recipe.py \
+    --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
+    --episodes 10 --seeds 42-141
+
+uv run python scripts/eval/eval_recipe.py \
+    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
+    --episodes 10 --seeds 42-141
+
+# Independent rollouts on both engines + TOST (JAX checkpoints only)
 JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
-    --checkpoint jaxborg-exp/<run>/checkpoint_final.pkl \
+    --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
     --episodes 100
-
-# Train CybORG PPO baseline (CPU-only, CleanRL)
-JAX_PLATFORMS=cpu uv run python scripts/train/ppo_cleanrl_cyborg.py \
-    --total-timesteps 20000000 --num-epochs 4 --num-minibatches 16 \
-    --no-anneal-lr
 ```
 
-Training output goes to `../jaxborg-exp/`.
+Training output goes to `$JAXBORG_EXP_DIR` (defaults to `../jaxborg-exp/`).
+
+## Recipes
+
+A recipe is a single YAML under `recipes/` that drives both backends. The `algorithm:` key picks the trainer (`scripts/train/algorithms/<algorithm>_<backend>.py`); `arch.name` picks the policy from the `src/jaxborg/policies/` registry; `core` / `train` / `jax` / `cleanrl` sections project to backend-specific PPO config.
+
+```yaml
+# recipes/default.yaml — Matched-Training v2 baseline
+algorithm: ippo
+core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
+arch:    {name: shared, hidden_dim: 256, hidden_layers: 2}
+train:   {episode_length: 500, total_timesteps: 3000000}
+jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
+cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
+```
+
+Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and `transfer.py` — pre-sidecar checkpoints no longer load.
+
+Add a new arch: drop a module under `src/jaxborg/policies/` exporting `JAX_FACTORY` + `TORCH_FACTORY`, register it in `policies/__init__.py`, then reference it as `arch.name: <new>` in any recipe.
 
 ## Network Architecture
 

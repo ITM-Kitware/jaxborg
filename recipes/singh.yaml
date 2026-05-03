@@ -1,0 +1,54 @@
+meta:
+  name: singh
+  source: "Singh et al., arXiv:2410.17351, AAMAS 2025"
+  added: 2026-04-30
+  notes: |
+    Flat IPPO recipe targeting the Singh paper's -180 ± 93 reward band —
+    ~10× better in magnitude than the matched-v2 plateau (~-1850) that
+    `default.yaml` reproduces. Different objective: `default` validates
+    the new training stack reproduces pre-refactor behavior; `singh`
+    attempts a new capability (paper-scale convergence) we have not yet
+    achieved in-repo.
+
+    Paper-stated hyperparameters only; knobs the paper does not state
+    inherit from trainer defaults. Key paper levers vs matched-v2:
+      lr 5e-5 (vs 3e-4), 30 SGD iters / 1M-sample buffer (vs 4 epochs ×
+      16 mb), separate actor / critic networks (vs shared trunk),
+      no entropy bonus (vs ent_coef=0.01).
+
+algorithm: ippo
+
+core:
+  lr: 5.0e-5
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  norm_rewards: true
+
+arch:
+  name: separate
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 1000000
+  minibatch_size: 32768
+  sgd_iterations: 30
+  total_timesteps: 50000000
+
+jax:
+  num_envs: 400              # 400 * 500 * 5 agents = 1M (matches train.buffer_size)
+  num_minibatches: 32        # 1M / 32 = 31,250 ≈ minibatch_size (32 is closest divisor)
+  update_epochs: 1           # 32 SGD iters ≈ sgd_iterations
+  topology_mode: generative
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 20               # tuned for 64-core box; rollouts accumulate to buffer_size
+  rollout_length: 500
+  num_minibatches: 32
+  num_epochs: 1

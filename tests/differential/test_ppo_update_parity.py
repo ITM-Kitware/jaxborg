@@ -8,8 +8,9 @@ and compare:
   2. Post-Adam-step parameters    (≤1e-4 tolerance)
 
 The two loss bodies are inlined faithfully from
-`scripts/train/ippo_jax.py::_loss_fn` (default config, no busy mask, no
-value clipping) and `scripts/train/ppo_cleanrl_cyborg.py` PPO update.
+`scripts/train/algorithms/ippo_jax.py::_loss_fn` (default config, no busy
+mask, no value clipping) and `scripts/train/algorithms/ippo_cyborg.py` PPO
+update.
 
 This test fails if the two loss math implementations diverge on identical
 inputs — isolating the −227 pt matched-training gap from rollout
@@ -33,9 +34,9 @@ import torch
 import torch.nn as nn
 from flax.training.train_state import TrainState
 
-from jaxborg.policy import SharedActorCritic
+from jaxborg.policies import make_jax_policy
 
-# Align with `scripts/train/ppo_cleanrl_agent.py::PPOAgent`.
+# Align with `src/jaxborg/policies/shared_actor_critic.py` (torch factory).
 HIDDEN_DIM = 32
 OBS_DIM = 16
 ACT_DIM = 8
@@ -74,14 +75,14 @@ class TinyPPOAgent(nn.Module):
         h = torch.tanh(self.fc1(obs))
         h = torch.tanh(self.fc2(h))
         logits = self.actor(h)
-        # Match ppo_cleanrl_agent.py masking convention.
+        # Match policies/shared_actor_critic.py masking convention.
         logits = logits + (action_mask.float() - 1.0) * 1e8
         value = self.critic(h).squeeze(-1)
         return logits, value
 
 
 def _torch_to_flax_params(torch_agent: TinyPPOAgent) -> dict:
-    """Convert TinyPPOAgent state_dict → SharedActorCritic params pytree.
+    """Convert TinyPPOAgent state_dict → "shared" arch params pytree.
 
     Flax Dense uses kernel (in, out); torch Linear uses weight (out, in).
     Flax @nn.compact ordering puts the four Dense layers as
@@ -187,7 +188,7 @@ def test_forward_pass_parity():
     torch.manual_seed(0)
     agent = TinyPPOAgent()
     flax_params = _torch_to_flax_params(agent)
-    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    network = make_jax_policy("shared", action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, hidden_layers=2, activation="tanh")
 
     obs, actions, mask, *_ = _make_minibatch(seed=0)
 
@@ -215,7 +216,7 @@ def test_ppo_minibatch_update_parity():
     torch.manual_seed(0)
     agent = TinyPPOAgent()
     flax_params = _torch_to_flax_params(agent)
-    network = SharedActorCritic(action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, activation="tanh")
+    network = make_jax_policy("shared", action_dim=ACT_DIM, hidden_dim=HIDDEN_DIM, hidden_layers=2, activation="tanh")
 
     obs, actions, mask, old_lp, mb_adv, mb_ret, mb_val_old = _make_minibatch(seed=0)
 
@@ -325,7 +326,7 @@ def test_advantage_normalization_ddof_audit():
 
     This test demonstrates the bias direction (torch.std > jnp.std) and
     the magnitude. It also verifies that `unbiased=False` brings the two
-    into byte-equivalence — the fix applied to `ppo_cleanrl_cyborg.py`.
+    into byte-equivalence — the fix applied to `algorithms/ippo_cyborg.py`.
     """
     rng = np.random.default_rng(0)
     for n in (128, 7500):

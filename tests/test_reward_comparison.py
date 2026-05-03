@@ -51,16 +51,16 @@ def cyborg_flat_env():
 
 @pytest.fixture
 def jax_fsm_from_cyborg(cyborg_flat_env):
-    from jaxborg.env import CC4EnvState, _init_red_state
-    from jaxborg.fsm_red_env import FsmRedCC4Env
+    from jaxborg.env import ScenarioEnvState, _init_red_state
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
     from jaxborg.state import create_initial_state
-    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     const = build_const_from_cyborg(cyborg_flat_env.env)
     state = create_initial_state()
     state = state.replace(host_services=jnp.array(const.initial_services))
     state = _init_red_state(const, state)
-    env_state = CC4EnvState(state=state, const=const)
+    env_state = ScenarioEnvState(state=state, const=const)
 
     env = FsmRedCC4Env(num_steps=500)
     return env, env_state

@@ -24,19 +24,14 @@ from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import apply_red_session_check
-from jaxborg.agents.fsm_red import fsm_red_init_states
-from jaxborg.constants import (
-    BLUE_OBS_SIZE,
-    COMPROMISE_USER,
-    GLOBAL_MAX_HOSTS,
-    NUM_BLUE_AGENTS,
-    NUM_RED_AGENTS,
-)
+from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
+from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER, TOTAL_ACTION_ACTOR_SLOTS
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
-from jaxborg.state import CC4Const, CC4State, create_initial_state
-from jaxborg.topology import (
+from jaxborg.scenarios.config import ScenarioConfig
+from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
+from jaxborg.scenarios.cc4.topology import (
     build_topology,
     cyborg_bank_index_from_key,
     get_cyborg_green_random_bank,
@@ -44,15 +39,13 @@ from jaxborg.topology import (
     get_cyborg_topology_bank,
 )
 
-TOTAL_ACTION_ACTOR_SLOTS = NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS + NUM_RED_AGENTS
 
-
-def _frontload_order(front_slots: tuple[int, ...]) -> jnp.ndarray:
-    slots = [slot for slot in range(TOTAL_ACTION_ACTOR_SLOTS) if slot not in front_slots]
+def _frontload_order(front_slots: tuple[int, ...], total_slots: int = TOTAL_ACTION_ACTOR_SLOTS) -> jnp.ndarray:
+    slots = [slot for slot in range(total_slots) if slot not in front_slots]
     return jnp.array([*front_slots, *slots], dtype=jnp.int32)
 
 
-def _cyborg_priority_execution_order(blue_actions: jnp.ndarray) -> jnp.ndarray:
+def _cyborg_priority_execution_order(blue_actions: jnp.ndarray, total_slots: int) -> jnp.ndarray:
     """Build execution order matching CybORG's deterministic priority sort.
 
     CybORG sorts actions by priority (stable sort):
@@ -62,18 +55,19 @@ def _cyborg_priority_execution_order(blue_actions: jnp.ndarray) -> jnp.ndarray:
     Within the same priority tier the original agent-interface insertion order
     is preserved (blue 0-4, then green hosts, then red 0-5).
     """
-    all_slots = jnp.arange(TOTAL_ACTION_ACTOR_SLOTS, dtype=jnp.int32)
+    n_blue = blue_actions.shape[0]
+    all_slots = jnp.arange(total_slots, dtype=jnp.int32)
     # Blue agents doing BlockTraffic or AllowTraffic have priority 1.
     is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
     # Build priority: 1 for traffic-control blue slots, 99 for everything else.
-    priorities = jnp.full(TOTAL_ACTION_ACTOR_SLOTS, 99, dtype=jnp.int32)
-    priorities = priorities.at[:NUM_BLUE_AGENTS].set(jnp.where(is_traffic, 1, 99))
+    priorities = jnp.full(total_slots, 99, dtype=jnp.int32)
+    priorities = priorities.at[:n_blue].set(jnp.where(is_traffic, 1, 99))
     return all_slots[jnp.argsort(priorities, stable=True)]
 
 
 def apply_all_actions_in_order(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -82,11 +76,15 @@ def apply_all_actions_in_order(
     forced_primary_pids: jnp.ndarray,
     execution_order: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
-) -> CC4State:
+) -> SimulatorState:
     """Apply one CybORG step using an explicit chosen-action execution order."""
+    n_blue = blue_actions.shape[0]
+    n_red = red_actions.shape[0]
+    n_hosts = const.host_active.shape[0]
+    total_slots = n_blue + n_hosts + n_red
     if blue_keys is None:
-        blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
-    green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
+        blue_keys = jax.random.split(jax.random.PRNGKey(0), n_blue)
+    green_keys = jax.random.split(key_green, n_hosts)
 
     # CybORG calls get_action() for ALL agents before any execute().
     # Snapshot creation-time parameters from pre-execution state so red
@@ -95,12 +93,12 @@ def apply_all_actions_in_order(
 
     def step_actor(step_idx, carry_state):
         actor_slot = execution_order[step_idx]
-        blue_id = jnp.clip(actor_slot, 0, NUM_BLUE_AGENTS - 1)
-        green_host = jnp.clip(actor_slot - NUM_BLUE_AGENTS, 0, GLOBAL_MAX_HOSTS - 1)
-        red_id = jnp.clip(actor_slot - NUM_BLUE_AGENTS - GLOBAL_MAX_HOSTS, 0, NUM_RED_AGENTS - 1)
+        blue_id = jnp.clip(actor_slot, 0, n_blue - 1)
+        green_host = jnp.clip(actor_slot - n_blue, 0, n_hosts - 1)
+        red_id = jnp.clip(actor_slot - n_blue - n_hosts, 0, n_red - 1)
 
-        is_blue = actor_slot < NUM_BLUE_AGENTS
-        is_green = (actor_slot >= NUM_BLUE_AGENTS) & (actor_slot < NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS)
+        is_blue = actor_slot < n_blue
+        is_green = (actor_slot >= n_blue) & (actor_slot < n_blue + n_hosts)
 
         return jax.lax.cond(
             is_blue,
@@ -124,16 +122,16 @@ def apply_all_actions_in_order(
             carry_state,
         )
 
-    state = jax.lax.fori_loop(0, TOTAL_ACTION_ACTOR_SLOTS, step_actor, state)
+    state = jax.lax.fori_loop(0, total_slots, step_actor, state)
 
     # red_server_session_count is now maintained as a cumulative counter:
     # incremented in green_vmap (phishing) and reassignment (session transfer).
     # No HWM update needed here.
 
     state = reassign_cross_subnet_sessions(state, const)
-    for b in range(NUM_BLUE_AGENTS):
+    for b in range(n_blue):
         state = apply_blue_monitor(state, const, b)
-    for r in range(NUM_RED_AGENTS):
+    for r in range(n_red):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
         state = apply_red_session_check(state, const, r, session_check_key)
 
@@ -148,8 +146,8 @@ def apply_all_actions_in_order(
 
 
 def apply_all_actions_typed(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -160,7 +158,7 @@ def apply_all_actions_typed(
     blue_keys: jnp.ndarray = None,
     *,
     use_green_vmap: bool = True,
-) -> CC4State:
+) -> SimulatorState:
     """Apply one CybORG step using typed loops (no cond dispatch).
 
     Splits the monolithic fori_loop into 3 typed phases matching CybORG's
@@ -172,7 +170,10 @@ def apply_all_actions_typed(
     then by insertion order (blue 0-4, green hosts, red 0-5). After traffic-control
     blue agents, the order is always: remaining blue → green → red.
     """
-    green_keys = jax.random.split(key_green, GLOBAL_MAX_HOSTS)
+    n_blue = blue_actions.shape[0]
+    n_red = red_actions.shape[0]
+    n_hosts = const.host_active.shape[0]
+    green_keys = jax.random.split(key_green, n_hosts)
 
     # CybORG sorts actions by priority (ControlTraffic=1, else=99) then
     # executes in deterministic agent-interface insertion order within each
@@ -182,20 +183,20 @@ def apply_all_actions_typed(
 
     # --- Phase 1: Blue agents (traffic-control first, then others) ---
     is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
-    blue_order = jnp.arange(NUM_BLUE_AGENTS, dtype=jnp.int32)
+    blue_order = jnp.arange(n_blue, dtype=jnp.int32)
     blue_priority = jnp.where(is_traffic, 0, 1)
     # Deterministic sort by priority; stable sort preserves agent index order
     # within the same tier, matching CybORG's dict insertion order.
     blue_order = blue_order[jnp.argsort(blue_priority, stable=True)]
 
     if blue_keys is None:
-        blue_keys = jax.random.split(jax.random.PRNGKey(0), NUM_BLUE_AGENTS)
+        blue_keys = jax.random.split(jax.random.PRNGKey(0), n_blue)
 
     def blue_step(i, carry_state):
         b = blue_order[i]
         return process_blue_with_duration(carry_state, const, b, blue_actions[b], blue_keys[b])
 
-    state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, blue_step, state)
+    state = jax.lax.fori_loop(0, n_blue, blue_step, state)
 
     # --- Phase 2: Green agents ---
     # Use vmapped green in pure/training mode (faster, training-correct).
@@ -225,7 +226,7 @@ def apply_all_actions_typed(
         state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
 
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
-    red_order = jnp.arange(NUM_RED_AGENTS, dtype=jnp.int32)
+    red_order = jnp.arange(n_red, dtype=jnp.int32)
 
     def red_step(i, carry_state):
         r = red_order[i]
@@ -241,7 +242,7 @@ def apply_all_actions_typed(
             creation_visible_sessions_override=pre_green_visible_sessions[r],
         )
 
-    state = jax.lax.fori_loop(0, NUM_RED_AGENTS, red_step, state)
+    state = jax.lax.fori_loop(0, n_red, red_step, state)
 
     # --- Post-step processing ---
 
@@ -257,13 +258,13 @@ def apply_all_actions_typed(
     def monitor_step(b, carry_state):
         return apply_blue_monitor(carry_state, const, b)
 
-    state = jax.lax.fori_loop(0, NUM_BLUE_AGENTS, monitor_step, state)
+    state = jax.lax.fori_loop(0, n_blue, monitor_step, state)
 
     def session_check_step(r, carry_state):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
         return apply_red_session_check(carry_state, const, r, session_check_key)
 
-    state = jax.lax.fori_loop(0, NUM_RED_AGENTS, session_check_step, state)
+    state = jax.lax.fori_loop(0, n_red, session_check_step, state)
 
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
@@ -276,8 +277,8 @@ def apply_all_actions_typed(
 
 
 def apply_all_actions(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     blue_actions: jnp.ndarray,
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
@@ -285,22 +286,23 @@ def apply_all_actions(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
-) -> CC4State:
+) -> SimulatorState:
     """Apply all agent actions in CybORG's deterministic priority order.
 
     CybORG sorts by action priority (ControlTraffic=1, else=99) then
     executes in agent-interface insertion order within each tier.
 
-    Shared by CC4Env.step_env and the differential harness.
+    Shared by ScenarioEnv.step_env and the differential harness.
 
     Args:
-        blue_actions: (NUM_BLUE_AGENTS,) int32
-        red_actions: (NUM_RED_AGENTS,) int32
-        red_keys: (NUM_RED_AGENTS, 2) PRNGKey per red agent
-        forced_primary_hosts: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_HOST` for no override
-        forced_primary_pids: (NUM_RED_AGENTS,) int32, `UNKNOWN_PRIMARY_PID` for no override
+        blue_actions: (num_blue_agents,) int32
+        red_actions: (num_red_agents,) int32
+        red_keys: (num_red_agents, 2) PRNGKey per red agent
+        forced_primary_hosts: (num_red_agents,) int32, `UNKNOWN_PRIMARY_HOST` for no override
+        forced_primary_pids: (num_red_agents,) int32, `UNKNOWN_PRIMARY_PID` for no override
     """
-    execution_order = _cyborg_priority_execution_order(blue_actions)
+    total_slots = blue_actions.shape[0] + const.host_active.shape[0] + red_actions.shape[0]
+    execution_order = _cyborg_priority_execution_order(blue_actions, total_slots)
     # When CybORG execution order is synced (differential testing), use the
     # full action order captured from CybORG's priority-based shuffle.  This
     # ensures session creation order within a single source agent matches
@@ -325,12 +327,12 @@ def apply_all_actions(
 
 
 @struct.dataclass
-class CC4EnvState:
-    state: CC4State
-    const: CC4Const
+class ScenarioEnvState:
+    state: SimulatorState
+    const: SimulatorConst
 
 
-def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
+def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorState:
     red_sessions = state.red_sessions
     red_session_count = state.red_session_count
     red_privilege = state.red_privilege
@@ -353,7 +355,8 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     # Only red_agent_0 is active at reset; others activate via session reassignment
     red_agent_active = state.red_agent_active.at[0].set(True)
 
-    for r in range(NUM_RED_AGENTS):
+    n_red = state.red_agent_active.shape[0]
+    for r in range(n_red):
         start_host = const.red_start_hosts[r]
         is_active = red_agent_active[r]
         red_sessions = jnp.where(
@@ -406,7 +409,7 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
         )
         # CybORG pre-seeds aspace.ip_address with the start host at reset
         # for ALL agents (including initially inactive ones).  Always mark
-        # start host as discovered so CC4Env action replay has the correct
+        # start host as discovered so ScenarioEnv action replay has the correct
         # action space.  FsmRedCC4Env._strip_inactive_red_reset_knowledge
         # will clear this for inactive agents to match the FSM's host_states.
         red_discovered = red_discovered.at[r, start_host].set(True)
@@ -474,17 +477,19 @@ def _init_red_state(const: CC4Const, state: CC4State) -> CC4State:
     )
 
 
-class CC4Env(MultiAgentEnv):
+class ScenarioEnv(MultiAgentEnv):
     def __init__(
         self,
-        num_steps: int = 500,
+        num_steps: Optional[int] = None,
         *,
         topology_mode: str = "generative",
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        scenario_config: ScenarioConfig = CC4_CONFIG,
     ):
-        self.num_steps = num_steps
+        self.cfg = scenario_config
+        self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.topology_mode = topology_mode
         self.topology_bank_size = topology_bank_size
         self.sync_red_policy_bank = sync_red_policy_bank
@@ -493,33 +498,33 @@ class CC4Env(MultiAgentEnv):
         self._green_random_bank = None
         self._red_policy_random_bank = None
         if topology_mode == "cyborg_bank":
-            self._const_bank = get_cyborg_topology_bank(num_steps, topology_bank_size)
+            self._const_bank = get_cyborg_topology_bank(self.num_steps, topology_bank_size)
             # Green random bank encodes CybORG's specific green agent decisions
             # for a reference trajectory.  Always load in non-training mode so
             # green phishing/LWF decisions match CybORG.  In training mode tokens
             # become stale when blue actions change services, so only load when
             # explicitly syncing the full policy bank.
             if not training_mode or sync_red_policy_bank:
-                self._green_random_bank = get_cyborg_green_random_bank(num_steps, topology_bank_size)
+                self._green_random_bank = get_cyborg_green_random_bank(self.num_steps, topology_bank_size)
             if sync_red_policy_bank:
-                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(num_steps, topology_bank_size)
+                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(self.num_steps, topology_bank_size)
         elif topology_mode != "generative":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
 
-        self.blue_agents = [f"blue_{i}" for i in range(NUM_BLUE_AGENTS)]
-        self.red_agents = [f"red_{i}" for i in range(NUM_RED_AGENTS)]
+        self.blue_agents = [f"blue_{i}" for i in range(self.cfg.num_blue_agents)]
+        self.red_agents = [f"red_{i}" for i in range(self.cfg.num_red_agents)]
         self.agents = self.blue_agents + self.red_agents
 
-        super().__init__(num_agents=NUM_BLUE_AGENTS + NUM_RED_AGENTS)
+        super().__init__(num_agents=self.cfg.num_blue_agents + self.cfg.num_red_agents)
 
         for agent in self.blue_agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
         for agent in self.red_agents:
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
 
-    def _select_const(self, key: chex.PRNGKey) -> CC4Const:
+    def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
         if self._const_bank is None:
             return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
 
@@ -540,7 +545,7 @@ class CC4Env(MultiAgentEnv):
         bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
         return self._red_policy_random_bank[bank_idx]
 
-    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], CC4EnvState]:
+    def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
         red_policy_randoms = self._select_red_policy_randoms(key)
@@ -548,19 +553,19 @@ class CC4Env(MultiAgentEnv):
             const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         if red_policy_randoms is not None:
             const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
-        state = create_initial_state()
+        state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=jnp.array(const.initial_services),
             host_max_pid=const.host_initial_max_pid,
         )
         state = _init_red_state(const, state)
 
-        env_state = CC4EnvState(state=state, const=const)
+        env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
         return obs, env_state
 
     @partial(jax.jit, static_argnums=[0])
-    def _reset_state(self, env_state: CC4EnvState, key: chex.PRNGKey) -> CC4EnvState:
+    def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
         const = self._select_const(key)
         green_randoms = self._select_green_randoms(key)
@@ -569,22 +574,22 @@ class CC4Env(MultiAgentEnv):
             const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
         if red_policy_randoms is not None:
             const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
-        state = create_initial_state()
+        state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=const.initial_services,
             host_max_pid=const.host_initial_max_pid,
         )
         state = _init_red_state(const, state)
-        return CC4EnvState(state=state, const=const)
+        return ScenarioEnvState(state=state, const=const)
 
     @partial(jax.jit, static_argnums=[0])
     def step(
         self,
         key: chex.PRNGKey,
-        state: CC4EnvState,
+        state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
         reset_state: Optional[State] = None,
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         key, key_reset = jax.random.split(key)
         obs_st, states_st, rewards, dones, infos = self.step_env(key, state, actions)
 
@@ -610,34 +615,37 @@ class CC4Env(MultiAgentEnv):
     def step_env(
         self,
         key: chex.PRNGKey,
-        env_state: CC4EnvState,
+        env_state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
-    ) -> Tuple[Dict[str, chex.Array], CC4EnvState, Dict[str, float], Dict[str, bool], Dict]:
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         state = env_state.state
         const = env_state.const
+        n_blue = self.cfg.num_blue_agents
+        n_red = self.cfg.num_red_agents
+        n_hosts = self.cfg.num_hosts
 
         key, key_green, key_red, key_blue = jax.random.split(key, 4)
-        red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
-        blue_keys = jax.random.split(key_blue, NUM_BLUE_AGENTS)
+        red_keys = jax.random.split(key_red, n_red)
+        blue_keys = jax.random.split(key_blue, n_blue)
 
         state = advance_mission_phase(state, const)
 
         state = state.replace(
-            red_scan_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
-            red_exploit_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
-            red_discover_success=jnp.zeros(NUM_RED_AGENTS, dtype=jnp.bool_),
-            red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32),
-            green_lwf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-            green_asf_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
-            red_impact_attempted=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_),
+            red_scan_success=jnp.zeros(n_red, dtype=jnp.bool_),
+            red_exploit_success=jnp.zeros(n_red, dtype=jnp.bool_),
+            red_discover_success=jnp.zeros(n_red, dtype=jnp.bool_),
+            red_activity_this_step=jnp.zeros(n_hosts, dtype=jnp.int32),
+            green_lwf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
+            green_asf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
+            red_impact_attempted=jnp.zeros(n_hosts, dtype=jnp.bool_),
         )
 
-        blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(NUM_BLUE_AGENTS)], dtype=jnp.int32)
-        red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(NUM_RED_AGENTS)], dtype=jnp.int32)
-        no_forced = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
-        no_forced_pids = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
+        blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(n_blue)], dtype=jnp.int32)
+        red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(n_red)], dtype=jnp.int32)
+        no_forced = jnp.full(n_red, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
+        no_forced_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        execution_order = _cyborg_priority_execution_order(blue_action_arr)
+        execution_order = _cyborg_priority_execution_order(blue_action_arr, n_blue + n_hosts + n_red)
         state = apply_all_actions_typed(
             state,
             const,
@@ -666,7 +674,7 @@ class CC4Env(MultiAgentEnv):
         done = state.time >= const.max_steps
         state = state.replace(done=jnp.array(done))
 
-        env_state = CC4EnvState(state=state, const=const)
+        env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
 
         rewards = {}
@@ -692,20 +700,20 @@ class CC4Env(MultiAgentEnv):
         return obs, env_state, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
-    def get_obs(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_obs(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         state = env_state.state
         const = env_state.const
         obs = {}
-        for b in range(NUM_BLUE_AGENTS):
+        for b in range(self.cfg.num_blue_agents):
             obs[f"blue_{b}"] = get_blue_obs(state, const, b)
-        for r in range(NUM_RED_AGENTS):
+        for r in range(self.cfg.num_red_agents):
             obs[f"red_{r}"] = get_red_obs(state, const, r)
         return obs
 
     @partial(jax.jit, static_argnums=[0])
-    def get_avail_actions(self, env_state: CC4EnvState) -> Dict[str, chex.Array]:
+    def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         masks = {}
-        for i in range(NUM_BLUE_AGENTS):
+        for i in range(self.cfg.num_blue_agents):
             masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i, env_state.state)
         for agent in self.red_agents:
             masks[agent] = jnp.ones(RED_WITHDRAW_END, dtype=jnp.bool_)

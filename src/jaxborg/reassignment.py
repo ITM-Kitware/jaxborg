@@ -11,7 +11,7 @@ import jax.numpy as jnp
 from jaxborg.actions.pids import append_pid_to_row, first_valid_pid
 from jaxborg.actions.red_common import recompute_scan_anchor_hosts, scan_sources, sync_scan_memory_fields
 from jaxborg.actions.session_counts import effective_session_counts
-from jaxborg.agents.fsm_red import FSM_R, FSM_U
+from jaxborg.scenarios.cc4.red_fsm import FSM_R, FSM_U
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     COMPROMISE_PRIVILEGED,
@@ -19,10 +19,10 @@ from jaxborg.constants import (
     MAX_TRACKED_SESSION_PIDS,
     NUM_RED_AGENTS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def reassign_cross_subnet_sessions(state: CC4State, const: CC4Const) -> CC4State:
+def reassign_cross_subnet_sessions(state: SimulatorState, const: SimulatorConst) -> SimulatorState:
     owner_mask = const.red_agent_subnets
     any_owner = jnp.any(owner_mask, axis=0)
     subnet_owner = jnp.where(any_owner, jnp.argmax(owner_mask, axis=0), -1)

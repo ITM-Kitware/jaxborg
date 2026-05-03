@@ -2,7 +2,9 @@
 
 Each episode is written as a JSONL file with:
   - one `header` record (model, seed, host list)
-  - 500 `step` records (per-agent action class, target host, success, reward)
+  - 500 `step` records (per-agent action class, target host, success, reward;
+    captured for blue, red, AND green agents — green records make ASF and
+    other availability-event metrics derivable post-hoc without re-rolling out)
   - one `footer` record (total reward, steps)
 
 Trajectories are then scored post-hoc by `cc4_score_trajectories.py`. Decoupling
@@ -26,11 +28,11 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
-sys.path.insert(0, str(ROOT / "scripts" / "train"))
-
-from ppo_cleanrl_agent import PPOAgent
+if str(ROOT / "src") not in sys.path:
+    sys.path.insert(0, str(ROOT / "src"))
 
 from jaxborg.constants import BLUE_OBS_SIZE
+from jaxborg.evaluation.cyborg_runner import load_torch_policy
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -106,6 +108,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
     # `ec.action` is empty right after reset; discover after first step.
     red_ids: list[str] = []
     blue_ids: list[str] = []
+    green_ids: list[str] = []
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     f = out_path.open("w")
@@ -117,6 +120,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
         "hosts": hosts,
         "red_agents": red_ids,
         "blue_agents": blue_ids,
+        "green_agents": green_ids,
         "episode_length": EPISODE_LENGTH,
     }
     f.write(json.dumps(header) + "\n")
@@ -129,9 +133,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
             obs_t = torch.from_numpy(obs).to(device)
             mask_t = torch.from_numpy(mask).to(device)
             if deterministic:
-                feats = agent.features(obs_t)
-                logits = agent.actor(feats) + (mask_t - 1.0) * 1e8
-                act = logits.argmax(dim=-1).cpu().numpy()
+                act = agent.deterministic_action(obs_t, mask_t).cpu().numpy()
             else:
                 a, _, _, _ = agent.get_action_and_value(obs_t, mask_t)
                 act = a.cpu().numpy()
@@ -144,6 +146,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
         if not red_ids:
             red_ids = sorted(a for a in ec.action.keys() if a.startswith("red_agent_"))
             blue_ids = sorted(a for a in ec.action.keys() if a.startswith("blue_agent_"))
+            green_ids = sorted(a for a in ec.action.keys() if a.startswith("green_agent_"))
 
         try:
             phase = ec.state.mission_phase
@@ -156,6 +159,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
             "reward": reward,
             "red": _capture_agent_records(unwrap, red_ids),
             "blue": _capture_agent_records(unwrap, blue_ids),
+            "green": _capture_agent_records(unwrap, green_ids),
         }
         f.write(json.dumps(record) + "\n")
         if any(term_d.values()) or any(trunc_d.values()):
@@ -167,6 +171,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
         "steps": steps_run,
         "red_agents": red_ids,
         "blue_agents": blue_ids,
+        "green_agents": green_ids,
     }
     f.write(json.dumps(footer) + "\n")
     f.close()
@@ -175,10 +180,7 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
 
 def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
     device = torch.device("cpu")
-    agent = PPOAgent(OBS_DIM, ACT_DIM)
-    state_dict = torch.load(model_path, map_location=device, weights_only=True)
-    agent.load_state_dict(state_dict)
-    agent.eval()
+    agent, _recipe = load_torch_policy(model_path)
 
     torch.manual_seed(seed)
     np.random.seed(seed)

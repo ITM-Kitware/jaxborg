@@ -27,8 +27,8 @@ from jaxborg.constants import (
     SERVICE_IDS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_const_from_cyborg
-from jaxborg.translate import build_mappings_from_cyborg
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.parity.translate import build_mappings_from_cyborg
 from tests.differential.state_comparator import compare_fast
 
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))

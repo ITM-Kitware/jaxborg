@@ -22,7 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from jaxborg.eval.cia import score_trajectory_file
+from jaxborg.evaluation.cia import score_trajectory_file
 
 
 def _stats(xs):

@@ -81,7 +81,7 @@ from jaxborg.actions.action_defs import (  # noqa: F401
     encode_red_action,
 )
 from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, NUM_SUBNETS, OBS_VECTOR_HOSTS_PER_SUBNET
-from jaxborg.state import CC4Const
+from jaxborg.state import SimulatorConst
 
 RED_ACTION_DURATIONS = jnp.array(
     #  Sleep Discover Scan  SSH  FTP  HTTP HTTPS Haraka SQL  EBlue BKeep PEsc Impact AggSc StlSc DcDec Degrd Withd
@@ -96,17 +96,17 @@ BLUE_ACTION_DURATIONS = jnp.array(
 )
 
 
-def get_red_action_duration(action_idx: int, const: CC4Const) -> jnp.int32:
+def get_red_action_duration(action_idx: int, const: SimulatorConst) -> jnp.int32:
     action_type, _, _ = decode_red_action(action_idx, 0, const)
     return RED_ACTION_DURATIONS[action_type]
 
 
-def get_blue_action_duration(action_idx: int, const: CC4Const) -> jnp.int32:
+def get_blue_action_duration(action_idx: int, const: SimulatorConst) -> jnp.int32:
     action_type, _, _, _, _ = decode_blue_action(action_idx, 0, const)
     return BLUE_ACTION_DURATIONS[action_type]
 
 
-def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
+def decode_red_action(action_idx: int, agent_id: int, const: SimulatorConst):
     is_discover = (action_idx >= RED_DISCOVER_START) & (action_idx < RED_DISCOVER_END)
     is_scan = (action_idx >= RED_SCAN_START) & (action_idx < RED_SCAN_END)
 
@@ -150,7 +150,7 @@ def decode_red_action(action_idx: int, agent_id: int, const: CC4Const):
     return action_type, target_subnet, target_host
 
 
-def _slot_to_global_host(const: CC4Const, relative_slot, agent_id):
+def _slot_to_global_host(const: SimulatorConst, relative_slot, agent_id):
     """Resolve an agent-relative slot to a global host index via obs_host_map.
 
     relative_slot = relative_subnet_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot_within
@@ -167,7 +167,7 @@ def _slot_to_global_host(const: CC4Const, relative_slot, agent_id):
     return jnp.where(subnet_id >= 0, host, jnp.int32(-1))
 
 
-def decode_blue_action(action_idx: int, agent_id: int, const: CC4Const):
+def decode_blue_action(action_idx: int, agent_id: int, const: SimulatorConst):
     is_analyse = (action_idx >= BLUE_ANALYSE_START) & (action_idx < BLUE_ANALYSE_END)
     is_remove = (action_idx >= BLUE_REMOVE_START) & (action_idx < BLUE_REMOVE_END)
     is_restore = (action_idx >= BLUE_RESTORE_START) & (action_idx < BLUE_RESTORE_END)

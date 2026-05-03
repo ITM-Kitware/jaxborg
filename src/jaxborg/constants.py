@@ -1,13 +1,38 @@
-GLOBAL_MAX_HOSTS = 137
-NUM_SUBNETS = 9
-NUM_BLUE_AGENTS = 5
-NUM_RED_AGENTS = 6
-NUM_SERVICES = 5
-NUM_DECOY_TYPES = 4
-MISSION_PHASES = 3
-MESSAGE_LENGTH = 8
-MAX_STEPS = 500
-TOTAL_ACTION_ACTOR_SLOTS = NUM_BLUE_AGENTS + GLOBAL_MAX_HOSTS + NUM_RED_AGENTS
+from jaxborg.scenarios.config import ScenarioConfig
+
+CC4_CONFIG = ScenarioConfig(
+    num_hosts=137,
+    num_subnets=9,
+    num_blue_agents=5,
+    num_red_agents=6,
+    num_services=5,
+    num_decoy_types=4,
+    mission_phases=3,
+    max_steps=500,
+    message_length=8,
+    max_detection_randoms=1024,
+    num_green_random_fields=8,
+    num_red_policy_random_fields=3,
+    min_hosts_per_subnet=4,
+    max_hosts_per_subnet=17,
+    max_user_hosts=10,
+    max_server_hosts=6,
+    blue_max_observed_subnets=3,
+    # Peak observed: 33 with random blue over 50 seeds × 500 steps. 34 gives ~3% headroom.
+    max_tracked_session_pids=34,
+    max_tracked_suspicious_pids=34,
+)
+
+GLOBAL_MAX_HOSTS = CC4_CONFIG.num_hosts
+NUM_SUBNETS = CC4_CONFIG.num_subnets
+NUM_BLUE_AGENTS = CC4_CONFIG.num_blue_agents
+NUM_RED_AGENTS = CC4_CONFIG.num_red_agents
+NUM_SERVICES = CC4_CONFIG.num_services
+NUM_DECOY_TYPES = CC4_CONFIG.num_decoy_types
+MISSION_PHASES = CC4_CONFIG.mission_phases
+MESSAGE_LENGTH = CC4_CONFIG.message_length
+MAX_STEPS = CC4_CONFIG.max_steps
+TOTAL_ACTION_ACTOR_SLOTS = CC4_CONFIG.total_action_actor_slots
 
 SUBNET_NAMES = [
     "RESTRICTED_ZONE_A",
@@ -51,33 +76,23 @@ ACTIVITY_NONE = 0
 ACTIVITY_SCAN = 1
 ACTIVITY_EXPLOIT = 2
 
-MAX_DETECTION_RANDOMS = 1024
-NUM_GREEN_RANDOM_FIELDS = 8
-NUM_RED_POLICY_RANDOM_FIELDS = 3
+MAX_DETECTION_RANDOMS = CC4_CONFIG.max_detection_randoms
+NUM_GREEN_RANDOM_FIELDS = CC4_CONFIG.num_green_random_fields
+NUM_RED_POLICY_RANDOM_FIELDS = CC4_CONFIG.num_red_policy_random_fields
 
-MIN_HOSTS_PER_SUBNET = 4
-MAX_HOSTS_PER_SUBNET = 17
+MIN_HOSTS_PER_SUBNET = CC4_CONFIG.min_hosts_per_subnet
+MAX_HOSTS_PER_SUBNET = CC4_CONFIG.max_hosts_per_subnet
 
-MAX_USER_HOSTS = 10
-MAX_SERVER_HOSTS = 6
-# Hosts per subnet in obs_host_map — includes router for action encoding.
-OBS_HOSTS_PER_SUBNET = MAX_USER_HOSTS + MAX_SERVER_HOSTS + 1
-# Hosts per subnet in the observation vector — excludes router (matches CybORG BlueFlatWrapper).
-OBS_VECTOR_HOSTS_PER_SUBNET = MAX_USER_HOSTS + MAX_SERVER_HOSTS
-ACTION_HOST_SLOTS = NUM_SUBNETS * OBS_HOSTS_PER_SUBNET
-BLUE_MAX_OBSERVED_SUBNETS = 3
-BLUE_ACTION_HOST_SLOTS = BLUE_MAX_OBSERVED_SUBNETS * OBS_VECTOR_HOSTS_PER_SUBNET
-BLUE_TRAFFIC_SLOTS = (NUM_SUBNETS - 1) * BLUE_MAX_OBSERVED_SUBNETS
-NUM_MESSAGES = NUM_BLUE_AGENTS - 1
-# PID identity slots used for red session PID tracking.
-# Peak observed: 33 with random blue over 50 seeds × 500 steps.
-# 34 gives ~3% headroom over peak.
-MAX_TRACKED_SESSION_PIDS = 34
-# PID identity slots used for blue suspicious PID memory.
-MAX_TRACKED_SUSPICIOUS_PIDS = 34
+MAX_USER_HOSTS = CC4_CONFIG.max_user_hosts
+MAX_SERVER_HOSTS = CC4_CONFIG.max_server_hosts
+OBS_HOSTS_PER_SUBNET = CC4_CONFIG.obs_hosts_per_subnet
+OBS_VECTOR_HOSTS_PER_SUBNET = CC4_CONFIG.obs_vector_hosts_per_subnet
+ACTION_HOST_SLOTS = CC4_CONFIG.action_host_slots
+BLUE_MAX_OBSERVED_SUBNETS = CC4_CONFIG.blue_max_observed_subnets
+BLUE_ACTION_HOST_SLOTS = CC4_CONFIG.blue_action_host_slots
+BLUE_TRAFFIC_SLOTS = CC4_CONFIG.blue_traffic_slots
+NUM_MESSAGES = CC4_CONFIG.num_messages
+MAX_TRACKED_SESSION_PIDS = CC4_CONFIG.max_tracked_session_pids
+MAX_TRACKED_SUSPICIOUS_PIDS = CC4_CONFIG.max_tracked_suspicious_pids
 ABSTRACT_RANK_NONE = 1_000_000
-BLUE_OBS_SIZE = (
-    1
-    + 3 * (NUM_SUBNETS + NUM_SUBNETS + NUM_SUBNETS + OBS_VECTOR_HOSTS_PER_SUBNET + OBS_VECTOR_HOSTS_PER_SUBNET)
-    + NUM_MESSAGES * MESSAGE_LENGTH
-)
+BLUE_OBS_SIZE = CC4_CONFIG.blue_obs_size

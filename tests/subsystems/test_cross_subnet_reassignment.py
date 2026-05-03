@@ -8,12 +8,12 @@ from CybORG.Shared.Session import RedAbstractSession, Session
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
 from jaxborg.actions.encoding import encode_red_action
-from jaxborg.agents.fsm_red import FSM_K, FSM_KD, FSM_S, FSM_SD, FSM_U
+from jaxborg.scenarios.cc4.red_fsm import FSM_K, FSM_KD, FSM_S, FSM_SD, FSM_U
 from jaxborg.constants import COMPROMISE_USER, NUM_RED_AGENTS, NUM_SUBNETS
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.state import create_initial_state
-from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
-from jaxborg.translate import build_mappings_from_cyborg
+from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
+from jaxborg.parity.translate import build_mappings_from_cyborg
 
 
 def _make_env(seed: int = 0):

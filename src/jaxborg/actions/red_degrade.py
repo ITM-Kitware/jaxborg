@@ -2,17 +2,17 @@ import chex
 import jax.numpy as jnp
 
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 DEGRADE_AMOUNT = 20
 
 
 def apply_degrade(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     has_session = state.red_sessions[agent_id, target_host]
     is_privileged = state.red_privilege[agent_id, target_host] >= COMPROMISE_PRIVILEGED

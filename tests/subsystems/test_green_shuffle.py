@@ -20,7 +20,7 @@ from jaxborg.constants import GLOBAL_MAX_HOSTS
 
 @pytest.fixture(scope="module")
 def topology():
-    from jaxborg.topology import build_topology
+    from jaxborg.scenarios.cc4.topology import build_topology
 
     return build_topology(jax.random.PRNGKey(42), num_steps=500)
 

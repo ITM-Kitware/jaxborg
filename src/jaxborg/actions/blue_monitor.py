@@ -8,10 +8,10 @@ from jaxborg.constants import (
     MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
-def apply_blue_monitor(state: CC4State, const: CC4Const, agent_id: int | None = None) -> CC4State:
+def apply_blue_monitor(state: SimulatorState, const: SimulatorConst, agent_id: int | None = None) -> SimulatorState:
     if agent_id is None:
         for b in range(NUM_BLUE_AGENTS):
             state = apply_blue_monitor(state, const, b)

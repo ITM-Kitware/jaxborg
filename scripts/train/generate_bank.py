@@ -64,7 +64,7 @@ def _init_worker():
 
 
 def _build_one_topology(seed: int, num_steps: int) -> dict:
-    """Build a single CC4Const from one CybORG seed; return as numpy dict."""
+    """Build a single SimulatorConst from one CybORG seed; return as numpy dict."""
     import jax
 
     # Prevent workers from grabbing GPU
@@ -74,7 +74,7 @@ def _build_one_topology(seed: int, num_steps: int) -> dict:
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    from jaxborg.topology import build_const_from_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     scenario = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
@@ -101,8 +101,8 @@ def _build_one_green(seed: int, num_steps: int) -> np.ndarray:
     from CybORG.Simulator.Actions import Sleep
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    from jaxborg.cyborg_green_recorder import GreenRecorder
-    from jaxborg.translate import build_mappings_from_cyborg
+    from jaxborg.parity.cyborg_green_recorder import GreenRecorder
+    from jaxborg.parity.translate import build_mappings_from_cyborg
 
     scenario = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
@@ -138,8 +138,8 @@ def _build_one_red_policy(seed: int, num_steps: int) -> np.ndarray:
     from CybORG.Simulator.Actions import Sleep
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    from jaxborg.cyborg_red_policy_recorder import RedPolicyRecorder
-    from jaxborg.translate import build_mappings_from_cyborg
+    from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
+    from jaxborg.parity.translate import build_mappings_from_cyborg
 
     scenario = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,

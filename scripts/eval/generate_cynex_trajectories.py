@@ -19,7 +19,6 @@ Usage:
 
 import argparse
 import json
-import pickle
 import time
 from datetime import datetime
 from pathlib import Path
@@ -97,54 +96,14 @@ def _load_jax_model(path: str):
     # Lazy imports so the script works without JAX when only using --model-pt
     import distrax
     import jax
-    import jax.numpy as jnp
+    from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 
+    policy, params, recipe = load_jax_checkpoint(path)
+    print(f"Loaded JAX checkpoint from {path} (arch={recipe['arch']['name']})")
 
-    from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
-    from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
-
-    with open(path, "rb") as f:
-        ckpt = pickle.load(f)
-
-    nested_params = ckpt["params"].get("params", {})
-    if "actor_head" in nested_params:
-        policy = ActorCritic(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        kind = "current"
-    elif "Dense_0" in nested_params:
-        dense_count = sum(1 for k in nested_params if k.startswith("Dense_"))
-        if dense_count >= 4:
-            policy = SharedActorCritic(
-                action_dim=ckpt["action_dim"],
-                hidden_dim=ckpt["hidden_dim"],
-                activation=ckpt["activation"],
-            )
-            kind = "shared"
-        else:
-            policy = LegacyActor(
-                action_dim=ckpt["action_dim"],
-                hidden_dim=ckpt["hidden_dim"],
-                activation=ckpt["activation"],
-            )
-            kind = "legacy"
-    else:
-        raise ValueError(f"Unrecognized checkpoint format: keys={sorted(nested_params.keys())}")
-
-    print(f"Loaded JAX checkpoint from {path} (kind={kind})")
-
-    # Build batched inference function
-    if kind == "current":
-        def _fwd(o, m):
-            return policy.apply(ckpt["params"], o, m, method=ActorCritic.actor).logits
-    elif kind == "shared":
-        def _fwd(o, m):
-            return policy.apply(ckpt["params"], o, m, method=SharedActorCritic.actor).logits
-    else:
-        def _fwd(o, m):
-            return policy.apply(ckpt["params"], o, m).logits
+    def _fwd(o, m):
+        pi, _ = policy.apply(params, o, m)
+        return pi.logits
 
     @jax.jit
     def batched_step(obs_stack, mask_stack, keys):
@@ -152,7 +111,7 @@ def _load_jax_model(path: str):
         actions = jax.vmap(lambda lg, k: distrax.Categorical(logits=lg).sample(seed=k))(logits, keys)
         return actions, logits
 
-    return batched_step, ckpt["params"]
+    return batched_step, params
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +173,7 @@ def _build_mask_cache(wrapper, mappings, const):
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
     """Translate a single CybORG action to JAX indices (from transfer.py)."""
 
-    from jaxborg.translate import cyborg_blue_to_jax
+    from jaxborg.parity.translate import cyborg_blue_to_jax
     try:
         jax_idx = cyborg_blue_to_jax(action, agent_name, mappings, const=const)
         return [jax_idx]
@@ -316,8 +275,8 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     import jax.numpy as jnp
 
 
-    from jaxborg.topology import build_const_from_cyborg
-    from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
 
     # Create env with BlueFlatWrapper (same as transfer.py)
     wrapper = make_cyborg_env(seed, steps)

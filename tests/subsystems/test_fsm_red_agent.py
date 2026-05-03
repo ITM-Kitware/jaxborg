@@ -15,7 +15,7 @@ from jaxborg.actions.encoding import (
     RED_EXPLOIT_HTTP_START,
     RED_SLEEP,
 )
-from jaxborg.agents.fsm_red import (
+from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_AGGRESSIVE_SCAN,
     FSM_ACT_DISCOVER,
     FSM_ACT_EXPLOIT,
@@ -123,7 +123,7 @@ class TestAutonomousActionParity:
         from CybORG.Simulator.Actions import Sleep
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
         scenario = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -264,8 +264,8 @@ class TestFsmUpdateState:
 
 class TestFsmSuccessDetection:
     def test_exploit_session_count_growth_counts_as_success_like_cyborg(self):
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -315,8 +315,8 @@ class TestFsmSuccessDetection:
         )
 
     def test_discover_reaffirming_known_hosts_counts_as_success_like_cyborg(self):
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -562,8 +562,8 @@ class TestFsmDiscoverSuccessFlag:
 
 
 def _make_trivial_const():
-    """Build a minimal CC4Const for unit tests that don't need full topology."""
-    from jaxborg.topology import build_topology
+    """Build a minimal SimulatorConst for unit tests that don't need full topology."""
+    from jaxborg.scenarios.cc4.topology import build_topology
 
     return build_topology(jnp.array([42, 0], dtype=jnp.uint32), num_steps=10)
 
@@ -571,8 +571,8 @@ def _make_trivial_const():
 class TestFsmGetAction:
     def test_discover_subnet_matches_cyborg_action_space_allowed_subnet(self):
         from jaxborg.env import _init_red_state
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -601,8 +601,8 @@ class TestFsmGetAction:
     def test_generic_exploit_selector_matches_cyborg_http_host(self):
         from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
 
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -638,8 +638,8 @@ class TestFsmGetAction:
     def test_generic_exploit_selector_matches_cyborg_smtp_host(self):
         from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
 
-        from jaxborg.topology import build_const_from_cyborg
-        from jaxborg.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -834,7 +834,7 @@ class TestFsmRedDifferential:
         from CybORG.Simulator.Actions import DiscoverRemoteSystems
 
         from jaxborg.actions.encoding import RED_DISCOVER_START
-        from jaxborg.translate import (
+        from jaxborg.parity.translate import (
             build_mappings_from_cyborg,
             cyborg_red_to_jax,
             jax_red_to_cyborg,
@@ -857,7 +857,7 @@ class TestFsmRedDifferential:
         from CybORG.Simulator.Actions import SSHBruteForce
 
         from jaxborg.actions.encoding import RED_EXPLOIT_SSH_START
-        from jaxborg.translate import build_mappings_from_cyborg, cyborg_red_to_jax, jax_red_to_cyborg
+        from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_red_to_jax, jax_red_to_cyborg
 
         mappings = build_mappings_from_cyborg(cyborg_env)
         host_idx = 0

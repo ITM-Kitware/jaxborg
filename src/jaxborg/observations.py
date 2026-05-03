@@ -5,13 +5,10 @@ import numpy as np
 
 from jaxborg.constants import (
     BLUE_OBS_SIZE,
-    GLOBAL_MAX_HOSTS,
-    NUM_BLUE_AGENTS,
-    NUM_MESSAGES,
     NUM_SUBNETS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 CYBORG_POS_TO_JAX_ID = jnp.array([5, 4, 8, 6, 2, 3, 7, 0, 1], dtype=jnp.int32)
 
@@ -23,8 +20,8 @@ SUBNET_BLOCK_SIZE = NUM_SUBNETS * 3 + OBS_VECTOR_HOSTS_PER_SUBNET * 2
 
 
 def _subnet_block(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     subnet_id: int,
 ) -> chex.Array:
     cyborg_pos = JAX_ID_TO_CYBORG_POS[subnet_id]
@@ -40,7 +37,7 @@ def _subnet_block(
     # which excludes routers). obs_host_map has an extra router slot used for action
     # encoding but not for observations.
     host_indices = const.obs_host_map[subnet_id, :OBS_VECTOR_HOSTS_PER_SUBNET]
-    is_active = host_indices < GLOBAL_MAX_HOSTS
+    is_active = host_indices < const.host_active.shape[0]
 
     safe_indices = jnp.where(is_active, host_indices, 0)
     # CybORG observations read old + current events (2-cycle persistence via Monitor aging)
@@ -61,11 +58,12 @@ def _subnet_block(
     )
 
 
-def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
+def get_blue_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) -> chex.Array:
     mission_phase = state.mission_phase.astype(jnp.float32)
 
+    n_obs_subnets = const.blue_obs_subnets.shape[1]
     blocks = []
-    for slot in range(3):
+    for slot in range(n_obs_subnets):
         sid = const.blue_obs_subnets[agent_id, slot]
         block = jnp.where(
             sid >= 0,
@@ -76,23 +74,24 @@ def get_blue_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
     all_blocks = jnp.concatenate(blocks)
     num_subnets = jnp.sum(const.blue_obs_subnets[agent_id] >= 0).astype(jnp.int32)
     subnet_len = num_subnets * SUBNET_BLOCK_SIZE
-    subnet_mask = jnp.arange(3 * SUBNET_BLOCK_SIZE, dtype=jnp.int32) < subnet_len
+    subnet_mask = jnp.arange(n_obs_subnets * SUBNET_BLOCK_SIZE, dtype=jnp.int32) < subnet_len
     subnet_section = jnp.where(subnet_mask, all_blocks, 0.0)
 
-    other_agents = jnp.array([i for i in range(NUM_BLUE_AGENTS) if i != agent_id])
+    n_blue = state.messages.shape[0]
+    other_agents = jnp.array([i for i in range(n_blue) if i != agent_id])
     msg_parts = []
-    for idx in range(NUM_MESSAGES):
+    for idx in range(n_blue - 1):
         sender = other_agents[idx]
         msg_parts.append(state.messages[sender, agent_id, :])
     message_section = jnp.concatenate(msg_parts)
 
     obs = jnp.zeros(BLUE_OBS_SIZE, dtype=jnp.float32)
     obs = obs.at[0].set(mission_phase)
-    obs = obs.at[1 : 1 + 3 * SUBNET_BLOCK_SIZE].set(subnet_section)
+    obs = obs.at[1 : 1 + n_obs_subnets * SUBNET_BLOCK_SIZE].set(subnet_section)
     message_start = jnp.int32(1) + subnet_len
     obs = jax.lax.dynamic_update_slice(obs, message_section, (message_start,))
     return obs
 
 
-def get_red_obs(state: CC4State, const: CC4Const, agent_id: int) -> chex.Array:
+def get_red_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) -> chex.Array:
     return jnp.zeros(BLUE_OBS_SIZE, dtype=jnp.float32)

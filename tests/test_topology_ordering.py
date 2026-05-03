@@ -15,7 +15,7 @@ from jaxborg.constants import (
     SUBNET_IDS,
     SUBNET_NAMES,
 )
-from jaxborg.topology import (
+from jaxborg.scenarios.cc4.topology import (
     _ROUTER_LINKS,
     build_topology,
 )
@@ -216,7 +216,7 @@ class TestCybORGStructuralParity:
         return CybORG(scenario_generator=sg, seed=42)
 
     def test_cyborg_const_alphabetical_ordering(self, cyborg_env):
-        from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
 
         state = cyborg_env.environment_controller.state
         sorted_hostnames = sorted(state.hosts.keys())
@@ -229,7 +229,7 @@ class TestCybORGStructuralParity:
             assert int(const.host_subnet[idx]) == expected_sid
 
     def test_both_builders_same_type_ordering(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
         pure_const = build_topology(jax.random.PRNGKey(0), num_steps=100)
@@ -240,7 +240,7 @@ class TestCybORGStructuralParity:
             assert cyborg_pattern == pure_pattern, f"Subnet {sname}: cyborg={cyborg_pattern}, pure={pure_pattern}"
 
     def test_blue_red_agent_subnets_match(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
         pure_const = build_topology(jax.random.PRNGKey(0), num_steps=100)
@@ -251,7 +251,7 @@ class TestCybORGStructuralParity:
         np.testing.assert_array_equal(np.array(cyborg_const.red_agent_subnets), np.array(pure_const.red_agent_subnets))
 
     def test_services_from_same_set(self, cyborg_env):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_const = build_const_from_cyborg(cyborg_env)
         for h in range(int(cyborg_const.num_hosts)):
@@ -264,7 +264,7 @@ class TestCybORGStructuralParity:
         from CybORG.Agents import SleepAgent
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -285,9 +285,9 @@ class TestCybORGStructuralParity:
 
 class TestAutoResetIntegration:
     def test_auto_reset_produces_new_topology(self):
-        from jaxborg.env import CC4Env
+        from jaxborg.env import ScenarioEnv
 
-        env = CC4Env(num_steps=1)
+        env = ScenarioEnv(num_steps=1)
         key = jax.random.PRNGKey(0)
         obs, state = env.reset(key)
         original_num_hosts = int(state.const.num_hosts)

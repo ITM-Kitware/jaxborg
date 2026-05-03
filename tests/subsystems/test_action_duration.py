@@ -15,13 +15,13 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.red_common import apply_red_session_check
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
-from jaxborg.env import CC4Env
+from jaxborg.env import ScenarioEnv
 
 
 @pytest.fixture(scope="module")
 def env_and_state():
     key = jax.random.PRNGKey(42)
-    env = CC4Env()
+    env = ScenarioEnv()
     obs, env_state = env.reset(key)
     return env, obs, env_state
 
@@ -159,7 +159,7 @@ class TestFsmRedEnvDurationTicks:
 
     @pytest.fixture(scope="class")
     def fsm_env_and_state(self):
-        from jaxborg.fsm_red_env import FsmRedCC4Env
+        from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
         env = FsmRedCC4Env(num_steps=100)
         key = jax.random.PRNGKey(42)
@@ -469,7 +469,7 @@ class TestDiscoverDeceptionFailsAfterSessionDestroyed:
             red_scan_anchor_host=s1.red_scan_anchor_host.at[agent_id].set(jnp.int32(host_b)),
         )
 
-        # Enable detection random tracking (detection_randoms lives on CC4Const)
+        # Enable detection random tracking (detection_randoms lives on SimulatorConst)
         const = const.replace(
             use_detection_randoms=jnp.array(True),
             detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)).at[1].set(jnp.float32(0.99)),
@@ -550,7 +550,7 @@ class TestScanFailsWhenSession0NotAbstract:
             red_discovered_hosts=state.red_discovered_hosts.at[agent_id, target_host].set(True),
         )
 
-        # Enable detection random tracking (detection_randoms lives on CC4Const)
+        # Enable detection random tracking (detection_randoms lives on SimulatorConst)
         const = const.replace(
             use_detection_randoms=jnp.array(True),
             detection_randoms=const.detection_randoms.at[0].set(jnp.float32(0.99)),

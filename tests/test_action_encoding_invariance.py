@@ -25,7 +25,7 @@ from jaxborg.constants import (
     OBS_VECTOR_HOSTS_PER_SUBNET,
     SUBNET_NAMES,
 )
-from jaxborg.topology import build_topology
+from jaxborg.scenarios.cc4.topology import build_topology
 
 
 def _slot_to_canonical(flat_slot: int):
@@ -171,7 +171,7 @@ class TestCybORGActionEncodingParity:
     def test_analyse_slot_matches_cyborg_canonical_host(self, cyborg_wrapped):
         """For each blue agent, verify that JAXborg's Analyse action at a given
         canonical slot targets the same host as CybORG's action at the same slot."""
-        from jaxborg.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID, build_const_from_cyborg
 
         cyborg_env = cyborg_wrapped.env
         jax_const = build_const_from_cyborg(cyborg_env)

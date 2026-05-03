@@ -3,17 +3,17 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import select_bound_source_host
 from jaxborg.constants import ACTIVITY_EXPLOIT, COMPROMISE_PRIVILEGED, SERVICE_IDS
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 OTSERVICE_IDX = SERVICE_IDS["OTSERVICE"]
 
 
 def apply_impact(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     agent_has_session = jnp.any(state.red_sessions[agent_id] & const.host_active)
     has_session = state.red_sessions[agent_id, target_host]

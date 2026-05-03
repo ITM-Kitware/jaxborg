@@ -22,7 +22,7 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.state import create_initial_state
-from jaxborg.topology import build_topology
+from jaxborg.scenarios.cc4.topology import build_topology
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 

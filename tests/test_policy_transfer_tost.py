@@ -8,7 +8,6 @@ Set JAXBORG_CKPT_PATH to the checkpoint path to run.
 """
 
 import os
-import pickle
 from pathlib import Path
 from statistics import mean, stdev
 
@@ -25,41 +24,23 @@ TOST_ALPHA = float(os.environ.get("JAXBORG_TOST_ALPHA", "0.05"))
 
 
 def _load_checkpoint(path):
-    """Load checkpoint and return (policy, params, kind)."""
-    from jaxborg.policy import ActorCritic, LegacyActor
+    """Load checkpoint via jax_runner.load_jax_checkpoint (sidecar required)."""
+    from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 
-    ckpt_path = Path(path)
-    if not ckpt_path.is_file():
-        raise FileNotFoundError(f"Checkpoint not found: {ckpt_path}")
-    with ckpt_path.open("rb") as f:
-        ckpt = pickle.load(f)
-
-    nested_params = ckpt["params"].get("params", {})
-    if "actor_head" in nested_params:
-        policy = ActorCritic(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "current"
-
-    if "Dense_0" in nested_params:
-        policy = LegacyActor(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "legacy"
-
-    raise ValueError(f"Unknown checkpoint format: {sorted(nested_params.keys())}")
+    policy, params, _recipe = load_jax_checkpoint(path)
+    return policy, params
 
 
-def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
+def _policy_action(policy, params, obs_jax, mask_jax):
+    pi, _ = policy.apply(params, obs_jax, mask_jax)
+    return int(pi.mode()[0])
+
+
+def _rollout_jaxborg(policy, params, seed, num_episodes, num_steps=500):
     """Run episodes in JaxBorg and return per-episode cumulative rewards."""
     from jaxborg.actions.masking import compute_blue_action_mask
     from jaxborg.constants import NUM_BLUE_AGENTS
-    from jaxborg.fsm_red_env import FsmRedCC4Env
-    from jaxborg.policy import ActorCritic
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 
     env = FsmRedCC4Env(num_steps=num_steps)
     rewards = []
@@ -78,14 +59,7 @@ def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
                 mask = compute_blue_action_mask(state, env.const, b)
                 obs_jax = jnp.array(obs).reshape(1, -1)
                 mask_jax = jnp.array(mask).reshape(1, -1)
-
-                if kind == "current":
-                    dist = policy.apply(params, obs_jax, mask_jax, method=ActorCritic.actor)
-                else:
-                    dist = policy.apply(params, obs_jax, mask_jax)
-
-                action = int(dist.mode()[0])
-                actions[agent_name] = action
+                actions[agent_name] = _policy_action(policy, params, obs_jax, mask_jax)
 
             key, step_key = jax.random.split(key)
             obs_dict, state, reward_dict, done_dict, info = env.step(step_key, state, actions)
@@ -99,7 +73,7 @@ def _rollout_jaxborg(policy, params, kind, seed, num_episodes, num_steps=500):
     return np.array(rewards)
 
 
-def _rollout_cyborg(policy, params, kind, seed, num_episodes, num_steps=500):
+def _rollout_cyborg(policy, params, seed, num_episodes, num_steps=500):
     """Run episodes in CybORG and return per-episode cumulative rewards."""
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
@@ -107,7 +81,6 @@ def _rollout_cyborg(policy, params, kind, seed, num_episodes, num_steps=500):
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
     from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
-    from jaxborg.policy import ActorCritic
 
     rewards = []
 
@@ -138,14 +111,7 @@ def _rollout_cyborg(policy, params, kind, seed, num_episodes, num_steps=500):
                     mask_jax = jnp.ones((1, BLUE_ALLOW_TRAFFIC_END))
                 else:
                     mask_jax = jnp.array(mask).reshape(1, -1)
-
-                if kind == "current":
-                    dist = policy.apply(params, obs_jax, mask_jax, method=ActorCritic.actor)
-                else:
-                    dist = policy.apply(params, obs_jax, mask_jax)
-
-                cyborg_action = int(dist.mode()[0])
-                actions[agent_name] = cyborg_action
+                actions[agent_name] = _policy_action(policy, params, obs_jax, mask_jax)
 
             observations, rews, terminated, truncated, info = env.step(actions)
             ep_reward += sum(rews.values()) / max(len(rews), 1)
@@ -175,10 +141,10 @@ def test_policy_transfer_tost():
     if not CKPT_PATH:
         pytest.skip("No checkpoint: set JAXBORG_CKPT_PATH env var")
 
-    policy, params, kind = _load_checkpoint(CKPT_PATH)
+    policy, params = _load_checkpoint(CKPT_PATH)
 
-    jax_rewards = _rollout_jaxborg(policy, params, kind, seed=42, num_episodes=NUM_EPISODES)
-    cyborg_rewards = _rollout_cyborg(policy, params, kind, seed=42, num_episodes=NUM_EPISODES)
+    jax_rewards = _rollout_jaxborg(policy, params, seed=42, num_episodes=NUM_EPISODES)
+    cyborg_rewards = _rollout_cyborg(policy, params, seed=42, num_episodes=NUM_EPISODES)
 
     diffs = jax_rewards - cyborg_rewards
     equivalent, p_value, mean_diff, std_diff = tost_equivalence(diffs, TOST_MARGIN, TOST_ALPHA)

@@ -1,15 +1,15 @@
 import chex
 
 from jaxborg.actions.red_common import select_bound_source_host
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def apply_discover(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_subnet: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     source_host = select_bound_source_host(state, const, agent_id)
     has_bound_source = source_host >= 0
     # CybORG DiscoverRemoteSystems delegates to Pingsweep, which does not

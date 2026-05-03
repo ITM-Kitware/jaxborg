@@ -30,7 +30,7 @@ from jaxborg.constants import (
     NUM_SERVICES,
     NUM_SUBNETS,
 )
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 FP_DETECTION_RATE = 0.01
 PHISHING_ERROR_RATE = 0.01
@@ -84,8 +84,8 @@ def _find_phishing_red_agent(state, const, host_idx, key):
 
 
 def _compute_green_decision(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     host_idx: jnp.int32,
     key: jax.Array,
 ) -> GreenDecision:
@@ -199,10 +199,10 @@ def _compute_green_decision(
 
 
 def apply_green_agents_vmapped(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     key: jax.Array,
-) -> CC4State:
+) -> SimulatorState:
     """Apply all green agents using vmap + scatter instead of sequential fori_loop.
 
     1. Vmap: compute per-host decisions in parallel

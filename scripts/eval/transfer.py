@@ -15,7 +15,6 @@ os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 
 import argparse
 import json
-import pickle
 import sys
 import time
 from dataclasses import dataclass, field
@@ -53,11 +52,10 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     OBS_VECTOR_HOSTS_PER_SUBNET,
 )
-from jaxborg.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.observations import get_blue_obs
-from jaxborg.policy import ActorCritic, LegacyActor, SharedActorCritic
-from jaxborg.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
-from jaxborg.translate import (
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     describe_blue_action,
@@ -187,43 +185,11 @@ def print_trajectory_summary(trajectory, label="JAXborg ep"):
 
 
 def load_checkpoint(path):
-    with open(path, "rb") as f:
-        ckpt = pickle.load(f)
-    nested_params = ckpt["params"].get("params", {})
+    """Load a recipe-driven JAX checkpoint via jax_runner (sidecar required)."""
+    from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 
-    if "actor_head" in nested_params:
-        policy = ActorCritic(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "current"
-
-    if "Dense_0" in nested_params:
-        if ckpt["action_dim"] != BLUE_ALLOW_TRAFFIC_END:
-            raise ValueError(
-                f"Legacy checkpoint action_dim={ckpt['action_dim']} is incompatible with current action space "
-                f"{BLUE_ALLOW_TRAFFIC_END}"
-            )
-        # SharedActorCritic has 4 Dense layers (trunk×2 + actor + critic);
-        # LegacyActor has 3 (hidden×2 + output).
-        dense_count = sum(1 for k in nested_params if k.startswith("Dense_"))
-        if dense_count >= 4:
-            policy = SharedActorCritic(
-                action_dim=ckpt["action_dim"],
-                hidden_dim=ckpt["hidden_dim"],
-                activation=ckpt["activation"],
-            )
-            return policy, ckpt["params"], "shared"
-
-        policy = LegacyActor(
-            action_dim=ckpt["action_dim"],
-            hidden_dim=ckpt["hidden_dim"],
-            activation=ckpt["activation"],
-        )
-        return policy, ckpt["params"], "legacy"
-
-    raise ValueError(f"Unrecognized checkpoint format: nested params keys={sorted(nested_params.keys())}")
+    policy, params, _recipe = load_jax_checkpoint(path)
+    return policy, params
 
 
 def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
@@ -238,32 +204,21 @@ def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
     return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS, topology_mode=topology_mode)
 
 
-def policy_dist(policy, params, policy_kind, obs_jax, mask):
-    if policy_kind == "current":
-        return policy.apply(params, obs_jax, mask, method=ActorCritic.actor)
-    if policy_kind == "shared":
-        return policy.apply(params, obs_jax, mask, method=SharedActorCritic.actor)
-    return policy.apply(params, obs_jax, mask)
+def policy_dist(policy, params, obs_jax, mask):
+    pi, _ = policy.apply(params, obs_jax, mask)
+    return pi
 
 
-def make_batched_inference_fn(policy, params, policy_kind, deterministic):
+def make_batched_inference_fn(policy, params, deterministic):
     """Build a JIT-compiled function that runs policy inference for all agents at once.
 
     Returns batched_step(obs_stack, mask_stack, keys) -> (actions, logits)
     where obs_stack/mask_stack are (NUM_BLUE_AGENTS, ...) and keys is (NUM_BLUE_AGENTS, 2).
     """
-    if policy_kind == "current":
 
-        def _fwd(o, m):
-            return policy.apply(params, o, m, method=ActorCritic.actor).logits
-    elif policy_kind == "shared":
-
-        def _fwd(o, m):
-            return policy.apply(params, o, m, method=SharedActorCritic.actor).logits
-    else:
-
-        def _fwd(o, m):
-            return policy.apply(params, o, m).logits
+    def _fwd(o, m):
+        pi, _ = policy.apply(params, o, m)
+        return pi.logits
 
     if deterministic:
 
@@ -443,7 +398,7 @@ def make_cyborg_env(seed=42, bank_match_size=None):
 # --- Core rollout functions ---
 
 
-def make_scan_eval_fn(env, policy, policy_kind, deterministic):
+def make_scan_eval_fn(env, policy, deterministic):
     """Build a fully JIT'd scan-based eval rollout.
 
     Returns a function: (params, key, env_state, obs) -> (final_state, step_data)
@@ -458,18 +413,9 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
     _agent_ids = jnp.arange(NUM_BLUE_AGENTS)
     _mask_single = jax.vmap(compute_blue_action_mask, in_axes=(None, 0, None))
 
-    if policy_kind == "current":
-
-        def _fwd(params, obs_flat, mask_flat):
-            return policy.apply(params, obs_flat, mask_flat, method=ActorCritic.actor).logits
-    elif policy_kind == "shared":
-
-        def _fwd(params, obs_flat, mask_flat):
-            return policy.apply(params, obs_flat, mask_flat, method=SharedActorCritic.actor).logits
-    else:
-
-        def _fwd(params, obs_flat, mask_flat):
-            return policy.apply(params, obs_flat, mask_flat).logits
+    def _fwd(params, obs_flat, mask_flat):
+        pi, _ = policy.apply(params, obs_flat, mask_flat)
+        return pi.logits
 
     def _env_step(carry, _):
         params, key, env_state, obs = carry
@@ -529,7 +475,7 @@ def make_scan_eval_fn(env, policy, policy_kind, deterministic):
 def rollout_jaxborg_scan(
     policy,
     params,
-    policy_kind,
+    
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -543,7 +489,7 @@ def rollout_jaxborg_scan(
     Subsequent runs load from XLA cache and execute all episodes in one GPU pass.
     """
     env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
-    scan_fn = make_scan_eval_fn(env, policy, policy_kind, deterministic)
+    scan_fn = make_scan_eval_fn(env, policy, deterministic)
 
     # Build keys for all episodes
     keys = jnp.stack([jax.random.PRNGKey(seed + ep) for ep in range(num_episodes)])
@@ -618,7 +564,7 @@ def rollout_jaxborg_scan(
 def rollout_jaxborg(
     policy,
     params,
-    policy_kind,
+    
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -626,7 +572,7 @@ def rollout_jaxborg(
     topology_bank_size=DEFAULT_BANK_SIZE,
 ):
     env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
-    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
+    batched_step = make_batched_inference_fn(policy, params, deterministic)
     all_actions = []
     episode_rewards = []
     episode_results = []
@@ -720,8 +666,8 @@ def _rollout_cyborg_single_episode(args_tuple):
     import numpy as np
 
     from jaxborg.constants import NUM_BLUE_AGENTS
-    from jaxborg.topology import build_const_from_cyborg
-    from jaxborg.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
     from scripts.eval.transfer import (
         _build_cyborg_mask_cache,
         _live_blue_wrapper_mask_in_jax_space_cached,
@@ -731,8 +677,8 @@ def _rollout_cyborg_single_episode(args_tuple):
         make_cyborg_env,
     )
 
-    policy, params, policy_kind = load_checkpoint(checkpoint_path)
-    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
+    policy, params = load_checkpoint(checkpoint_path)
+    batched_step = make_batched_inference_fn(policy, params, deterministic)
 
     env = make_cyborg_env(seed=seed + ep, bank_match_size=bank_match_size)
     observations, _ = env.reset()
@@ -842,7 +788,7 @@ def _rollout_cyborg_single_episode(args_tuple):
 def rollout_cyborg(
     policy,
     params,
-    policy_kind,
+    
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -905,7 +851,7 @@ def rollout_cyborg(
         )
 
     # Fallback: sequential (no checkpoint path or parallel=False)
-    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic)
+    batched_step = make_batched_inference_fn(policy, params, deterministic)
     all_actions = []
     episode_rewards = []
     all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
@@ -980,7 +926,7 @@ def rollout_cyborg(
     )
 
 
-def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, deterministic=False, seed=0):
+def rollout_matched_transfer(policy, params, num_episodes=3, deterministic=False, seed=0):
     """Compare policy outputs on matched JAX/CybORG states.
 
     JAX-selected actions drive the synced rollout so the underlying episode stays
@@ -990,7 +936,7 @@ def rollout_matched_transfer(policy, params, policy_kind, num_episodes=3, determ
     Optimized: batched policy inference across agents.
     """
 
-    batched_step = make_batched_inference_fn(policy, params, policy_kind, deterministic=deterministic)
+    batched_step = make_batched_inference_fn(policy, params, deterministic=deterministic)
     rng = jax.random.PRNGKey(seed + 9999)  # separate stream for action sampling
 
     all_jax_actions = []
@@ -1391,7 +1337,7 @@ def run_random_baseline(episodes=5, seed=42):
     return mean(totals)
 
 
-def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
+def run_verbose_trace(policy, params, steps=20, seed=42):
     env = make_cyborg_env(seed=seed)
     observations, _ = env.reset()
     inner = env.env
@@ -1399,7 +1345,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
     mappings = build_mappings_from_cyborg(inner)
 
     from jaxborg.actions.encoding import BLUE_ANALYSE_END
-    from jaxborg.topology import BLUE_AGENT_SUBNETS, SUBNET_IDS
+    from jaxborg.scenarios.cc4.topology import BLUE_AGENT_SUBNETS, SUBNET_IDS
 
     print("\nMASK VALIDATION (step 0):")
     for agent_idx, agent_name in enumerate(env.agents):
@@ -1441,7 +1387,7 @@ def run_verbose_trace(policy, params, policy_kind, steps=20, seed=42):
             mask = _live_blue_wrapper_mask_in_jax_space(env, agent_name, mappings, const)
             mask_np = np.array(mask, dtype=bool)
 
-            pi = policy_dist(policy, params, policy_kind, obs_jax, mask)
+            pi = policy_dist(policy, params, obs_jax, mask)
             action_idx = int(jnp.argmax(pi.logits))
             is_valid = bool(mask_np[action_idx])
             cyborg_action = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
@@ -1528,7 +1474,7 @@ def main():
     deterministic = args.deterministic
 
     print(f"Loading checkpoint: {args.checkpoint}")
-    policy, params, policy_kind = load_checkpoint(args.checkpoint)
+    policy, params = load_checkpoint(args.checkpoint)
 
     if args.mask_summary:
         print_mask_summary()
@@ -1544,7 +1490,7 @@ def main():
         jax_actions, jax_rewards, jax_results = rollout_fn(
             policy,
             params,
-            policy_kind,
+            
             args.episodes,
             deterministic,
             seed=args.seed,
@@ -1633,7 +1579,7 @@ def main():
             return rollout_fn(
                 policy,
                 params,
-                policy_kind,
+                
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1646,7 +1592,7 @@ def main():
             return rollout_cyborg(
                 policy,
                 params,
-                policy_kind,
+                
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1804,7 +1750,7 @@ def main():
         ) = rollout_matched_transfer(
             policy,
             params,
-            policy_kind,
+            
             args.episodes,
             deterministic,
             seed=args.seed,
@@ -1863,7 +1809,7 @@ def main():
         print("\n" + "=" * 70)
         print(f"VERBOSE CYBORG TRACE ({args.verbose} steps, deterministic)")
         print("=" * 70)
-        run_verbose_trace(policy, params, policy_kind, steps=args.verbose, seed=args.seed)
+        run_verbose_trace(policy, params, steps=args.verbose, seed=args.seed)
 
     # Optional: plots
     if args.plot:
@@ -1878,11 +1824,12 @@ def main():
         except Exception as e:
             print(f"(Skipped reward plot: {e})")
 
-        metrics_path = EXP_DIR / "ippo_cc4" / "metrics.jsonl"
-        if metrics_path.exists():
-            plot_training_curves(metrics_path, output_dir / "training_curves.png")
+        # New layout: metrics live under $EXP_DIR/ippo_jax/<tag>/metrics.jsonl
+        candidates = sorted(EXP_DIR.glob("ippo_jax/*/metrics.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if candidates:
+            plot_training_curves(candidates[0], output_dir / "training_curves.png")
         else:
-            print(f"No metrics file at {metrics_path}, skipping training curves")
+            print(f"No metrics file under {EXP_DIR}/ippo_jax/*/, skipping training curves")
 
 
 if __name__ == "__main__":

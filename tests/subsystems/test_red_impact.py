@@ -273,7 +273,7 @@ class TestImpactChain:
 class TestDifferentialWithCybORG:
     @pytest.fixture(scope="class")
     def cyborg_env_and_const(self):
-        from jaxborg.topology import build_const_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,

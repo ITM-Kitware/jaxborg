@@ -14,14 +14,14 @@ import pytest  # noqa: E402
 
 from jaxborg.actions import apply_blue_action, apply_red_action  # noqa: E402
 from jaxborg.constants import NUM_BLUE_AGENTS, SUBNET_IDS  # noqa: E402
-from jaxborg.state import CC4State  # noqa: E402
-from jaxborg.topology import build_topology  # noqa: E402
+from jaxborg.state import SimulatorState  # noqa: E402
+from jaxborg.scenarios.cc4.topology import build_topology  # noqa: E402
 
 jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
 
 
-def setup_red_agent_session(state: CC4State, agent_id: int, host: int) -> CC4State:
+def setup_red_agent_session(state: SimulatorState, agent_id: int, host: int) -> SimulatorState:
     """Set up initial red agent session on a host (session + abstract flag + anchor)."""
     return state.replace(
         red_sessions=state.red_sessions.at[agent_id, host].set(True),
@@ -73,7 +73,7 @@ def cyborg_env():
 
 
 # ---------------------------------------------------------------------------
-# Session-scoped shared CybORG environments and their extracted CC4Const.
+# Session-scoped shared CybORG environments and their extracted SimulatorConst.
 #
 # These exist purely for const extraction and state inspection.  Tests that
 # need to step/reset CybORG must create their own function-scoped fixtures.
@@ -98,8 +98,8 @@ def cyborg_env_sleep42():
 
 @pytest.fixture(scope="session")
 def cyborg_const_sleep42(cyborg_env_sleep42):
-    """CC4Const extracted from the all-SleepAgent CybORG env (seed=42)."""
-    from jaxborg.topology import build_const_from_cyborg
+    """SimulatorConst extracted from the all-SleepAgent CybORG env (seed=42)."""
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     return build_const_from_cyborg(cyborg_env_sleep42)
 
@@ -122,7 +122,7 @@ def cyborg_env_default42():
 
 @pytest.fixture(scope="session")
 def cyborg_const_default42(cyborg_env_default42):
-    """CC4Const extracted from the default-agent CybORG env (seed=42)."""
-    from jaxborg.topology import build_const_from_cyborg
+    """SimulatorConst extracted from the default-agent CybORG env (seed=42)."""
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     return build_const_from_cyborg(cyborg_env_default42)

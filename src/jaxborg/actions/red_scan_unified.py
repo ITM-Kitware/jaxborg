@@ -10,18 +10,18 @@ from jaxborg.actions.red_common import (
 )
 from jaxborg.actions.rng import sample_detection_random
 from jaxborg.constants import ACTIVITY_SCAN
-from jaxborg.state import CC4Const, CC4State
+from jaxborg.state import SimulatorConst, SimulatorState
 
 
 def apply_scan_unified(
-    state: CC4State,
-    const: CC4Const,
+    state: SimulatorState,
+    const: SimulatorConst,
     agent_id: int,
     target_host: chex.Array,
     key: jax.Array,
     has_detection_roll: chex.Array,
     detection_rate: chex.Array,
-) -> CC4State:
+) -> SimulatorState:
     is_active = const.host_active[target_host]
     is_discovered = state.red_discovered_hosts[agent_id, target_host]
     target_subnet = const.host_subnet[target_host]
@@ -43,11 +43,11 @@ def apply_scan_unified(
     # CybORG Portscan: decoy processes always trigger detection regardless of random
     has_decoy = jnp.any(state.host_decoys[target_host])
 
-    def with_roll(s: CC4State):
+    def with_roll(s: SimulatorState):
         rand_val, next_state = sample_detection_random(s, const, key)
         return (rand_val < detection_rate) | has_decoy, next_state
 
-    def without_roll(s: CC4State):
+    def without_roll(s: SimulatorState):
         return success, s
 
     detected, state = jax.lax.cond(should_roll, with_roll, without_roll, state)
