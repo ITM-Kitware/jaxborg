@@ -402,9 +402,7 @@ def apply_red_session_check(
     )
     red_session_pids = state.red_session_pids.at[agent_id, next_idx].set(final_pid_row)
     red_session_abstract_pids = state.red_session_abstract_pids.at[agent_id, next_idx].set(final_abstract_pid_row)
-    red_session_privileged_pids = state.red_session_privileged_pids.at[agent_id, next_idx].set(
-        final_privileged_pid_row
-    )
+    red_session_privileged_pids = state.red_session_privileged_pids.at[agent_id, next_idx].set(final_privileged_pid_row)
     next_primary_is_abstract = jax.lax.cond(
         next_anchor >= 0,
         lambda _: pid_row_contains(red_session_abstract_pids[agent_id, next_idx], next_primary_pid),

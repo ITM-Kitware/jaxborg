@@ -270,8 +270,8 @@ class TestApplyBlueMonitor:
         existing_b = 6101
         new_a = 6200
         new_b = 6201
-        suspicious_row = jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32).at[0].set(existing_a).at[1].set(
-            existing_b
+        suspicious_row = (
+            jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32).at[0].set(existing_a).at[1].set(existing_b)
         )
         event_row = (
             jnp.full(MAX_TRACKED_SUSPICIOUS_PIDS, -1, dtype=jnp.int32)

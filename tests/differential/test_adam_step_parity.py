@@ -73,12 +73,8 @@ def test_adam_single_step_parity(t_init, lr, eps):
 
     betas = (0.9, 0.999)
 
-    p_torch = _torch_adam_step(
-        params, grads, lr=lr, eps=eps, betas=betas, m_init=m, v_init=v, t_init=t_init
-    )
-    p_optax = _optax_adam_step(
-        params, grads, lr=lr, eps=eps, betas=betas, m_init=m, v_init=v, t_init=t_init
-    )
+    p_torch = _torch_adam_step(params, grads, lr=lr, eps=eps, betas=betas, m_init=m, v_init=v, t_init=t_init)
+    p_optax = _optax_adam_step(params, grads, lr=lr, eps=eps, betas=betas, m_init=m, v_init=v, t_init=t_init)
 
     np.testing.assert_allclose(
         p_torch,
