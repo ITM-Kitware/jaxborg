@@ -45,26 +45,22 @@ def test_red_policy_matches_cyborg_multistep(seed: int) -> None:
 
     if harness.red_policy_mismatches:
         lines = [
-            f"  step {m['step']}: red_{m['red_agent']} "
-            f"cyborg={m['cyborg_pick']} jax={m['jax_pick']}"
+            f"  step {m['step']}: red_{m['red_agent']} cyborg={m['cyborg_pick']} jax={m['jax_pick']}"
             for m in harness.red_policy_mismatches[:10]
         ]
         pytest.fail(
             f"seed={seed}: {len(harness.red_policy_mismatches)} red-policy pick "
-            f"mismatches across {harness.red_policy_compared} comparisons\n"
-            + "\n".join(lines)
+            f"mismatches across {harness.red_policy_compared} comparisons\n" + "\n".join(lines)
         )
 
     if harness.red_eligibility_mismatches:
         lines = [
-            f"  step {m['step']}: cyborg_eligible={m['cyborg_eligible']} "
-            f"jax_eligible={m['jax_eligible']}"
+            f"  step {m['step']}: cyborg_eligible={m['cyborg_eligible']} jax_eligible={m['jax_eligible']}"
             for m in harness.red_eligibility_mismatches[:10]
         ]
         pytest.fail(
             f"seed={seed}: {len(harness.red_eligibility_mismatches)} eligibility "
-            f"mismatches across {harness.red_eligibility_compared} checks\n"
-            + "\n".join(lines)
+            f"mismatches across {harness.red_eligibility_compared} checks\n" + "\n".join(lines)
         )
 
     assert harness.red_policy_compared > 0, (

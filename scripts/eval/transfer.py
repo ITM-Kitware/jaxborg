@@ -475,7 +475,6 @@ def make_scan_eval_fn(env, policy, deterministic):
 def rollout_jaxborg_scan(
     policy,
     params,
-
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -564,7 +563,6 @@ def rollout_jaxborg_scan(
 def rollout_jaxborg(
     policy,
     params,
-
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -788,7 +786,6 @@ def _rollout_cyborg_single_episode(args_tuple):
 def rollout_cyborg(
     policy,
     params,
-
     num_episodes=3,
     deterministic=False,
     seed=0,
@@ -802,7 +799,8 @@ def rollout_cyborg(
         from concurrent.futures import ProcessPoolExecutor
 
         if max_workers is None:
-            max_workers = min(num_episodes, multiprocessing.cpu_count(), 10)
+            env_cap = int(os.environ.get("JAXBORG_TRANSFER_WORKERS", "10"))
+            max_workers = min(num_episodes, multiprocessing.cpu_count(), env_cap)
 
         print(f"  Running {num_episodes} CybORG episodes in parallel ({max_workers} workers)...", flush=True)
         t0 = time.perf_counter()
@@ -1490,7 +1488,6 @@ def main():
         jax_actions, jax_rewards, jax_results = rollout_fn(
             policy,
             params,
-
             args.episodes,
             deterministic,
             seed=args.seed,
@@ -1579,7 +1576,6 @@ def main():
             return rollout_fn(
                 policy,
                 params,
-
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1592,7 +1588,6 @@ def main():
             return rollout_cyborg(
                 policy,
                 params,
-
                 args.episodes,
                 deterministic,
                 seed=args.seed,
@@ -1750,7 +1745,6 @@ def main():
         ) = rollout_matched_transfer(
             policy,
             params,
-
             args.episodes,
             deterministic,
             seed=args.seed,
