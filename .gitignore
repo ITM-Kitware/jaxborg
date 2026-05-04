@@ -14,3 +14,4 @@ mlruns/
 .jax_cache/
 slurm-*.out
 scripts/dev/catalog_status.json
+outputs/*

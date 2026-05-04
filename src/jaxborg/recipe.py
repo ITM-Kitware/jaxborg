@@ -65,6 +65,7 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     arch = recipe["arch"]
     train = recipe["train"]
     jax_ = recipe.get("jax", {})
+    eval_ = recipe.get("eval", {})
     return {
         "LR": float(core["lr"]),
         "GAMMA": float(core["gamma"]),
@@ -90,6 +91,7 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),
+        "RESILIENCE_MODE": bool(eval_.get("resilience_mode", False)),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
     }
@@ -130,6 +132,31 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         "num_epochs": int(cr.get("num_epochs", 4)),
         "num_minibatches": int(cr.get("num_minibatches", 16)),
         "total_timesteps": int(train["total_timesteps"]),
+    }
+
+
+
+def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
+    """Flatten the eval section of a recipe into a config dict.
+
+    Returns defaults if the recipe has no ``eval`` section.
+
+    Keys returned:
+        cia_metric          — "cc4" or "resilience"
+        resilience_mode     — bool; when True use resilience topology + metric
+        resilience_red_agent — "c", "i", or "a"; targeted red agent for JAX training
+    """
+    ev = recipe.get("eval", {})
+
+    cia_metric = ev.get("cia_metric", "cc4")
+
+    resilience_mode = bool(ev.get("resilience_mode", False))
+    resilience_red_agent = ev.get("resilience_red_agent", "a")
+
+    return {
+        "cia_metric": cia_metric,
+        "resilience_mode": resilience_mode,
+        "resilience_red_agent": resilience_red_agent,
     }
 
 

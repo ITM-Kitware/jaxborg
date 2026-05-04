@@ -44,7 +44,7 @@ train:
   buffer_size: 5120000        # 1024 envs * 500 steps * 10 agents flat (informational)
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 3000000
+  total_timesteps: 3000
 
 jax:
   num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)
@@ -54,8 +54,25 @@ jax:
   checkpoint_every_updates: 50
 
 cleanrl:
-  num_envs: 48
+  num_envs: 1
   rollout_length: 500
   num_rollouts_per_update: 1   # 48*500=24000 steps/update → ~125 updates @ 3M; matches Matched-v2 (2026-04-25)
   num_minibatches: 16
   num_epochs: 4
+
+eval:
+  # Which CIA scorer to use when running cc4_score_trajectories.py.
+  # cc4:        original composite (0.4*C + 0.4*I + 0.2*A, zone-based host weights)
+  # resilience: ResilienceMetric — scores only auth/db/web server impacts
+  cia_metric: resilience
+
+  # When true: assign auth/db/web roles to three Operational Zone servers at
+  # rollout time (stored in each trajectory header) and use ResilienceMetric
+  # for scoring.  Also selects which targeted red agent to evaluate against
+  # in JAX training; has no effect on the CybORG FiniteStateRedAgent used
+  # in cc4_trajectory_eval.py.
+  resilience_mode: true
+
+  # Which CIA component the targeted red agent focuses on (c / i / a).
+  # Only used when resilience_mode: true.
+  resilience_red_agent: c
