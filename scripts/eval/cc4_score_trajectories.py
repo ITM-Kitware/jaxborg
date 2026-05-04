@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 from statistics import mean, stdev
+from jaxborg.recipe import load, project_eval
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
@@ -22,7 +23,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from jaxborg.evaluation.cia import score_trajectory_file
+from jaxborg.evaluation.cia import ResilienceMetric, score_trajectory_file
 
 
 def _stats(xs):
@@ -37,7 +38,16 @@ def main():
     parser.add_argument("--glob", default="*.jsonl")
     parser.add_argument("--summary-json", default=None)
     parser.add_argument("--per-episode-json", default=None)
+    parser.add_argument("--recipe", default=None, help="Path or name of recipe yaml")
     args = parser.parse_args()
+
+    resilience_mode = False
+    if args.recipe is not None:
+        eval_cfg = project_eval(load(args.recipe))
+        resilience_mode = eval_cfg["resilience_mode"]
+
+    scorer = ResilienceMetric() if resilience_mode else None
+
 
     traj_dir = Path(args.traj_dir)
     files = sorted(traj_dir.glob(args.glob))
@@ -47,7 +57,7 @@ def main():
 
     rows = []
     for p in files:
-        s = score_trajectory_file(p)
+        s = scorer.score_trajectory_file(p) if resilience_mode else score_trajectory_file(p)
         rows.append(
             {
                 "file": p.name,
@@ -61,8 +71,8 @@ def main():
                 "I_min": s.I_min,
                 "A_min": s.A_min,
                 "R_min": s.R_min,
-                "red_events": s.red_event_counts,
-                "blue_events": s.blue_event_counts,
+                "red_events": getattr(s, "impact_counts", None) or getattr(s, "red_event_counts", {}),
+                "blue_events": getattr(s, "blue_event_counts", {}),
             }
         )
 
@@ -104,8 +114,8 @@ def main():
                     "n": len(rows),
                     "reward_mean": rew_m,
                     "reward_stdev": rew_s,
-                    "cia_means": {k: _stats([r[k] for r in rows])[0] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
-                    "cia_stdev": {k: _stats([r[k] for r in rows])[1] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
+                    "cia_means": {k: ms for k, (ms, _) in {k: _stats([r[k] for r in rows]) for k in ("C_mean", "I_mean", "A_mean", "R_mean")}.items()},
+                    "cia_stdev": {k: sd for k, (_, sd) in {k: _stats([r[k] for r in rows]) for k in ("C_mean", "I_mean", "A_mean", "R_mean")}.items()},
                     "red_event_totals": red_total,
                     "blue_event_totals": blue_total,
                 },

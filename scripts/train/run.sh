@@ -36,7 +36,10 @@ from jaxborg.recipe import load
 print(load('$RECIPE')['algorithm'])
 ")
 
-SCRIPT="scripts/train/algorithms/${ALGORITHM}_${BACKEND}.py"
+
+# cleanrl is an alias for the cyborg backend script
+SCRIPT_BACKEND="${BACKEND/cleanrl/cyborg}"
+SCRIPT="scripts/train/algorithms/${ALGORITHM}_${SCRIPT_BACKEND}.py"
 if [[ ! -f "$SCRIPT" ]]; then
     echo "No algorithm script for backend=$BACKEND algorithm=$ALGORITHM (expected $SCRIPT)"
     exit 1

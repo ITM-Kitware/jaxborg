@@ -17,6 +17,8 @@ re-running CybORG (CPU-bound, ~2 min/episode).
 import argparse
 import json
 import os
+import random
+import re
 import sys
 from pathlib import Path
 
@@ -33,6 +35,26 @@ if str(ROOT / "src") not in sys.path:
 
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_runner import load_torch_policy
+
+_OPERATIONAL_SERVER_RE = re.compile(r"^operational_zone_[ab]_subnet_server_host_\d+$")
+
+# Role ints mirror resilience_topology.RESILIENCE_ROLE_* (no JAX import needed).
+_ROLE_AUTH, _ROLE_DB, _ROLE_WEB = 1, 2, 3
+
+
+def _assign_resilience_roles(hosts: list[str], seed: int) -> dict[str, int]:
+    """Randomly assign auth/db/web roles to three Operational Zone server hosts.
+
+    Deterministic given ``seed`` — matches the intent of
+    ``resilience_topology._assign_resilience_roles`` without requiring JAX.
+    """
+    candidates = [h for h in hosts if _OPERATIONAL_SERVER_RE.match(h)]
+    rng = random.Random(seed)
+    rng.shuffle(candidates)
+    return {
+        host: role
+        for host, role in zip(candidates[:3], [_ROLE_AUTH, _ROLE_DB, _ROLE_WEB])
+    }
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -100,7 +122,7 @@ def _capture_agent_records(unwrap, agent_ids):
     return out
 
 
-def rollout_episode(env, agent, device, deterministic, episode_seed, model_path, out_path):
+def rollout_episode(env, agent, device, deterministic, episode_seed, model_path, out_path, resilience_roles=None):
     obs_d, info_d = env.reset()
     unwrap = env.unwrapped if hasattr(env, "unwrapped") else env
     ec = unwrap.environment_controller
@@ -123,6 +145,8 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
         "green_agents": green_ids,
         "episode_length": EPISODE_LENGTH,
     }
+    if resilience_roles:
+        header["host_resilience_roles"] = resilience_roles
     f.write(json.dumps(header) + "\n")
 
     total = 0.0
@@ -178,9 +202,15 @@ def rollout_episode(env, agent, device, deterministic, episode_seed, model_path,
     return total, steps_run
 
 
-def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
+def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_path=None):
     device = torch.device("cpu")
     agent, _recipe = load_torch_policy(model_path)
+
+    resilience_mode = False
+    if recipe_path is not None:
+        from jaxborg.recipe import load, project_eval
+        eval_cfg = project_eval(load(recipe_path))
+        resilience_mode = eval_cfg["resilience_mode"]
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -192,8 +222,12 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
     for ep in range(episodes):
         ep_seed = seed + ep
         env = make_env(ep_seed)
+        resilience_roles = None
+        if resilience_mode:
+            hosts = list(env.unwrapped.environment_controller.state.hosts.keys())
+            resilience_roles = _assign_resilience_roles(hosts, ep_seed)
         out_path = output_dir / f"{tag}_seed{ep_seed}.jsonl"
-        r, n = rollout_episode(env, agent, device, deterministic, ep_seed, model_path, out_path)
+        r, n = rollout_episode(env, agent, device, deterministic, ep_seed, model_path, out_path, resilience_roles)
         rewards.append(r)
         print(f"  ep {ep + 1}/{episodes}: reward={r:+9.1f} steps={n}  → {out_path.name}", flush=True)
 
@@ -201,6 +235,8 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag):
     print(f"episodes:     {episodes}")
     print(f"reward mean:  {sum(rewards) / len(rewards):+.4f}")
     print(f"trajectories: {output_dir}")
+    if resilience_mode:
+        print("resilience_mode: ON (host_resilience_roles written to each trajectory header)")
 
 
 if __name__ == "__main__":
@@ -211,5 +247,6 @@ if __name__ == "__main__":
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--tag", default=None, help="Override tag in trajectory filename")
+    parser.add_argument("--recipe", default=None, help="Path or name of recipe YAML (enables resilience_mode if set)")
     args = parser.parse_args()
-    evaluate(args.model, args.episodes, args.seed, args.deterministic, args.output_dir, args.tag)
+    evaluate(args.model, args.episodes, args.seed, args.deterministic, args.output_dir, args.tag, args.recipe)

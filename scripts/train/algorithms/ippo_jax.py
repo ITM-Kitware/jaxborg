@@ -50,6 +50,7 @@ from jaxborg.checkpoint import save_jax_params, write_sidecar
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+from jaxborg.parity.resilience_red_env import ResilienceRedCC4Env
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_jax
@@ -85,7 +86,8 @@ def compute_value_loss(value, old_value, targets, clip_eps, clip_value_loss):
 def make_train(config, network):
     """Build env and a single JIT'd collect_and_update fn from a flat config."""
     num_envs = config["NUM_ENVS"]
-    inner_env = FsmRedCC4Env(
+    _env_cls = ResilienceRedCC4Env if config.get("RESILIENCE_MODE", False) else FsmRedCC4Env
+    inner_env = _env_cls(
         num_steps=500,
         training_mode=bool(config.get("TRAINING_MODE", True)),
     )
@@ -332,7 +334,13 @@ def main():
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
     # Build network from recipe.arch via the policy registry
-    inner_env = FsmRedCC4Env(num_steps=500)
+    if config.get("RESILIENCE_MODE", False):
+        inner_env = ResilienceRedCC4Env(
+            num_steps=500,
+            topology_mode=config.get("TOPOLOGY_MODE", "generative"),
+        )
+    else:
+        inner_env = FsmRedCC4Env(num_steps=500)
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
         recipe["arch"]["name"],
