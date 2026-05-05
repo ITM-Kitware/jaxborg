@@ -10,7 +10,23 @@ from jaxborg.state import SimulatorConst, SimulatorState
 def host_decoy_compatibility_mask(host_services: jnp.ndarray, host_decoys: jnp.ndarray) -> jnp.ndarray:
     """Return per-decoy compatibility for one host.
 
-    Matches the concrete decoy compatibility modeled by `apply_blue_decoy()`.
+    Mirrors CybORG's actual (slightly quirky) port-occupancy semantics:
+
+      * ``HarakaDecoyFactory`` (port 25) is incompatible if SMTP service or a
+        prior Haraka decoy holds port 25.
+      * ``ApacheDecoyFactory`` (port 80) is incompatible if APACHE2 service,
+        a prior Apache decoy, *or* a prior Vsftpd decoy holds port 80.  The
+        Vsftpd inclusion is intentional and matches CybORG: although CybORG's
+        ``DecoyVsftpd.is_host_compatible`` checks port 21, the
+        ``VsftpdDecoyFactory`` constant ``PORT == 80`` means the decoy
+        process actually opens port 80, so subsequent Apache deploys see
+        port 80 as taken.
+      * ``TomcatDecoyFactory`` (port 443) is incompatible if a prior Tomcat
+        decoy holds port 443 (no real service uses 443).
+      * ``VsftpdDecoyFactory`` is *always compatible* (subject to OS, which
+        is a static host property handled elsewhere).  CybORG's check uses
+        port 21, which the Vsftpd decoy never actually claims, so re-deploys
+        succeed unconditionally.
     """
     has_port_25 = host_services[SERVICE_IDS["SMTP"]] | host_decoys[DECOY_IDS["HarakaSMPT"]]
     has_port_80 = (

@@ -67,7 +67,11 @@ def test_generic_deploy_decoy_pending_ticks_match_jax():
         blue_cls=blue_cls,
         green_cls=SleepAgent,
         red_cls=SleepAgent,
-        sync_green_rng=False,
+        # Need sync_green_rng=True to install the IndexedRNGTape, which
+        # replays CybORG's blue_decoy_type choice into JAX.  Without it, the
+        # two sides draw decoy types from independent RNGs and disagree on
+        # which factory got picked from the (matching) compatible pool.
+        sync_green_rng=True,
         use_cyborg_blue_policy=True,
     )
     harness.reset()
@@ -259,7 +263,10 @@ def test_generic_deploy_decoy_reusing_service_name_matches_jax():
         blue_cls=blue_cls,
         green_cls=SleepAgent,
         red_cls=SleepAgent,
-        sync_green_rng=False,
+        # Need sync_green_rng=True to install the IndexedRNGTape so JAX
+        # picks the same blue_decoy_type CybORG picked from the compat pool
+        # — otherwise the two sides draw from independent RNGs.
+        sync_green_rng=True,
         use_cyborg_blue_policy=True,
     )
     harness.reset()
