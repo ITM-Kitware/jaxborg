@@ -12,7 +12,6 @@ class ScenarioConfig:
     mission_phases: int
     max_steps: int
     message_length: int
-    max_detection_randoms: int
     num_green_random_fields: int
     num_red_policy_random_fields: int
     min_hosts_per_subnet: int
