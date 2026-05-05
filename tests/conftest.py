@@ -39,39 +39,40 @@ _PARITY_DEBUG_PATHS = (
     "tests/subsystems/test_red_scan.py",
 )
 
-_RETIRED_REPLAY_PATHS = (
-    "tests/test_adversarial_fuzz.py",
-    "tests/test_cyborg_trace_replay.py",
-    "tests/test_fsm_action_parity.py",
-    "tests/test_green_parity.py",
-    "tests/test_green_unit.py",
-    "tests/test_obs_hash_fingerprint.py",
-)
+# Whole-file retirements.  Empty by default — under the IndexedRNGTape
+# (jit-compatible via io_callback) every previously-retired file passes.
+# Add an entry here only if a whole file is genuinely incompatible with the
+# new tape architecture and porting it isn't viable.
+_RETIRED_REPLAY_PATHS: tuple[str, ...] = ()
 
-# Specific test items in otherwise-live files that require byte-equality.
+# Specific test items in otherwise-live files retired due to genuine
+# parity bugs (not infrastructure issues).  Each entry below should track a
+# real divergence between CybORG and JAX semantics that the IndexedRNGTape
+# *cannot* paper over because the divergence is in the action logic, not in
+# the random replay.  Tests pinned here MUST come with a one-line FIXME
+# pointing at the suspected source so re-enabling has a clear next step.
+#
+# Re-enabling protocol: drop the entry, rerun the test, and if it passes,
+# delete the FIXME along with it.  Don't add new entries without a FIXME.
 _RETIRED_REPLAY_NODEIDS = frozenset(
     {
-        "tests/differential/test_fsm_parity.py::TestFsmParity::test_fsm_states_tracked_through_episode",
-        "tests/differential/test_fsm_parity.py::TestFsmParity::test_session_counts_tracked",
-        # Individually retired tests in otherwise-live files (un-retired by default
-        # because the per-purpose RNG dispatch + IndexedRNGTape now satisfy several
-        # parity tests, but a residual subset still depends on byte-equality with
-        # CybORG's MT19937 stream that the harness cannot fully replay).
+        # FIXME(parity): host_decoys diverges on host_84 step 1 when a generic
+        # blue DeployDecoy reuses an existing service name.  The tape replays
+        # the recorded decoy type, but JAX still ends up with a different
+        # host_decoys mask than CybORG.  Likely a same-step service/decoy
+        # collision in apply_blue_decoy ordering vs. CybORG's tier resolution.
         "tests/differential/test_blue_policy_fuzz.py::test_generic_deploy_decoy_reusing_service_name_matches_jax",
         "tests/differential/test_blue_policy_fuzz.py::test_generic_deploy_decoy_pending_ticks_match_jax",
-        "tests/differential/test_blue_policy_fuzz.py::test_reward_parity_when_green_local_work_selects_decoy_service",
-        "tests/differential/test_blue_policy_fuzz.py::test_reward_parity_handles_sessionless_impact_trace",
-        "tests/differential/test_random_sync.py::test_detection_random_sync_advances_jax_index_for_cyborg_scan_trace",
-        "tests/differential/test_random_sync.py::test_detection_random_sync_handles_failed_scan_trace_with_random_blue_actions",
-        "tests/differential/test_random_sync.py::test_strict_random_sync_handles_red_session_check_trace",
-        "tests/differential/test_random_sync.py::test_strict_random_sync_handles_privesc_session_choice_trace",
-        "tests/differential/test_random_sync.py::test_detection_random_sync_handles_long_discover_deception_trace",
+        # FIXME(parity): red policy multi-step rollout diverges across all 5
+        # seeds.  test_red_policy_parity exercises the red policy's choice
+        # *over time* (200+ steps), and JAX accumulates drift CybORG doesn't.
+        # Suspect red_policy randoms or per-step action gating; investigate
+        # before un-retiring.
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1000]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1001]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1002]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1003]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1004]",
-        "tests/differential/test_matched_rng_reward_parity.py::test_matched_rng_per_step_reward_matches_cyborg[1000]",
     }
 )
 
@@ -85,15 +86,16 @@ def pytest_collection_modifyitems(config, items):
             "for deterministic JAX-only tests use tests.differential.parity_rng_replay.RNGTape"
         )
     )
+    skip_retired = os.environ.get("JAXBORG_SKIP_RETIRED", "1") != "0"
     for item in items:
         path = item.path.as_posix()
         rel_path = path[path.find("tests/") :] if "tests/" in path else path
         if rel_path.startswith(_PARITY_DEBUG_PATHS):
             item.add_marker(slow)
-        if rel_path.startswith(_RETIRED_REPLAY_PATHS):
+        if skip_retired and rel_path.startswith(_RETIRED_REPLAY_PATHS):
             item.add_marker(retired_replay)
         nodeid_short = item.nodeid[item.nodeid.find("tests/") :] if "tests/" in item.nodeid else item.nodeid
-        if nodeid_short in _RETIRED_REPLAY_NODEIDS:
+        if skip_retired and nodeid_short in _RETIRED_REPLAY_NODEIDS:
             item.add_marker(retired_replay)
 
 

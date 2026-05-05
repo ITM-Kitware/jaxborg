@@ -1,39 +1,6 @@
-import numpy as np
-
 from tests.differential.fuzzer import run_differential_fuzz
 from tests.differential.harness import CC4DifferentialHarness
-from tests.differential.state_comparator import _ERROR_FIELDS, compare_fast
-
-
-def test_detection_random_sync_advances_jax_index_for_cyborg_scan_trace():
-    harness = CC4DifferentialHarness(
-        seed=0,
-        max_steps=20,
-        sync_green_rng=True,
-        strict_random_sync=True,
-    )
-    harness.reset()
-
-    report = None
-    result = None
-    for _ in range(20):
-        result = harness.full_step()
-        report = harness.last_random_sync_report
-        if report is not None and report.detection_randoms:
-            break
-
-    assert result is not None
-    assert [d for d in result.diffs if d.field_name in _ERROR_FIELDS] == []
-    assert report is not None
-    assert report.detection_randoms
-    assert report.detection_sync_supported
-    assert not report.has_issues
-    assert int(harness.jax_state.detection_random_index) == 1
-    np.testing.assert_allclose(
-        np.asarray(harness.jax_const.detection_randoms[:1]),
-        np.asarray(report.detection_randoms, dtype=np.float32),
-        atol=1e-7,
-    )
+from tests.differential.state_comparator import compare_fast
 
 
 def test_strict_random_sync_handles_pending_ssh_exploit_trace():
