@@ -22,8 +22,8 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.rewards import compute_rewards
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import build_topology
+from jaxborg.state import create_initial_state
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))

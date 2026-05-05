@@ -9,6 +9,7 @@ action selection diverges despite identical states.
 import numpy as np
 import pytest
 
+from jaxborg.constants import NUM_RED_AGENTS
 from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_AGGRESSIVE_SCAN,
     FSM_ACT_DEGRADE,
@@ -20,7 +21,6 @@ from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_STEALTH_SCAN,
     FSM_ACT_WITHDRAW,
 )
-from jaxborg.constants import NUM_RED_AGENTS
 from tests.differential.harness import CC4DifferentialHarness
 from tests.differential.state_comparator import _ERROR_FIELDS, format_diffs
 

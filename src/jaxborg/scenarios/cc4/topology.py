@@ -28,9 +28,7 @@ from jaxborg.constants import (
     OBS_HOSTS_PER_SUBNET,
     SERVICE_IDS,
     SUBNET_IDS,
-    TOTAL_ACTION_ACTOR_SLOTS,
 )
-from jaxborg.state import SimulatorConst
 from jaxborg.scenarios.cc4.topology_numpy import (
     _ROUTER_LINKS,
     BLUE_AGENT_SUBNETS,
@@ -45,6 +43,7 @@ from jaxborg.scenarios.cc4.topology_numpy import (
     _subnet_nacl_adjacency,
     build_const_arrays_from_cyborg,
 )
+from jaxborg.state import SimulatorConst
 
 
 def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
@@ -90,10 +89,12 @@ def _green_cache_key(num_steps: int, bank_size: int) -> str:
 
 
 def _red_policy_cache_key(num_steps: int, bank_size: int) -> str:
-    return (
-        f"steps{num_steps}_bank{bank_size}_"
-        f"{_hash_paths(_THIS_DIR / 'topology.py', _PARITY_DIR / 'cyborg_red_policy_recorder.py', _THIS_DIR / 'red_fsm.py')}"
+    policy_hash = _hash_paths(
+        _THIS_DIR / "topology.py",
+        _PARITY_DIR / "cyborg_red_policy_recorder.py",
+        _THIS_DIR / "red_fsm.py",
     )
+    return f"steps{num_steps}_bank{bank_size}_{policy_hash}"
 
 
 _PARALLEL_THRESHOLD = 8  # use multiprocessing for bank_size >= this
@@ -544,11 +545,6 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
             dtype=jnp.int32,
         ),
         use_blue_decoy_type_choices=jnp.array(False),
-        green_host_order=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, TOTAL_ACTION_ACTOR_SLOTS),
-            dtype=jnp.int32,
-        ),
-        use_green_host_order=jnp.array(False),
         red_exploit_session_choices=jnp.zeros(
             (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
             dtype=jnp.int32,

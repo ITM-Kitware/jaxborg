@@ -385,28 +385,24 @@ def apply_red_session_check(
         jnp.int32(-1),
     )
     should_reorder_primary_row = needs_primary & (next_anchor >= 0) & (next_primary_pid >= 0)
-    reordered_pid_row = move_pid_to_row_end(state.red_session_pids[agent_id, next_idx], next_primary_pid)
-    reordered_abstract_pid_row = move_pid_to_row_end(
-        state.red_session_abstract_pids[agent_id, next_idx], next_primary_pid
+    # Push the conditional select into the row-level scatter to avoid building
+    # full (NUM_RED, MAX_HOSTS, MAX_PIDS) materializations under both branches
+    # of jnp.where for each of the three PID arrays.  When cond is False, the
+    # scatter writes the original row back (a no-op), keeping behavior identical.
+    cur_pid_row = state.red_session_pids[agent_id, next_idx]
+    cur_abstract_pid_row = state.red_session_abstract_pids[agent_id, next_idx]
+    cur_privileged_pid_row = state.red_session_privileged_pids[agent_id, next_idx]
+    reordered_pid_row = move_pid_to_row_end(cur_pid_row, next_primary_pid)
+    reordered_abstract_pid_row = move_pid_to_row_end(cur_abstract_pid_row, next_primary_pid)
+    reordered_privileged_pid_row = move_pid_to_row_end(cur_privileged_pid_row, next_primary_pid)
+    final_pid_row = jnp.where(should_reorder_primary_row, reordered_pid_row, cur_pid_row)
+    final_abstract_pid_row = jnp.where(should_reorder_primary_row, reordered_abstract_pid_row, cur_abstract_pid_row)
+    final_privileged_pid_row = jnp.where(
+        should_reorder_primary_row, reordered_privileged_pid_row, cur_privileged_pid_row
     )
-    reordered_privileged_pid_row = move_pid_to_row_end(
-        state.red_session_privileged_pids[agent_id, next_idx], next_primary_pid
-    )
-    red_session_pids = jnp.where(
-        should_reorder_primary_row,
-        state.red_session_pids.at[agent_id, next_idx].set(reordered_pid_row),
-        state.red_session_pids,
-    )
-    red_session_abstract_pids = jnp.where(
-        should_reorder_primary_row,
-        state.red_session_abstract_pids.at[agent_id, next_idx].set(reordered_abstract_pid_row),
-        state.red_session_abstract_pids,
-    )
-    red_session_privileged_pids = jnp.where(
-        should_reorder_primary_row,
-        state.red_session_privileged_pids.at[agent_id, next_idx].set(reordered_privileged_pid_row),
-        state.red_session_privileged_pids,
-    )
+    red_session_pids = state.red_session_pids.at[agent_id, next_idx].set(final_pid_row)
+    red_session_abstract_pids = state.red_session_abstract_pids.at[agent_id, next_idx].set(final_abstract_pid_row)
+    red_session_privileged_pids = state.red_session_privileged_pids.at[agent_id, next_idx].set(final_privileged_pid_row)
     next_primary_is_abstract = jax.lax.cond(
         next_anchor >= 0,
         lambda _: pid_row_contains(red_session_abstract_pids[agent_id, next_idx], next_primary_pid),
@@ -440,24 +436,26 @@ def apply_red_session_check(
     # is recorded (pid == -1), fall back to clearing (conservative).
     preserve_scan = scan_owner_alive & (scan_owner_pid >= 0)
     should_clear_scan = (anchor_changed_host | primary_invalidated_same_host) & ~preserve_scan
-    cleared_source_hosts = state.red_scanned_source_hosts.at[agent_id, :, old_anchor_idx].set(False)
-    cleared_scanned_hosts = jnp.any(cleared_source_hosts[agent_id], axis=1)
-    red_scanned_source_hosts = jnp.where(
-        should_clear_scan,
-        cleared_source_hosts,
-        state.red_scanned_source_hosts,
-    )
-    red_scanned_hosts = jnp.where(
-        should_clear_scan,
-        state.red_scanned_hosts.at[agent_id].set(cleared_scanned_hosts),
-        state.red_scanned_hosts,
-    )
+    # Push the conditional select into row/column-level scatters: avoids building
+    # full (NUM_RED, MAX_HOSTS, MAX_HOSTS) and (NUM_RED, MAX_HOSTS) materializations
+    # under both branches of jnp.where.  When `should_clear_scan` is False, the
+    # column write equals the original column (no-op), keeping behavior identical.
+    old_anchor_col = state.red_scanned_source_hosts[agent_id, :, old_anchor_idx]
+    new_anchor_col = jnp.where(should_clear_scan, jnp.zeros_like(old_anchor_col), old_anchor_col)
+    red_scanned_source_hosts = state.red_scanned_source_hosts.at[agent_id, :, old_anchor_idx].set(new_anchor_col)
+    # red_scanned_hosts is invalidated only when we actually cleared scan memory;
+    # the previous code preserved the row otherwise (it can diverge from
+    # `any(red_scanned_source_hosts, axis=2)` because callers may apply session/
+    # abstract/active masking via sync_scan_memory_fields).  Match that exactly.
+    old_scanned_row = state.red_scanned_hosts[agent_id]
+    cleared_agent_sources = state.red_scanned_source_hosts[agent_id].at[:, old_anchor_idx].set(False)
+    cleared_scanned_for_agent = jnp.any(cleared_agent_sources, axis=1)
+    final_scanned_for_agent = jnp.where(should_clear_scan, cleared_scanned_for_agent, old_scanned_row)
+    red_scanned_hosts = state.red_scanned_hosts.at[agent_id].set(final_scanned_for_agent)
     # Clear scan-owning PID on old anchor when scan memory is cleared.
-    red_scan_source_pid = jnp.where(
-        should_clear_scan,
-        state.red_scan_source_pid.at[agent_id, old_anchor_idx].set(-1),
-        state.red_scan_source_pid,
-    )
+    cur_scan_pid = state.red_scan_source_pid[agent_id, old_anchor_idx]
+    new_scan_pid = jnp.where(should_clear_scan, jnp.int32(-1), cur_scan_pid)
+    red_scan_source_pid = state.red_scan_source_pid.at[agent_id, old_anchor_idx].set(new_scan_pid)
 
     return state.replace(
         red_scan_anchor_host=state.red_scan_anchor_host.at[agent_id].set(next_anchor),

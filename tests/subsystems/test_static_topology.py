@@ -304,8 +304,8 @@ class TestDifferentialWithCybORG:
 
     def test_red_agent_0_only_active_at_reset(self, cyborg_env):
         from jaxborg.env import _init_red_state
-        from jaxborg.state import create_initial_state
         from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+        from jaxborg.state import create_initial_state
 
         c = build_const_from_cyborg(cyborg_env)
         state = create_initial_state()
@@ -343,8 +343,8 @@ class TestDifferentialWithCybORG:
         np.testing.assert_array_equal(np.array(c.allowed_subnet_pairs), expected)
 
     def test_host_order_matches_cyborg(self, cyborg_env):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         build_const_from_cyborg(cyborg_env)
         mappings = build_mappings_from_cyborg(cyborg_env)
@@ -352,8 +352,8 @@ class TestDifferentialWithCybORG:
         assert hostnames == sorted(hostnames), f"Host ordering is not alphabetical: {hostnames[:10]}..."
 
     def test_initial_foothold_privilege_matches_cyborg(self, cyborg_env):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         mappings = build_mappings_from_cyborg(cyborg_env)
         const = build_const_from_cyborg(cyborg_env)

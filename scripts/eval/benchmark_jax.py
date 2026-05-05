@@ -53,8 +53,10 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
         "CRITIC_MAX_GRAD_NORM": 50.0,
         "ACTIVATION": "tanh",
         "HIDDEN_DIM": 256,
+        "HIDDEN_LAYERS": 2,
         "ANNEAL_LR": False,
         "LR": 3e-4,
+        "NORM_REWARDS": True,
         "REWARD_SCALE": 1.0,
         "SEED": 0,
         "TOPOLOGY_MODE": "generative",
@@ -62,15 +64,28 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
     }
 
     # Use make_train from the training script
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "train"))
-    from ippo_jax import make_train
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "train" / "algorithms"))
+    import jax.numpy as jnp
+    from ippo_jax import RewardNormState, make_train
+
+    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+    from jaxborg.policies import make_jax_policy
 
     print(f"\nConfig: NUM_ENVS={config['NUM_ENVS']}, NUM_STEPS={config['NUM_STEPS']}")
     print(f"Benchmark: {num_updates} updates\n")
 
     # --- Setup ---
     t_setup_start = time.perf_counter()
-    env, network, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config)
+    inner_env = FsmRedCC4Env(num_steps=500, topology_mode=config["TOPOLOGY_MODE"])
+    action_dim = inner_env.action_space(inner_env.agents[0]).n
+    network = make_jax_policy(
+        "shared",
+        action_dim=action_dim,
+        hidden_dim=config["HIDDEN_DIM"],
+        hidden_layers=config["HIDDEN_LAYERS"],
+        activation=config["ACTIVATION"],
+    )
+    env, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config, network)
     t_setup = time.perf_counter() - t_setup_start
     print(f"Setup (env+network build): {t_setup:.2f}s")
 
@@ -80,12 +95,21 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
 
     env_state = init_env_state
     obs = init_obs
+    num_envs = config["NUM_ENVS"]
+    reward_norm_state = RewardNormState(
+        returns=jnp.zeros(num_envs, dtype=jnp.float32),
+        mean=jnp.zeros((), dtype=jnp.float32),
+        var=jnp.ones((), dtype=jnp.float32),
+        count=jnp.array(1e-4, dtype=jnp.float32),
+    )
 
     # --- Run updates ---
     update_times = []
     for i in range(num_updates):
         t0 = time.perf_counter()
-        train_state, env_state, obs, rng, metric = collect_and_update(train_state, env_state, obs, rng)
+        train_state, env_state, obs, rng, reward_norm_state, metric = collect_and_update(
+            train_state, env_state, obs, rng, reward_norm_state
+        )
         # Block until computation is done
         jax.block_until_ready(metric)
         t1 = time.perf_counter()

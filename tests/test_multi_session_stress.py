@@ -21,8 +21,8 @@ from jaxborg.constants import (
     MAX_TRACKED_SESSION_PIDS,
     NUM_RED_AGENTS,
 )
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import build_topology
+from jaxborg.state import create_initial_state
 
 
 @pytest.fixture(scope="module")

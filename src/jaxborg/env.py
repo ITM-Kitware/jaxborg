@@ -20,17 +20,14 @@ from jaxborg.actions.encoding import (
     BLUE_BLOCK_TRAFFIC_START,
     RED_WITHDRAW_END,
 )
-from jaxborg.actions.green import apply_green_agent_action
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import apply_red_session_check
-from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
-from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER, TOTAL_ACTION_ACTOR_SLOTS
+from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
-from jaxborg.scenarios.config import ScenarioConfig
-from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
+from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.scenarios.cc4.topology import (
     build_topology,
     cyborg_bank_index_from_key,
@@ -38,34 +35,11 @@ from jaxborg.scenarios.cc4.topology import (
     get_cyborg_red_policy_random_bank,
     get_cyborg_topology_bank,
 )
+from jaxborg.scenarios.config import ScenarioConfig
+from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
 
 
-def _frontload_order(front_slots: tuple[int, ...], total_slots: int = TOTAL_ACTION_ACTOR_SLOTS) -> jnp.ndarray:
-    slots = [slot for slot in range(total_slots) if slot not in front_slots]
-    return jnp.array([*front_slots, *slots], dtype=jnp.int32)
-
-
-def _cyborg_priority_execution_order(blue_actions: jnp.ndarray, total_slots: int) -> jnp.ndarray:
-    """Build execution order matching CybORG's deterministic priority sort.
-
-    CybORG sorts actions by priority (stable sort):
-      - ControlTraffic (BlockTraffic/AllowTraffic): priority 1 → execute first
-      - Everything else: priority 99 → execute after
-
-    Within the same priority tier the original agent-interface insertion order
-    is preserved (blue 0-4, then green hosts, then red 0-5).
-    """
-    n_blue = blue_actions.shape[0]
-    all_slots = jnp.arange(total_slots, dtype=jnp.int32)
-    # Blue agents doing BlockTraffic or AllowTraffic have priority 1.
-    is_traffic = (blue_actions >= BLUE_BLOCK_TRAFFIC_START) & (blue_actions < BLUE_ALLOW_TRAFFIC_END)
-    # Build priority: 1 for traffic-control blue slots, 99 for everything else.
-    priorities = jnp.full(total_slots, 99, dtype=jnp.int32)
-    priorities = priorities.at[:n_blue].set(jnp.where(is_traffic, 1, 99))
-    return all_slots[jnp.argsort(priorities, stable=True)]
-
-
-def apply_all_actions_in_order(
+def apply_all_actions(
     state: SimulatorState,
     const: SimulatorConst,
     blue_actions: jnp.ndarray,
@@ -74,106 +48,25 @@ def apply_all_actions_in_order(
     red_keys: jnp.ndarray,
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
-    execution_order: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
 ) -> SimulatorState:
-    """Apply one CybORG step using an explicit chosen-action execution order."""
-    n_blue = blue_actions.shape[0]
-    n_red = red_actions.shape[0]
-    n_hosts = const.host_active.shape[0]
-    total_slots = n_blue + n_hosts + n_red
-    if blue_keys is None:
-        blue_keys = jax.random.split(jax.random.PRNGKey(0), n_blue)
-    green_keys = jax.random.split(key_green, n_hosts)
+    """Apply one CybORG step in CybORG's deterministic priority order.
 
-    # CybORG calls get_action() for ALL agents before any execute().
-    # Snapshot creation-time parameters from pre-execution state so red
-    # exploit actions see the same N that CybORG's get_action() would.
-    pre_execution_visible_sessions = state.red_server_session_count
+    Split into 3 typed phases matching CybORG's execution order:
+    traffic-control blue → other blue → green → red. Each loop body handles
+    only its own action type, eliminating the 3-level nested jax.lax.cond
+    that would force XLA to evaluate all 3 branches per iteration.
 
-    def step_actor(step_idx, carry_state):
-        actor_slot = execution_order[step_idx]
-        blue_id = jnp.clip(actor_slot, 0, n_blue - 1)
-        green_host = jnp.clip(actor_slot - n_blue, 0, n_hosts - 1)
-        red_id = jnp.clip(actor_slot - n_blue - n_hosts, 0, n_red - 1)
-
-        is_blue = actor_slot < n_blue
-        is_green = (actor_slot >= n_blue) & (actor_slot < n_blue + n_hosts)
-
-        return jax.lax.cond(
-            is_blue,
-            lambda s: process_blue_with_duration(s, const, blue_id, blue_actions[blue_id], blue_keys[blue_id]),
-            lambda s: jax.lax.cond(
-                is_green,
-                lambda gs: apply_green_agent_action(gs, const, green_host, green_keys[green_host]),
-                lambda rs: process_red_with_duration(
-                    rs,
-                    const,
-                    red_id,
-                    red_actions[red_id],
-                    red_keys[red_id],
-                    forced_primary_host=forced_primary_hosts[red_id],
-                    forced_primary_pid=forced_primary_pids[red_id],
-                    run_session_check=False,
-                    creation_visible_sessions_override=pre_execution_visible_sessions[red_id],
-                ),
-                s,
-            ),
-            carry_state,
-        )
-
-    state = jax.lax.fori_loop(0, total_slots, step_actor, state)
-
-    # red_server_session_count is now maintained as a cumulative counter:
-    # incremented in green_vmap (phishing) and reassignment (session transfer).
-    # No HWM update needed here.
-
-    state = reassign_cross_subnet_sessions(state, const)
-    for b in range(n_blue):
-        state = apply_blue_monitor(state, const, b)
-    for r in range(n_red):
-        session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
-        state = apply_red_session_check(state, const, r, session_check_key)
-
-    # CybORG's _process_new_observations adds ALL hosts from the observation
-    # to host_states.  The observation includes every host where the agent has
-    # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
-    fsm_host_entered = state.fsm_host_entered | state.red_sessions
-
-    return state.replace(
-        fsm_host_entered=fsm_host_entered,
-    )
-
-
-def apply_all_actions_typed(
-    state: SimulatorState,
-    const: SimulatorConst,
-    blue_actions: jnp.ndarray,
-    red_actions: jnp.ndarray,
-    key_green: chex.PRNGKey,
-    red_keys: jnp.ndarray,
-    forced_primary_hosts: jnp.ndarray,
-    forced_primary_pids: jnp.ndarray,
-    execution_order: jnp.ndarray,
-    blue_keys: jnp.ndarray = None,
-    *,
-    use_green_vmap: bool = True,
-) -> SimulatorState:
-    """Apply one CybORG step using typed loops (no cond dispatch).
-
-    Splits the monolithic fori_loop into 3 typed phases matching CybORG's
-    execution order: traffic-control blue → other blue → green → red.
-    Each loop body handles only its own action type, eliminating the 3-level
-    nested jax.lax.cond that forces XLA to evaluate all 3 branches per iteration.
-
-    Execution order correctness: CybORG sorts by priority (traffic=1, else=99)
-    then by insertion order (blue 0-4, green hosts, red 0-5). After traffic-control
-    blue agents, the order is always: remaining blue → green → red.
+    Order correctness: CybORG sorts by priority (ControlTraffic=1, else=99)
+    via a stable sort, then executes in agent-interface dict-insertion order
+    within each tier (blue 0..4 → green hosts → red 0..5). The bandwidth
+    shuffle in CybORG's sort_action_order is a no-op for CC4 (every action
+    has bandwidth_usage=0 → no drops, returned list is the un-shuffled
+    priority sort). The JAX derivation reproduces this exactly; verified
+    against real CybORG traces by the differential test suite.
     """
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
-    n_hosts = const.host_active.shape[0]
-    green_keys = jax.random.split(key_green, n_hosts)
 
     # CybORG sorts actions by priority (ControlTraffic=1, else=99) then
     # executes in deterministic agent-interface insertion order within each
@@ -192,16 +85,12 @@ def apply_all_actions_typed(
     if blue_keys is None:
         blue_keys = jax.random.split(jax.random.PRNGKey(0), n_blue)
 
-    def blue_step(i, carry_state):
+    # n_blue is small (5) and static; unroll for stronger XLA fusion / no while carrier.
+    for i in range(n_blue):
         b = blue_order[i]
-        return process_blue_with_duration(carry_state, const, b, blue_actions[b], blue_keys[b])
+        state = process_blue_with_duration(state, const, b, blue_actions[b], blue_keys[b])
 
-    state = jax.lax.fori_loop(0, n_blue, blue_step, state)
-
-    # --- Phase 2: Green agents ---
-    # Use vmapped green in pure/training mode (faster, training-correct).
-    # Fall back to sequential fori_loop for cyborg_bank mode (exact parity).
-
+    # --- Phase 2: Green agents (vmap+scatter) ---
     # CybORG's FSM calls get_action() for ALL agents BEFORE any execute().
     # server_session (used for exploit 1/N roll) therefore reflects the
     # previous step's observation — it does NOT include phishing sessions
@@ -210,28 +99,15 @@ def apply_all_actions_typed(
     # get_action() timing.
     pre_green_visible_sessions = state.red_server_session_count
 
-    if use_green_vmap:
-        from jaxborg.actions.green_vmap import apply_green_agents_vmapped
+    from jaxborg.actions.green_vmap import apply_green_agents_vmapped
 
-        state = apply_green_agents_vmapped(state, const, key_green)
-    else:
-        from jaxborg.actions.green import _apply_single_green, _ordered_green_hosts
-
-        green_host_order = _ordered_green_hosts(const)
-
-        def green_step(i, carry_state):
-            host_idx = green_host_order[i]
-            return _apply_single_green(carry_state, const, host_idx, green_keys[host_idx])
-
-        state = jax.lax.fori_loop(0, const.num_green_agents, green_step, state)
+    state = apply_green_agents_vmapped(state, const, key_green)
 
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
-    red_order = jnp.arange(n_red, dtype=jnp.int32)
-
-    def red_step(i, carry_state):
-        r = red_order[i]
-        return process_red_with_duration(
-            carry_state,
+    # red_order = arange so r == i; n_red is small (6) and static — unroll directly.
+    for r in range(n_red):
+        state = process_red_with_duration(
+            state,
             const,
             r,
             red_actions[r],
@@ -241,8 +117,6 @@ def apply_all_actions_typed(
             run_session_check=False,
             creation_visible_sessions_override=pre_green_visible_sessions[r],
         )
-
-    state = jax.lax.fori_loop(0, n_red, red_step, state)
 
     # --- Post-step processing ---
 
@@ -255,16 +129,12 @@ def apply_all_actions_typed(
 
     state = reassign_cross_subnet_sessions(state, const)
 
-    def monitor_step(b, carry_state):
-        return apply_blue_monitor(carry_state, const, b)
+    for b in range(n_blue):
+        state = apply_blue_monitor(state, const, b)
 
-    state = jax.lax.fori_loop(0, n_blue, monitor_step, state)
-
-    def session_check_step(r, carry_state):
+    for r in range(n_red):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
-        return apply_red_session_check(carry_state, const, r, session_check_key)
-
-    state = jax.lax.fori_loop(0, n_red, session_check_step, state)
+        state = apply_red_session_check(state, const, r, session_check_key)
 
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
@@ -273,56 +143,6 @@ def apply_all_actions_typed(
 
     return state.replace(
         fsm_host_entered=fsm_host_entered,
-    )
-
-
-def apply_all_actions(
-    state: SimulatorState,
-    const: SimulatorConst,
-    blue_actions: jnp.ndarray,
-    red_actions: jnp.ndarray,
-    key_green: chex.PRNGKey,
-    red_keys: jnp.ndarray,
-    forced_primary_hosts: jnp.ndarray,
-    forced_primary_pids: jnp.ndarray,
-    blue_keys: jnp.ndarray = None,
-) -> SimulatorState:
-    """Apply all agent actions in CybORG's deterministic priority order.
-
-    CybORG sorts by action priority (ControlTraffic=1, else=99) then
-    executes in agent-interface insertion order within each tier.
-
-    Shared by ScenarioEnv.step_env and the differential harness.
-
-    Args:
-        blue_actions: (num_blue_agents,) int32
-        red_actions: (num_red_agents,) int32
-        red_keys: (num_red_agents, 2) PRNGKey per red agent
-        forced_primary_hosts: (num_red_agents,) int32, `UNKNOWN_PRIMARY_HOST` for no override
-        forced_primary_pids: (num_red_agents,) int32, `UNKNOWN_PRIMARY_PID` for no override
-    """
-    total_slots = blue_actions.shape[0] + const.host_active.shape[0] + red_actions.shape[0]
-    execution_order = _cyborg_priority_execution_order(blue_actions, total_slots)
-    # When CybORG execution order is synced (differential testing), use the
-    # full action order captured from CybORG's priority-based shuffle.  This
-    # ensures session creation order within a single source agent matches
-    # CybORG's shuffled order.
-    execution_order = jnp.where(
-        const.use_green_host_order,
-        const.green_host_order[state.time],
-        execution_order,
-    )
-    return apply_all_actions_in_order(
-        state,
-        const,
-        blue_actions,
-        red_actions,
-        key_green,
-        red_keys,
-        forced_primary_hosts,
-        forced_primary_pids,
-        execution_order,
-        blue_keys,
     )
 
 
@@ -359,53 +179,35 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
     for r in range(n_red):
         start_host = const.red_start_hosts[r]
         is_active = red_agent_active[r]
-        red_sessions = jnp.where(
-            is_active,
-            red_sessions.at[r, start_host].set(True),
-            red_sessions,
+        # Push is_active into scalar/row/column-scoped scatters: when False, the
+        # scatter writes the prior value back (no-op).  Avoids materializing full
+        # (NUM_RED, GLOBAL_MAX_HOSTS, ...) arrays under both branches of jnp.where
+        # for each of the ~15 fields below.  Behavior is identical.
+        red_sessions = red_sessions.at[r, start_host].set(jnp.where(is_active, True, red_sessions[r, start_host]))
+        red_session_count = red_session_count.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(1), red_session_count[r, start_host])
         )
-        red_session_count = jnp.where(
-            is_active,
-            red_session_count.at[r, start_host].set(1),
-            red_session_count,
+        red_session_is_abstract = red_session_is_abstract.at[r, start_host].set(
+            jnp.where(is_active, True, red_session_is_abstract[r, start_host])
         )
-        red_session_is_abstract = jnp.where(
-            is_active,
-            red_session_is_abstract.at[r, start_host].set(True),
-            red_session_is_abstract,
+        red_abstract_host_rank = red_abstract_host_rank.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(0), red_abstract_host_rank[r, start_host])
         )
-        red_abstract_host_rank = jnp.where(
-            is_active,
-            red_abstract_host_rank.at[r, start_host].set(0),
-            red_abstract_host_rank,
-        )
-        red_next_abstract_rank = jnp.where(
-            is_active,
-            red_next_abstract_rank.at[r].set(1),
-            red_next_abstract_rank,
+        red_next_abstract_rank = red_next_abstract_rank.at[r].set(
+            jnp.where(is_active, jnp.int32(1), red_next_abstract_rank[r])
         )
         pid_row = red_session_pids[r, start_host]
-        red_session_pids = jnp.where(
-            is_active,
-            red_session_pids.at[r, start_host].set(append_pid_to_row(pid_row, red_next_pid)),
-            red_session_pids,
+        red_session_pids = red_session_pids.at[r, start_host].set(
+            jnp.where(is_active, append_pid_to_row(pid_row, red_next_pid), pid_row)
         )
         abstract_pid_row = red_session_abstract_pids[r, start_host]
-        red_session_abstract_pids = jnp.where(
-            is_active,
-            red_session_abstract_pids.at[r, start_host].set(append_pid_to_row(abstract_pid_row, red_next_pid)),
-            red_session_abstract_pids,
+        red_session_abstract_pids = red_session_abstract_pids.at[r, start_host].set(
+            jnp.where(is_active, append_pid_to_row(abstract_pid_row, red_next_pid), abstract_pid_row)
         )
-        red_primary_pid = jnp.where(
-            is_active,
-            red_primary_pid.at[r].set(red_next_pid),
-            red_primary_pid,
-        )
+        red_primary_pid = red_primary_pid.at[r].set(jnp.where(is_active, red_next_pid, red_primary_pid[r]))
         red_next_pid = jnp.where(is_active, red_next_pid + 1, red_next_pid)
-        red_privilege = jnp.where(
-            is_active,
-            red_privilege.at[r, start_host].set(COMPROMISE_USER),
-            red_privilege,
+        red_privilege = red_privilege.at[r, start_host].set(
+            jnp.where(is_active, jnp.int32(COMPROMISE_USER), red_privilege[r, start_host])
         )
         # CybORG pre-seeds aspace.ip_address with the start host at reset
         # for ALL agents (including initially inactive ones).  Always mark
@@ -413,38 +215,31 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         # action space.  FsmRedCC4Env._strip_inactive_red_reset_knowledge
         # will clear this for inactive agents to match the FSM's host_states.
         red_discovered = red_discovered.at[r, start_host].set(True)
-        host_compromised = jnp.where(
-            is_active,
-            host_compromised.at[start_host].set(jnp.maximum(host_compromised[start_host], COMPROMISE_USER)),
-            host_compromised,
+        host_compromised = host_compromised.at[start_host].set(
+            jnp.where(
+                is_active,
+                jnp.maximum(host_compromised[start_host], COMPROMISE_USER),
+                host_compromised[start_host],
+            )
         )
-        fsm_states = jnp.where(
-            is_active,
-            fsm_states.at[r].set(fsm_red_init_states(const, r)),
-            fsm_states,
+        fsm_states = fsm_states.at[r].set(jnp.where(is_active, fsm_red_init_states(const, r), fsm_states[r]))
+        fsm_host_entered = fsm_host_entered.at[r, start_host].set(
+            jnp.where(is_active, True, fsm_host_entered[r, start_host])
         )
-        fsm_host_entered = jnp.where(
-            is_active,
-            fsm_host_entered.at[r, start_host].set(True),
-            fsm_host_entered,
-        )
-        red_scan_anchor_host = jnp.where(
-            is_active,
-            red_scan_anchor_host.at[r].set(start_host),
-            red_scan_anchor_host,
-        )
+        red_scan_anchor_host = red_scan_anchor_host.at[r].set(jnp.where(is_active, start_host, red_scan_anchor_host[r]))
         initially_scanned = const.red_initial_scanned_hosts[r]
-        red_scanned_source_hosts = jnp.where(
-            is_active,
-            red_scanned_source_hosts.at[r, :, start_host].set(initially_scanned),
-            red_scanned_source_hosts,
+        prior_scan_col = red_scanned_source_hosts[r, :, start_host]
+        red_scanned_source_hosts = red_scanned_source_hosts.at[r, :, start_host].set(
+            jnp.where(is_active, initially_scanned, prior_scan_col)
         )
         # Record scan-owning PID for initial knowledge sourced from start_host.
         has_initial_scan = jnp.any(initially_scanned)
-        red_scan_source_pid = jnp.where(
-            is_active & has_initial_scan,
-            red_scan_source_pid.at[r, start_host].set(red_primary_pid[r]),
-            red_scan_source_pid,
+        red_scan_source_pid = red_scan_source_pid.at[r, start_host].set(
+            jnp.where(
+                is_active & has_initial_scan,
+                red_primary_pid[r],
+                red_scan_source_pid[r, start_host],
+            )
         )
 
     # CybORG's server_session dict gets one entry per active agent at reset
@@ -645,8 +440,7 @@ class ScenarioEnv(MultiAgentEnv):
         no_forced = jnp.full(n_red, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
         no_forced_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
-        execution_order = _cyborg_priority_execution_order(blue_action_arr, n_blue + n_hosts + n_red)
-        state = apply_all_actions_typed(
+        state = apply_all_actions(
             state,
             const,
             blue_action_arr,
@@ -655,9 +449,7 @@ class ScenarioEnv(MultiAgentEnv):
             red_keys,
             no_forced,
             no_forced_pids,
-            execution_order,
             blue_keys,
-            use_green_vmap=(self.topology_mode == "generative"),
         )
 
         reward_breakdown = compute_reward_breakdown(

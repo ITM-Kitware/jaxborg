@@ -34,8 +34,8 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     NUM_SUBNETS,
 )
-from jaxborg.state import create_initial_state
 from jaxborg.scenarios.cc4.topology import CYBORG_SUFFIX_TO_ID
+from jaxborg.state import create_initial_state
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))
@@ -312,8 +312,8 @@ class TestDifferentialWithCybORG:
         If scan memory belongs to one abstract session and a different abstract
         session is restored, CybORG keeps the scanned host. JAX must do the same.
         """
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -488,8 +488,8 @@ class TestDifferentialWithCybORG:
 
     def test_restore_source_host_keeps_target_scan_when_target_session_still_knows_ip_matches_cyborg(self):
         """Regression: rescans should not overwrite scan ownership away from a live target session."""
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -752,8 +752,8 @@ class TestScanRequiresAbstractSession:
         )
 
     def test_stale_abstract_flag_without_live_session_does_not_allow_scan_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -799,8 +799,8 @@ class TestScanRequiresAbstractSession:
 class TestDeferredScanSessionBinding:
     def test_deferred_scan_fails_if_bound_session_removed_before_execute_matches_cyborg(self):
         """Deferred scan stays bound to the queued session id in CybORG."""
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -898,8 +898,8 @@ class TestDeferredScanSessionBinding:
         assert jax_scanned == cy_scanned, "JAX must match CybORG for deferred scan session binding"
 
     def test_scan_does_not_rebind_when_bound_source_is_missing_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -974,8 +974,8 @@ class TestDeferredScanSessionBinding:
         assert not bool(new_state.red_scanned_hosts[red_agent_id, target_host])
 
     def test_scan_honors_prebound_source_during_execution_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1131,8 +1131,8 @@ class TestDeferredScanSessionBinding:
         assert bool(state.red_scanned_source_hosts[red_agent_id, target_host, source_host])
 
     def test_deferred_scan_uses_current_session_zero_host_when_prebound_source_stale_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1218,8 +1218,8 @@ class TestDeferredScanSessionBinding:
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
 
     def test_deferred_scan_does_not_rebind_from_unset_source_when_new_abstract_appears_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1319,8 +1319,8 @@ class TestDeferredScanSessionBinding:
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
 
     def test_deferred_scan_uses_anchor_session_when_source_is_unset_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1395,8 +1395,8 @@ class TestDeferredScanSessionBinding:
         assert bool(new_state.red_scanned_hosts[red_agent_id, target_host]) == cy_scanned
 
     def test_deferred_scan_does_not_rebind_stale_scan_memory_source_to_anchor_matches_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1581,8 +1581,8 @@ class TestDeferredScanSessionBinding:
 
     def test_scan_bound_to_nonabstract_session_zero_does_not_fallback_to_other_abstract_host_matches_cyborg(self):
         """Session-0 scan cannot silently switch to another abstract session on a different host."""
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -1695,8 +1695,8 @@ class TestDeferredScanSessionBinding:
 
     def test_forced_primary_host_overrides_stale_anchor_for_same_tick_scan_matches_cyborg(self):
         """Differential regression: current scan tick must use CybORG's current session-0 host."""
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         sg = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,

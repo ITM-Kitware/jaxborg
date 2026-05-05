@@ -43,8 +43,8 @@ def jax_fsm_env():
 def jax_env_from_cyborg(cyborg_sleep_env):
     from jaxborg.env import ScenarioEnvState, _init_red_state
     from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-    from jaxborg.state import create_initial_state
     from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+    from jaxborg.state import create_initial_state
 
     inner_cyborg = cyborg_sleep_env.env
     const = build_const_from_cyborg(inner_cyborg)
@@ -198,8 +198,8 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.masking import compute_blue_action_mask
         from jaxborg.constants import NUM_BLUE_AGENTS
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -336,8 +336,8 @@ class TestFsmRedEnvDifferential:
         """Independent transfer must use the same cached CybORG bank member as the JAX reset key."""
         from jaxborg.actions.masking import compute_blue_action_mask
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 3
@@ -379,10 +379,10 @@ class TestFsmRedEnvDifferential:
         """Native bank-backed red policy should match CybORG's first red_0 action."""
         from CybORG.Simulator.Actions import Sleep
 
-        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
         from jaxborg.constants import NUM_RED_AGENTS
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
         from jaxborg.parity.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
@@ -453,8 +453,8 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Actions import Sleep
 
         from jaxborg.actions.encoding import encode_blue_action
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from scripts.eval.transfer import make_cyborg_env
 
         seed = 4
@@ -615,10 +615,10 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.actions.encoding import BLUE_SLEEP
-        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update
         from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(
@@ -677,10 +677,10 @@ class TestFsmRedEnvDifferential:
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.actions.encoding import BLUE_SLEEP
-        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
         from jaxborg.constants import NUM_BLUE_AGENTS, NUM_RED_AGENTS
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
         from jaxborg.parity.translate import build_mappings_from_cyborg, jax_red_to_cyborg
+        from jaxborg.scenarios.cc4.red_fsm import fsm_red_apply_delayed_update, fsm_red_select_actions
 
         seed = 0
         scenario = EnterpriseScenarioGenerator(

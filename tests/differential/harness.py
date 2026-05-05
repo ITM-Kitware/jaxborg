@@ -36,12 +36,6 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.scenarios.cc4.red_fsm import (
-    fsm_red_apply_delayed_update,
-    fsm_red_init_states,
-    fsm_red_schedule_post_step_update,
-    fsm_red_select_actions,
-)
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
@@ -51,15 +45,21 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
 )
 from jaxborg.env import apply_all_actions
-from jaxborg.rewards import advance_mission_phase, compute_rewards
-from jaxborg.state import create_initial_state
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.parity.translate import (
     build_mappings_from_cyborg,
     cyborg_blue_to_jax,
     jax_blue_to_cyborg,
     jax_red_to_cyborg,
 )
+from jaxborg.rewards import advance_mission_phase, compute_rewards
+from jaxborg.scenarios.cc4.red_fsm import (
+    fsm_red_apply_delayed_update,
+    fsm_red_init_states,
+    fsm_red_schedule_post_step_update,
+    fsm_red_select_actions,
+)
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+from jaxborg.state import create_initial_state
 from tests.differential.blue_mask_projection import (
     comparison_blue_mask_in_jax_space,
     format_action_index_set,
@@ -702,7 +702,6 @@ class CC4DifferentialHarness:
                 use_green_randoms=jnp.array(True),
                 use_red_pid_deltas=jnp.array(True),
                 use_blue_decoy_pid_deltas=jnp.array(True),
-                use_green_host_order=jnp.array(True),
             )
             self.jax_const = self.jax_const.replace(
                 use_red_privesc_choices=jnp.array(True),
@@ -1099,25 +1098,6 @@ class CC4DifferentialHarness:
             red_sc_host_row = self.jax_const.red_session_check_hosts.at[self.jax_state.time].set(
                 jnp.array(sc_host_row, dtype=jnp.int32)
             )
-            # Sync CybORG's full action execution order so JAX processes all
-            # agents (blue, green, red) in CybORG's shuffled priority order.
-            from jaxborg.env import TOTAL_ACTION_ACTOR_SLOTS
-
-            full_exec = random_sync_report.full_execution_order
-            if full_exec:
-                # Build complete execution order: CybORG-observed slots first,
-                # then any remaining slots that weren't logged.
-                seen = set(full_exec)
-                remaining = [s for s in range(TOTAL_ACTION_ACTOR_SLOTS) if s not in seen]
-                full_order = np.array(full_exec + remaining, dtype=np.int32)
-                if len(full_order) < TOTAL_ACTION_ACTOR_SLOTS:
-                    full_order = np.pad(full_order, (0, TOTAL_ACTION_ACTOR_SLOTS - len(full_order)), constant_values=0)
-                green_host_order_row = self.jax_const.green_host_order.at[self.jax_state.time].set(
-                    jnp.array(full_order[:TOTAL_ACTION_ACTOR_SLOTS], dtype=jnp.int32)
-                )
-            else:
-                green_host_order_row = self.jax_const.green_host_order
-
             self.jax_const = self.jax_const.replace(
                 green_randoms=green_randoms,
                 red_pid_deltas=red_pid_delta_row,
@@ -1127,7 +1107,6 @@ class CC4DifferentialHarness:
                 red_privesc_choices=red_privesc_choice_row,
                 red_session_check_choices=red_sc_choice_row,
                 red_session_check_hosts=red_sc_host_row,
-                green_host_order=green_host_order_row,
             )
             self.jax_state = self.jax_state.replace(
                 detection_random_index=jnp.array(0, dtype=jnp.int32),
@@ -1711,8 +1690,8 @@ class CC4DifferentialHarness:
 
         We compare the symmetric difference of the two index sets.
         """
-        from jaxborg.scenarios.cc4.red_fsm import FSM_F
         from jaxborg.constants import NUM_RED_AGENTS
+        from jaxborg.scenarios.cc4.red_fsm import FSM_F
 
         step = int(self.jax_state.time)
         fsm_entered = self.jax_state.fsm_host_entered
@@ -1739,6 +1718,7 @@ class CC4DifferentialHarness:
                 hostname = entry.get("hostname")
                 if hostname is None:
                     from ipaddress import IPv4Address
+
                     try:
                         hostname = controller.state.ip_addresses.get(IPv4Address(ip_str))
                     except (ValueError, TypeError):

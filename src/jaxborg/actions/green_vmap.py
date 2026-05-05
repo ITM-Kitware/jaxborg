@@ -1,4 +1,4 @@
-"""Vectorized green agent processing for training mode.
+"""Vectorized green agent processing.
 
 Splits green agent logic into:
 1. Pure per-host decisions (vmappable) — computes what each green agent does
@@ -7,6 +7,30 @@ Splits green agent logic into:
 
 This replaces the sequential fori_loop over ~80 active hosts with one
 vmapped pass + a small sequential loop for the rare phishing events.
+
+CybORG-faithfulness contract
+----------------------------
+The vmap intent reads the following pre-green state. For each, the
+green phase MUST NOT mutate it (otherwise sequential and vmap diverge):
+
+  field                          | mutated within green phase?
+  -------------------------------|---------------------------
+  host_services / host_decoys    | no — only blue Restore (phase 1)
+  *_reliability                  | no
+  blocked_zones                  | no — only blue traffic (phase 1)
+  host_active / host_is_server   | no — const
+  mission_phase / allowed pairs  | no
+  red_sessions                   | YES — by phishing. NEVER read in vmap intent
+
+Because phishing mutates `red_sessions`, the phishing-source derivation
+(the only state-sensitive intent) is NOT in the vmap pass. It is
+re-derived against `carry_state` inside the sequential phishing fori_loop,
+matching `_apply_single_green` in `green.py`.
+
+If a future change adds another green-phase mutation to a field listed
+"no" above, this audit becomes invalid and the vmap path will silently
+diverge from CybORG. The forced-two-phishing test in
+`tests/subsystems/test_green_vmap_pure_parity.py` is the regression gate.
 """
 
 from typing import NamedTuple
@@ -26,7 +50,6 @@ from jaxborg.constants import (
     COMPROMISE_USER,
     GLOBAL_MAX_HOSTS,
     NUM_DECOY_TYPES,
-    NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
 )
@@ -47,7 +70,12 @@ MAX_PHISHING_PER_STEP = 8
 
 
 class GreenDecision(NamedTuple):
-    """Per-host green agent decision outputs (vmappable)."""
+    """Per-host green agent decision outputs (vmappable).
+
+    State-independent intent. The phishing source agent is NOT in this
+    struct — it is derived live inside the phishing fori_loop, see
+    module docstring.
+    """
 
     host_idx: jnp.int32
     local_work_failed: jnp.bool_
@@ -55,32 +83,8 @@ class GreenDecision(NamedTuple):
     access_blocked: jnp.bool_
     access_fp: jnp.bool_
     dest_host: jnp.int32
-    phish_creates_session: jnp.bool_
-    red_agent_idx: jnp.int32
+    phish_intent: jnp.bool_  # do_phish & work_succeeds & phish_triggered & ~any_red_on_host_pre
     pid_delta: jnp.int32
-
-
-def _find_phishing_red_agent(state, const, host_idx, key):
-    """Find which red agent gets a phishing session on this host."""
-    host_subnet = const.host_subnet[host_idx]
-    same_subnet_agents = const.red_agent_subnets[:, host_subnet]
-    has_same_subnet = jnp.any(same_subnet_agents)
-    same_candidates = jnp.where(same_subnet_agents, jnp.arange(NUM_RED_AGENTS), -1)
-    same_valid = same_candidates >= 0
-    same_count = jnp.sum(same_valid)
-    same_idx = jax.random.randint(key, (), 0, jnp.maximum(same_count, 1))
-    same_sorted = jnp.sort(jnp.where(same_valid, same_candidates, NUM_RED_AGENTS))
-    same_subnet_agent = same_sorted[same_idx]
-
-    active_agents = jnp.where(state.red_agent_active, jnp.arange(NUM_RED_AGENTS), NUM_RED_AGENTS)
-    active_sorted = jnp.sort(active_agents)
-    num_active = jnp.sum(state.red_agent_active)
-    fallback_flat_idx = jax.random.randint(key, (), 0, jnp.maximum(num_active, 1))
-    fallback_agent = active_sorted[fallback_flat_idx]
-    num_candidates = jnp.where(has_same_subnet, same_count, num_active)
-    fallback_agent = jnp.where(num_candidates > 0, fallback_agent, jnp.int32(-1))
-
-    return jnp.where(has_same_subnet, same_subnet_agent, fallback_agent)
 
 
 def _compute_green_decision(
@@ -139,14 +143,19 @@ def _compute_green_decision(
     fp_triggered = fp_roll < FP_DETECTION_RATE
     local_fp = (action == GREEN_LOCAL_WORK) & work_succeeds & fp_triggered
 
-    # Phishing
+    # Phishing intent (state-independent rolls only).
+    # Source-agent selection is state-dependent (reads red_sessions which is
+    # mutated by prior phishing in this same step), so it MUST be derived
+    # live inside the phishing fori_loop, not here. The pre-state
+    # `~any_red_on_host` is a useful intent gate: red_sessions only grows
+    # during the green phase, so a host with a red session pre-green will
+    # still have one when this slot would run sequentially.
+    del k_phish_src  # source derivation moved to phishing fori_loop
     phish_roll = sample_green_random(const, t, host_idx, 4, k3)
     phish_triggered = phish_roll < PHISHING_ERROR_RATE
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
-    red_agent = _find_phishing_red_agent(state, const, host_idx, k_phish_src)
-    any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
-    phish_creates_session = do_phish & (red_agent >= 0) & ~any_red_on_host
-    red_agent_idx = jnp.maximum(red_agent, 0)
+    any_red_on_host_pre = jnp.any(state.red_sessions[:, host_idx])
+    phish_intent = do_phish & ~any_red_on_host_pre
     pid_delta = sample_green_random(const, t, host_idx, 7, k_pid, int_range=9) + 1
 
     # Access service
@@ -192,8 +201,7 @@ def _compute_green_decision(
         access_blocked=access_blocked,
         access_fp=access_fp,
         dest_host=dest_host,
-        phish_creates_session=phish_creates_session,
-        red_agent_idx=red_agent_idx,
+        phish_intent=phish_intent,
         pid_delta=pid_delta,
     )
 
@@ -224,8 +232,11 @@ def apply_green_agents_vmapped(
         return _compute_green_decision(state, const, host_idx, green_keys[host_idx])
 
     decisions = jax.vmap(decide_for_slot)(jnp.arange(GLOBAL_MAX_HOSTS))
-    # Mask: only first num_active slots are valid
-    active_mask = jnp.arange(GLOBAL_MAX_HOSTS) < num_active
+    # Mask: only first num_active slots are valid. AND in the global
+    # `green_agents_active` flag so that the entire green phase becomes a
+    # no-op when CybORG uses SleepAgent for green (the harness sets this
+    # flag to False to mirror that case).
+    active_mask = (jnp.arange(GLOBAL_MAX_HOSTS) < num_active) & const.green_agents_active
 
     # --- Phase 2: Scatter per-host results ---
     host_indices = decisions.host_idx  # (GLOBAL_MAX_HOSTS,) — actual host idx per slot
@@ -272,26 +283,40 @@ def apply_green_agents_vmapped(
         host_process_creation_pids=proc_pids,
     )
 
-    # --- Phase 3: Sequential phishing (rare events) ---
-    phish_mask = active_mask & decisions.phish_creates_session
-    phish_sorted_slots = jnp.argsort(~phish_mask)  # phishing slots first
+    # --- Phase 3: Sequential phishing (rare events, ~0.8/step expected) ---
+    # Order matters: each green's phishing must see prior greens' state
+    # mutations (matching CybORG's sequential dispatch). Source agent and
+    # `any_red_on_host` are re-derived from carry_state inside the loop.
+    from jaxborg.actions.green import _find_phishing_red_agent
+
+    phish_mask = active_mask & decisions.phish_intent
+    phish_sorted_slots = jnp.argsort(~phish_mask)  # phishing slots first, in green-iteration order
     num_phish = jnp.sum(phish_mask)
+    t = state.time
 
     def _apply_phishing(i, carry_state):
         slot = phish_sorted_slots[i]
         valid = i < num_phish
         h = decisions.host_idx[slot]
-        red_idx = decisions.red_agent_idx[slot]
         delta = decisions.pid_delta[slot]
 
-        # Re-validate against current carry_state (vmapped decisions used stale
-        # state — another green agent may have already created a session on this
-        # host or for this red agent since the decisions were computed).
+        # Live source-agent derivation against current carry_state (mirrors
+        # _apply_single_green's branch in green.py).
+        sub_keys = jax.random.split(green_keys[h], 9)
+        k_phish_src = sub_keys[7]
+        red_agent_rng = _find_phishing_red_agent(carry_state, const, h, k_phish_src)
+        precomputed_src = jnp.int32(const.green_randoms[t, h, 5]) - 1
+        has_precomputed_src = const.use_green_randoms & (precomputed_src >= 0)
+        red_agent_live = jnp.where(has_precomputed_src, precomputed_src, red_agent_rng)
+
+        # Re-validate against current carry_state.
         any_red_on_host_now = jnp.any(carry_state.red_sessions[:, h])
-        valid = valid & ~any_red_on_host_now
+        valid = valid & (red_agent_live >= 0) & ~any_red_on_host_now
+        red_idx = jnp.maximum(red_agent_live, 0)
 
         # Allocate PID
-        new_pid = carry_state.host_max_pid[h] + delta
+        prev_host_max_pid = carry_state.host_max_pid[h]
+        new_pid = prev_host_max_pid + delta
 
         # Session creation
         session_counts = effective_session_counts(carry_state)
@@ -315,43 +340,64 @@ def apply_green_agents_vmapped(
         agent_has_no_sessions = ~jnp.any(carry_state.red_sessions[red_idx])
         should_set_anchor = valid & (carry_state.red_scan_anchor_host[red_idx] < 0) & agent_has_no_sessions
 
-        new_state = carry_state.replace(
-            red_sessions=carry_state.red_sessions.at[red_idx, h].set(True),
-            red_session_count=session_counts.at[red_idx, h].set(new_count),
+        # Push the `valid` gate from a full-state jnp.where down into each
+        # individual row/scalar scatter so XLA does not need to materialize a
+        # full-state select for every field on every iteration.  When valid is
+        # False each scatter writes the original value back at its index
+        # (no-op).
+        prev_red_sessions_row = carry_state.red_sessions[red_idx, h]
+        prev_abs_count_row = carry_state.red_abstract_session_count[red_idx, h]
+        prev_server_count = carry_state.red_server_session_count[red_idx]
+        prev_is_abstract_row = carry_state.red_session_is_abstract[red_idx, h]
+        prev_next_abstract = carry_state.red_next_abstract_rank[red_idx]
+        prev_privilege_row = carry_state.red_privilege[red_idx, h]
+        prev_host_compromised_row = carry_state.host_compromised[h]
+        prev_anchor = carry_state.red_scan_anchor_host[red_idx]
+
+        new_pids_row = jnp.where(valid, append_pid_to_row(pid_row, new_pid), pid_row)
+        new_abstract_pids_row = jnp.where(valid, append_pid_to_row(abstract_row, new_pid), abstract_row)
+
+        return carry_state.replace(
+            red_sessions=carry_state.red_sessions.at[red_idx, h].set(jnp.where(valid, True, prev_red_sessions_row)),
+            red_session_count=carry_state.red_session_count.at[red_idx, h].set(
+                jnp.where(valid, new_count, carry_state.red_session_count[red_idx, h])
+            ),
             red_abstract_session_count=carry_state.red_abstract_session_count.at[red_idx, h].set(
-                carry_state.red_abstract_session_count[red_idx, h] + 1
+                jnp.where(valid, prev_abs_count_row + 1, prev_abs_count_row)
             ),
             # CybORG's server_session dict grows by one entry for each new
             # RedAbstractSession (phishing).  Increment the cumulative counter.
             red_server_session_count=carry_state.red_server_session_count.at[red_idx].set(
-                carry_state.red_server_session_count[red_idx] + 1
+                jnp.where(valid, prev_server_count + 1, prev_server_count)
             ),
-            red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(True),
-            red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(assigned_rank),
-            red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(next_rank + 1),
-            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(append_pid_to_row(pid_row, new_pid)),
-            red_session_abstract_pids=carry_state.red_session_abstract_pids.at[red_idx, h].set(
-                append_pid_to_row(abstract_row, new_pid)
+            red_session_is_abstract=carry_state.red_session_is_abstract.at[red_idx, h].set(
+                jnp.where(valid, True, prev_is_abstract_row)
             ),
-            red_next_pid=jnp.maximum(carry_state.red_next_pid, new_pid + 1),
-            host_max_pid=carry_state.host_max_pid.at[h].set(jnp.maximum(carry_state.host_max_pid[h], new_pid)),
+            red_abstract_host_rank=carry_state.red_abstract_host_rank.at[red_idx, h].set(
+                jnp.where(valid, assigned_rank, abstract_rank_before)
+            ),
+            red_next_abstract_rank=carry_state.red_next_abstract_rank.at[red_idx].set(
+                jnp.where(valid, prev_next_abstract + 1, prev_next_abstract)
+            ),
+            red_session_pids=carry_state.red_session_pids.at[red_idx, h].set(new_pids_row),
+            red_session_abstract_pids=carry_state.red_session_abstract_pids.at[red_idx, h].set(new_abstract_pids_row),
+            red_next_pid=jnp.where(valid, jnp.maximum(carry_state.red_next_pid, new_pid + 1), carry_state.red_next_pid),
+            host_max_pid=carry_state.host_max_pid.at[h].set(
+                jnp.where(valid, jnp.maximum(prev_host_max_pid, new_pid), prev_host_max_pid)
+            ),
             red_privilege=carry_state.red_privilege.at[red_idx, h].set(
-                jnp.maximum(carry_state.red_privilege[red_idx, h], COMPROMISE_USER)
+                jnp.where(valid, jnp.maximum(prev_privilege_row, COMPROMISE_USER), prev_privilege_row)
             ),
             host_compromised=carry_state.host_compromised.at[h].set(
-                jnp.maximum(carry_state.host_compromised[h], COMPROMISE_USER)
+                jnp.where(
+                    valid,
+                    jnp.maximum(prev_host_compromised_row, COMPROMISE_USER),
+                    prev_host_compromised_row,
+                )
             ),
-            red_scan_anchor_host=jnp.where(
-                should_set_anchor,
-                carry_state.red_scan_anchor_host.at[red_idx].set(h),
-                carry_state.red_scan_anchor_host,
+            red_scan_anchor_host=carry_state.red_scan_anchor_host.at[red_idx].set(
+                jnp.where(should_set_anchor, h, prev_anchor)
             ),
-        )
-
-        return jax.tree.map(
-            lambda new, old: jnp.where(valid, new, old),
-            new_state,
-            carry_state,
         )
 
     state = jax.lax.fori_loop(0, MAX_PHISHING_PER_STEP, _apply_phishing, state)

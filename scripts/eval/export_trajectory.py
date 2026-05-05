@@ -21,8 +21,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
-from torch.distributions import Categorical
-
 from CybORG import CybORG
 from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import EnterpriseMAE
@@ -31,6 +29,7 @@ from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Actions.AbstractActions.Impact import Impact
 from CybORG.Simulator.Actions.GreenActions import GreenAccessService, GreenLocalWork
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+from torch.distributions import Categorical
 
 EPISODE_LENGTH = 500
 NUM_AGENTS = 5
@@ -59,7 +58,7 @@ class PPOAgent(nn.Module):
     def get_action(self, obs, action_mask, deterministic=False):
         features = self.features(obs)
         logits = self.actor(features)
-        logits = logits + (action_mask.float() - 1.0) * 1e8
+        logits = logits + (action_mask.float() - 1.0) * 1e10
         if deterministic:
             return logits.argmax(dim=-1)
         dist = Categorical(logits=logits)
@@ -184,13 +183,9 @@ def extract_topology(cyborg: CybORG) -> dict:
         system_info = {
             "Hostname": hostname,
             "OSType": host.os_type.name if hasattr(host.os_type, "name") else str(host.os_type),
-            "OSDistribution": host.distribution.name
-            if hasattr(host.distribution, "name")
-            else str(host.distribution),
+            "OSDistribution": host.distribution.name if hasattr(host.distribution, "name") else str(host.distribution),
             "OSVersion": host.version.name if hasattr(host.version, "name") else str(host.version),
-            "Architecture": host.architecture.name
-            if hasattr(host.architecture, "name")
-            else str(host.architecture),
+            "Architecture": host.architecture.name if hasattr(host.architecture, "name") else str(host.architecture),
         }
 
         topology[hostname] = {
@@ -454,9 +449,17 @@ def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) 
             break
 
     return _build_trajectory_dict(
-        episode_num, seed, actual_steps, "SleepAgent",
-        blue_agents, red_agents, green_agents,
-        topology, subnet_metadata, agent_actions, step_states,
+        episode_num,
+        seed,
+        actual_steps,
+        "SleepAgent",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
     )
 
 
@@ -561,16 +564,32 @@ def run_episode_policy(
             break
 
     return _build_trajectory_dict(
-        episode_num, seed, actual_steps, "PPO",
-        blue_agents, red_agents, green_agents,
-        topology, subnet_metadata, agent_actions, step_states,
+        episode_num,
+        seed,
+        actual_steps,
+        "PPO",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
     )
 
 
 def _build_trajectory_dict(
-    episode_num, seed, actual_steps, blue_agent_name,
-    blue_agents, red_agents, green_agents,
-    topology, subnet_metadata, agent_actions, step_states,
+    episode_num,
+    seed,
+    actual_steps,
+    blue_agent_name,
+    blue_agents,
+    red_agents,
+    green_agents,
+    topology,
+    subnet_metadata,
+    agent_actions,
+    step_states,
 ) -> dict:
     """Build the V2 trajectory dict from collected episode data."""
     # Build flattened backward-compat arrays (interleaved all blue / all red)

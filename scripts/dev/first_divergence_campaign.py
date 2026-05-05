@@ -1,7 +1,7 @@
 """Run differential harness across many seeds and histogram first divergence.
 
-Unlike `parity_loop.sh`, this does not stop on first mismatch — it records the
-first divergence per seed (if any), then prints a histogram by step + field.
+This records the first divergence per seed (if any), then prints a histogram by
+step + field.
 
 Usage:
     uv run python scripts/dev/first_divergence_campaign.py \\

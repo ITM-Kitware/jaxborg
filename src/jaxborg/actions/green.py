@@ -433,7 +433,7 @@ def apply_green_agents(state: SimulatorState, const: SimulatorConst, key: jax.Ar
 
     def step_fn(carry_state, ordered_idx):
         host_idx = host_order[ordered_idx]
-        is_active = const.green_agent_active[host_idx]
+        is_active = const.green_agent_active[host_idx] & const.green_agents_active
         new_state = _apply_single_green(carry_state, const, host_idx, keys[host_idx])
         out_state = jax.tree.map(
             lambda new, old: jnp.where(is_active, new, old),
@@ -448,19 +448,3 @@ def apply_green_agents(state: SimulatorState, const: SimulatorConst, key: jax.Ar
         jnp.arange(GLOBAL_MAX_HOSTS),
     )
     return final_state
-
-
-def apply_green_agent_action(
-    state: SimulatorState,
-    const: SimulatorConst,
-    host_idx: jnp.int32,
-    key: jax.Array,
-) -> SimulatorState:
-    """Apply one green host action if that host owns an active green agent."""
-    is_active = const.green_agent_active[host_idx] & const.green_agents_active
-    new_state = _apply_single_green(state, const, host_idx, key)
-    return jax.tree.map(
-        lambda new, old: jnp.where(is_active, new, old),
-        new_state,
-        state,
-    )

@@ -20,7 +20,6 @@ Usage:
 import argparse
 import json
 import time
-from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,7 +32,6 @@ from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
 from export_trajectory import (
     EPISODE_LENGTH,
     _build_trajectory_dict,
@@ -75,7 +73,7 @@ def _load_torch_model(path: str):
         def get_action(self, obs, action_mask, deterministic=False):
             features = self.features(obs)
             logits = self.actor(features)
-            logits = logits + (action_mask.float() - 1.0) * 1e8
+            logits = logits + (action_mask.float() - 1.0) * 1e10
             if deterministic:
                 return logits.argmax(dim=-1)
             dist = Categorical(logits=logits)
@@ -96,6 +94,7 @@ def _load_jax_model(path: str):
     # Lazy imports so the script works without JAX when only using --model-pt
     import distrax
     import jax
+
     from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 
     policy, params, recipe = load_jax_checkpoint(path)
@@ -136,7 +135,6 @@ def _build_mask_cache(wrapper, mappings, const):
     """Precompute CybORG-to-JAX action translation tables (from transfer.py)."""
 
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
-    from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 
     controller = wrapper.env.environment_controller
     cyborg_state = controller.state
@@ -162,9 +160,7 @@ def _build_mask_cache(wrapper, mappings, const):
                     else:
                         agent_cache.append([jax_idx])
             else:
-                jax_indices = _cyborg_action_to_jax_indices(
-                    action, label, agent_name, mappings, const, cyborg_state
-                )
+                jax_indices = _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state)
                 agent_cache.append(jax_indices if jax_indices else None)
         cache[agent_name] = agent_cache
     return cache
@@ -174,6 +170,7 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
     """Translate a single CybORG action to JAX indices (from transfer.py)."""
 
     from jaxborg.parity.translate import cyborg_blue_to_jax
+
     try:
         jax_idx = cyborg_blue_to_jax(action, agent_name, mappings, const=const)
         return [jax_idx]
@@ -212,13 +209,14 @@ def _get_jax_mask(wrapper, agent_name, mask_cache):
 def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
     """Filter no-op traffic actions from mask (from transfer.py)."""
     import jax.numpy as jnp
-    from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
+
     from jaxborg.actions.encoding import (
         BLUE_ALLOW_TRAFFIC_END,
         BLUE_ALLOW_TRAFFIC_START,
         BLUE_BLOCK_TRAFFIC_END,
         BLUE_BLOCK_TRAFFIC_START,
     )
+    from jaxborg.constants import BLUE_MAX_OBSERVED_SUBNETS, BLUE_TRAFFIC_SLOTS, NUM_SUBNETS
 
     offsets = jnp.arange(BLUE_TRAFFIC_SLOTS)
     src_offset = offsets // BLUE_MAX_OBSERVED_SUBNETS
@@ -240,6 +238,7 @@ def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
 def _cyborg_blocked_zones(controller):
     """Extract CybORG block state as (NUM_SUBNETS, NUM_SUBNETS) bool array."""
     import jax.numpy as jnp
+
     from jaxborg.constants import CYBORG_SUFFIX_TO_ID, NUM_SUBNETS
 
     blocked = jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
@@ -266,6 +265,7 @@ def _cyborg_blocked_zones(controller):
 def run_episode_torch(seed, episode_num, model, deterministic=False, steps=EPISODE_LENGTH):
     """Run CybORG episode with PyTorch PPO policy (delegates to export_trajectory)."""
     from export_trajectory import run_episode_policy
+
     return run_episode_policy(seed, episode_num, model, deterministic, steps)
 
 
@@ -274,9 +274,8 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     import jax
     import jax.numpy as jnp
 
-
-    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
     from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     # Create env with BlueFlatWrapper (same as transfer.py)
     wrapper = make_cyborg_env(seed, steps)
@@ -316,14 +315,10 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             # Build JAX-space masks with traffic filtering
             blocked_zones = _cyborg_blocked_zones(ctrl)
             raw_masks = [_get_jax_mask(wrapper, a, mask_cache) for a in wrapper.agents]
-            masks = jnp.stack([
-                _apply_traffic_filter(jnp.array(m), blocked_zones, const, i)
-                for i, m in enumerate(raw_masks)
-            ])
-            obs_stack = jnp.stack([
-                jnp.array(observations[a], dtype=jnp.float32)
-                for a in wrapper.agents
-            ])
+            masks = jnp.stack(
+                [_apply_traffic_filter(jnp.array(m), blocked_zones, const, i) for i, m in enumerate(raw_masks)]
+            )
+            obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in wrapper.agents])
 
             # JAX policy inference
             actions_arr, _ = batched_step_fn(obs_stack, masks, act_keys)
@@ -333,29 +328,23 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             cyborg_actions = {}
             for agent_idx, agent_name in enumerate(wrapper.agents):
                 jax_action_idx = int(actions_np[agent_idx])
-                cyborg_actions[agent_name] = jax_blue_to_cyborg(
-                    jax_action_idx, agent_idx, mappings, const=const
-                )
+                cyborg_actions[agent_name] = jax_blue_to_cyborg(jax_action_idx, agent_idx, mappings, const=const)
         else:
             cyborg_actions = {a: Sleep() for a in wrapper.possible_agents}
 
         # Step CybORG directly with the translated actions
         obs_raw, rews, dones, _info = cyborg.parallel_step(
-            cyborg_actions, skip_valid_action_check=True,
+            cyborg_actions,
+            skip_valid_action_check=True,
         )
         # Flatten observations through the wrapper
         observations = {
             agent: wrapper.observation_change(agent, obs_raw[agent])
-            for agent in wrapper.possible_agents if agent in obs_raw
+            for agent in wrapper.possible_agents
+            if agent in obs_raw
         }
-        rewards = {
-            agent: sum(rews[agent].values())
-            for agent in wrapper.possible_agents if agent in rews
-        }
-        wrapper.agents = [
-            agent for agent in wrapper.possible_agents
-            if not (dones.get(agent, False))
-        ]
+        rewards = {agent: sum(rews[agent].values()) for agent in wrapper.possible_agents if agent in rews}
+        wrapper.agents = [agent for agent in wrapper.possible_agents if not (dones.get(agent, False))]
 
         state = ctrl.state
         actual_steps = step + 1
@@ -382,14 +371,16 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             step_rewards[agent] = float(reward_val)
             cumulative_rewards[agent] += step_rewards[agent]
 
-        step_states.append({
-            "step": step,
-            "mission_phase": state.mission_phase,
-            "host_compromise": compromise,
-            "rewards": step_rewards,
-            "cumulative_reward": {a: round(v, 4) for a, v in cumulative_rewards.items()},
-            "reward_breakdown": breakdown,
-        })
+        step_states.append(
+            {
+                "step": step,
+                "mission_phase": state.mission_phase,
+                "host_compromise": compromise,
+                "rewards": step_rewards,
+                "cumulative_reward": {a: round(v, 4) for a, v in cumulative_rewards.items()},
+                "reward_breakdown": breakdown,
+            }
+        )
 
         if step % 100 == 0:
             compromised = sum(1 for v in compromise.values() if v != "NONE")
@@ -404,9 +395,17 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             break
 
     return _build_trajectory_dict(
-        episode_num, seed, actual_steps, "JAXborg-PPO",
-        blue_agents, red_agents, green_agents,
-        topology, subnet_metadata, agent_actions, step_states,
+        episode_num,
+        seed,
+        actual_steps,
+        "JAXborg-PPO",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
     )
 
 
@@ -414,9 +413,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
 # Main
 # ---------------------------------------------------------------------------
 def main():
-    parser = argparse.ArgumentParser(
-        description="Generate cynex V2 trajectory JSON from JAXborg or CybORG policies"
-    )
+    parser = argparse.ArgumentParser(description="Generate cynex V2 trajectory JSON from JAXborg or CybORG policies")
     parser.add_argument("--seed", type=int, default=42, help="Starting random seed")
     parser.add_argument("--num-episodes", type=int, default=2, help="Number of episodes")
     parser.add_argument("--steps", type=int, default=EPISODE_LENGTH, help="Steps per episode")
@@ -446,13 +443,9 @@ def main():
         t0 = time.perf_counter()
 
         if torch_model is not None:
-            trajectory = run_episode_torch(
-                seed, ep, torch_model, args.deterministic, args.steps
-            )
+            trajectory = run_episode_torch(seed, ep, torch_model, args.deterministic, args.steps)
         else:
-            trajectory = run_episode_jax(
-                seed, ep, jax_model, args.deterministic, args.steps
-            )
+            trajectory = run_episode_jax(seed, ep, jax_model, args.deterministic, args.steps)
 
         elapsed = time.perf_counter() - t0
         filename = f"cc4-{args.tag}-seed{seed}-E{ep}.json"

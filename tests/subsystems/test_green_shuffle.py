@@ -1,12 +1,11 @@
-"""L1 regression test: green agent shuffle must not skip active hosts.
+"""L1 regression test: _ordered_green_hosts must place active hosts first.
 
-The green shuffle in apply_all_actions_typed permutes green_host_order to
-randomize execution order (matching CybORG's random same-priority ordering).
-A bug (permuting ALL GLOBAL_MAX_HOSTS entries instead of only the active
-portion) causes active green agents to be shuffled into positions beyond
-num_green_agents, where the fori_loop never reaches them.  This silently
-skips ~50% of green agents each step, reducing phishing/LWF/ASF events and
-producing a systematic reward bias (JAXborg better than CybORG in L4 TOST).
+A historical bug permuted ALL GLOBAL_MAX_HOSTS entries instead of only the
+active portion, shuffling active green agents into positions beyond
+num_green_agents where the fori_loop never reached them. The current
+typed-phase path uses `_ordered_green_hosts` directly (no per-step shuffle),
+but this contract still matters: the vmap green path slices the first
+num_green_agents entries and trusts they're all active.
 """
 
 import jax

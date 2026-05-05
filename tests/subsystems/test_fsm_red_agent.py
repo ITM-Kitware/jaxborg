@@ -15,6 +15,7 @@ from jaxborg.actions.encoding import (
     RED_EXPLOIT_HTTP_START,
     RED_SLEEP,
 )
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_AGGRESSIVE_SCAN,
     FSM_ACT_DISCOVER,
@@ -43,7 +44,6 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_select_actions,
     fsm_red_update_state,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.state import create_initial_state
 
 
@@ -264,8 +264,8 @@ class TestFsmUpdateState:
 
 class TestFsmSuccessDetection:
     def test_exploit_session_count_growth_counts_as_success_like_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -315,8 +315,8 @@ class TestFsmSuccessDetection:
         )
 
     def test_discover_reaffirming_known_hosts_counts_as_success_like_cyborg(self):
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -571,8 +571,8 @@ def _make_trivial_const():
 class TestFsmGetAction:
     def test_discover_subnet_matches_cyborg_action_space_allowed_subnet(self):
         from jaxborg.env import _init_red_state
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -601,8 +601,8 @@ class TestFsmGetAction:
     def test_generic_exploit_selector_matches_cyborg_http_host(self):
         from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
 
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
@@ -638,8 +638,8 @@ class TestFsmGetAction:
     def test_generic_exploit_selector_matches_cyborg_smtp_host(self):
         from CybORG.Simulator.Actions.AbstractActions.ExploitRemoteService import DefaultExploitActionSelector
 
-        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
         from jaxborg.parity.translate import build_mappings_from_cyborg
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
         cyborg_env = CybORG(
             scenario_generator=EnterpriseScenarioGenerator(
