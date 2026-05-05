@@ -56,13 +56,6 @@ _RETIRED_REPLAY_PATHS: tuple[str, ...] = ()
 # delete the FIXME along with it.  Don't add new entries without a FIXME.
 _RETIRED_REPLAY_NODEIDS = frozenset(
     {
-        # FIXME(parity): host_decoys diverges on host_84 step 1 when a generic
-        # blue DeployDecoy reuses an existing service name.  The tape replays
-        # the recorded decoy type, but JAX still ends up with a different
-        # host_decoys mask than CybORG.  Likely a same-step service/decoy
-        # collision in apply_blue_decoy ordering vs. CybORG's tier resolution.
-        "tests/differential/test_blue_policy_fuzz.py::test_generic_deploy_decoy_reusing_service_name_matches_jax",
-        "tests/differential/test_blue_policy_fuzz.py::test_generic_deploy_decoy_pending_ticks_match_jax",
         # FIXME(parity): red policy multi-step rollout diverges across all 5
         # seeds.  test_red_policy_parity exercises the red policy's choice
         # *over time* (200+ steps), and JAX accumulates drift CybORG doesn't.
