@@ -56,11 +56,40 @@ _RETIRED_REPLAY_PATHS: tuple[str, ...] = ()
 # delete the FIXME along with it.  Don't add new entries without a FIXME.
 _RETIRED_REPLAY_NODEIDS = frozenset(
     {
-        # FIXME(parity): red policy multi-step rollout diverges across all 5
-        # seeds.  test_red_policy_parity exercises the red policy's choice
-        # *over time* (200+ steps), and JAX accumulates drift CybORG doesn't.
-        # Suspect red_policy randoms or per-step action gating; investigate
-        # before un-retiring.
+        # FIXME(parity): red-policy parity is broken in three places, not
+        # one.  Re-enabling these tests is a focused workstream, not a
+        # one-line fix:
+        #
+        # 1) Missing wire from recorder to tape.
+        #    ``RedPolicyRecorder._tape`` records CybORG's per-step choice
+        #    outcomes into a (MAX_STEPS, NUM_RED_AGENTS, 3) float32 array,
+        #    but the harness never copies those rows into
+        #    ``IndexedRNGTape.set_red_policy(agent_id, field_idx, value)``.
+        #    The tape's ``red_policy`` table stays empty; even strict-mode
+        #    misses don't fire because the harness uses ``strict=False``.
+        #
+        # 2) Encoding doesn't invert for non-uniform probs.
+        #    ``cyborg_red_policy_recorder._token_midpoint`` encodes choices
+        #    as ``(chosen_idx + 0.5) / total_count`` — the midpoint of a
+        #    uniform-probability bucket.  For action selection
+        #    ``np_random.choice(p=action_probs)`` the probs aren't uniform,
+        #    so ``searchsorted(cumsum(action_probs), midpoint)`` recovers
+        #    the wrong index whenever the chosen bucket is narrower than
+        #    the uniform width.  Encoding should use the actual cumsum
+        #    bucket midpoint computed from the captured ``probs`` (already
+        #    in ``choice_log`` but unused).
+        #
+        # 3) No consumption in JAX.
+        #    ``src/jaxborg/scenarios/cc4/red_fsm.fsm_red_get_action_and_info``
+        #    picks host / fsm_action / discover_subnet via raw
+        #    ``jax.random.choice(key, n, p=probs)`` — three call sites,
+        #    completely independent of the IndexedRNGTape.  Each needs to
+        #    become ``searchsorted(cumsum(probs), sample_red_policy_random(
+        #    const, time, agent_id, field_idx, key))``.  Field-idx mapping
+        #    must match the recorder's slot assignment (host=0, action=1,
+        #    subnet=2).
+        #
+        # Until all three are fixed these 5 seeds drift within a few steps.
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1000]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1001]",
         "tests/differential/test_red_policy_parity.py::test_red_policy_matches_cyborg_multistep[1002]",
