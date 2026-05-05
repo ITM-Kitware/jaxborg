@@ -102,10 +102,14 @@ def main():
         import torch
 
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg, load_torch_policy_from_recipe
+        from jaxborg.recipe import project_eval
 
         recipe = read_sidecar(model_path)
+        eval_cfg = project_eval(recipe)
+        red_agent = eval_cfg["red_agent"]
+        target_weight = eval_cfg["resilience_target_weight"]
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
-        print(f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} eps/seed={args.episodes}", flush=True)
+        print(f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} eps/seed={args.episodes} red_agent={red_agent}", flush=True)
 
         state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
         agent = load_torch_policy_from_recipe(recipe, state_dict)
@@ -116,6 +120,8 @@ def main():
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
+            red_agent=red_agent,
+            target_weight=target_weight,
         )
         wall = time.perf_counter() - t0
     else:
@@ -145,6 +151,7 @@ def main():
         "recipe_path": recipe.get("meta", {}).get("source_path") or recipe.get("__source_path__", ""),
         "trained_backend": trained_backend,
         "eval_env": "cyborg",
+        "red_agent": red_agent if trained_backend == "cyborg" else "finite_state",
         "seeds": seeds,
         "episodes_per_seed": args.episodes,
         "stochastic": not args.deterministic,

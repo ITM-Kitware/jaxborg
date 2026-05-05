@@ -91,7 +91,9 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),
+        "RED_AGENT": train.get("red_agent") or eval_.get("red_agent", "finite_state"),
         "RESILIENCE_MODE": bool(eval_.get("resilience_mode", False)),
+        "RESILIENCE_TARGET_WEIGHT": float(eval_.get("resilience_target_weight", 5.0)),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
     }
@@ -111,6 +113,9 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         rollouts_per_update = int(cr["num_rollouts_per_update"])
     else:
         rollouts_per_update = max(1, math.ceil(int(train["buffer_size"]) / per_rollout))
+
+    ev = recipe.get("eval", {})
+    train_red_agent = train.get("red_agent") or ev.get("red_agent", "finite_state")
 
     return {
         "lr": float(core["lr"]),
@@ -132,6 +137,8 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         "num_epochs": int(cr.get("num_epochs", 4)),
         "num_minibatches": int(cr.get("num_minibatches", 16)),
         "total_timesteps": int(train["total_timesteps"]),
+        "red_agent": train_red_agent,
+        "resilience_target_weight": float(ev.get("resilience_target_weight", 5.0)),
     }
 
 
@@ -142,21 +149,23 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     Returns defaults if the recipe has no ``eval`` section.
 
     Keys returned:
-        cia_metric          — "cc4" or "resilience"
-        resilience_mode     — bool; when True use resilience topology + metric
-        resilience_red_agent — "c", "i", or "a"; targeted red agent for JAX training
+        cia_metric      — "cc4" or "resilience"
+        resilience_mode — bool; when True use resilience topology + metric
+        red_agent       — red agent selector:
+                          "finite_state" (default) or "sleep" for CybORG eval;
+                          "c", "i", "a" for JAX targeted training agents
     """
     ev = recipe.get("eval", {})
 
     cia_metric = ev.get("cia_metric", "cc4")
-
     resilience_mode = bool(ev.get("resilience_mode", False))
-    resilience_red_agent = ev.get("resilience_red_agent", "a")
+    red_agent = ev.get("red_agent", "finite_state")
 
     return {
         "cia_metric": cia_metric,
         "resilience_mode": resilience_mode,
-        "resilience_red_agent": resilience_red_agent,
+        "red_agent": red_agent,
+        "resilience_target_weight": float(ev.get("resilience_target_weight", 5.0)),
     }
 
 

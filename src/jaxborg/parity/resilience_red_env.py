@@ -28,7 +28,7 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
 )
-from jaxborg.scenarios.cc4.resilience_red_fsm import resilience_red_select_actions
+from jaxborg.scenarios.cc4.targeted_red_fsm import resilience_red_select_actions
 from jaxborg.scenarios.cc4.resilience_topology import _assign_resilience_roles
 
 
@@ -53,6 +53,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         topology_bank_size: int = 0,
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        target_weight: float = 5.0,
     ):
         self._env = ScenarioEnv(
             num_steps=num_steps,
@@ -61,6 +62,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
             sync_red_policy_bank=sync_red_policy_bank,
             training_mode=training_mode,
         )
+        self._target_weight = target_weight
         self.agents = list(self._env.blue_agents)
         super().__init__(num_agents=NUM_BLUE_AGENTS)
         for agent in self.agents:
@@ -68,10 +70,9 @@ class ResilienceRedCC4Env(MultiAgentEnv):
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ResilienceEnvState]:
-        key, key_roles = jax.random.split(key)
         obs, env_state = self._env.reset(key)
         env_state = self._strip_inactive_red_reset_knowledge(env_state)
-        host_resilience_role = _assign_resilience_roles(key_roles, env_state.const)
+        host_resilience_role = _assign_resilience_roles(env_state.const)
         blue_obs = {a: obs[a] for a in self.agents}
         return blue_obs, ResilienceEnvState(env_state=env_state, host_resilience_role=host_resilience_role)
 
@@ -98,7 +99,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         actions: Dict[str, chex.Array],
         reset_state=None,
     ) -> Tuple[Dict[str, chex.Array], ResilienceEnvState, Dict[str, float], Dict[str, bool], Dict]:
-        key, key_reset, key_roles = jax.random.split(key, 3)
+        key, key_reset = jax.random.split(key)
         obs_st, states_st, rewards, dones, infos = self.step_env(key, state, actions)
 
         if reset_state is not None:
@@ -107,7 +108,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         else:
             inner_re = self._env._reset_state(states_st.env_state, key_reset)
             inner_re = self._strip_inactive_red_reset_knowledge(inner_re)
-            roles_re = _assign_resilience_roles(key_roles, inner_re.const)
+            roles_re = _assign_resilience_roles(inner_re.const)
 
         states_re = ResilienceEnvState(env_state=inner_re, host_resilience_role=roles_re)
         obs_re = self._get_blue_obs(states_re)
@@ -146,7 +147,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
             fsm_actions_arr,
             eligible_arr,
             state,
-        ) = resilience_red_select_actions(state_before, env_state.const, host_resilience_role, red_keys)
+        ) = self._call_red_select(state_before, env_state.const, host_resilience_role, red_keys)
 
         red_actions = {f"red_{r}": red_action_arr[r] for r in range(NUM_RED_AGENTS)}
         target_hosts = [target_hosts_arr[r] for r in range(NUM_RED_AGENTS)]
@@ -192,6 +193,9 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         blue_dones = {a: dones[a] for a in self.agents}
         blue_dones["__all__"] = dones["__all__"]
         return blue_obs, out_state, blue_rewards, blue_dones, info
+
+    def _call_red_select(self, state, const, host_resilience_role, red_keys):
+        return resilience_red_select_actions(state, const, host_resilience_role, red_keys, self._target_weight)
 
     @partial(jax.jit, static_argnums=[0])
     def _get_blue_obs(self, resilience_state: ResilienceEnvState) -> Dict[str, chex.Array]:
