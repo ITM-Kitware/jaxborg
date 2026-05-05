@@ -21,7 +21,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.pids import host_current_max_pid
 from jaxborg.actions.rng import rng_impls
-from jaxborg.actions.rng_tape import RNGTape
+from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     DECOY_IDS,
     DECOY_NAMES,

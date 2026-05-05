@@ -82,7 +82,7 @@ def pytest_collection_modifyitems(config, items):
     retired_replay = pytest.mark.skip(
         reason=(
             "byte-equality with CybORG's MT19937 stream is no longer enforced; "
-            "for deterministic JAX-only tests use jaxborg.actions.rng_tape.RNGTape"
+            "for deterministic JAX-only tests use tests.differential.parity_rng_replay.RNGTape"
         )
     )
     for item in items:

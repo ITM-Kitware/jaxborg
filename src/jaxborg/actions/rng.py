@@ -6,14 +6,19 @@ points exist:
 * **Low-level impl swap** (:func:`set_impls`, :func:`rng_impls`) replaces the
   underlying ``uniform`` / ``randint`` / ``permutation`` calls.  Useful for
   narrow unit tests where a single sequential value stream is enough — see
-  :class:`jaxborg.actions.rng_tape.RNGTape`.
+  ``tests.differential.parity_rng_replay.RNGTape``.
 
 * **Per-purpose dispatch swap** (:func:`set_purpose_impls`,
   :func:`indexed_rng_impls`) replaces the high-level *purpose* (detection,
   green, red_pid_delta, …) so each call site can be served from its own
   indexed table — needed for full-episode harness parity where CybORG and
   JAX traverse hosts/agents in different orders.  See
-  :class:`jaxborg.actions.rng_tape.IndexedRNGTape`.
+  ``tests.differential.parity_rng_replay.IndexedRNGTape``.
+
+The tape implementations themselves live under ``tests/differential/`` so
+production code never imports replay machinery.  Production calls go through
+the default impls (:func:`jax.random.uniform` / ``randint`` / ``permutation``)
+which are jit-compatible.
 
 The per-purpose dispatchers default to calling the low-level impls, so a
 swap of ``_uniform_impl`` propagates to every purpose unless that purpose

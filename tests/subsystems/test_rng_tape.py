@@ -16,7 +16,7 @@ from jaxborg.actions.rng import (
     sample_red_privesc_choice,
     sample_red_session_check_choice,
 )
-from jaxborg.actions.rng_tape import IndexedRNGTape, RNGTape
+from tests.differential.parity_rng_replay import IndexedRNGTape, RNGTape
 
 
 def test_eager_uniform_replay():
@@ -150,7 +150,7 @@ def test_indexed_tape_detection_queue():
 
 
 def test_indexed_tape_records_misses():
-    tape = IndexedRNGTape()
+    tape = IndexedRNGTape(strict=False)
     # No tables populated — every call should miss.
     with indexed_rng_impls(**tape.as_overrides()):
         sample_red_pid_delta(const=None, time=0, agent_id=0, key=jax.random.PRNGKey(0))
@@ -158,6 +158,14 @@ def test_indexed_tape_records_misses():
     assert tape.used == 0
     assert any("red_pid_delta: agent=0" in m for m in tape.misses)
     assert any("exploit_session: agent=1" in m for m in tape.misses)
+
+
+def test_indexed_tape_strict_miss_raises():
+    """Default strict=True: a missing entry surfaces as RuntimeError."""
+    tape = IndexedRNGTape()  # strict=True by default
+    with indexed_rng_impls(**tape.as_overrides()):
+        with pytest.raises(RuntimeError, match="strict mode"):
+            sample_red_pid_delta(const=None, time=0, agent_id=0, key=jax.random.PRNGKey(0))
 
 
 def test_indexed_tape_blue_decoy_type_honors_compatibility():
@@ -207,8 +215,54 @@ def test_indexed_tape_green_uniform_table():
     assert float(v) == pytest.approx(0.42)
 
 
+def test_indexed_tape_jit_compatible():
+    """IndexedRNGTape impls work under @jax.jit.
+
+    Verifies (a) tracing succeeds without disable_jit, and (b) re-running
+    after mutating the tape returns the new values without recompiling
+    (callbacks read self.<attr> at execution time, not trace time).
+    """
+    tape = IndexedRNGTape(strict=False)
+    tape.set_red_pid_delta(agent_id=0, value=3)
+    tape.set_red_pid_delta(agent_id=1, value=7)
+
+    @jax.jit
+    def go(agent_id):
+        with indexed_rng_impls(**tape.as_overrides()):
+            return sample_red_pid_delta(const=None, time=0, agent_id=agent_id, key=jax.random.PRNGKey(0))
+
+    a = go(jnp.int32(0))
+    b = go(jnp.int32(1))
+    assert int(a) == 3
+    assert int(b) == 7
+
+    # Mutate tape, re-call: callback reads new value (no retrace required).
+    tape.set_red_pid_delta(agent_id=0, value=42)
+    c = go(jnp.int32(0))
+    assert int(c) == 42
+
+
+def test_indexed_tape_jit_green_vmap():
+    """Green table lookup works under jit + vmap (the harness pattern)."""
+    import numpy as np
+
+    tape = IndexedRNGTape(strict=False)
+    tape.set_green_uniform(np.tile(np.arange(8, dtype=np.float32) / 10.0, (10, 1)))
+
+    @jax.jit
+    def gather(host_indices):
+        with indexed_rng_impls(**tape.as_overrides()):
+            return jax.vmap(
+                lambda h: sample_green_random(const=None, time=0, host_idx=h, field_idx=2, key=jax.random.PRNGKey(0))
+            )(host_indices)
+
+    out = gather(jnp.arange(5, dtype=jnp.int32))
+    # field_idx=2 → 0.2 for every host.
+    assert all(float(v) == pytest.approx(0.2) for v in out)
+
+
 def test_indexed_tape_clear():
-    tape = IndexedRNGTape()
+    tape = IndexedRNGTape(strict=False)
     tape.set_red_pid_delta(agent_id=0, value=5)
     tape.set_detection_queue([0.5])
     tape.clear()
