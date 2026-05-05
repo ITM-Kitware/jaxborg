@@ -43,7 +43,7 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_process_event,
 )
-from jaxborg.actions.rng import sample_green_random
+from jaxborg.actions.rng import sample_green_dest_host, sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -111,14 +111,7 @@ def _compute_green_decision(
     available_tokens = jnp.concatenate([service_tokens, decoy_tokens], axis=0)
     num_available = jnp.sum(active_services.astype(jnp.int32)) + jnp.sum(active_decoys.astype(jnp.int32))
     sorted_tokens = jnp.sort(available_tokens)
-    chosen_token_precomputed = jnp.int32(const.green_randoms[t, host_idx, 1])
-    chosen_token_rng = sorted_tokens[sample_green_random(const, t, host_idx, 1, k_svc, int_range=num_available)]
-    chosen_token = jax.lax.cond(
-        const.use_green_randoms,
-        lambda _: chosen_token_precomputed,
-        lambda _: chosen_token_rng,
-        None,
-    )
+    chosen_token = sorted_tokens[sample_green_random(const, t, host_idx, 1, k_svc, int_range=num_available)]
     has_service = num_available > 0
     chosen_token = jnp.where(has_service, chosen_token, jnp.int32(0))
     chosen_is_decoy = chosen_token >= NUM_SERVICES
@@ -175,15 +168,7 @@ def _compute_green_decision(
     has_reachable = num_reachable > 0
     server_indices = jnp.where(is_reachable_server, jnp.arange(GLOBAL_MAX_HOSTS), GLOBAL_MAX_HOSTS)
     sorted_servers = jnp.sort(server_indices)
-    dest_host_precomputed = jnp.int32(const.green_randoms[t, host_idx, 5])
-    rand_idx_rng = jax.random.randint(k4, (), 0, jnp.maximum(num_reachable, 1))
-    dest_host_rng = sorted_servers[rand_idx_rng]
-    dest_host = jax.lax.cond(
-        const.use_green_randoms,
-        lambda _: dest_host_precomputed,
-        lambda _: dest_host_rng,
-        None,
-    )
+    dest_host = sample_green_dest_host(const, t, host_idx, k4, sorted_servers, num_reachable)
     dest_host = jnp.where(has_reachable, dest_host, jnp.int32(0))
     dest_subnet = const.host_subnet[dest_host]
     blocked_src_to_dst = state.blocked_zones[src_subnet, dest_subnet]
@@ -292,7 +277,6 @@ def apply_green_agents_vmapped(
     phish_mask = active_mask & decisions.phish_intent
     phish_sorted_slots = jnp.argsort(~phish_mask)  # phishing slots first, in green-iteration order
     num_phish = jnp.sum(phish_mask)
-    t = state.time
 
     def _apply_phishing(i, carry_state):
         slot = phish_sorted_slots[i]
@@ -304,10 +288,7 @@ def apply_green_agents_vmapped(
         # _apply_single_green's branch in green.py).
         sub_keys = jax.random.split(green_keys[h], 9)
         k_phish_src = sub_keys[7]
-        red_agent_rng = _find_phishing_red_agent(carry_state, const, h, k_phish_src)
-        precomputed_src = jnp.int32(const.green_randoms[t, h, 5]) - 1
-        has_precomputed_src = const.use_green_randoms & (precomputed_src >= 0)
-        red_agent_live = jnp.where(has_precomputed_src, precomputed_src, red_agent_rng)
+        red_agent_live = _find_phishing_red_agent(carry_state, const, h, k_phish_src)
 
         # Re-validate against current carry_state.
         any_red_on_host_now = jnp.any(carry_state.red_sessions[:, h])

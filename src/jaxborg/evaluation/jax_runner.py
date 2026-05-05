@@ -22,25 +22,24 @@ import numpy as np
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import make_jax_policy
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
 EPISODE_LENGTH = 500
 
 
-def make_env(seed: int | None = None, bank_match_size: int | None = None):
+def make_env(seed: int | None = None):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    actual_seed = cyborg_bank_seed_from_seed(seed, bank_match_size) if bank_match_size is not None else seed
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
         red_agent_class=FiniteStateRedAgent,
         steps=EPISODE_LENGTH,
     )
-    cyborg = CybORG(sg, "sim", seed=actual_seed)
+    cyborg = CybORG(sg, "sim", seed=seed)
     return BlueFlatWrapper(env=cyborg, pad_spaces=True)
 
 
@@ -182,7 +181,6 @@ def evaluate_jax_on_cyborg(
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
-    bank_match_size: int | None = None,
     progress: bool = True,
 ) -> tuple[list[float], list[int], dict]:
     """Load a JAX `.pkl`, evaluate against CybORG. Returns (rewards, seed_log, recipe)."""
@@ -195,7 +193,7 @@ def evaluate_jax_on_cyborg(
     n = 0
     for s in seeds:
         for ep in range(episodes_per_seed):
-            env = make_env(seed=s + ep, bank_match_size=bank_match_size)
+            env = make_env(seed=s + ep)
             rng, _rng = jax.random.split(rng)
             r = run_episode(env, policy, params, deterministic, _rng)
             rewards.append(r)

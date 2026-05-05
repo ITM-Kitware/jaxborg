@@ -44,7 +44,6 @@ jax:
   num_envs: 400              # 400 * 500 * 5 agents = 1M (matches train.buffer_size)
   num_minibatches: 32        # 1M / 32 = 31,250 ≈ minibatch_size (32 is closest divisor)
   update_epochs: 1           # 32 SGD iters ≈ sgd_iterations
-  topology_mode: generative
   checkpoint_every_updates: 50
 
 cleanrl:

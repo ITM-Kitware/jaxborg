@@ -8,7 +8,7 @@ Usage:
 
     # Trained PPO policy:
     python scripts/eval/export_trajectory.py --seed 42 --num-episodes 1 \
-        --model /path/to/cleanrl_ppo/model_cyborg_matched.pt \
+        --model /path/to/cleanrl_ppo/model.pt \
         --output-dir ../cynex/public/data/trajectories/
 """
 

@@ -26,6 +26,8 @@ from jaxborg.actions.encoding import (
     decode_red_action,
     encode_red_action,
 )
+from jaxborg.actions.rng import rng_impls
+from jaxborg.actions.rng_tape import RNGTape
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     COMPROMISE_NONE,
@@ -33,7 +35,6 @@ from jaxborg.constants import (
     COMPROMISE_USER,
     DECOY_IDS,
     GLOBAL_MAX_HOSTS,
-    MAX_DETECTION_RANDOMS,
     NUM_SUBNETS,
     SERVICE_IDS,
 )
@@ -86,17 +87,12 @@ class TestApplyAggressiveScan:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
-        state = state.replace(
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
-        )
+        tape = RNGTape()
+        tape.push_uniforms([0.1] * 16)
 
         action_idx = encode_red_action("AggressiveServiceDiscovery", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == ACTIVITY_SCAN
@@ -143,17 +139,12 @@ class TestApplyStealthScan:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
-        state = state.replace(
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
-        )
+        tape = RNGTape()
+        tape.push_uniforms([0.9] * 16)  # > 0.95 threshold → no detection
 
         action_idx = encode_red_action("StealthServiceDiscovery", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert bool(new_state.red_scanned_hosts[0, target])
         assert int(new_state.red_activity_this_step[target]) == 0
@@ -191,23 +182,20 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
         state = state.replace(
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
+        tape = RNGTape()
+        tape.push_uniforms([0.1] * 16)
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -216,21 +204,18 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.9)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
         state = state.replace(
             red_scanned_hosts=scanned,
             fsm_host_states=fsm,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
+        tape = RNGTape()
+        tape.push_uniforms([0.9] * 16)
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -239,21 +224,18 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_S)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
         state = state.replace(
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
+        tape = RNGTape()
+        tape.push_uniforms([0.1] * 16)
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
 
@@ -262,19 +244,13 @@ class TestApplyDiscoverDeception:
         target = _first_discovered_non_router(jax_const, jax_state_with_discovered)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
-        state = state.replace(
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
-        )
+        tape = RNGTape()
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            apply_red_action(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
 
-        assert int(new_state.detection_random_index) == 0
+        assert tape.consumed == 0
 
     def test_discover_deception_ignores_blocked_subnet_route_matches_cyborg(self):
         sg = EnterpriseScenarioGenerator(
@@ -329,45 +305,37 @@ class TestApplyDiscoverDeception:
         state = apply_blue_decoy(state, const, blue_agent_id, target, DECOY_IDS["Tomcat"])
         blocked = jnp.zeros((NUM_SUBNETS, NUM_SUBNETS), dtype=jnp.bool_)
         blocked = blocked.at[int(const.host_subnet[target]), start_subnet].set(True)
-        const = const.replace(
-            detection_randoms=jnp.full(MAX_DETECTION_RANDOMS, 0.1),
-            use_detection_randoms=jnp.array(True),
-        )
         state = state.replace(
             blocked_zones=blocked,
             fsm_host_states=state.fsm_host_states.at[0, target].set(FSM_S),
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
+        tape = RNGTape()
+        tape.push_uniforms([0.1] * 16)
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
-        new_state = _jit_apply_red(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = apply_red_action(state, const, 0, action_idx, jax.random.PRNGKey(0))
 
         assert int(new_state.fsm_host_states[0, target]) == FSM_S
-        assert int(new_state.detection_random_index) == 2
+        assert tape.consumed == 2
 
     def test_jit_compatible(self, jax_const, jax_state_with_discovered):
         state = jax_state_with_discovered
         target = _first_discovered_non_router(jax_const, state)
         assert target is not None
 
-        randoms = jnp.full(MAX_DETECTION_RANDOMS, 0.1)
         scanned = state.red_scanned_hosts.at[0, target].set(True)
         decoys = state.host_decoys.at[target, 0].set(True)
         fsm = state.fsm_host_states.at[0, target].set(FSM_K)
-        const = jax_const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
         state = state.replace(
             red_scanned_hosts=scanned,
             host_decoys=decoys,
             fsm_host_states=fsm,
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
         )
 
         action_idx = encode_red_action("DiscoverDeception", target, 0)
         jitted = jax.jit(apply_red_action, static_argnums=(2,))
-        new_state = jitted(state, const, 0, action_idx, jax.random.PRNGKey(0))
+        new_state = jitted(state, jax_const, 0, action_idx, jax.random.PRNGKey(0))
         assert int(new_state.fsm_host_states[0, target]) == FSM_K
 
 

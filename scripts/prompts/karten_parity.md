@@ -67,20 +67,21 @@ The harness asserts (not syncs) parity via `_assert_fsm_host_entered`.
 dict never removes destroyed sessions — after Blue Restore, phantom IDs persist,
 inflating N and making exploits fail more often. JAXborg replicates this via
 `red_server_session_count` (monotonic high-water mark updated end-of-step).
-In the harness, `red_exploit_session_choices` syncs the choice index from CybORG.
+The old runtime replay tape for CybORG's choice index has been retired; use
+explicit live differential traces when investigating a first divergence.
 See `CYBORG_DIFFERENCES.md` ("Exploit source-session selection") for details.
 
 ### The Sync Problem
 
 The differential harness syncs CybORG outcomes into JAX each step. Classification:
 
-**RNG syncs (KEPT — bridge different RNG implementations):**
-- `green_randoms`, `green_host_order` (execution order), `detection_randoms`
-- `red_privesc_choices`, `red_session_check_choices/hosts`
-- `red_pid_deltas`, `blue_decoy_pid_deltas`
-- `red_exploit_session_ok` (harness limitation — always True, see above)
+**Debug records (KEPT — inspect different RNG implementations without runtime tapes):**
+- CybORG green/detection/privesc/session-check reports
+- PID deltas from live CybORG events
+- translated explicit red traces for targeted replay tests
 
 **Removed (JAX computes its own):**
+- replay tape fields on `SimulatorConst`
 - `forced_primary_hosts/pids`, `red_impact_attempted`, `green_lwf/asf_this_step`
 
 **Assertions (verify parity, don't sync):**

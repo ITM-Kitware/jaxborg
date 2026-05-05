@@ -7,7 +7,7 @@ from jaxborg.actions.pids import (
     append_pid_to_row,
     append_process_event,
 )
-from jaxborg.actions.rng import sample_green_random
+from jaxborg.actions.rng import sample_green_dest_host, sample_green_random
 from jaxborg.actions.session_counts import effective_session_counts
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
@@ -165,14 +165,7 @@ def _apply_single_green(
     available_tokens = jnp.concatenate([service_tokens, decoy_tokens], axis=0)
     num_available = jnp.sum(active_services.astype(jnp.int32)) + jnp.sum(active_decoys.astype(jnp.int32))
     sorted_tokens = jnp.sort(available_tokens)
-    chosen_token_precomputed = jnp.int32(const.green_randoms[t, host_idx, 1])
-    chosen_token_rng = sorted_tokens[sample_green_random(const, t, host_idx, 1, k_svc, int_range=num_available)]
-    chosen_token = jax.lax.cond(
-        const.use_green_randoms,
-        lambda _: chosen_token_precomputed,
-        lambda _: chosen_token_rng,
-        None,
-    )
+    chosen_token = sorted_tokens[sample_green_random(const, t, host_idx, 1, k_svc, int_range=num_available)]
     has_service = num_available > 0
     chosen_token = jnp.where(has_service, chosen_token, jnp.int32(0))
     chosen_is_decoy = chosen_token >= NUM_SERVICES
@@ -208,13 +201,7 @@ def _apply_single_green(
     do_phish = (action == GREEN_LOCAL_WORK) & work_succeeds & phish_triggered
 
     red_agent_rng = _find_phishing_red_agent(state, const, host_idx, k_phish_src)
-    # Field 5 encodes the CybORG-chosen phishing source red agent (agent_idx + 1,
-    # so 0.0 = no precomputed source).  Use it in differential mode to match
-    # CybORG's np_random.choice(red_agents) which picks the source agent randomly
-    # from all reachable agents — the random fallback differs between JAX/CybORG.
-    precomputed_src = jnp.int32(const.green_randoms[t, host_idx, 5]) - 1
-    has_precomputed_src = const.use_green_randoms & (precomputed_src >= 0)
-    red_agent = jnp.where(has_precomputed_src, precomputed_src, red_agent_rng)
+    red_agent = red_agent_rng
     any_red_on_host = jnp.any(state.red_sessions[:, host_idx])
     phish_creates_session = do_phish & (red_agent >= 0) & ~any_red_on_host
     red_agent_idx = jnp.maximum(red_agent, 0)
@@ -344,17 +331,7 @@ def _apply_single_green(
     server_indices = jnp.where(is_reachable_server, jnp.arange(GLOBAL_MAX_HOSTS), GLOBAL_MAX_HOSTS)
     sorted_servers = jnp.sort(server_indices)
 
-    # In precomputed mode, field 5 stores the actual JAX host index directly
-    # (to match CybORG's server ordering). In RNG mode, pick randomly from sorted list.
-    dest_host_precomputed = jnp.int32(const.green_randoms[t, host_idx, 5])
-    rand_idx_rng = jax.random.randint(k4, (), 0, jnp.maximum(num_reachable, 1))
-    dest_host_rng = sorted_servers[rand_idx_rng]
-    dest_host = jax.lax.cond(
-        const.use_green_randoms,
-        lambda _: dest_host_precomputed,
-        lambda _: dest_host_rng,
-        None,
-    )
+    dest_host = sample_green_dest_host(const, t, host_idx, k4, sorted_servers, num_reachable)
     dest_host = jnp.where(has_reachable, dest_host, jnp.int32(0))
 
     dest_subnet = const.host_subnet[dest_host]

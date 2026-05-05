@@ -112,10 +112,10 @@ session selection at FSM action-creation time (matching CybORG's
 `get_action()` timing). It counts N = abstract sessions in allowed subnets at
 the step the exploit is queued, then rolls 1/N at execution time — exactly
 one of the N sessions holds scan data, so `P(success) = 1/N`. The N count is
-phantom-inclusive to match CybORG's stale `server_session`. In the
-differential harness, the outcome is synced from CybORG via the
-`red_exploit_session_choices` array, which provides the choice index so
-JAXborg exercises its own N computation.
+phantom-inclusive to match CybORG's stale `server_session`. The retired
+runtime replay tape that forced CybORG's choice index has been replaced by
+live differential traces and explicit translated red actions in targeted
+debug tests.
 
 - CybORG: `Actions/AbstractActions/ExploitRemoteService.py:175` (`session.ports` check)
 - CybORG: `Agents/SimpleAgents/FiniteStateRedAgent.py:330` (session selection)

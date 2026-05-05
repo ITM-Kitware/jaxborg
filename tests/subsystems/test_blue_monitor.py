@@ -21,6 +21,8 @@ from jaxborg.actions.encoding import (
     encode_red_action,
 )
 from jaxborg.actions.pids import PROCESS_EVENT_NO_PID, append_pid_to_row_allow_duplicates
+from jaxborg.actions.rng import rng_impls
+from jaxborg.actions.rng_tape import RNGTape
 from jaxborg.constants import (
     ACTIVITY_NONE,
     ACTIVITY_SCAN,
@@ -590,19 +592,14 @@ class TestDifferentialWithCybORG:
         state = _jit_apply_red(state, const, 0, scan_idx, jax.random.PRNGKey(0))
         state = state.replace(red_activity_this_step=jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32))
 
-        randoms = const.detection_randoms.at[0].set(0.5).at[1].set(0.01)
-        const = const.replace(
-            detection_randoms=randoms,
-            use_detection_randoms=jnp.array(True),
-        )
-        state = state.replace(
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
-        )
+        tape = RNGTape()
+        tape.push_uniforms([0.5, 0.01])
         exploit_idx = encode_red_action("ExploitRemoteService_cc4SQLInjection", target_h, 0)
-        state = _jit_apply_red(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            state = apply_red_action(state, const, 0, exploit_idx, jax.random.PRNGKey(0))
 
         assert bool(state.red_sessions[0, target_h])
-        assert int(state.detection_random_index) == 2
+        assert tape.consumed == 2
         assert np.all(np.asarray(state.host_process_creation_pids[target_h]) == -1)
 
         state = apply_blue_monitor(state, const)

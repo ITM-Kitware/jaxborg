@@ -1,5 +1,6 @@
 from functools import partial
-from typing import Dict, Optional, Tuple
+from pathlib import Path
+from typing import Dict, Optional, Sequence, Tuple
 
 import chex
 import jax
@@ -30,10 +31,7 @@ from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.scenarios.cc4.topology import (
     build_topology,
-    cyborg_bank_index_from_key,
-    get_cyborg_green_random_bank,
-    get_cyborg_red_policy_random_bank,
-    get_cyborg_topology_bank,
+    load_topology,
 )
 from jaxborg.scenarios.config import ScenarioConfig
 from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
@@ -49,6 +47,8 @@ def apply_all_actions(
     forced_primary_hosts: jnp.ndarray,
     forced_primary_pids: jnp.ndarray,
     blue_keys: jnp.ndarray = None,
+    forced_session_check_hosts: jnp.ndarray = None,
+    forced_session_check_pids: jnp.ndarray = None,
 ) -> SimulatorState:
     """Apply one CybORG step in CybORG's deterministic priority order.
 
@@ -132,17 +132,44 @@ def apply_all_actions(
     for b in range(n_blue):
         state = apply_blue_monitor(state, const, b)
 
+    if forced_session_check_hosts is None:
+        forced_session_check_hosts = jnp.full(n_red, jnp.int32(-1), dtype=jnp.int32)
+    if forced_session_check_pids is None:
+        forced_session_check_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
     for r in range(n_red):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
-        state = apply_red_session_check(state, const, r, session_check_key)
+        state = apply_red_session_check(
+            state,
+            const,
+            r,
+            session_check_key,
+            forced_primary_host=forced_session_check_hosts[r],
+            forced_primary_pid=forced_session_check_pids[r],
+        )
 
     # CybORG's _process_new_observations adds ALL hosts from the observation
     # to host_states.  The observation includes every host where the agent has
     # a session.  Mark these so JAX's FSM knowledge matches CybORG's.
     fsm_host_entered = state.fsm_host_entered | state.red_sessions
 
+    # Re-gate ``red_impact_attempted`` against post-reassignment / post-session-check
+    # sessions.  CybORG's BlueRewardMachine evaluates ``len(active sessions) > 0``
+    # for each agent that submitted an Impact action AT REWARD TIME, after
+    # ``different_subnet_agent_reassignment`` and the per-agent RedSessionCheck
+    # end-turn actions have run (SimulationController._step:278-309 → :306).
+    # An agent that did Impact during the red phase but lost all of its sessions
+    # to cross-subnet reassignment before reward computation is therefore *not*
+    # charged the RIA penalty; the per-host array consumed by reward calculation
+    # must reflect this gate.
+    agent_has_session = jnp.any(state.red_sessions & const.host_active[None, :], axis=1)
+    red_impact_attempted = jnp.any(
+        state.red_impact_attempted_by_agent & agent_has_session[:, None],
+        axis=0,
+    )
+
     return state.replace(
         fsm_host_entered=fsm_host_entered,
+        red_impact_attempted=red_impact_attempted,
     )
 
 
@@ -272,39 +299,52 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
     )
 
 
+def _normalize_topology_paths(topology_path: str | Path | Sequence[str | Path]) -> tuple[Path, ...]:
+    if isinstance(topology_path, (str, Path)):
+        paths = (Path(topology_path),)
+    else:
+        paths = tuple(Path(path) for path in topology_path)
+    if not paths:
+        raise ValueError("topology_path must contain at least one snapshot path")
+    return paths
+
+
 class ScenarioEnv(MultiAgentEnv):
     def __init__(
         self,
         num_steps: Optional[int] = None,
         *,
         topology_mode: str = "generative",
-        topology_bank_size: int = 0,
-        sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        topology_path: str | Path | Sequence[str | Path] | None = None,
         scenario_config: ScenarioConfig = CC4_CONFIG,
     ):
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
-        self.topology_mode = topology_mode
-        self.topology_bank_size = topology_bank_size
-        self.sync_red_policy_bank = sync_red_policy_bank
         self.training_mode = training_mode
         self._const_bank = None
-        self._green_random_bank = None
-        self._red_policy_random_bank = None
-        if topology_mode == "cyborg_bank":
-            self._const_bank = get_cyborg_topology_bank(self.num_steps, topology_bank_size)
-            # Green random bank encodes CybORG's specific green agent decisions
-            # for a reference trajectory.  Always load in non-training mode so
-            # green phishing/LWF decisions match CybORG.  In training mode tokens
-            # become stale when blue actions change services, so only load when
-            # explicitly syncing the full policy bank.
-            if not training_mode or sync_red_policy_bank:
-                self._green_random_bank = get_cyborg_green_random_bank(self.num_steps, topology_bank_size)
-            if sync_red_policy_bank:
-                self._red_policy_random_bank = get_cyborg_red_policy_random_bank(self.num_steps, topology_bank_size)
+        self._const_bank_size = 0
+        if topology_path is not None:
+            if topology_mode != "generative":
+                raise ValueError(
+                    f"topology_path is mutually exclusive with topology_mode={topology_mode!r}; "
+                    "leave topology_mode unset (or set to 'generative') when supplying a snapshot"
+                )
+            topology_paths = _normalize_topology_paths(topology_path)
+            consts = [
+                load_topology(path, training_mode=training_mode, scenario_config=scenario_config)
+                for path in topology_paths
+            ]
+            self._const_bank = jax.tree.map(
+                lambda *xs: jnp.stack([jnp.asarray(x) for x in xs]),
+                *consts,
+            )
+            self._const_bank_size = len(consts)
+            self.topology_mode = "snapshot"
         elif topology_mode != "generative":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
+        else:
+            self.topology_mode = "generative"
 
         self.blue_agents = [f"blue_{i}" for i in range(self.cfg.num_blue_agents)]
         self.red_agents = [f"red_{i}" for i in range(self.cfg.num_red_agents)]
@@ -323,31 +363,11 @@ class ScenarioEnv(MultiAgentEnv):
         if self._const_bank is None:
             return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
 
-        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
+        bank_idx = jax.random.randint(key, (), 0, self._const_bank_size)
         return jax.tree.map(lambda x: x[bank_idx], self._const_bank)
-
-    def _select_green_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
-        if self._green_random_bank is None:
-            return None
-
-        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
-        return self._green_random_bank[bank_idx]
-
-    def _select_red_policy_randoms(self, key: chex.PRNGKey) -> chex.Array | None:
-        if self._red_policy_random_bank is None:
-            return None
-
-        bank_idx = cyborg_bank_index_from_key(key, self.topology_bank_size)
-        return self._red_policy_random_bank[bank_idx]
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         const = self._select_const(key)
-        green_randoms = self._select_green_randoms(key)
-        red_policy_randoms = self._select_red_policy_randoms(key)
-        if green_randoms is not None:
-            const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
-        if red_policy_randoms is not None:
-            const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=jnp.array(const.initial_services),
@@ -363,12 +383,6 @@ class ScenarioEnv(MultiAgentEnv):
     def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
         const = self._select_const(key)
-        green_randoms = self._select_green_randoms(key)
-        red_policy_randoms = self._select_red_policy_randoms(key)
-        if green_randoms is not None:
-            const = const.replace(green_randoms=green_randoms, use_green_randoms=jnp.array(True))
-        if red_policy_randoms is not None:
-            const = const.replace(red_policy_randoms=red_policy_randoms, use_red_policy_randoms=jnp.array(True))
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=const.initial_services,
@@ -433,6 +447,7 @@ class ScenarioEnv(MultiAgentEnv):
             green_lwf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
             green_asf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
             red_impact_attempted=jnp.zeros(n_hosts, dtype=jnp.bool_),
+            red_impact_attempted_by_agent=jnp.zeros((n_red, n_hosts), dtype=jnp.bool_),
         )
 
         blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(n_blue)], dtype=jnp.int32)

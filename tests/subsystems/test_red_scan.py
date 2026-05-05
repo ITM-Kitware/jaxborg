@@ -28,6 +28,8 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
 from jaxborg.actions.red_common import can_reach_subnet, select_new_primary_session_host
+from jaxborg.actions.rng import rng_impls
+from jaxborg.actions.rng_tape import RNGTape
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     GLOBAL_MAX_HOSTS,
@@ -1998,21 +2000,19 @@ class TestPendingStealthScanSourceLostOnRestore:
             red_pending_ticks=state_restored.red_pending_ticks.at[red_agent_id].set(1),
         )
 
-        # Set up detection randoms to track consumption
-        const = const.replace(
-            detection_randoms=const.detection_randoms.at[0].set(0.5),
-            use_detection_randoms=jnp.array(True),
-        )
-        state_restored = state_restored.replace(
-            detection_random_index=jnp.array(0, dtype=jnp.int32),
-        )
+        # Track detection-roll consumption via tape RNG.  No values are pushed
+        # because the action should not execute and therefore should consume
+        # no rolls; popping from an empty tape would surface that as a
+        # RuntimeError instead of a silent regression.
+        tape = RNGTape()
 
         key = jax.random.PRNGKey(99)
-        new_state = process_red_with_duration(state_restored, const, red_agent_id, stealth_action, key)
+        with rng_impls(uniform=tape.uniform), jax.disable_jit():
+            new_state = process_red_with_duration(state_restored, const, red_agent_id, stealth_action, key)
 
         # Stealth scan should NOT have executed (source was destroyed by Restore)
-        detection_consumed = int(new_state.detection_random_index)
-        assert detection_consumed == 0, (
-            f"Stealth scan consumed {detection_consumed} detection random(s) "
+        del new_state
+        assert tape.consumed == 0, (
+            f"Stealth scan consumed {tape.consumed} detection random(s) "
             f"but should have failed because source session on host_a={host_a} was restored"
         )

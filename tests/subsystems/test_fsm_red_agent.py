@@ -116,7 +116,7 @@ class TestAutonomousActionParity:
         assert type(cyborg_action).__name__ != "Sleep"
         assert int(red_actions[0]) != RED_SLEEP
 
-    def test_fsm_hidden_state_applies_after_completion_step(self):
+    def test_fsm_hidden_state_applies_after_completion_step(self, tmp_path):
         """FSM hidden state should update on the next decision step, not immediately on completion."""
         from CybORG.Agents import EnterpriseGreenAgent
         from CybORG.Agents.Wrappers import BlueFlatWrapper
@@ -124,6 +124,7 @@ class TestAutonomousActionParity:
         from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
         from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+        from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, save_topology
 
         scenario = EnterpriseScenarioGenerator(
             blue_agent_class=SleepAgent,
@@ -134,13 +135,14 @@ class TestAutonomousActionParity:
         cyborg_env = BlueFlatWrapper(env=CybORG(scenario, "sim", seed=0), pad_spaces=True)
         cyborg_env.reset()
         cyborg_agent = cyborg_env.env.environment_controller.agent_interfaces["red_agent_0"].agent
-
-        jax_env = FsmRedCC4Env(
-            num_steps=500,
-            topology_mode="cyborg_bank",
-            topology_bank_size=1,
-            sync_red_policy_bank=True,
+        topology_path = tmp_path / "cyborg_seed_0.npz"
+        save_topology(
+            build_const_from_cyborg(cyborg_env.env),
+            topology_path,
+            metadata={"source": "cyborg", "source_seed": 0},
         )
+
+        jax_env = FsmRedCC4Env(num_steps=500, topology_path=topology_path)
         key = jax.random.PRNGKey(0)
         _, env_state = jax_env.reset(key)
         start_host = int(env_state.const.red_start_hosts[0])

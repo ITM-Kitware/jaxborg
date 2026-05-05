@@ -36,6 +36,8 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.actions.pids import append_pid_to_row
+from jaxborg.actions.rng import indexed_rng_impls
+from jaxborg.actions.rng_tape import IndexedRNGTape
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
@@ -199,6 +201,7 @@ def _jit_advance_and_clear(state, const):
         green_lwf_this_step=_ZERO_BOOL_HOSTS,
         green_asf_this_step=_ZERO_BOOL_HOSTS,
         red_impact_attempted=_ZERO_BOOL_HOSTS,
+        red_impact_attempted_by_agent=jnp.zeros((NUM_RED_AGENTS, GLOBAL_MAX_HOSTS), dtype=jnp.bool_),
     )
 
 
@@ -285,6 +288,10 @@ class CC4DifferentialHarness:
         self._blue_wrapper = None
         self._blue_unsupported_pending = {}
         self.last_random_sync_report = None
+        # Reusable indexed-tape: populated per step from CybORG draws and
+        # consumed by JAX via the per-purpose RNG dispatchers.  Active only
+        # when sync_green_rng is True (i.e. when GreenRecorder is installed).
+        self._rng_tape = IndexedRNGTape()
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -435,10 +442,6 @@ class CC4DifferentialHarness:
         # Disable green actions when CybORG uses SleepAgent for green
         if self.green_cls is SleepAgent:
             self.jax_const = self.jax_const.replace(green_agents_active=jnp.array(False))
-        # Enable exploit session-selection sync: the harness records CybORG's
-        # server_session choice index per step so JAX exercises the same N
-        # and makes the same 1/N decision.
-        self.jax_const = self.jax_const.replace(use_red_exploit_session_choices=jnp.array(True))
         cyborg_state = self.cyborg_env.environment_controller.state
         controller = self.cyborg_env.environment_controller
 
@@ -698,25 +701,12 @@ class CC4DifferentialHarness:
 
             self.green_recorder = GreenRecorder()
             self.green_recorder.install(self.cyborg_env, self.mappings)
-            self.jax_const = self.jax_const.replace(
-                use_green_randoms=jnp.array(True),
-                use_red_pid_deltas=jnp.array(True),
-                use_blue_decoy_pid_deltas=jnp.array(True),
-            )
-            self.jax_const = self.jax_const.replace(
-                use_red_privesc_choices=jnp.array(True),
-                use_red_session_check_choices=jnp.array(True),
-            )
 
         if self.record_red_policy:
             from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
 
             self.red_policy_recorder = RedPolicyRecorder()
             self.red_policy_recorder.install(self.cyborg_env, self.mappings)
-            self.jax_const = self.jax_const.replace(
-                red_policy_randoms=jnp.asarray(self.red_policy_recorder._tape),
-                use_red_policy_randoms=jnp.array(True),
-            )
             self.red_policy_mismatches = []
             self.red_policy_compared = 0
             self.red_eligibility_mismatches = []
@@ -871,8 +861,6 @@ class CC4DifferentialHarness:
         """
         self.rng_key, key_green, key_red, *subkeys = jax.random.split(self.rng_key, NUM_RED_AGENTS + 3)
         red_keys = jax.random.split(key_red, NUM_RED_AGENTS)
-        detection_count = 0
-        using_detection_sync = False
 
         if blue_actions is None and not self.use_cyborg_blue_policy:
             blue_actions = {b: BLUE_SLEEP for b in range(NUM_BLUE_AGENTS)}
@@ -919,9 +907,6 @@ class CC4DifferentialHarness:
                 except Exception as exc:
                     cyborg_pre_picks[r] = exc
             controller.np_random.bit_generator.state = pre_rng_state
-            self.jax_const = self.jax_const.replace(
-                red_policy_randoms=jnp.asarray(self.red_policy_recorder._tape),
-            )
 
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
@@ -1049,6 +1034,10 @@ class CC4DifferentialHarness:
         self._correct_pending_decoys(changed_services_by_host)
 
         # --- Green RNG sync ---
+        random_sync_report = None
+        step_fields = None
+        red_pid_deltas = None
+        blue_decoy_pid_deltas = None
         if self.green_recorder:
             step_fields, red_pid_deltas, blue_decoy_pid_deltas, random_sync_report = self.green_recorder.extract_step(
                 int(self.jax_state.time)
@@ -1056,61 +1045,6 @@ class CC4DifferentialHarness:
             self._sync_red_action_randoms(random_sync_report, red_actions)
             self._validate_blue_action_randoms(random_sync_report, controller)
             self.last_random_sync_report = random_sync_report
-            green_randoms = self.jax_const.green_randoms.at[self.jax_state.time].set(jnp.array(step_fields))
-            red_pid_delta_row = self.jax_const.red_pid_deltas.at[self.jax_state.time].set(
-                jnp.array(red_pid_deltas, dtype=jnp.int32)
-            )
-            blue_decoy_pid_delta_row = self.jax_const.blue_decoy_pid_deltas.at[self.jax_state.time].set(
-                jnp.array(blue_decoy_pid_deltas, dtype=jnp.int32)
-            )
-            detection_count = len(random_sync_report.detection_randoms)
-            detection_randoms = self.jax_const.detection_randoms
-            # Detection replay is step-local. Reusing the same buffer each step
-            # avoids leaking stale prior-step consumption into current-step sync.
-            if detection_count:
-                if detection_count > detection_randoms.shape[0]:
-                    raise RuntimeError(
-                        "Detection random overflow while syncing CybORG RNG at "
-                        f"step {int(self.jax_state.time)}: count={detection_count} "
-                        f"> step_capacity={int(detection_randoms.shape[0])}"
-                    )
-                detection_randoms = detection_randoms.at[:detection_count].set(
-                    jnp.array(random_sync_report.detection_randoms, dtype=jnp.float32)
-                )
-            using_detection_sync = bool(detection_count) and random_sync_report.detection_sync_supported
-            # Sync privesc session choice indices from CybORG
-            privesc_row = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
-            for ridx, choice_idx in random_sync_report.red_privesc_choices.items():
-                privesc_row[ridx] = choice_idx
-            red_privesc_choice_row = self.jax_const.red_privesc_choices.at[self.jax_state.time].set(
-                jnp.array(privesc_row, dtype=jnp.int32)
-            )
-            # Sync session-check within-host slot indices and host from CybORG
-            sc_row = np.zeros(NUM_RED_AGENTS, dtype=np.int32)
-            for ridx, slot_idx in random_sync_report.red_session_check_choices.items():
-                sc_row[ridx] = slot_idx
-            red_sc_choice_row = self.jax_const.red_session_check_choices.at[self.jax_state.time].set(
-                jnp.array(sc_row, dtype=jnp.int32)
-            )
-            sc_host_row = np.full(NUM_RED_AGENTS, -1, dtype=np.int32)
-            for ridx, host_idx in random_sync_report.red_session_check_hosts.items():
-                sc_host_row[ridx] = host_idx
-            red_sc_host_row = self.jax_const.red_session_check_hosts.at[self.jax_state.time].set(
-                jnp.array(sc_host_row, dtype=jnp.int32)
-            )
-            self.jax_const = self.jax_const.replace(
-                green_randoms=green_randoms,
-                red_pid_deltas=red_pid_delta_row,
-                blue_decoy_pid_deltas=blue_decoy_pid_delta_row,
-                detection_randoms=detection_randoms,
-                use_detection_randoms=jnp.array(using_detection_sync),
-                red_privesc_choices=red_privesc_choice_row,
-                red_session_check_choices=red_sc_choice_row,
-                red_session_check_hosts=red_sc_host_row,
-            )
-            self.jax_state = self.jax_state.replace(
-                detection_random_index=jnp.array(0, dtype=jnp.int32),
-            )
             if self.strict_random_sync and random_sync_report.has_issues:
                 raise AssertionError(random_sync_report.format(int(self.jax_state.time)))
 
@@ -1146,27 +1080,54 @@ class CC4DifferentialHarness:
             dtype=jnp.int32,
         )
 
-        self.jax_state = _jit_apply_all_actions(
-            self.jax_state,
-            self.jax_const,
-            blue_action_arr,
-            red_action_arr,
-            key_green,
-            jnp.stack(subkeys[:NUM_RED_AGENTS]),
-            forced_primary_hosts_pre,
-            forced_primary_pids_pre,
-        )
+        # Build per-agent forced primary host/pid arrays for the post-step
+        # apply_red_session_check.  Populated only when CybORG ran
+        # _choose_new_primary_session this step (i.e. session 0 was missing
+        # post-red and a new session was promoted).  Forces JAX to pick the
+        # same host CybORG did, eliminating cross-host-promotion divergence.
+        # NB: the sentinel for "no force" on the PID array is UNKNOWN_PRIMARY_PID
+        # (-2) — using -1 collides with current_primary_pid=-1 and would
+        # spuriously trigger forced_confirms_current_pid in apply_red_session_check.
+        from jaxborg.actions.duration import UNKNOWN_PRIMARY_PID as _UNK_PID
 
-        if self.green_recorder:
-            detection_consumed = int(self.jax_state.detection_random_index)
-            expected_consumed = detection_count if using_detection_sync else 0
-            if detection_consumed != expected_consumed:
-                # Detection RNG consumption diverged — reset the index so
-                # future steps stay in sync.  State diffs are no longer
-                # papered over; they surface as test errors.
-                self.jax_state = self.jax_state.replace(
-                    detection_random_index=jnp.array(expected_consumed, dtype=jnp.int32),
+        forced_session_check_hosts = jnp.full(NUM_RED_AGENTS, jnp.int32(-1), dtype=jnp.int32)
+        forced_session_check_pids = jnp.full(NUM_RED_AGENTS, _UNK_PID, dtype=jnp.int32)
+        if random_sync_report is not None:
+            for agent_idx, host_idx in random_sync_report.red_session_check_hosts.items():
+                if 0 <= host_idx < GLOBAL_MAX_HOSTS:
+                    forced_session_check_hosts = forced_session_check_hosts.at[agent_idx].set(int(host_idx))
+                    sessions = controller.state.sessions.get(f"red_agent_{agent_idx}", {})
+                    sess0 = sessions.get(0)
+                    if sess0 is not None:
+                        forced_session_check_pids = forced_session_check_pids.at[agent_idx].set(int(sess0.pid))
+
+        if self.green_recorder and random_sync_report is not None:
+            self._populate_rng_tape(random_sync_report, step_fields, red_pid_deltas, blue_decoy_pid_deltas)
+            with indexed_rng_impls(**self._rng_tape.as_overrides()), jax.disable_jit():
+                self.jax_state = apply_all_actions(
+                    self.jax_state,
+                    self.jax_const,
+                    blue_action_arr,
+                    red_action_arr,
+                    key_green,
+                    jnp.stack(subkeys[:NUM_RED_AGENTS]),
+                    forced_primary_hosts_pre,
+                    forced_primary_pids_pre,
+                    forced_session_check_hosts=forced_session_check_hosts,
+                    forced_session_check_pids=forced_session_check_pids,
                 )
+        else:
+            self.jax_state = _jit_apply_all_actions(
+                self.jax_state,
+                self.jax_const,
+                blue_action_arr,
+                red_action_arr,
+                key_green,
+                jnp.stack(subkeys[:NUM_RED_AGENTS]),
+                forced_primary_hosts_pre,
+                forced_primary_pids_pre,
+            )
+
         self._schedule_pending_generic_decoys(controller)
         self._sync_pending_unsupported_blue_actions(controller, changed_services_by_host)
 
@@ -1324,6 +1285,13 @@ class CC4DifferentialHarness:
 
         step = int(self.jax_state.time)
         cy_state = controller.state
+        # Preserve previous-step chosen_ids: when an exploit was queued at step
+        # S with chosen_id=K, CybORG holds onto session=K in actions_in_progress
+        # until resolution at step S+3.  JAX's exploit_common_preconditions
+        # calls sample_exploit_session_choice ONLY at the resolve step, so the
+        # tape must return chosen_id=K then — not 0 (which would always
+        # succeed and disagree with CybORG when K != 0).
+        prev_exploit_session_ids = dict(getattr(self, "_exploit_session_ids", {}))
         self._exploit_session_ids = {}
 
         for r in range(NUM_RED_AGENTS):
@@ -1331,7 +1299,20 @@ class CC4DifferentialHarness:
             is_exploit = RED_EXPLOIT_SSH_START <= action_idx < RED_EXPLOIT_BLUEKEEP_END
             is_busy = int(self.jax_state.red_pending_ticks[r]) > 0
 
-            if not is_exploit or is_busy:
+            if is_busy:
+                # In the middle of (or resolving) a previously-queued action.
+                # Keep the chosen session ID stable for the entire duration so
+                # the tape returns the same value at the resolve step that was
+                # passed to CybORG when the action was first queued.
+                pending_action_idx = int(self.jax_state.red_pending_action[r])
+                pending_is_exploit = RED_EXPLOIT_SSH_START <= pending_action_idx < RED_EXPLOIT_BLUEKEEP_END
+                if pending_is_exploit:
+                    self._exploit_session_ids[r] = int(prev_exploit_session_ids.get(r, 0))
+                else:
+                    self._exploit_session_ids[r] = 0
+                continue
+
+            if not is_exploit:
                 # Not submitting a new exploit — default to session 0.
                 self._exploit_session_ids[r] = 0
                 continue
@@ -1359,22 +1340,134 @@ class CC4DifferentialHarness:
             rng = np.random.RandomState(self.seed * 10000 + step * NUM_RED_AGENTS + r)
             chosen_id = int(rng.choice(abstract_session_ids))
             self._exploit_session_ids[r] = chosen_id
-            # Translate CybORG's outcome into JAXborg's framework:
-            # JAXborg succeeds when choice == 0, so map session-0 → 0
-            # and any other session → its 1-based position.
-            n = len(abstract_session_ids)
-            choice_index = 0 if chosen_id == 0 else (rng.randint(1, max(n, 2)))
+            # Runtime exploit-session replay tapes were retired; keep only the
+            # chosen CybORG session ID for translating explicit live actions.
 
-            # Write at the EXECUTION step: exploit duration is 4, so the
-            # action resolves 3 steps after submission.
-            exec_step = step + 3
-            max_step = self.jax_const.red_exploit_session_choices.shape[0]
-            if exec_step < max_step:
-                self.jax_const = self.jax_const.replace(
-                    red_exploit_session_choices=self.jax_const.red_exploit_session_choices.at[exec_step, r].set(
-                        jnp.int32(choice_index)
-                    ),
-                )
+    def _populate_rng_tape(self, random_sync_report, step_fields, red_pid_deltas, blue_decoy_pid_deltas):
+        """Build the IndexedRNGTape from CybORG's per-step recorded draws.
+
+        Called per harness step before invoking ``apply_all_actions`` under
+        ``indexed_rng_impls(**tape.as_overrides())``.  Each table is keyed
+        by JAX's call-site context (agent_id / host_idx / field_idx) so the
+        order in which JAX traverses agents/hosts is irrelevant.
+        """
+        tape = self._rng_tape
+        tape.clear()
+
+        # Detection rolls — flat list in CybORG's draw order; consumed FIFO.
+        # _sync_red_action_randoms has already extended this list with the
+        # per-action draws appropriate for JAX consumption.
+        tape.set_detection_queue(random_sync_report.detection_randoms)
+
+        # Per-agent red draws.  red_pid_deltas[r] is 0 when CybORG didn't draw
+        # one this step; we still write 0 so a JAX miss surfaces as a hard
+        # error rather than a silent fallback to default RNG.
+        for r in range(NUM_RED_AGENTS):
+            tape.set_red_pid_delta(agent_id=r, value=int(red_pid_deltas[r]))
+
+        for agent_idx, slot in random_sync_report.red_session_check_choices.items():
+            tape.set_red_session_check(agent_id=agent_idx, value=int(slot))
+
+        for agent_idx, slot in random_sync_report.red_privesc_choices.items():
+            tape.set_red_privesc(agent_id=agent_idx, value=int(slot))
+
+        # Exploit-session 1/N choice — pre-computed in _precompute_exploit_session_ok.
+        # session_id 0 holds scan data so JAX's exploit succeeds iff index==0.
+        for r, chosen_id in self._exploit_session_ids.items():
+            tape.set_exploit_session(agent_id=r, value=int(chosen_id))
+
+        # Per-(blue agent, slot) decoy pid deltas.
+        for b in range(NUM_BLUE_AGENTS):
+            for slot in range(blue_decoy_pid_deltas.shape[1]):
+                tape.set_blue_decoy_pid_delta(agent_id=b, respawn_index=slot, value=int(blue_decoy_pid_deltas[b, slot]))
+
+        # Blue decoy type choice — captured by ``_validate_blue_action_randoms``
+        # by inspecting the post-step host process table to recover which
+        # decoy CybORG actually deployed (CybORG's choice() of compatible
+        # factories does not surface the result on the action object).
+        for b, decoy_type in getattr(self, "_blue_decoy_type_choices", {}).items():
+            tape.set_blue_decoy_type(agent_id=int(b), value=int(decoy_type))
+
+        # Green randoms table — host × field uniforms.
+        if step_fields is not None:
+            tape.set_green_uniform(step_fields)
+            int_table = self._build_green_int_range_table(step_fields)
+            tape.set_green_int_range(int_table)
+
+    def _build_green_int_range_table(self, step_fields):
+        """Compute the integer override table for green RNG int_range fields.
+
+        The recorder stores per-(host, field) floats whose float→int decoding
+        is ``floor(value * int_range)`` for fields 0/2/7 (action selector,
+        reliability roll, pid delta).  Field 1 is special — the recorder
+        stores the *raw chosen-token id*, but JAX consumes
+        ``sorted_tokens[sample_green_random(..., int_range=num_available)]``.
+        We must invert this: find the index ``i`` in JAX's pre-step
+        ``sorted_tokens`` row such that ``sorted_tokens[i] == recorded_token``.
+
+        Returns an ``(GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS)`` int32
+        table.  Entries that should fall through to the float-decode path
+        are set to ``-1``; the tape's ``_green_impl`` honours this sentinel.
+        """
+        from jaxborg.constants import (
+            GLOBAL_MAX_HOSTS,
+            NUM_DECOY_TYPES,
+            NUM_GREEN_RANDOM_FIELDS,
+            NUM_SERVICES,
+        )
+
+        table = np.full((GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), -1, dtype=np.int32)
+        host_services_pre = np.asarray(self.jax_state.host_services).copy()
+        host_decoys_pre = np.asarray(self.jax_state.host_decoys).copy()
+        # The green vmap runs AFTER blue actions (apply_all_actions order:
+        # blue → green → red).  Same-step blue mutations to host_decoys /
+        # host_services are visible to the green vmap, so the int_range table
+        # must invert against the post-blue (pre-green) state to find the
+        # right index in JAX's sorted_tokens.
+        #
+        # Restore (final tick this step) wipes host_decoys and resets
+        # host_services to ``const.initial_services``.  Without applying this
+        # here, JAX's runtime ``sorted_tokens`` for the restored host
+        # diverges from the table-builder's snapshot, and ``searchsorted``
+        # either misses (→ table[h,1]=-1, fallback path picks a phantom
+        # decoy) or lands on the wrong sorted index — producing a phantom
+        # green LWF event.
+        initial_services = np.asarray(self.jax_const.initial_services)
+        for host_idx in getattr(self, "_blue_restore_hosts_this_step", set()):
+            if 0 <= host_idx < GLOBAL_MAX_HOSTS:
+                host_decoys_pre[host_idx, :] = False
+                host_services_pre[host_idx, :] = initial_services[host_idx]
+        # DeployDecoy (final tick this step) sets host_decoys[h, type]=True.
+        # Apply AFTER restores so a same-host Restore→Decoy sequence collapses
+        # to "decoy present" (CybORG processes blue actions in priority order
+        # then within-tier; JAX matches the order via ``apply_all_actions``).
+        for host_idx, decoy_type in getattr(self, "_blue_decoy_hosts_this_step", {}).items():
+            if 0 <= host_idx < GLOBAL_MAX_HOSTS and 0 <= decoy_type < NUM_DECOY_TYPES:
+                host_decoys_pre[host_idx, decoy_type] = True
+        # Replicate JAX's sorted_tokens construction:
+        #   service_tokens[i] = i               if active_services[i] else NUM_SERVICES + NUM_DECOY_TYPES
+        #   decoy_tokens[i]   = NUM_SERVICES+i  if active_decoys[i]   else NUM_SERVICES + NUM_DECOY_TYPES
+        #   sorted_tokens     = sort(concat(service_tokens, decoy_tokens))
+        sentinel = NUM_SERVICES + NUM_DECOY_TYPES
+        for h in range(GLOBAL_MAX_HOSTS):
+            recorded_token = int(round(float(step_fields[h, 1])))
+            if recorded_token < 0 or recorded_token >= sentinel:
+                continue
+            svc_active = host_services_pre[h]
+            dec_active = host_decoys_pre[h]
+            svc_tokens = np.where(svc_active, np.arange(NUM_SERVICES, dtype=np.int32), sentinel)
+            dec_tokens = np.where(dec_active, NUM_SERVICES + np.arange(NUM_DECOY_TYPES, dtype=np.int32), sentinel)
+            available = np.concatenate([svc_tokens, dec_tokens])
+            sorted_tokens = np.sort(available)
+            # Locate recorded_token in sorted_tokens.  np.searchsorted on a
+            # sorted array gives the leftmost index equal to the target; if
+            # absent the index points at the next-larger entry, in which case
+            # we leave -1 and let the float-decode fallback (sentinel-aware)
+            # produce a stable result.
+            idx = int(np.searchsorted(sorted_tokens, recorded_token))
+            if idx < sorted_tokens.shape[0] and sorted_tokens[idx] == recorded_token:
+                table[h, 1] = idx
+        return table
 
     def _sync_red_action_randoms(self, random_sync_report, red_actions):
         synced_randoms = list(random_sync_report.detection_randoms)
@@ -1537,6 +1630,46 @@ class CC4DifferentialHarness:
         return int(proposed_action)
 
     def _validate_blue_action_randoms(self, random_sync_report, controller) -> None:
+        # Reset per-step decoy choices captured for the tape.
+        self._blue_decoy_type_choices = {}
+        # Track per-step blue decoy deployments by target host so
+        # _build_green_int_range_table can predict the post-blue, pre-green
+        # decoy state used by JAX's green vmap.
+        self._blue_decoy_hosts_this_step: dict[int, int] = {}
+        # Track per-step blue Restore actions that COMPLETED this step (final
+        # tick of duration=5).  Restore wipes host_decoys and resets
+        # host_services to initial values; the green vmap runs on the
+        # post-blue state, so the int_range table must invert against the
+        # restored host's sorted_tokens to find the right index.
+        self._blue_restore_hosts_this_step: set[int] = set()
+        for b in range(NUM_BLUE_AGENTS):
+            agent_name = f"blue_agent_{b}"
+            executed = controller.action.get(agent_name, [])
+            for act in executed:
+                if type(act).__name__ != "Restore":
+                    continue
+                hostname = getattr(act, "hostname", None)
+                if hostname is None:
+                    continue
+                host_idx = self.mappings.hostname_to_idx.get(hostname)
+                if host_idx is None:
+                    continue
+                # Only mirror JAX's Restore effect when the blue agent
+                # actually covers the host — apply_blue_restore is gated by
+                # ``const.blue_agent_hosts[agent_id, target_host]``.
+                if not bool(self.jax_const.blue_agent_hosts[b, host_idx]):
+                    continue
+                # When the Restore action is unsupported in JAX's blue action
+                # encoding (encode_blue_action returns BLUE_SLEEP), the harness
+                # applies it post-hoc via ``_apply_unsupported_blue_host_action``
+                # AFTER apply_all_actions runs.  In that case JAX's green vmap
+                # sees pre-Restore state, so the int_range table must NOT
+                # mirror Restore — leave the pre-blue state in place to match
+                # the green vmap's actual view.
+                if self._is_unsupported_blue_host_action(act, b):
+                    continue
+                self._blue_restore_hosts_this_step.add(int(host_idx))
+        seen_decoy_agents: set[int] = set()
         for usage in random_sync_report.blue_action_rng_usage:
             if usage.action_type != "DeployDecoy":
                 random_sync_report.unsupported_random_actions.append(
@@ -1556,6 +1689,100 @@ class CC4DifferentialHarness:
                 random_sync_report.unsupported_random_actions.append(
                     f"blue_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
                 )
+                continue
+            # Resolve the decoy type CybORG actually deployed, so JAX picks the
+            # same one when the tape feeds ``sample_blue_decoy_type_choice``.
+            # Inspect the executed (or pending) action's hostname and look up
+            # which decoy service appeared on that host's process table.
+            decoy_action = executed[0] if executed_is_generic_decoy else pending["action"]
+            hostname = getattr(decoy_action, "hostname", None)
+            if hostname is None:
+                continue
+            host = controller.state.hosts.get(hostname)
+            if host is None:
+                continue
+            chosen_type = self._resolve_deployed_decoy_type(host)
+            if chosen_type is not None:
+                self._blue_decoy_type_choices[int(usage.agent_idx)] = int(chosen_type)
+                host_idx = self.mappings.hostname_to_idx.get(hostname)
+                if host_idx is not None:
+                    self._blue_decoy_hosts_this_step[int(host_idx)] = int(chosen_type)
+            seen_decoy_agents.add(int(usage.agent_idx))
+
+        # CybORG's DeployDecoy emits at most two ``state.np_random.choice``
+        # calls (session, factory).  When a host has only one session AND
+        # only one compatible decoy factory, both calls are size==1 and the
+        # recorder filters them out — leaving no ``blue_action_rng_usage``
+        # entry for the agent.  Without an entry, JAX would receive a tape
+        # miss for ``sample_blue_decoy_type_choice`` and default to slot 0
+        # (Haraka), which is often incompatible.  Catch this case by
+        # inspecting which blue agents just executed a DeployDecoy and
+        # resolving the deployed type from the host's process table.
+        for b in range(NUM_BLUE_AGENTS):
+            if b in seen_decoy_agents:
+                continue
+            agent_name = f"blue_agent_{b}"
+            executed = controller.action.get(agent_name, [])
+            decoy_action = next((act for act in executed if type(act).__name__ == "DeployDecoy"), None)
+            if decoy_action is None:
+                continue
+            hostname = getattr(decoy_action, "hostname", None)
+            if hostname is None:
+                continue
+            host = controller.state.hosts.get(hostname)
+            if host is None:
+                continue
+            chosen_type = self._resolve_deployed_decoy_type(host)
+            if chosen_type is not None:
+                self._blue_decoy_type_choices[int(b)] = int(chosen_type)
+                host_idx = self.mappings.hostname_to_idx.get(hostname)
+                if host_idx is not None:
+                    self._blue_decoy_hosts_this_step[int(host_idx)] = int(chosen_type)
+
+    @staticmethod
+    def _resolve_deployed_decoy_type(host) -> int | None:
+        """Return the JAX decoy type id corresponding to the most recently
+        deployed exploit-decoy on ``host`` (one of HarakaSMPT/Apache/Tomcat/
+        Vsftpd), or ``None`` if no exploit decoy is present.
+
+        The walk prefers the highest-PID decoy process to pick the most
+        recently created one when redeployment leaves orphaned decoys with
+        the same service name.
+        """
+        from CybORG.Shared.Enums import DecoyType
+
+        best_pid = -1
+        best_type = None
+        # Each decoy factory's process is identifiable by a substring in its
+        # name.  ``DecoyHarakaSMPT`` → ``haraka``, ``DecoyApache`` →
+        # ``apache``, ``DecoyTomcat`` → ``tomcat`` (e.g. ``Tomcat.exe``),
+        # ``DecoyVsftpd`` → ``vsftpd``.  Match case-insensitively on the
+        # process name so capitalization / extension differences don't
+        # break recovery.
+        substr_map = (
+            ("haraka", 0),
+            ("apache", 1),
+            ("tomcat", 2),
+            ("vsftpd", 3),
+        )
+        for proc in host.processes:
+            decoy_attr = getattr(proc, "decoy_type", None)
+            if decoy_attr is None or decoy_attr != DecoyType.EXPLOIT:
+                continue
+            raw_name = getattr(proc, "name", None) or getattr(proc, "process_name", "")
+            name = (raw_name or "").lower()
+            mapped = None
+            for needle, decoy_id in substr_map:
+                if needle in name:
+                    mapped = decoy_id
+                    break
+            if mapped is None:
+                continue
+            pid = int(getattr(proc, "pid", 0) or 0)
+            if pid > best_pid:
+                best_pid = pid
+                best_type = mapped
+        return best_type
 
     def _sync_discover_deception_randoms(self, usage, action_type: int, action_idx: int) -> list[float] | None:
         if action_type != ACTION_TYPE_DISCOVER_DECEPTION:
@@ -1938,13 +2165,7 @@ class CC4DifferentialHarness:
         self.jax_state = apply_fn(self.jax_state, self.jax_const, agent_idx, host_idx)
 
     def _correct_pending_decoys(self, new_services_by_host):
-        """Record the decoy type CybORG chose into the precomputed tape.
-
-        When a pending decoy is about to execute (pending_ticks == 1), observe
-        which new service appeared on the target host and record the resolved
-        decoy type into blue_decoy_type_choices so that apply_blue_decoy
-        selects the same type via the precomputed path.
-        """
+        """Clear unsupported pending decoys whose resolved type JAX cannot force."""
         for b in range(NUM_BLUE_AGENTS):
             if int(self.jax_state.blue_pending_ticks[b]) != 1:
                 continue
@@ -1965,15 +2186,7 @@ class CC4DifferentialHarness:
                 if svc_name in self._SERVICE_TO_DECOY:
                     resolved_type = self._SERVICE_TO_DECOY[svc_name]
                     break
-            if resolved_type is not None:
-                # Record the CybORG-chosen decoy type for this step+agent
-                self.jax_const = self.jax_const.replace(
-                    blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[self.jax_state.time, b].set(
-                        resolved_type
-                    ),
-                    use_blue_decoy_type_choices=jnp.array(True),
-                )
-            else:
+            if resolved_type is None:
                 self.jax_state = self.jax_state.replace(
                     blue_pending_ticks=self.jax_state.blue_pending_ticks.at[b].set(0),
                     blue_pending_action=self.jax_state.blue_pending_action.at[b].set(BLUE_SLEEP),
@@ -2060,13 +2273,6 @@ class CC4DifferentialHarness:
                             resolved = self._SERVICE_TO_DECOY[service_name]
                             break
                     if resolved is not None:
-                        # Record the resolved type so apply_blue_decoy picks it up
-                        self.jax_const = self.jax_const.replace(
-                            blue_decoy_type_choices=self.jax_const.blue_decoy_type_choices.at[
-                                self.jax_state.time, b
-                            ].set(resolved),
-                            use_blue_decoy_type_choices=jnp.array(True),
-                        )
                         self.jax_state = apply_blue_decoy(self.jax_state, self.jax_const, b, host_idx, -1)
                     continue
                 self._apply_unsupported_blue_host_action(b, action_name, host_idx)

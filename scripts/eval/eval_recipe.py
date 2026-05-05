@@ -83,12 +83,6 @@ def main():
     parser.add_argument("--seeds", type=str, default="42-51", help="e.g. '42-51' or '42,43,44'")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--output", type=str, default=None, help="Override result jsonl path")
-    parser.add_argument(
-        "--bank-match-size",
-        type=int,
-        default=None,
-        help="JAX-only: topology bank size for seed matching (default: pure mode)",
-    )
     args = parser.parse_args()
 
     model_path = Path(args.model).resolve()
@@ -127,7 +121,6 @@ def main():
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
-            bank_match_size=args.bank_match_size,
         )
         wall = time.perf_counter() - t0
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)

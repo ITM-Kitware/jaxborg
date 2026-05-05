@@ -85,8 +85,6 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "NUM_MINIBATCHES": int(jax_.get("num_minibatches", 16)),
         "UPDATE_EPOCHS": int(jax_.get("update_epochs", 4)),
         "TOTAL_TIMESTEPS": int(train["total_timesteps"]),
-        "TOPOLOGY_MODE": jax_.get("topology_mode", "generative"),
-        "TOPOLOGY_BANK_SIZE": int(jax_.get("topology_bank_size", 0)),
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),

@@ -1,5 +1,6 @@
 from functools import partial
-from typing import Dict, Tuple
+from pathlib import Path
+from typing import Dict, Sequence, Tuple
 
 import chex
 import jax
@@ -30,16 +31,14 @@ class FsmRedCC4Env(MultiAgentEnv):
         num_steps: int = 500,
         *,
         topology_mode: str = "generative",
-        topology_bank_size: int = 0,
-        sync_red_policy_bank: bool = False,
         training_mode: bool = False,
+        topology_path: str | Path | Sequence[str | Path] | None = None,
     ):
         self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
-            topology_bank_size=topology_bank_size,
-            sync_red_policy_bank=sync_red_policy_bank,
             training_mode=training_mode,
+            topology_path=topology_path,
         )
         self.agents = list(self._env.blue_agents)
 

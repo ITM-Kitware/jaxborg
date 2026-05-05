@@ -60,7 +60,7 @@ from jaxborg.parity.translate import (
     describe_blue_action,
     jax_blue_to_cyborg,
 )
-from jaxborg.scenarios.cc4.topology import build_const_from_cyborg, cyborg_bank_seed_from_seed
+from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from tests.differential.harness import CC4DifferentialHarness
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -88,7 +88,6 @@ ACTION_TYPE_RANGES = [
 ]
 
 DEFAULT_NUM_STEPS = 500
-DEFAULT_BANK_SIZE = 32
 
 
 def classify_action(action_idx: int) -> int:
@@ -192,16 +191,8 @@ def load_checkpoint(path):
     return policy, params
 
 
-def _make_jax_eval_env(topology_mode: str, topology_bank_size: int):
-    if topology_mode == "cyborg_bank":
-        if topology_bank_size <= 0:
-            raise ValueError(f"topology_bank_size must be > 0 for cyborg_bank, got {topology_bank_size}")
-        return FsmRedCC4Env(
-            num_steps=DEFAULT_NUM_STEPS,
-            topology_mode=topology_mode,
-            topology_bank_size=topology_bank_size,
-        )
-    return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS, topology_mode=topology_mode)
+def _make_jax_eval_env():
+    return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS)
 
 
 def policy_dist(policy, params, obs_jax, mask):
@@ -378,20 +369,19 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     return observations, rewards, terminated, truncated, info
 
 
-def make_cyborg_env(seed=42, bank_match_size=None):
+def make_cyborg_env(seed=42):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import BlueFlatWrapper
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    actual_seed = cyborg_bank_seed_from_seed(seed, bank_match_size) if bank_match_size is not None else seed
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
         red_agent_class=FiniteStateRedAgent,
         steps=500,
     )
-    cyborg = CybORG(sg, "sim", seed=actual_seed)
+    cyborg = CybORG(sg, "sim", seed=seed)
     return BlueFlatWrapper(env=cyborg, pad_spaces=True)
 
 
@@ -478,8 +468,6 @@ def rollout_jaxborg_scan(
     num_episodes=3,
     deterministic=False,
     seed=0,
-    jax_topology_mode="cyborg_bank",
-    topology_bank_size=DEFAULT_BANK_SIZE,
 ):
     """JAXborg-only eval using jax.lax.scan + jax.vmap — all episodes in parallel.
 
@@ -487,7 +475,7 @@ def rollout_jaxborg_scan(
     First call triggers XLA compilation (~5-10 min, cached to disk).
     Subsequent runs load from XLA cache and execute all episodes in one GPU pass.
     """
-    env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
+    env = _make_jax_eval_env()
     scan_fn = make_scan_eval_fn(env, policy, deterministic)
 
     # Build keys for all episodes
@@ -566,10 +554,8 @@ def rollout_jaxborg(
     num_episodes=3,
     deterministic=False,
     seed=0,
-    jax_topology_mode="cyborg_bank",
-    topology_bank_size=DEFAULT_BANK_SIZE,
 ):
-    env = _make_jax_eval_env(jax_topology_mode, topology_bank_size)
+    env = _make_jax_eval_env()
     batched_step = make_batched_inference_fn(policy, params, deterministic)
     all_actions = []
     episode_rewards = []
@@ -657,7 +643,7 @@ def rollout_jaxborg(
 
 def _rollout_cyborg_single_episode(args_tuple):
     """Run a single CybORG episode in its own process. Returns (ep, reward, actions_by_agent)."""
-    ep, checkpoint_path, deterministic, seed, bank_match_size = args_tuple
+    ep, checkpoint_path, deterministic, seed = args_tuple
     # Each worker reimports everything — necessary for ProcessPoolExecutor (spawn)
     import jax
     import jax.numpy as jnp
@@ -678,7 +664,7 @@ def _rollout_cyborg_single_episode(args_tuple):
     policy, params = load_checkpoint(checkpoint_path)
     batched_step = make_batched_inference_fn(policy, params, deterministic)
 
-    env = make_cyborg_env(seed=seed + ep, bank_match_size=bank_match_size)
+    env = make_cyborg_env(seed=seed + ep)
     observations, _ = env.reset()
     inner = env.env
     const = build_const_from_cyborg(inner)
@@ -789,7 +775,6 @@ def rollout_cyborg(
     num_episodes=3,
     deterministic=False,
     seed=0,
-    bank_match_size=None,
     checkpoint_path=None,
     parallel=True,
     max_workers=None,
@@ -804,7 +789,7 @@ def rollout_cyborg(
 
         print(f"  Running {num_episodes} CybORG episodes in parallel ({max_workers} workers)...", flush=True)
         t0 = time.perf_counter()
-        args_list = [(ep, checkpoint_path, deterministic, seed, bank_match_size) for ep in range(num_episodes)]
+        args_list = [(ep, checkpoint_path, deterministic, seed) for ep in range(num_episodes)]
         all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         all_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         all_phase_per_step: list = [[] for _ in range(num_episodes)]
@@ -857,7 +842,7 @@ def rollout_cyborg(
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        env = make_cyborg_env(seed=seed + ep, bank_match_size=bank_match_size)
+        env = make_cyborg_env(seed=seed + ep)
         observations, _ = env.reset()
         inner = env.env
         const = build_const_from_cyborg(inner)
@@ -1412,7 +1397,7 @@ def run_verbose_trace(policy, params, steps=20, seed=42):
 
 def print_mask_summary():
     print("\n--- Action Mask Summary ---")
-    env = FsmRedCC4Env(num_steps=100, topology_mode="cyborg_bank", topology_bank_size=32)
+    env = FsmRedCC4Env(num_steps=100, topology_mode="generative")
     key = jax.random.PRNGKey(42)
     _, env_state = env.reset(key)
 
@@ -1455,18 +1440,6 @@ def main():
     parser.add_argument("--verbose", type=int, default=0, help="Step-by-step CybORG trace for N steps")
     parser.add_argument("--plot", action="store_true", help="Save action dist + training curve PNGs")
     parser.add_argument("--mask-summary", action="store_true", help="Print per-agent mask breakdown")
-    parser.add_argument(
-        "--jax-topology-mode",
-        choices=("generative", "cyborg_bank"),
-        default="cyborg_bank",
-        help="JAX env topology mode for JAX-only or independent rollouts",
-    )
-    parser.add_argument(
-        "--topology-bank-size",
-        type=int,
-        default=DEFAULT_BANK_SIZE,
-        help="Topology bank size for cyborg_bank mode (default 32)",
-    )
     args = parser.parse_args()
 
     deterministic = args.deterministic
@@ -1491,8 +1464,6 @@ def main():
             args.episodes,
             deterministic,
             seed=args.seed,
-            jax_topology_mode=args.jax_topology_mode,
-            topology_bank_size=args.topology_bank_size,
         )
         jax_pooled_by_agent = [
             [a for ep in jax_results for a in ep.actions_by_agent[i]] for i in range(NUM_BLUE_AGENTS)
@@ -1558,11 +1529,10 @@ def main():
         print("FULLY INDEPENDENT ROLLOUTS")
         print("=" * 70)
         print("Each backend runs completely on its own — no sync of any kind.")
-        print("Same policy weights, matched topology seeds, independent everything else.")
+        print("Same policy weights, independent generated/CybORG topologies and everything else.")
         print("Compare population means via TOST.\n")
 
         use_scan = not args.no_scan
-        cyborg_bank_match_size = args.topology_bank_size if args.jax_topology_mode == "cyborg_bank" else None
 
         # Run JAXborg (scan/vmap) and CybORG (sequential) concurrently
         from concurrent.futures import ThreadPoolExecutor
@@ -1579,8 +1549,6 @@ def main():
                 args.episodes,
                 deterministic,
                 seed=args.seed,
-                jax_topology_mode=args.jax_topology_mode,
-                topology_bank_size=args.topology_bank_size,
             )
 
         def _run_cyborg():
@@ -1591,7 +1559,6 @@ def main():
                 args.episodes,
                 deterministic,
                 seed=args.seed,
-                bank_match_size=cyborg_bank_match_size,
                 checkpoint_path=args.checkpoint,
             )
 
