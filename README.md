@@ -139,3 +139,28 @@ Both engines use the same network architecture — a single shared-trunk actor-c
 | **Params**       | ~182K                        | ~182K                        |
 
 Agents 0-3 each observe one subnet; agent 4 observes three (the full 210-dim vector). Agents 0-3 are zero-padded to 210 obs / 242 actions, with action masking to prevent invalid actions.
+
+## Resilience Metric and Alignment
+
+The [Resilience meric](https://github.com/xcadet/CyberResilience) is implemented using a separate topology that labels an operational host in each subnet as CIA-tied assets. An example configuration can be found in the `recipe/resilience.yaml` configuration. Resilience metric training and evaluation can be done with the following:
+
+```bash
+
+# Training:
+../scripts/traing/run.sh jax resilience 42
+
+# Evaluation:
+# 1. Record trajectories
+uv run python scripts/eval/cc4_trajectory_eval.py \
+    --model jaxborg-exp/ippo_cyborg/resilience_seed42/model_resilience_seed42.pt \
+    --episodes 100 \
+    --seed 42 \
+    --output-dir trajs/resilience_seed42 \
+    --recipe recipes/resilience.yaml
+
+# 2. Score them (CIA + resilience)
+uv run python scripts/eval/cc4_score_trajectories.py trajs/resilience_seed42 \
+    --recipe recipes/resilience.yaml
+
+```
+
