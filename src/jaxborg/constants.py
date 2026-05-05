@@ -10,7 +10,6 @@ CC4_CONFIG = ScenarioConfig(
     mission_phases=3,
     max_steps=500,
     message_length=8,
-    max_detection_randoms=1024,
     num_green_random_fields=8,
     num_red_policy_random_fields=3,
     min_hosts_per_subnet=4,
@@ -76,7 +75,6 @@ ACTIVITY_NONE = 0
 ACTIVITY_SCAN = 1
 ACTIVITY_EXPLOIT = 2
 
-MAX_DETECTION_RANDOMS = CC4_CONFIG.max_detection_randoms
 NUM_GREEN_RANDOM_FIELDS = CC4_CONFIG.num_green_random_fields
 NUM_RED_POLICY_RANDOM_FIELDS = CC4_CONFIG.num_red_policy_random_fields
 
