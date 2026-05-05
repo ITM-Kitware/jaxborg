@@ -15,7 +15,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.red_common import apply_red_session_check
 from jaxborg.actions.rng import rng_impls
-from jaxborg.actions.rng_tape import RNGTape
+from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS, SERVICE_IDS
 from jaxborg.env import ScenarioEnv
 

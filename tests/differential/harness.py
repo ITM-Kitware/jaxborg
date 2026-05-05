@@ -37,7 +37,6 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.rng import indexed_rng_impls
-from jaxborg.actions.rng_tape import IndexedRNGTape
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
@@ -68,6 +67,7 @@ from tests.differential.blue_mask_projection import (
     live_blue_wrapper_mask_in_jax_space,
     refresh_blue_wrapper_action_space,
 )
+from tests.differential.parity_rng_replay import IndexedRNGTape
 
 
 @dataclass
@@ -242,6 +242,45 @@ def _jit_apply_all_actions(
     )
 
 
+def _make_jit_apply_all_actions_with_forced_sessions():
+    """Build a fresh jit'd ``apply_all_actions`` for the tape path.
+
+    The trace bakes in :func:`io_callback` calls referencing the harness's
+    :class:`IndexedRNGTape` host buffers.  Each harness instance must own
+    its own jit cache — sharing one across instances would let test 2's
+    call hit a cache entry compiled with test 1's tape, returning stale
+    values.  We therefore build a new jit'd function per harness.
+    """
+
+    @jax.jit
+    def _go(
+        state,
+        const,
+        blue_actions,
+        red_actions,
+        key_green,
+        red_keys,
+        forced_primary_hosts,
+        forced_primary_pids,
+        forced_session_check_hosts,
+        forced_session_check_pids,
+    ):
+        return apply_all_actions(
+            state,
+            const,
+            blue_actions,
+            red_actions,
+            key_green,
+            red_keys,
+            forced_primary_hosts,
+            forced_primary_pids,
+            forced_session_check_hosts=forced_session_check_hosts,
+            forced_session_check_pids=forced_session_check_pids,
+        )
+
+    return _go
+
+
 class CC4DifferentialHarness:
     def __init__(
         self,
@@ -291,7 +330,18 @@ class CC4DifferentialHarness:
         # Reusable indexed-tape: populated per step from CybORG draws and
         # consumed by JAX via the per-purpose RNG dispatchers.  Active only
         # when sync_green_rng is True (i.e. when GreenRecorder is installed).
-        self._rng_tape = IndexedRNGTape()
+        # strict=False is a temporary opt-out: the harness deliberately
+        # under-populates some tables (e.g. red_session_check is only set
+        # when CybORG ran the action this step) and JAX may still call the
+        # dispatcher for masked/no-op slots.  TODO: tighten populate paths
+        # so strict=True can be the default everywhere.
+        self._rng_tape = IndexedRNGTape(strict=False)
+        # Per-harness jit cache for the tape path — see
+        # ``_make_jit_apply_all_actions_with_forced_sessions`` for why this
+        # cannot be a module-level ``@jax.jit``.  Each harness's tape has
+        # its own host buffers; the trace closes over the *names* of those
+        # buffers via ``self`` in the io_callback host fns.
+        self._jit_apply_all_actions_tape = _make_jit_apply_all_actions_with_forced_sessions()
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -1103,8 +1153,8 @@ class CC4DifferentialHarness:
 
         if self.green_recorder and random_sync_report is not None:
             self._populate_rng_tape(random_sync_report, step_fields, red_pid_deltas, blue_decoy_pid_deltas)
-            with indexed_rng_impls(**self._rng_tape.as_overrides()), jax.disable_jit():
-                self.jax_state = apply_all_actions(
+            with indexed_rng_impls(**self._rng_tape.as_overrides()):
+                self.jax_state = self._jit_apply_all_actions_tape(
                     self.jax_state,
                     self.jax_const,
                     blue_action_arr,
@@ -1113,8 +1163,8 @@ class CC4DifferentialHarness:
                     jnp.stack(subkeys[:NUM_RED_AGENTS]),
                     forced_primary_hosts_pre,
                     forced_primary_pids_pre,
-                    forced_session_check_hosts=forced_session_check_hosts,
-                    forced_session_check_pids=forced_session_check_pids,
+                    forced_session_check_hosts,
+                    forced_session_check_pids,
                 )
         else:
             self.jax_state = _jit_apply_all_actions(

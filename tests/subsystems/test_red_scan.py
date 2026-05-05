@@ -29,7 +29,7 @@ from jaxborg.actions.pending_source import (
 )
 from jaxborg.actions.red_common import can_reach_subnet, select_new_primary_session_host
 from jaxborg.actions.rng import rng_impls
-from jaxborg.actions.rng_tape import RNGTape
+from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     GLOBAL_MAX_HOSTS,

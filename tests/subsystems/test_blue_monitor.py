@@ -22,7 +22,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.pids import PROCESS_EVENT_NO_PID, append_pid_to_row_allow_duplicates
 from jaxborg.actions.rng import rng_impls
-from jaxborg.actions.rng_tape import RNGTape
+from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     ACTIVITY_NONE,
     ACTIVITY_SCAN,

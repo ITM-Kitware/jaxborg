@@ -27,7 +27,7 @@ from jaxborg.actions.encoding import (
     encode_red_action,
 )
 from jaxborg.actions.rng import rng_impls
-from jaxborg.actions.rng_tape import RNGTape
+from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     COMPROMISE_NONE,
