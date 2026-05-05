@@ -1,0 +1,83 @@
+meta:
+  name: default
+  source: "Matched-Training v2 baseline (2026-04-25, training-results.md)"
+  added: 2026-04-30
+  notes: |
+    Hyperparameters match the Matched-Training v2 protocol — the last
+    pre-Singh head-to-head where JAX-trained and CybORG-trained policies
+    came out statistically equivalent on CybORG env (gap +5.4 ± 58 pts,
+    n=300, EQUIVALENT at Δ=200/284).
+
+    Replication target (3M steps, mean across 3 seeds, last-50-updates):
+      JAX raw_ep_rew:    -1998 ± 118
+      CybORG ep_rew:     -1854 ± 46
+    Cross-policy eval (n=300, seeds 42-141):
+      JAX-trained → CybORG:    -1853
+      CybORG-trained → CybORG: -1858
+    PPO diagnostics nearly indistinguishable across backends:
+      entropy ~3.84, approx_kl ~0.005, explained_var ~0.61
+
+    Both backends plateau in the -1800 to -2000 band by ~500k steps.
+    3M is past plateau and was the v2 stop point (vs the older 5-20M
+    runs that drifted in the plateau region without improving).
+
+algorithm: ippo
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 5120000        # 1024 envs * 500 steps * 10 agents flat (informational)
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 10000
+  # Red agent used during CybORG training (ippo_cyborg.py).
+  # "finite_state" | "sleep" | "resilience" | c | i | a
+  red_agent: resilience
+
+jax:
+  num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)
+  num_minibatches: 16
+  update_epochs: 4
+  topology_mode: generative
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 1
+  rollout_length: 500
+  num_rollouts_per_update: 1   # 48*500=24000 steps/update → ~125 updates @ 3M; matches Matched-v2 (2026-04-25)
+  num_minibatches: 16
+  num_epochs: 4
+
+eval:
+  # Which CIA scorer to use when running cc4_score_trajectories.py.
+  # cc4:        original composite (0.4*C + 0.4*I + 0.2*A, zone-based host weights)
+  # resilience: ResilienceMetric — scores only auth/db/web server impacts
+  cia_metric: resilience
+
+  # When true: assign auth/db/web roles to three Operational Zone servers at
+  # rollout time (stored in each trajectory header) and use ResilienceMetric
+  # for scoring.
+  resilience_mode: true
+
+  # Red agent used during CybORG evaluation (eval_recipe.py).
+  # "finite_state" | "sleep" (no adversary) | "resilience" | c | i | a
+  red_agent: c
+
+  # Host-selection bias weight for the resilience red agent (CybORG and JAX).
+  # Operational zone servers are this many times more likely to be targeted.
+  resilience_target_weight: 5.0
