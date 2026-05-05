@@ -17,7 +17,6 @@ re-running CybORG (CPU-bound, ~2 min/episode).
 import argparse
 import json
 import os
-import random
 import re
 import sys
 from pathlib import Path
@@ -43,14 +42,13 @@ _ROLE_AUTH, _ROLE_DB, _ROLE_WEB = 1, 2, 3
 
 
 def _assign_resilience_roles(hosts: list[str], seed: int) -> dict[str, int]:
-    """Randomly assign auth/db/web roles to three Operational Zone server hosts.
+    """Deterministically assign auth/db/web roles to three Operational Zone server hosts.
 
-    Deterministic given ``seed`` — matches the intent of
-    ``resilience_topology._assign_resilience_roles`` without requiring JAX.
+    Selects the 3 eligible hosts with the lowest sorted names, mirroring
+    ``resilience_topology._assign_resilience_roles`` which picks by lowest host index.
+    The ``seed`` parameter is unused but kept for call-site compatibility.
     """
-    candidates = [h for h in hosts if _OPERATIONAL_SERVER_RE.match(h)]
-    rng = random.Random(seed)
-    rng.shuffle(candidates)
+    candidates = sorted(h for h in hosts if _OPERATIONAL_SERVER_RE.match(h))
     return {
         host: role
         for host, role in zip(candidates[:3], [_ROLE_AUTH, _ROLE_DB, _ROLE_WEB])
@@ -63,16 +61,24 @@ ACT_DIM = 242
 EPISODE_LENGTH = 500
 
 
-def make_env(seed):
+def make_env(seed, red_agent: str = "finite_state", target_weight: float = 5.0):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+    from jaxborg.cyborg_agents import ResilienceRedAgent
+
+    _red_classes = {
+        "finite_state": FiniteStateRedAgent,
+        "sleep": SleepAgent,
+        "resilience": ResilienceRedAgent.with_weight(target_weight),
+    }
+    red_cls = _red_classes.get(red_agent, FiniteStateRedAgent)
 
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
+        red_agent_class=red_cls,
         steps=EPISODE_LENGTH,
     )
     return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
@@ -207,10 +213,14 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     agent, _recipe = load_torch_policy(model_path)
 
     resilience_mode = False
+    red_agent = "finite_state"
+    target_weight = 5.0
     if recipe_path is not None:
         from jaxborg.recipe import load, project_eval
         eval_cfg = project_eval(load(recipe_path))
         resilience_mode = eval_cfg["resilience_mode"]
+        red_agent = eval_cfg["red_agent"]
+        target_weight = eval_cfg["resilience_target_weight"]
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -218,10 +228,11 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     output_dir = Path(output_dir)
     tag = tag or Path(model_path).stem.replace("model_", "")
 
+    print(f"red_agent: {red_agent}", flush=True)
     rewards = []
     for ep in range(episodes):
         ep_seed = seed + ep
-        env = make_env(ep_seed)
+        env = make_env(ep_seed, red_agent=red_agent, target_weight=target_weight)
         resilience_roles = None
         if resilience_mode:
             hosts = list(env.unwrapped.environment_controller.state.hosts.keys())
