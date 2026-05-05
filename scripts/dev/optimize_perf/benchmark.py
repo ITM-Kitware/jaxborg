@@ -44,8 +44,6 @@ def _build_network(recipe: dict, config: dict):
 
     env = FsmRedCC4Env(
         num_steps=500,
-        topology_mode=config.get("TOPOLOGY_MODE", "generative"),
-        topology_bank_size=config.get("TOPOLOGY_BANK_SIZE", 0),
         training_mode=bool(config.get("TRAINING_MODE", True)),
     )
     action_dim = env.action_space(env.agents[0]).n
@@ -95,10 +93,6 @@ def run_benchmark(args: argparse.Namespace) -> dict:
         config["NUM_ENVS"] = args.num_envs
     if args.num_steps is not None:
         config["NUM_STEPS"] = args.num_steps
-    # Optimization benchmark always uses the default generated topology path.
-    # Topology is not a benchmark knob; changing it would change the workload.
-    config["TOPOLOGY_MODE"] = "generative"
-    config["TOPOLOGY_BANK_SIZE"] = 0
     config["TOTAL_TIMESTEPS"] = int(args.num_updates * config["NUM_ENVS"] * config["NUM_STEPS"])
     config["MLFLOW_ENABLED"] = False
 

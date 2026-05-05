@@ -88,8 +88,6 @@ def make_train(config, network):
     num_envs = config["NUM_ENVS"]
     inner_env = FsmRedCC4Env(
         num_steps=500,
-        topology_mode=config.get("TOPOLOGY_MODE", "generative"),
-        topology_bank_size=config.get("TOPOLOGY_BANK_SIZE", 0),
         training_mode=bool(config.get("TRAINING_MODE", True)),
     )
     agents = list(inner_env.agents)
@@ -315,8 +313,6 @@ def main():
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
     parser.add_argument("--total-timesteps", type=int, default=None, help="Override recipe.train.total_timesteps")
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
-    parser.add_argument("--topology-mode", type=str, default=None, help="Override recipe.jax.topology_mode")
-    parser.add_argument("--topology-bank-size", type=int, default=None, help="Override recipe.jax.topology_bank_size")
     args = parser.parse_args()
 
     recipe = load_recipe(args.recipe)
@@ -326,10 +322,6 @@ def main():
         config["TOTAL_TIMESTEPS"] = args.total_timesteps
     if args.num_envs is not None:
         config["NUM_ENVS"] = args.num_envs
-    if args.topology_mode is not None:
-        config["TOPOLOGY_MODE"] = args.topology_mode
-    if args.topology_bank_size is not None:
-        config["TOPOLOGY_BANK_SIZE"] = args.topology_bank_size
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
     save_dir = EXP_DIR / "ippo_jax" / tag
@@ -341,7 +333,7 @@ def main():
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
     # Build network from recipe.arch via the policy registry
-    inner_env = FsmRedCC4Env(num_steps=500, topology_mode=config.get("TOPOLOGY_MODE", "generative"))
+    inner_env = FsmRedCC4Env(num_steps=500)
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
         recipe["arch"]["name"],

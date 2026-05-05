@@ -20,6 +20,8 @@ from jaxborg.actions.encoding import (
     encode_blue_action,
 )
 from jaxborg.actions.pids import host_current_max_pid
+from jaxborg.actions.rng import rng_impls
+from jaxborg.actions.rng_tape import RNGTape
 from jaxborg.constants import (
     DECOY_IDS,
     DECOY_NAMES,
@@ -391,18 +393,19 @@ class TestDecoyTypeSelectionParity:
         service_to_decoy = {"haraka": HARAKA_IDX, "apache2": APACHE_IDX, "tomcat": TOMCAT_IDX, "vsftpd": VSFTPD_IDX}
         cyborg_decoy_type = service_to_decoy[next(iter(added))]
 
-        # JAX: execute DeployDecoy WITH decoy type sync (precomputed path)
+        # JAX: execute DeployDecoy with tape-supplied type and pid delta
         jax_state = _make_jax_state(const)
         after_max = max(p.pid for p in cy_state.hosts[hostname].processes)
         before_max = const.host_initial_max_pid[target]
         pid_delta = int(after_max - before_max)
-        const_for_test = const.replace(
-            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx, 0].set(pid_delta),
-            use_blue_decoy_pid_deltas=jnp.array(True),
-            blue_decoy_type_choices=const.blue_decoy_type_choices.at[0, blue_idx].set(cyborg_decoy_type),
-            use_blue_decoy_type_choices=jnp.array(True),
-        )
-        new_state = apply_blue_decoy(jax_state, const_for_test, blue_idx, target, jnp.int32(-1))
+        # Permutation: force argmin to land on cyborg_decoy_type by placing 0 there.
+        perm = [1, 2, 3, 4]
+        perm[cyborg_decoy_type] = 0
+        tape = RNGTape()
+        tape.push_permutation(perm)
+        tape.push_randint(pid_delta)
+        with rng_impls(permutation=tape.permutation, randint=tape.randint), jax.disable_jit():
+            new_state = apply_blue_decoy(jax_state, const, blue_idx, target, jnp.int32(-1))
 
         jax_decoy_placed = np.array(new_state.host_decoys[target])
         jax_types_placed = np.where(jax_decoy_placed)[0]
@@ -471,11 +474,14 @@ class TestDifferentialWithCybORG:
         decoy_type = service_to_decoy[added_service]
 
         state = _make_jax_state(const)
-        const = const.replace(
-            blue_decoy_pid_deltas=const.blue_decoy_pid_deltas.at[0, blue_idx, 0].set(decoy_delta),
-            use_blue_decoy_pid_deltas=jnp.array(True),
-        )
-        new_state = apply_blue_decoy(state, const, blue_idx, target, decoy_type)
+        tape = RNGTape()
+        # apply_blue_decoy with explicit decoy_type still consumes a permutation
+        # for sample_blue_decoy_type_choice (the result is overridden when
+        # decoy_type >= 0) and a randint for sample_blue_decoy_pid_delta.
+        tape.push_permutation([0, 1, 2, 3])
+        tape.push_randint(decoy_delta)
+        with rng_impls(permutation=tape.permutation, randint=tape.randint), jax.disable_jit():
+            new_state = apply_blue_decoy(state, const, blue_idx, target, decoy_type)
 
         jax_after_max = int(host_current_max_pid(new_state, const, target))
         assert jax_after_max == after_max
@@ -510,15 +516,17 @@ class TestDifferentialWithCybORG:
 
         jax_state = _make_jax_state(const)
         action_idx = encode_blue_action("DeployDecoy", target, blue_idx, const=const)
-        # Force selection of Apache via precomputed tape
-        const = const.replace(
-            blue_decoy_type_choices=const.blue_decoy_type_choices.at[0, blue_idx].set(APACHE_IDX),
-            use_blue_decoy_type_choices=jnp.array(True),
-        )
-        new_state = process_blue_with_duration(jax_state, const, blue_idx, action_idx)
-        # DeployDecoy has duration=2; tick through pending action to execution
-        assert int(new_state.blue_pending_ticks[blue_idx]) == 1
-        new_state = process_blue_with_duration(new_state, const, blue_idx, BLUE_SLEEP)
+        # Force selection of Apache via tape permutation (place 0 at APACHE_IDX).
+        perm = [1, 2, 3, 4]
+        perm[APACHE_IDX] = 0
+        tape = RNGTape()
+        tape.push_permutation(perm)
+        tape.push_randint(5)  # pid_delta (irrelevant — action will fail)
+        with rng_impls(permutation=tape.permutation, randint=tape.randint), jax.disable_jit():
+            new_state = process_blue_with_duration(jax_state, const, blue_idx, action_idx)
+            # DeployDecoy has duration=2; tick through pending action to execution
+            assert int(new_state.blue_pending_ticks[blue_idx]) == 1
+            new_state = process_blue_with_duration(new_state, const, blue_idx, BLUE_SLEEP)
 
         assert str(cy_obs.success).upper() == "FALSE"
         assert before_decoys == after_decoys

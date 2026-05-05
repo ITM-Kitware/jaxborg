@@ -176,9 +176,7 @@ def exploit_common_preconditions(
 
     The 1/N roll uses the creation-time N saved in
     ``red_pending_visible_sessions`` (snapshotted when the action was first
-    queued in ``process_red_with_duration``).  In the differential harness the
-    choice index is synced from CybORG via ``red_exploit_session_choices``;
-    in training it comes from JAX RNG.  Both paths exercise the same N.
+    queued in ``process_red_with_duration``).
     """
     is_active = const.host_active[target_host]
     source_host = select_scan_execution_source_host(state, const, agent_id, target_host)
@@ -197,10 +195,9 @@ def exploit_common_preconditions(
     # CybORG's FSM picks uniformly from server_session (abstract sessions in
     # allowed subnets).  Only 1 of N sessions has scan data for the target.
     # N is snapshotted at action creation time (matching CybORG's get_action()
-    # timing).  The choice index is either synced from CybORG or from JAX RNG.
+    # timing).
     visible_sessions = state.red_pending_visible_sessions[agent_id]
-    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_exploit_session_choices.shape[0] - 1))
-    cyborg_roll = sample_exploit_session_choice(const, time_idx, agent_id, key, visible_sessions)
+    cyborg_roll = sample_exploit_session_choice(const, state.time, agent_id, key, visible_sessions)
     roll_ok = cyborg_roll == 0
 
     return base & roll_ok
@@ -325,18 +322,8 @@ def apply_red_session_check(
     forced_idx = jnp.clip(forced_primary_host, 0, state.red_sessions.shape[1] - 1)
     forced_valid = (forced_primary_host >= 0) & (session_counts[forced_idx] > 0) & const.host_active[forced_idx]
     forced_pid_valid = forced_valid & pid_row_contains(state.red_session_pids[agent_id, forced_idx], forced_primary_pid)
-    # When CybORG session-check host is synced, use it instead of JAX RNG
-    # sampling. CybORG's _choose_new_primary_session picks uniformly from all
-    # sessions via np_random.choice — this is an RNG sync (Category B).
-    synced_host = jax.lax.cond(
-        const.use_red_session_check_choices,
-        lambda: const.red_session_check_hosts[state.time, agent_id],
-        lambda: jnp.int32(-1),
-    )
-    synced_host_idx = jnp.clip(synced_host, 0, state.red_sessions.shape[1] - 1)
-    synced_host_valid = (synced_host >= 0) & (session_counts[synced_host_idx] > 0) & const.host_active[synced_host_idx]
     rng_sampled = select_new_primary_session_host(session_counts, const.host_active, key)
-    sampled = jnp.where(synced_host_valid, synced_host, rng_sampled)
+    sampled = rng_sampled
     promoted = jnp.where(needs_primary, sampled, anchor)
     next_anchor = jnp.where(
         has_any_sessions,

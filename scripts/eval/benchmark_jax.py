@@ -59,7 +59,6 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
         "NORM_REWARDS": True,
         "REWARD_SCALE": 1.0,
         "SEED": 0,
-        "TOPOLOGY_MODE": "generative",
         "TRAINING_MODE": True,
     }
 
@@ -76,7 +75,7 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
 
     # --- Setup ---
     t_setup_start = time.perf_counter()
-    inner_env = FsmRedCC4Env(num_steps=500, topology_mode=config["TOPOLOGY_MODE"])
+    inner_env = FsmRedCC4Env(num_steps=500)
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
         "shared",

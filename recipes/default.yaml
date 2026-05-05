@@ -50,7 +50,6 @@ jax:
   num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)
   num_minibatches: 16
   update_epochs: 4
-  topology_mode: generative
   checkpoint_every_updates: 50
 
 cleanrl:

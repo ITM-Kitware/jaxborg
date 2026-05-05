@@ -1,28 +1,23 @@
-import hashlib
-import multiprocessing
+import json
 import os
-import pickle
-import signal
-from functools import lru_cache, partial
+import subprocess
+from importlib import metadata as importlib_metadata
 from pathlib import Path
+from typing import Any, Mapping
 
 import jax
 import jax.numpy as jnp
 import numpy as np
 
 from jaxborg.constants import (
+    CC4_CONFIG,
     CYBORG_SUBNET_SUFFIX,  # noqa: F401 — re-exported
     CYBORG_SUFFIX_TO_ID,  # noqa: F401 — re-exported
     GLOBAL_MAX_HOSTS,
-    MAX_DETECTION_RANDOMS,
     MAX_SERVER_HOSTS,
-    MAX_STEPS,
     MAX_USER_HOSTS,
     NUM_BLUE_AGENTS,
-    NUM_DECOY_TYPES,
-    NUM_GREEN_RANDOM_FIELDS,
     NUM_RED_AGENTS,
-    NUM_RED_POLICY_RANDOM_FIELDS,
     NUM_SERVICES,
     NUM_SUBNETS,
     OBS_HOSTS_PER_SUBNET,
@@ -43,19 +38,46 @@ from jaxborg.scenarios.cc4.topology_numpy import (
     _subnet_nacl_adjacency,
     build_const_arrays_from_cyborg,
 )
-from jaxborg.state import SimulatorConst
+from jaxborg.scenarios.config import ScenarioConfig
+from jaxborg.state import SimulatorConst, create_initial_const
 
+TOPOLOGY_SNAPSHOT_METADATA_KEY = "__metadata_json__"
+TOPOLOGY_SNAPSHOT_FORMAT = "jaxborg.cc4.topology"
+TOPOLOGY_SNAPSHOT_VERSION = 1
 
-def cyborg_bank_index_from_key(key: jax.Array, bank_size: int) -> jax.Array:
-    """Map a JAX reset key onto a cached CybORG bank entry."""
-    bank_size = jnp.int32(bank_size)
-    return jnp.bitwise_xor(key[0], key[1]) % bank_size
-
-
-def cyborg_bank_seed_from_seed(seed: int, bank_size: int) -> int:
-    """Return the cached CybORG topology seed corresponding to a JAX episode seed."""
-    key = jax.random.PRNGKey(seed)
-    return int(cyborg_bank_index_from_key(key, bank_size))
+TOPOLOGY_SNAPSHOT_FIELDS = (
+    "host_active",
+    "host_subnet",
+    "host_is_router",
+    "host_is_server",
+    "host_is_user",
+    "subnet_adjacency",
+    "data_links",
+    "initial_services",
+    "host_has_bruteforceable_user",
+    "host_has_rfi",
+    "host_respond_to_ping",
+    "host_initial_max_pid",
+    "blue_agent_subnets",
+    "blue_agent_hosts",
+    "red_start_hosts",
+    "red_agent_subnets",
+    "red_initial_discovered_hosts",
+    "red_initial_scanned_hosts",
+    "host_info_links",
+    "green_agent_host",
+    "green_agent_active",
+    "num_green_agents",
+    "green_agents_active",
+    "phase_rewards",
+    "phase_boundaries",
+    "allowed_subnet_pairs",
+    "obs_host_map",
+    "blue_obs_subnets",
+    "comms_policy",
+    "max_steps",
+    "num_hosts",
+)
 
 
 def build_const_from_cyborg(cyborg_env) -> SimulatorConst:
@@ -64,250 +86,137 @@ def build_const_from_cyborg(cyborg_env) -> SimulatorConst:
     return SimulatorConst(**{k: jnp.asarray(v) for k, v in arrays.items()})
 
 
-_BANK_CACHE_DIR = Path(__file__).resolve().parents[4] / ".bank_cache"
-
-_THIS_DIR = Path(__file__).resolve().parent
-_PARITY_DIR = _THIS_DIR.parents[1] / "parity"
-
-
-def _hash_paths(*absolute_paths: Path) -> str:
-    digest = hashlib.md5()
-    for p in absolute_paths:
-        digest.update(p.read_bytes())
-    return digest.hexdigest()[:12]
-
-
-def _topology_cache_key(num_steps: int, bank_size: int) -> str:
-    return f"steps{num_steps}_bank{bank_size}_{_hash_paths(_THIS_DIR / 'topology.py')}"
+def _git_sha() -> str:
+    try:
+        return (
+            subprocess.check_output(
+                ["git", "rev-parse", "HEAD"],
+                cwd=Path(__file__).resolve().parents[4],
+                stderr=subprocess.DEVNULL,
+            )
+            .decode()
+            .strip()
+        )
+    except Exception:
+        return ""
 
 
-def _green_cache_key(num_steps: int, bank_size: int) -> str:
-    return (
-        f"steps{num_steps}_bank{bank_size}_"
-        f"{_hash_paths(_THIS_DIR / 'topology.py', _PARITY_DIR / 'cyborg_green_recorder.py')}"
+def _cyborg_version() -> str:
+    try:
+        return importlib_metadata.version("cyborg")
+    except importlib_metadata.PackageNotFoundError:
+        return ""
+
+
+_SCENARIO_CONFIG_DIGEST_FIELDS = (
+    "num_hosts",
+    "num_subnets",
+    "num_blue_agents",
+    "num_red_agents",
+    "num_services",
+    "num_decoy_types",
+    "mission_phases",
+    "max_steps",
+    "message_length",
+    "blue_max_observed_subnets",
+    "max_tracked_session_pids",
+    "max_tracked_suspicious_pids",
+    "obs_hosts_per_subnet",
+)
+
+
+def _scenario_config_digest(cfg: ScenarioConfig) -> dict[str, int]:
+    return {name: int(getattr(cfg, name)) for name in _SCENARIO_CONFIG_DIGEST_FIELDS}
+
+
+def _snapshot_metadata(metadata: Mapping[str, Any] | None, cfg: ScenarioConfig) -> dict[str, Any]:
+    out = {
+        "format": TOPOLOGY_SNAPSHOT_FORMAT,
+        "format_version": TOPOLOGY_SNAPSHOT_VERSION,
+        "cyborg_version": _cyborg_version(),
+        "jaxborg_git_sha": _git_sha(),
+        "scenario_config": _scenario_config_digest(cfg),
+    }
+    if metadata:
+        out.update(dict(metadata))
+    return out
+
+
+def save_topology(
+    const: SimulatorConst,
+    path: str | os.PathLike,
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    scenario_config: ScenarioConfig = CC4_CONFIG,
+) -> None:
+    """Save a static CC4 topology snapshot as an npz file.
+
+    The active ``ScenarioConfig`` is embedded in metadata so ``load_topology``
+    can detect snapshots saved against an incompatible config (different
+    ``max_steps``, host/subnet counts, etc.) and refuse to load.
+
+    Replay/random tape fields are not part of the runtime const ABI.
+    """
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    arrays = {name: np.asarray(getattr(const, name)) for name in TOPOLOGY_SNAPSHOT_FIELDS}
+    arrays[TOPOLOGY_SNAPSHOT_METADATA_KEY] = np.asarray(
+        json.dumps(_snapshot_metadata(metadata, scenario_config), sort_keys=True)
     )
+    np.savez_compressed(out_path, **arrays)
 
 
-def _red_policy_cache_key(num_steps: int, bank_size: int) -> str:
-    policy_hash = _hash_paths(
-        _THIS_DIR / "topology.py",
-        _PARITY_DIR / "cyborg_red_policy_recorder.py",
-        _THIS_DIR / "red_fsm.py",
-    )
-    return f"steps{num_steps}_bank{bank_size}_{policy_hash}"
+def load_topology_metadata(path: str | os.PathLike) -> dict[str, Any]:
+    with np.load(Path(path), allow_pickle=False) as data:
+        if TOPOLOGY_SNAPSHOT_METADATA_KEY not in data:
+            return {}
+        return json.loads(str(np.asarray(data[TOPOLOGY_SNAPSHOT_METADATA_KEY]).item()))
 
 
-_PARALLEL_THRESHOLD = 8  # use multiprocessing for bank_size >= this
+def load_topology(
+    path: str | os.PathLike,
+    *,
+    training_mode: bool = False,
+    scenario_config: ScenarioConfig = CC4_CONFIG,
+) -> SimulatorConst:
+    """Load a static CC4 topology snapshot.
 
+    Validates that the snapshot was saved against a compatible ``ScenarioConfig``
+    (matching host/subnet counts, ``max_steps``, mission phases, etc.).  Mismatch
+    raises ``ValueError`` rather than silently producing a const with
+    inconsistent shape arrays.
 
-def _pool_init():
-    """Ignore SIGINT in workers so Ctrl-C is handled by the main process."""
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    ``training_mode`` is accepted for API symmetry with ``build_topology``.
+    """
+    del training_mode
+    snapshot_path = Path(path)
+    with np.load(snapshot_path, allow_pickle=False) as data:
+        missing = [name for name in TOPOLOGY_SNAPSHOT_FIELDS if name not in data]
+        if missing:
+            raise ValueError(f"{snapshot_path} is missing topology snapshot fields: {', '.join(missing)}")
 
+        if TOPOLOGY_SNAPSHOT_METADATA_KEY in data:
+            metadata = json.loads(str(np.asarray(data[TOPOLOGY_SNAPSHOT_METADATA_KEY]).item()))
+            saved_digest = metadata.get("scenario_config")
+            current_digest = _scenario_config_digest(scenario_config)
+            if saved_digest is not None and saved_digest != current_digest:
+                diffs = {
+                    k: (saved_digest.get(k), current_digest.get(k))
+                    for k in current_digest
+                    if saved_digest.get(k) != current_digest.get(k)
+                }
+                raise ValueError(
+                    f"{snapshot_path} was saved against an incompatible ScenarioConfig; "
+                    f"mismatched fields (saved → current): {diffs}"
+                )
 
-def _pool_workers(bank_size: int) -> int:
-    """Choose worker count: min(bank_size, cpus - 8), clamped to [1, 56]."""
-    cpus = os.cpu_count() or 1
-    return max(1, min(bank_size, cpus - 8, 56))
+        replacements = {}
+        for name in TOPOLOGY_SNAPSHOT_FIELDS:
+            value = data[name]
+            replacements[name] = int(np.asarray(value)) if name == "max_steps" else jnp.asarray(value)
 
-
-def _build_topology_bank(num_steps: int, bank_size: int) -> SimulatorConst:
-    if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.scenarios.cc4.topology_workers import _build_one_topology
-
-        workers = _pool_workers(bank_size)
-        print(f"  Building topology bank ({bank_size} seeds, {workers} workers)...", flush=True)
-        worker_fn = partial(_build_one_topology, num_steps=num_steps)
-        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
-            dicts = list(pool.imap(worker_fn, range(bank_size)))
-        stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
-        return SimulatorConst(**stacked)
-    else:
-        from CybORG import CybORG
-        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-        dicts = []
-        for seed in range(bank_size):
-            scenario = EnterpriseScenarioGenerator(
-                blue_agent_class=SleepAgent,
-                green_agent_class=EnterpriseGreenAgent,
-                red_agent_class=FiniteStateRedAgent,
-                steps=num_steps,
-            )
-            cyborg = CybORG(scenario_generator=scenario, seed=seed)
-            cyborg.reset()
-            dicts.append(build_const_arrays_from_cyborg(cyborg))
-
-    stacked = {k: jnp.stack([jnp.asarray(d[k]) for d in dicts]) for k in dicts[0]}
-    return SimulatorConst(**stacked)
-
-
-def _build_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
-    if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.scenarios.cc4.topology_workers import _build_one_green
-
-        workers = _pool_workers(bank_size)
-        print(f"  Building green random bank ({bank_size} seeds, {workers} workers)...", flush=True)
-        worker_fn = partial(_build_one_green, num_steps=num_steps)
-        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
-            arrays = list(pool.imap(worker_fn, range(bank_size)))
-    else:
-        from CybORG import CybORG
-        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-        from CybORG.Agents.Wrappers import BlueFlatWrapper
-        from CybORG.Simulator.Actions import Sleep
-        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-        from jaxborg.parity.cyborg_green_recorder import GreenRecorder
-        from jaxborg.parity.translate import build_mappings_from_cyborg
-
-        arrays = []
-        for seed in range(bank_size):
-            scenario = EnterpriseScenarioGenerator(
-                blue_agent_class=SleepAgent,
-                green_agent_class=EnterpriseGreenAgent,
-                red_agent_class=FiniteStateRedAgent,
-                steps=num_steps,
-            )
-            cyborg = CybORG(scenario_generator=scenario, seed=seed)
-            wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-            wrapper.reset()
-
-            mappings = build_mappings_from_cyborg(cyborg)
-            recorder = GreenRecorder()
-            recorder.install(cyborg, mappings)
-
-            sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-            for step_idx in range(num_steps):
-                wrapper.step(actions=sleep_actions)
-                recorder.extract_step(step_idx)
-
-            arrays.append(np.asarray(recorder.to_jax_array()))
-
-    return jnp.stack(arrays, axis=0)
-
-
-def _build_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
-    if bank_size >= _PARALLEL_THRESHOLD:
-        from jaxborg.scenarios.cc4.topology_workers import _build_one_red_policy
-
-        workers = _pool_workers(bank_size)
-        print(f"  Building red policy bank ({bank_size} seeds, {workers} workers)...", flush=True)
-        worker_fn = partial(_build_one_red_policy, num_steps=num_steps)
-        with multiprocessing.get_context("spawn").Pool(workers, initializer=_pool_init) as pool:
-            arrays = list(pool.imap(worker_fn, range(bank_size)))
-    else:
-        from CybORG import CybORG
-        from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-        from CybORG.Agents.Wrappers import BlueFlatWrapper
-        from CybORG.Simulator.Actions import Sleep
-        from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-        from jaxborg.parity.cyborg_red_policy_recorder import RedPolicyRecorder
-        from jaxborg.parity.translate import build_mappings_from_cyborg
-
-        arrays = []
-        for seed in range(bank_size):
-            scenario = EnterpriseScenarioGenerator(
-                blue_agent_class=SleepAgent,
-                green_agent_class=EnterpriseGreenAgent,
-                red_agent_class=FiniteStateRedAgent,
-                steps=num_steps,
-            )
-            cyborg = CybORG(scenario_generator=scenario, seed=seed)
-            wrapper = BlueFlatWrapper(env=cyborg, pad_spaces=True)
-            wrapper.reset()
-
-            recorder = RedPolicyRecorder()
-            recorder.install(cyborg, build_mappings_from_cyborg(cyborg))
-
-            sleep_actions = {agent: Sleep() for agent in wrapper.agents}
-            for _ in range(num_steps):
-                wrapper.step(actions=sleep_actions)
-
-            arrays.append(np.asarray(recorder.to_jax_array()))
-
-    return jnp.stack(arrays, axis=0)
-
-
-@lru_cache(maxsize=None)
-def get_cyborg_topology_bank(num_steps: int, bank_size: int) -> SimulatorConst:
-    """Build (or load cached) bank of CybORG topologies for JAX resets."""
-    if bank_size <= 0:
-        raise ValueError(f"bank_size must be > 0, got {bank_size}")
-
-    cache_dir = _BANK_CACHE_DIR
-    key = _topology_cache_key(num_steps, bank_size)
-    cache_path = cache_dir / f"topo_{key}.pkl"
-
-    if cache_path.exists():
-        print(f"Loading cached topology bank from {cache_path}", flush=True)
-        with open(cache_path, "rb") as f:
-            np_tree = pickle.load(f)
-        return jax.tree.map(jnp.asarray, np_tree)
-
-    print(f"Building topology bank ({bank_size} seeds)...", flush=True)
-    bank = _build_topology_bank(num_steps, bank_size)
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    np_tree = jax.tree.map(np.asarray, bank)
-    with open(cache_path, "wb") as f:
-        pickle.dump(np_tree, f)
-    print(f"Cached topology bank to {cache_path}", flush=True)
-    return bank
-
-
-@lru_cache(maxsize=None)
-def get_cyborg_green_random_bank(num_steps: int, bank_size: int) -> jax.Array:
-    """Build (or load cached) bank of CybORG green random tapes for JAX resets."""
-    if bank_size <= 0:
-        raise ValueError(f"bank_size must be > 0, got {bank_size}")
-
-    cache_dir = _BANK_CACHE_DIR
-    key = _green_cache_key(num_steps, bank_size)
-    cache_path = cache_dir / f"green_{key}.pkl"
-
-    if cache_path.exists():
-        print(f"Loading cached green random bank from {cache_path}", flush=True)
-        with open(cache_path, "rb") as f:
-            arr = pickle.load(f)
-        return jnp.asarray(arr)
-
-    print(f"Building green random bank ({bank_size} seeds)...", flush=True)
-    bank = _build_green_random_bank(num_steps, bank_size)
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "wb") as f:
-        pickle.dump(np.asarray(bank), f)
-    print(f"Cached green random bank to {cache_path}", flush=True)
-    return bank
-
-
-@lru_cache(maxsize=None)
-def get_cyborg_red_policy_random_bank(num_steps: int, bank_size: int) -> jax.Array:
-    """Build (or load cached) bank of CybORG native red-policy choice tapes."""
-    if bank_size <= 0:
-        raise ValueError(f"bank_size must be > 0, got {bank_size}")
-
-    cache_dir = _BANK_CACHE_DIR
-    key = _red_policy_cache_key(num_steps, bank_size)
-    cache_path = cache_dir / f"red_policy_{key}.pkl"
-
-    if cache_path.exists():
-        print(f"Loading cached red policy random bank from {cache_path}", flush=True)
-        with open(cache_path, "rb") as f:
-            arr = pickle.load(f)
-        return jnp.asarray(arr)
-
-    print(f"Building red policy random bank ({bank_size} seeds)...", flush=True)
-    bank = _build_red_policy_random_bank(num_steps, bank_size)
-
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "wb") as f:
-        pickle.dump(np.asarray(bank), f)
-    print(f"Cached red policy random bank to {cache_path}", flush=True)
-    return bank
+    return create_initial_const(scenario_config).replace(**replacements)
 
 
 def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> SimulatorConst:
@@ -492,64 +401,6 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
         max_steps=num_steps,
         num_hosts=num_hosts,
         green_agents_active=jnp.array(True),
-        # Precomputed RNG arrays (defaults: disabled / zeros).
-        # In training_mode, use minimal (1,...) shapes to reduce PyTree size and
-        # XLA trace complexity.  The use_* flags are always False here, so the
-        # full-size arrays are never read at runtime — but XLA still traces both
-        # branches of each jax.lax.cond and includes the array shapes in the
-        # HLO program.  Smaller shapes → smaller HLO → faster compile + possibly
-        # smaller GPU kernels.
-        green_randoms=jnp.zeros(
-            (1, 1, 1) if training_mode else (MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS),
-            dtype=jnp.float32,
-        ),
-        use_green_randoms=jnp.array(False),
-        red_policy_randoms=jnp.full(
-            (1, 1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS),
-            0.5,
-            dtype=jnp.float32,
-        ),
-        use_red_policy_randoms=jnp.array(False),
-        detection_randoms=jnp.zeros(
-            (1,) if training_mode else (MAX_DETECTION_RANDOMS,),
-            dtype=jnp.float32,
-        ),
-        use_detection_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
-            dtype=jnp.int32,
-        ),
-        use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros(
-            (1, 1, 1) if training_mode else (MAX_STEPS, NUM_BLUE_AGENTS, NUM_DECOY_TYPES),
-            dtype=jnp.int32,
-        ),
-        use_blue_decoy_pid_deltas=jnp.array(False),
-        red_privesc_choices=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
-            dtype=jnp.int32,
-        ),
-        use_red_privesc_choices=jnp.array(False),
-        red_session_check_choices=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
-            dtype=jnp.int32,
-        ),
-        red_session_check_hosts=jnp.full(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
-            -1,
-            dtype=jnp.int32,
-        ),
-        use_red_session_check_choices=jnp.array(False),
-        blue_decoy_type_choices=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_BLUE_AGENTS),
-            dtype=jnp.int32,
-        ),
-        use_blue_decoy_type_choices=jnp.array(False),
-        red_exploit_session_choices=jnp.zeros(
-            (1, 1) if training_mode else (MAX_STEPS, NUM_RED_AGENTS),
-            dtype=jnp.int32,
-        ),
-        use_red_exploit_session_choices=jnp.array(False),
     )
 
 

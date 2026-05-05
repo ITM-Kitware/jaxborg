@@ -45,27 +45,7 @@ class SimulatorConst:
     max_steps: int
     num_hosts: chex.Array  # scalar int32
 
-    # --- Precomputed RNG arrays (read-only during stepping, set at reset) ---
-    green_randoms: chex.Array  # (max_steps, num_hosts, num_green_random_fields) float
-    use_green_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
     green_agents_active: chex.Array  # scalar bool — False = skip green actions (SleepAgent parity)
-    red_policy_randoms: chex.Array  # (max_steps, num_red_agents, num_red_policy_random_fields) float
-    use_red_policy_randoms: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    detection_randoms: chex.Array  # (max_detection_randoms,) float — precomputed sequence
-    use_detection_randoms: chex.Array  # scalar bool — True = use sequence, False = use JAX RNG
-    red_pid_deltas: chex.Array  # (max_steps, num_red_agents) int32 — precomputed Host.create_pid deltas
-    use_red_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    blue_decoy_pid_deltas: chex.Array  # (max_steps, num_blue_agents, num_decoy_types) int32
-    use_blue_decoy_pid_deltas: chex.Array  # scalar bool — True = use precomputed, False = use fallback RNG
-    red_privesc_choices: chex.Array  # (max_steps, num_red_agents) int32 — precomputed privesc session choice index
-    use_red_privesc_choices: chex.Array  # scalar bool — True = use precomputed, False = use JAX RNG
-    red_session_check_choices: chex.Array  # (max_steps, num_red_agents) int32 — session-check slot
-    red_session_check_hosts: chex.Array  # (max_steps, num_red_agents) int32 — session-check host (-1=unset)
-    use_red_session_check_choices: chex.Array  # scalar bool — use precomputed session-check
-    blue_decoy_type_choices: chex.Array  # (max_steps, num_blue_agents) int32 — precomputed decoy type index
-    use_blue_decoy_type_choices: chex.Array  # scalar bool — True = use precomputed, False = fallback RNG
-    red_exploit_session_choices: chex.Array  # (max_steps, num_red_agents) int32 — precomputed session choice index
-    use_red_exploit_session_choices: chex.Array  # scalar bool — True = use precomputed session choice
 
 
 @struct.dataclass
@@ -117,8 +97,6 @@ class SimulatorState:
     green_lwf_this_step: chex.Array  # (num_hosts,) bool — green LocalWork failed on that source host
     green_asf_this_step: chex.Array  # (num_hosts,) bool — green AccessService failed from that source host
 
-    detection_random_index: chex.Array  # scalar int — next index to consume
-
     red_session_sandboxed: chex.Array  # (num_red_agents, num_hosts) bool — sandboxed exploit sessions
     red_session_is_abstract: chex.Array  # (num_red_agents, num_hosts) bool — True for exploit-created sessions
     red_abstract_host_rank: chex.Array  # (num_red_agents, num_hosts) int32 — min abstract-session order per host
@@ -155,6 +133,12 @@ class SimulatorState:
     red_pending_target_subnet: chex.Array  # (num_red_agents,) int32 — stored target subnet for deferred discover
 
     red_impact_attempted: chex.Array  # (num_hosts,) bool — any red Impact reached execution this step
+    # (num_red_agents, num_hosts) bool — per-agent record of which target hosts an Impact reached
+    # execution on this step.  Materialised so that ``red_impact_attempted`` can be regated against
+    # post-reassignment session counts at end-of-step (matching CybORG's BlueRewardMachine, which
+    # only counts Impact reward for an agent that still has at least one active session at reward
+    # computation time — see CybORG/Shared/BlueRewardMachine.py:108).
+    red_impact_attempted_by_agent: chex.Array
 
     red_agent_active: chex.Array  # (num_red_agents,) bool — dynamically activated via session reassignment
 
@@ -165,7 +149,6 @@ def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorConst:
     n_blue = cfg.num_blue_agents
     n_red = cfg.num_red_agents
     n_services = cfg.num_services
-    n_decoys = cfg.num_decoy_types
     n_phases = cfg.mission_phases
     max_steps = cfg.max_steps
     return SimulatorConst(
@@ -199,30 +182,7 @@ def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorConst:
         comms_policy=jnp.zeros((n_phases, n_subnets, n_subnets), dtype=jnp.bool_),
         max_steps=max_steps,
         num_hosts=jnp.int32(0),
-        green_randoms=jnp.zeros((max_steps, n_hosts, cfg.num_green_random_fields), dtype=jnp.float32),
-        use_green_randoms=jnp.array(False),
         green_agents_active=jnp.array(True),
-        red_policy_randoms=jnp.full(
-            (max_steps, n_red, cfg.num_red_policy_random_fields),
-            0.5,
-            dtype=jnp.float32,
-        ),
-        use_red_policy_randoms=jnp.array(False),
-        detection_randoms=jnp.zeros(cfg.max_detection_randoms, dtype=jnp.float32),
-        use_detection_randoms=jnp.array(False),
-        red_pid_deltas=jnp.zeros((max_steps, n_red), dtype=jnp.int32),
-        use_red_pid_deltas=jnp.array(False),
-        blue_decoy_pid_deltas=jnp.zeros((max_steps, n_blue, n_decoys), dtype=jnp.int32),
-        use_blue_decoy_pid_deltas=jnp.array(False),
-        red_privesc_choices=jnp.zeros((max_steps, n_red), dtype=jnp.int32),
-        use_red_privesc_choices=jnp.array(False),
-        red_session_check_choices=jnp.zeros((max_steps, n_red), dtype=jnp.int32),
-        red_session_check_hosts=jnp.full((max_steps, n_red), -1, dtype=jnp.int32),
-        use_red_session_check_choices=jnp.array(False),
-        blue_decoy_type_choices=jnp.zeros((max_steps, n_blue), dtype=jnp.int32),
-        use_blue_decoy_type_choices=jnp.array(False),
-        red_exploit_session_choices=jnp.zeros((max_steps, n_red), dtype=jnp.int32),
-        use_red_exploit_session_choices=jnp.array(False),
     )
 
 
@@ -290,7 +250,6 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         host_max_pid=jnp.zeros(n_hosts, dtype=jnp.int32),
         green_lwf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
         green_asf_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
-        detection_random_index=jnp.array(0, dtype=jnp.int32),
         red_pending_ticks=jnp.zeros(n_red, dtype=jnp.int32),
         red_pending_action=jnp.zeros(n_red, dtype=jnp.int32),
         red_pending_key=jnp.zeros((n_red, 2), dtype=jnp.uint32),
@@ -304,5 +263,6 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         red_pending_target_host=jnp.zeros(n_red, dtype=jnp.int32),
         red_pending_target_subnet=jnp.zeros(n_red, dtype=jnp.int32),
         red_impact_attempted=jnp.zeros(n_hosts, dtype=jnp.bool_),
+        red_impact_attempted_by_agent=jnp.zeros((n_red, n_hosts), dtype=jnp.bool_),
         red_agent_active=jnp.zeros(n_red, dtype=jnp.bool_),
     )
