@@ -1,4 +1,16 @@
-"""Unit tests for green agent precomputed random mode (no CybORG dependency)."""
+"""Unit tests for green agent random replay (single-step, no CybORG dependency).
+
+Bank-retirement removed the ``const.green_randoms`` / ``use_green_randoms``
+const-level tape; this module ports those tests onto :class:`IndexedRNGTape`
+which serves the same purpose without baking replay arrays into
+``SimulatorConst``.  Each test sets a per-(host, field) override table via
+``set_green_uniform`` and runs ``apply_green_agents`` under
+``indexed_rng_impls(green=tape._green_impl)`` so only the green-uniform
+draws are intercepted; ``sample_green_dest_host`` still falls through to the
+default randint path (matching the pre-retirement semantics).
+"""
+
+import contextlib
 
 import jax
 import jax.numpy as jnp
@@ -12,8 +24,10 @@ from jaxborg.actions.green import (
     NUM_GREEN_ACTIONS,
     apply_green_agents,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_GREEN_RANDOM_FIELDS, NUM_SERVICES
+from jaxborg.actions.rng import indexed_rng_impls
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS, NUM_SERVICES
 from jaxborg.state import create_initial_state
+from tests.differential.parity_rng_replay import IndexedRNGTape
 
 
 @pytest.fixture
@@ -29,17 +43,24 @@ def _first_active_green_host(const):
     raise RuntimeError("No active green hosts")
 
 
-def _make_precomputed_const(state, const, overrides=None):
-    """Create a const with precomputed green randoms, optionally overriding specific fields."""
-    randoms = np.zeros((MAX_STEPS, GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
-    randoms[:, :, 0] = 0.5
+@contextlib.contextmanager
+def _green_tape(overrides=None):
+    """Install an IndexedRNGTape over the green purpose for one block.
+
+    ``overrides`` is the same ``{(t, h, f): value}`` shape these tests used
+    against the legacy ``green_randoms`` const tape.  Time is single-step
+    (only ``t=0`` is consulted by the tape); cross-time keys are ignored.
+    """
+    table = np.zeros((GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS), dtype=np.float32)
+    table[:, 0] = 0.5
     if overrides:
         for (t, h, f), val in overrides.items():
-            randoms[t, h, f] = val
-    return const.replace(
-        green_randoms=jnp.array(randoms),
-        use_green_randoms=jnp.array(True),
-    )
+            if t == 0:
+                table[h, f] = val
+    tape = IndexedRNGTape(strict=False)
+    tape.set_green_uniform(table)
+    with indexed_rng_impls(green=tape._green_impl):
+        yield tape
 
 
 class TestPrecomputedActionSelection:
@@ -64,8 +85,8 @@ class TestPrecomputedFP:
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.fail("Host has no services")
-        const = _make_precomputed_const(jax_state, jax_const, overrides)
-        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(jax_state, jax_const, jax.random.PRNGKey(0))
         # GreenLocalWork FP creates process_creation events (host_exploit_detected)
         assert result.host_exploit_detected[h]
 
@@ -80,8 +101,8 @@ class TestPrecomputedFP:
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.fail("Host has no services")
-        const = _make_precomputed_const(jax_state, jax_const, overrides)
-        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(jax_state, jax_const, jax.random.PRNGKey(0))
         assert not result.host_activity_detected[h]
 
 
@@ -101,8 +122,8 @@ class TestPrecomputedPhishing:
         has_service = bool(jnp.any(state.host_services[h]))
         if not has_service:
             pytest.fail("Host has no services")
-        const = _make_precomputed_const(state, jax_const, overrides)
-        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
         new_sessions = np.array(result.red_sessions) & ~np.array(jax_state.red_sessions)
         if np.any(new_sessions[:, h]):
             assert True
@@ -117,8 +138,8 @@ class TestPrecomputedPhishing:
             (0, h, 3): 0.5,
             (0, h, 4): 0.5,  # phishing roll above threshold
         }
-        const = _make_precomputed_const(jax_state, jax_const, overrides)
-        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(jax_state, jax_const, jax.random.PRNGKey(0))
         np.testing.assert_array_equal(np.array(result.red_sessions), np.array(jax_state.red_sessions))
 
 
@@ -134,8 +155,8 @@ class TestPrecomputedReliability:
             (0, h, 0): (GREEN_LOCAL_WORK + 0.5) / NUM_GREEN_ACTIONS,
             (0, h, 2): 0.99,  # floor(0.99 * 100) = 99 >= 50, so fails
         }
-        const = _make_precomputed_const(state, jax_const, overrides)
-        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
         assert result.green_lwf_this_step[h]
 
     def test_work_succeeds_when_roll_below_reliability(self, jax_const, jax_state):
@@ -149,8 +170,8 @@ class TestPrecomputedReliability:
         has_service = bool(jnp.any(jax_state.host_services[h]))
         if not has_service:
             pytest.fail("Host has no services")
-        const = _make_precomputed_const(jax_state, jax_const, overrides)
-        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(jax_state, jax_const, jax.random.PRNGKey(0))
         assert not result.green_lwf_this_step[h]
 
 
@@ -163,25 +184,25 @@ class TestPrecomputedAccessServiceBlocked:
         state = jax_state.replace(blocked_zones=blocked)
         overrides = {
             (0, h, 0): (GREEN_ACCESS_SERVICE + 0.5) / NUM_GREEN_ACTIONS,
-            (0, h, 5): 0.5,  # some dest host
+            (0, h, 5): 0.5,  # uniform → randint dest_host falls through to default
         }
-        const = _make_precomputed_const(state, jax_const, overrides)
-        result = apply_green_agents(state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(state, jax_const, jax.random.PRNGKey(0))
         assert jnp.any(result.green_asf_this_step) or jnp.any(result.host_activity_detected)
 
 
 class TestJITCompatibility:
     def test_precomputed_mode_jit_compatible(self, jax_const, jax_state):
-        const = _make_precomputed_const(jax_state, jax_const)
-        jitted = jax.jit(apply_green_agents)
-        result = jitted(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape():
+            jitted = jax.jit(apply_green_agents)
+            result = jitted(jax_state, jax_const, jax.random.PRNGKey(0))
         assert result.host_activity_detected.shape == (GLOBAL_MAX_HOSTS,)
 
     def test_precomputed_deterministic(self, jax_const, jax_state):
-        const = _make_precomputed_const(jax_state, jax_const)
-        jitted = jax.jit(apply_green_agents)
-        r1 = jitted(jax_state, const, jax.random.PRNGKey(0))
-        r2 = jitted(jax_state, const, jax.random.PRNGKey(999))
+        with _green_tape():
+            jitted = jax.jit(apply_green_agents)
+            r1 = jitted(jax_state, jax_const, jax.random.PRNGKey(0))
+            r2 = jitted(jax_state, jax_const, jax.random.PRNGKey(999))
         np.testing.assert_array_equal(
             np.array(r1.host_activity_detected),
             np.array(r2.host_activity_detected),
@@ -189,12 +210,12 @@ class TestJITCompatibility:
         np.testing.assert_array_equal(np.array(r1.red_sessions), np.array(r2.red_sessions))
 
     def test_precomputed_differs_from_rng(self, jax_const, jax_state):
-        """Precomputed mode should ignore the JAX key."""
+        """Tape-driven mode should ignore the JAX key."""
         overrides = {}
         for hh in range(GLOBAL_MAX_HOSTS):
             if jax_const.green_agent_active[hh]:
                 overrides[(0, hh, 0)] = 0.1  # force all to SLEEP
-        const = _make_precomputed_const(jax_state, jax_const, overrides)
-        result = apply_green_agents(jax_state, const, jax.random.PRNGKey(0))
+        with _green_tape(overrides):
+            result = apply_green_agents(jax_state, jax_const, jax.random.PRNGKey(0))
         assert not jnp.any(result.green_lwf_this_step)
         assert not jnp.any(result.green_asf_this_step)
