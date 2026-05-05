@@ -27,16 +27,27 @@ ACT_DIM = 242
 EPISODE_LENGTH = 500
 
 
-def make_env(seed: int):
+_CYBORG_RED_AGENT_NAMES = ("finite_state", "sleep", "resilience")
+
+
+def make_env(seed: int, red_agent: str = "finite_state", target_weight: float = 5.0):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+    from jaxborg.cyborg_agents import ResilienceRedAgent
+
+    _red_classes = {
+        "finite_state": FiniteStateRedAgent,
+        "sleep": SleepAgent,
+        "resilience": ResilienceRedAgent.with_weight(target_weight),
+    }
+    red_cls = _red_classes.get(red_agent, FiniteStateRedAgent)
 
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
+        red_agent_class=red_cls,
         steps=EPISODE_LENGTH,
     )
     return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
@@ -131,6 +142,8 @@ def evaluate_on_cyborg(
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
+    red_agent: str = "finite_state",
+    target_weight: float = 5.0,
     progress: bool = True,
 ) -> tuple[list[float], list[int]]:
     """Run `episodes_per_seed` episodes per seed. Returns (rewards, seed_for_each_ep)."""
@@ -140,7 +153,7 @@ def evaluate_on_cyborg(
     n = 0
     for s in seeds:
         for ep in range(episodes_per_seed):
-            env = make_env(s + ep)
+            env = make_env(s + ep, red_agent=red_agent, target_weight=target_weight)
             r = rollout_episode(env, agent, deterministic=deterministic)
             rewards.append(r)
             seed_log.append(s + ep)

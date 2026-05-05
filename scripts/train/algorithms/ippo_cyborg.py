@@ -50,24 +50,35 @@ OBS_DIM = BLUE_OBS_SIZE
 ACT_DIM = 242
 
 
-def make_cyborg_env():
+def make_cyborg_env(red_agent: str = "finite_state", target_weight: float = 5.0):
     from CybORG import CybORG
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+    from jaxborg.cyborg_agents import ARedAgent, CRedAgent, IRedAgent, ResilienceRedAgent
+
+    _red_classes = {
+        "finite_state": FiniteStateRedAgent,
+        "sleep": SleepAgent,
+        "resilience": ResilienceRedAgent.with_weight(target_weight),
+        "c": CRedAgent.with_weight(target_weight),
+        "i": IRedAgent.with_weight(target_weight),
+        "a": ARedAgent.with_weight(target_weight),
+    }
+    red_cls = _red_classes.get(red_agent, FiniteStateRedAgent)
 
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
+        red_agent_class=red_cls,
         steps=500,
     )
     return EnterpriseMAE(CybORG(scenario_generator=sg))
 
 
-def env_worker(pipe, env_id):
+def env_worker(pipe, env_id, red_agent: str = "finite_state", target_weight: float = 5.0):
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    env = make_cyborg_env()
+    env = make_cyborg_env(red_agent=red_agent, target_weight=target_weight)
     while True:
         try:
             cmd, data = pipe.recv()
@@ -88,13 +99,13 @@ def env_worker(pipe, env_id):
 
 
 class ParallelEnvs:
-    def __init__(self, num_envs):
+    def __init__(self, num_envs, red_agent: str = "finite_state", target_weight: float = 5.0):
         self.num_envs = num_envs
         self.pipes = []
         self.procs = []
         for i in range(num_envs):
             parent_pipe, child_pipe = Pipe()
-            proc = Process(target=env_worker, args=(child_pipe, i), daemon=True)
+            proc = Process(target=env_worker, args=(child_pipe, i, red_agent, target_weight), daemon=True)
             proc.start()
             child_pipe.close()
             self.pipes.append(parent_pipe)
@@ -171,8 +182,10 @@ def train(args, recipe, cfg):
     save_dir = EXP_DIR / "ippo_cyborg" / tag
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"Creating {cfg['num_envs']} parallel CybORG environments...", flush=True)
-    envs = ParallelEnvs(cfg["num_envs"])
+    red_agent = cfg.get("red_agent", "finite_state")
+    target_weight = cfg.get("resilience_target_weight", 5.0)
+    print(f"Creating {cfg['num_envs']} parallel CybORG environments (red_agent={red_agent})...", flush=True)
+    envs = ParallelEnvs(cfg["num_envs"], red_agent=red_agent, target_weight=target_weight)
 
     agent = make_torch_policy(
         recipe["arch"]["name"],

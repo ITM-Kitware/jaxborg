@@ -1,22 +1,23 @@
-"""CIA-targeted red FSM agents.
+"""CIA-targeted and resilience-biased red FSM agents.
 
-Three drop-in replacements for ``fsm_red_select_actions``, each steering the
-red team to constantly attack one CIA component by:
-
-  1. Biasing host selection toward the servers that affect that component.
-  2. At root-access FSM states (R/RD), heavily preferring Impact and
-     DegradeServices over Discover.
+Drop-in replacements for ``fsm_red_select_actions``. All variants bias host
+selection toward specific resilience-critical servers. The CIA-targeted variants
+(c/i/a) additionally bias action selection at root-access states toward Impact
+and DegradeServices.
 
 Agents and their target server sets (from ``resilience_topology``):
 
-  c_red_select_actions — targets C: AUTH + DB servers
-  i_red_select_actions — targets I: AUTH + WEB servers
-  a_red_select_actions — targets A: AUTH + DB + WEB servers
+  resilience_red_select_actions — all resilience-critical servers (AUTH + DB + WEB)
+                                   with configurable weight; uses base FSM action probs.
+  c_red_select_actions          — targets C: AUTH + DB servers
+  i_red_select_actions          — targets I: AUTH + WEB servers
+  a_red_select_actions          — targets A: AUTH + DB + WEB servers
 
 Usage::
 
     from jaxborg.scenarios.cc4.resilience_topology import build_resilience_topology
     from jaxborg.scenarios.cc4.targeted_red_fsm import (
+        resilience_red_select_actions,
         c_red_select_actions,
         i_red_select_actions,
         a_red_select_actions,
@@ -53,22 +54,16 @@ from jaxborg.scenarios.cc4.red_fsm import (
 from jaxborg.scenarios.cc4.resilience_topology import (
     RESILIENCE_ROLE_AUTH,
     RESILIENCE_ROLE_DB,
-    RESILIENCE_ROLE_NONE,
     RESILIENCE_ROLE_WEB,
 )
 from jaxborg.actions.rng import sample_red_policy_random
 from jaxborg.state import SimulatorConst, SimulatorState
 
-# ---------------------------------------------------------------------------
-# Host-selection weight multiplier for targeted servers.
-# Non-target servers keep weight 1.0.
-TARGET_HOST_WEIGHT = 10.0
+# Weight multiplier for targeted servers used by CIA-specific agents.
+_CIA_TARGET_WEIGHT = 10.0
 
-# ---------------------------------------------------------------------------
-# Modified probability matrix: at FSM_R (root, undiscovered) shift
-# probability from Discover toward Impact + Degrade.
-# FSM_RD (root, discovered) already has 0.5/0.5 Impact/Degrade — unchanged.
-#
+# Modified probability matrix for CIA-targeted agents: at FSM_R (root, undiscovered,
+# state index 6) shift probability from Discover toward Impact + Degrade.
 # Column order: DISCOVER AGGSCAN STEALTHSCAN DISC_DEC EXPLOIT PRIVESC IMPACT DEGRADE WITHDRAW
 _p = -1.0  # sentinel for invalid actions
 _TARGETED_PROBABILITY_MATRIX = PROBABILITY_MATRIX.at[6].set(
@@ -77,24 +72,24 @@ _TARGETED_PROBABILITY_MATRIX = PROBABILITY_MATRIX.at[6].set(
 _TARGETED_ACTION_VALID_MASK = _TARGETED_PROBABILITY_MATRIX >= 0.0
 
 
-# ---------------------------------------------------------------------------
-# Role → host weight arrays for each CIA component.
-
-def _role_weights(host_resilience_role: jax.Array, role_set: tuple[int, ...]) -> jax.Array:
-    """Return per-host weight array: TARGET_HOST_WEIGHT for roles in role_set, else 1.0."""
+def _role_weights(
+    host_resilience_role: jax.Array,
+    role_set: tuple[int, ...],
+    weight: float,
+) -> jax.Array:
+    """Return per-host weight array: weight for roles in role_set, else 1.0."""
     weights = jnp.ones(GLOBAL_MAX_HOSTS, dtype=jnp.float32)
     for role in role_set:
-        weights = jnp.where(host_resilience_role == role, TARGET_HOST_WEIGHT, weights)
+        weights = jnp.where(host_resilience_role == role, weight, weights)
     return weights
 
 
-# ---------------------------------------------------------------------------
-# Shared parameterized core.
-
-def _targeted_get_action_and_info(
+def _get_action_and_info(
     state: SimulatorState,
     const: SimulatorConst,
-    host_weights: jax.Array,       # (GLOBAL_MAX_HOSTS,) float32 — per-host target weight
+    host_weights: jax.Array,   # (GLOBAL_MAX_HOSTS,) float32
+    prob_matrix: jax.Array,    # (NUM_FSM_STATES, NUM_FSM_ACTIONS) float32
+    valid_mask: jax.Array,     # (NUM_FSM_STATES, NUM_FSM_ACTIONS) bool
     agent_id: int,
     key: jax.Array,
 ) -> tuple:
@@ -110,7 +105,6 @@ def _targeted_get_action_and_info(
 
     any_eligible = jnp.any(eligible)
 
-    # Biased host probabilities.
     raw = jnp.where(eligible, host_weights, 0.0)
     host_probs = raw / jnp.maximum(jnp.sum(raw), 1e-8)
 
@@ -130,10 +124,9 @@ def _targeted_get_action_and_info(
     host_state = fsm_states[chosen_host]
     host_state_clamped = jnp.clip(host_state, 0, NUM_FSM_STATES - 2)
 
-    # Targeted probability matrix: biased toward Impact/Degrade at root access.
-    action_probs_raw = _TARGETED_PROBABILITY_MATRIX[host_state_clamped]
-    valid_mask = _TARGETED_ACTION_VALID_MASK[host_state_clamped]
-    action_probs = jnp.where(valid_mask, jnp.maximum(action_probs_raw, 0.0), 0.0)
+    action_probs_raw = prob_matrix[host_state_clamped]
+    vmask = valid_mask[host_state_clamped]
+    action_probs = jnp.where(vmask, jnp.maximum(action_probs_raw, 0.0), 0.0)
     action_probs = action_probs / jnp.maximum(jnp.sum(action_probs), 1e-8)
 
     action_u = sample_red_policy_random(const, time_idx, agent_id, 1, key2)
@@ -141,7 +134,7 @@ def _targeted_get_action_and_info(
     chosen_fsm_action = jax.lax.cond(
         const.use_red_policy_randoms,
         lambda _: jnp.where(
-            valid_mask[recorded_action],
+            vmask[recorded_action],
             recorded_action,
             _weighted_choice_from_probs(action_probs, action_u),
         ),
@@ -176,10 +169,12 @@ def _targeted_get_action_and_info(
     )
 
 
-def _targeted_select_one_agent(
+def _select_one_agent(
     state: SimulatorState,
     const: SimulatorConst,
     host_weights: jax.Array,
+    prob_matrix: jax.Array,
+    valid_mask: jax.Array,
     r: int,
     key: jax.Array,
 ) -> tuple:
@@ -188,7 +183,7 @@ def _targeted_select_one_agent(
     action, host, target_subnet, fsm_act, eligible = jax.lax.cond(
         is_busy | ~is_active,
         lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
-        lambda: _targeted_get_action_and_info(state, const, host_weights, r, key),
+        lambda: _get_action_and_info(state, const, host_weights, prob_matrix, valid_mask, r, key),
     )
     eff_host    = jnp.where(is_busy, state.red_pending_target_host[r],   host)
     eff_subnet  = jnp.where(is_busy, state.red_pending_target_subnet[r], target_subnet)
@@ -202,14 +197,16 @@ def _targeted_select_one_agent(
     return action, eff_host, eff_subnet, eff_fsm_act, eff_eligible, source_kind, source_host
 
 
-def _targeted_red_select_actions(
+def _red_select_actions(
     state: SimulatorState,
     const: SimulatorConst,
     host_weights: jax.Array,
+    prob_matrix: jax.Array,
+    valid_mask: jax.Array,
     red_keys: jax.Array,
 ) -> tuple:
     all_results = [
-        _targeted_select_one_agent(state, const, host_weights, r, red_keys[r])
+        _select_one_agent(state, const, host_weights, prob_matrix, valid_mask, r, red_keys[r])
         for r in range(NUM_RED_AGENTS)
     ]
 
@@ -233,7 +230,28 @@ def _targeted_red_select_actions(
 
 
 # ---------------------------------------------------------------------------
-# Public entry points — one per CIA component.
+# Public entry points.
+
+def resilience_red_select_actions(
+    state: SimulatorState,
+    const: SimulatorConst,
+    host_resilience_role: jax.Array,
+    red_keys: jax.Array,
+    target_weight: float = 5.0,
+) -> tuple:
+    """Red agent biased toward all resilience-critical servers (AUTH + DB + WEB).
+
+    Uses the base FSM action probability matrix — no extra bias toward
+    Impact/Degrade at root access. All resilience-critical servers are weighted
+    ``target_weight`` times more likely to be targeted than ordinary hosts.
+    """
+    host_weights = _role_weights(
+        host_resilience_role,
+        (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB, RESILIENCE_ROLE_WEB),
+        target_weight,
+    )
+    return _red_select_actions(state, const, host_weights, PROBABILITY_MATRIX, ACTION_VALID_MASK, red_keys)
+
 
 def c_red_select_actions(
     state: SimulatorState,
@@ -246,8 +264,12 @@ def c_red_select_actions(
     Biases host selection toward RESILIENCE_ROLE_AUTH and RESILIENCE_ROLE_DB,
     and at root-access state heavily favors Impact/DegradeServices.
     """
-    host_weights = _role_weights(host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB))
-    return _targeted_red_select_actions(state, const, host_weights, red_keys)
+    host_weights = _role_weights(
+        host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB), _CIA_TARGET_WEIGHT
+    )
+    return _red_select_actions(
+        state, const, host_weights, _TARGETED_PROBABILITY_MATRIX, _TARGETED_ACTION_VALID_MASK, red_keys
+    )
 
 
 def i_red_select_actions(
@@ -261,8 +283,12 @@ def i_red_select_actions(
     Biases host selection toward RESILIENCE_ROLE_AUTH and RESILIENCE_ROLE_WEB,
     and at root-access state heavily favors Impact/DegradeServices.
     """
-    host_weights = _role_weights(host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_WEB))
-    return _targeted_red_select_actions(state, const, host_weights, red_keys)
+    host_weights = _role_weights(
+        host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_WEB), _CIA_TARGET_WEIGHT
+    )
+    return _red_select_actions(
+        state, const, host_weights, _TARGETED_PROBABILITY_MATRIX, _TARGETED_ACTION_VALID_MASK, red_keys
+    )
 
 
 def a_red_select_actions(
@@ -279,5 +305,8 @@ def a_red_select_actions(
     host_weights = _role_weights(
         host_resilience_role,
         (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB, RESILIENCE_ROLE_WEB),
+        _CIA_TARGET_WEIGHT,
     )
-    return _targeted_red_select_actions(state, const, host_weights, red_keys)
+    return _red_select_actions(
+        state, const, host_weights, _TARGETED_PROBABILITY_MATRIX, _TARGETED_ACTION_VALID_MASK, red_keys
+    )
