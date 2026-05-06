@@ -15,8 +15,6 @@ import sys
 from pathlib import Path
 from statistics import mean, stdev
 
-from jaxborg.recipe import load, project_eval
-
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 ROOT = Path(__file__).resolve().parent.parent.parent
@@ -24,7 +22,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 
-from jaxborg.evaluation.cia import ResilienceMetric, score_trajectory_file
+from jaxborg.evaluation.cia import get_cia_scorer
+from jaxborg.recipe import load, project_eval
 
 
 def _stats(xs):
@@ -42,12 +41,8 @@ def main():
     parser.add_argument("--recipe", default=None, help="Path or name of recipe yaml")
     args = parser.parse_args()
 
-    resilience_mode = False
-    if args.recipe is not None:
-        eval_cfg = project_eval(load(args.recipe))
-        resilience_mode = eval_cfg["resilience_mode"]
-
-    scorer = ResilienceMetric() if resilience_mode else None
+    eval_cfg = project_eval(load(args.recipe)) if args.recipe is not None else {"cia_metric": "cc4"}
+    scorer = get_cia_scorer(eval_cfg)
 
     traj_dir = Path(args.traj_dir)
     files = sorted(traj_dir.glob(args.glob))
@@ -57,7 +52,7 @@ def main():
 
     rows = []
     for p in files:
-        s = scorer.score_trajectory_file(p) if resilience_mode else score_trajectory_file(p)
+        s = scorer(p)
         rows.append(
             {
                 "file": p.name,
