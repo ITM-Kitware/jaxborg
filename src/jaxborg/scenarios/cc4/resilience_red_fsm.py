@@ -16,7 +16,7 @@ Agents and their target server sets (from ``resilience_topology``):
 Usage::
 
     from jaxborg.scenarios.cc4.resilience_topology import build_resilience_topology
-    from jaxborg.scenarios.cc4.targeted_red_fsm import (
+    from jaxborg.scenarios.cc4.resilience_red_fsm import (
         resilience_red_select_actions,
         c_red_select_actions,
         i_red_select_actions,

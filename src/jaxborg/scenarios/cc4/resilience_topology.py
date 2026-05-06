@@ -14,7 +14,7 @@ Usage::
 
 The returned ``SimulatorConst`` is identical to the base topology — only the
 extra ``host_resilience_role`` array carries server identity.  Pass both to
-the resilience-aware red agent in ``targeted_red_fsm.py``.
+the resilience-aware red agent in ``resilience_red_fsm.py``.
 """
 
 from __future__ import annotations
