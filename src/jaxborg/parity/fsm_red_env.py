@@ -317,11 +317,11 @@ def make_fsm_red_env(
     needs_roles = red_agent not in ("fsm", "finite_state")
     factory_name = role_assignment if role_assignment is not None else ("resilience" if needs_roles else None)
     if factory_name == "resilience":
-        from jaxborg.scenarios.cc4.resilience_topology import _assign_resilience_roles
+        from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles_from_const
 
         def extras_factory(key, const):
             del key
-            return {"host_resilience_role": _assign_resilience_roles(const)}
+            return {"host_resilience_role": assign_resilience_roles_from_const(const)}
     elif factory_name is None:
         extras_factory = _empty_extras_factory
     else:

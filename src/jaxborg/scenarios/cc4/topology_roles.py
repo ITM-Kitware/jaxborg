@@ -16,7 +16,15 @@ plain ints when comparing against jnp arrays, so no jnp-typed wrappers are neede
 from __future__ import annotations
 
 import re
-from typing import Iterable
+from typing import TYPE_CHECKING, Iterable
+
+import jax
+import jax.numpy as jnp
+
+from jaxborg.constants import GLOBAL_MAX_HOSTS, SUBNET_IDS
+
+if TYPE_CHECKING:
+    from jaxborg.state import SimulatorConst
 
 ROLE_NONE = 0
 ROLE_AUTH = 1  # authentication server  (CIA: C + I)
@@ -46,3 +54,48 @@ def assign_resilience_roles(hostnames: Iterable[str]) -> dict[str, int]:
 
 def role_name(role: int) -> str:
     return ROLE_NAMES.get(int(role), "unknown")
+
+
+# ---------------------------------------------------------------------------
+# JAX-side role assignment — operates on a SimulatorConst rather than a Python
+# hostname list. Matches the hostname-list rule (sort by host index) so the
+# trajectory recorder and JAX env produce identical role maps for the same
+# active-host set.
+
+_RESILIENCE_ZONE_SUBNETS = (
+    SUBNET_IDS["OPERATIONAL_ZONE_A"],
+    SUBNET_IDS["OPERATIONAL_ZONE_B"],
+)
+
+
+def assign_resilience_roles_from_const(const: "SimulatorConst") -> jax.Array:
+    """JAX-traceable role assignment from a ``SimulatorConst``.
+
+    Picks the 3 lowest-index active operational-zone server hosts and tags
+    them AUTH/DB/WEB. Returns a ``(GLOBAL_MAX_HOSTS,) int32`` array; non-tagged
+    hosts are 0 (``ROLE_NONE``).
+
+    Stable: same active-host set → same assignment, JIT-friendly.
+    """
+    is_resilience_zone = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+    for sid in _RESILIENCE_ZONE_SUBNETS:
+        is_resilience_zone = is_resilience_zone | (const.host_subnet == sid)
+
+    candidates = const.host_active & const.host_is_server & is_resilience_zone
+
+    # Lowest-index-first ordering: non-candidates sort to int32-max.
+    scores = jnp.where(candidates, jnp.arange(GLOBAL_MAX_HOSTS), jnp.iinfo(jnp.int32).max)
+    ranks = jnp.argsort(scores)
+    auth_host = ranks[0]
+    db_host = ranks[1]
+    web_host = ranks[2]
+
+    n_candidates = jnp.sum(candidates.astype(jnp.int32))
+    idx = jnp.arange(GLOBAL_MAX_HOSTS)
+    host_resilience_role = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
+    host_resilience_role = jnp.where(
+        (idx == auth_host) & (n_candidates >= 1), jnp.int32(ROLE_AUTH), host_resilience_role
+    )
+    host_resilience_role = jnp.where((idx == db_host) & (n_candidates >= 2), jnp.int32(ROLE_DB), host_resilience_role)
+    host_resilience_role = jnp.where((idx == web_host) & (n_candidates >= 3), jnp.int32(ROLE_WEB), host_resilience_role)
+    return host_resilience_role
