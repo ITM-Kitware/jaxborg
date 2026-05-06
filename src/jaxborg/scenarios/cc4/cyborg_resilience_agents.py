@@ -1,4 +1,16 @@
-"""CybORG red agent variants for jaxborg experiments."""
+"""CybORG red agent variants for jaxborg experiments.
+
+NOTE on role-assignment divergence: this CybORG-side mirror uses
+``index mod 3`` to spread auth/db/web roles across **every** op-zone server,
+while the JAX side and the trajectory recorder both use
+``topology_roles.assign_resilience_roles`` ("lowest 3 sorted hostnames").
+The reason: CybORG has no per-episode randomization, so the agent must
+decide its bias against the full op-zone server set; tying its behaviour
+to only 3 hosts would severely under-bias on real CybORG topologies.
+The trajectory header still records only the metric-relevant 3 hosts,
+so the resilience score may not fully reflect bias applied to other
+op-zone servers — see TODO(resilience-parity).
+"""
 
 from __future__ import annotations
 
@@ -6,18 +18,18 @@ import re
 
 from CybORG.Agents.SimpleAgents.FiniteStateRedAgent import FiniteStateRedAgent
 
-_OP_SERVER_RE = re.compile(r"^operational_zone_[ab]_subnet_server_host_\d+$")
+from jaxborg.scenarios.cc4.topology_roles import OPERATIONAL_SERVER_RE
+
 _OP_SERVER_IDX_RE = re.compile(r"(\d+)$")
 
 
 def _op_server_role_idx(hostname: str) -> int | None:
     """Return 0 (auth), 1 (db), or 2 (web) for an op-zone server, else None.
 
-    CybORG has no per-episode role randomization, so we use a fixed convention:
-    the trailing host index mod 3 maps to auth/db/web in the same order that
-    JAX's resilience_topology uses as its baseline.
+    See module docstring for why this differs from the canonical JAX/recorder
+    assignment in ``topology_roles.assign_resilience_roles``.
     """
-    if not _OP_SERVER_RE.match(hostname):
+    if not OPERATIONAL_SERVER_RE.match(hostname):
         return None
     m = _OP_SERVER_IDX_RE.search(hostname)
     return int(m.group()) % 3 if m else 0
@@ -48,7 +60,7 @@ class ResilienceRedAgent(FiniteStateRedAgent):
         for ip in host_options:
             info = self.host_states.get(ip) or {}
             hostname = info.get("hostname") or ""
-            weights.append(self._target_weight if _OP_SERVER_RE.match(hostname) else 1.0)
+            weights.append(self._target_weight if OPERATIONAL_SERVER_RE.match(hostname) else 1.0)
         total = sum(weights)
         probs = [w / total for w in weights]
         return self.np_random.choice(host_options, p=probs)

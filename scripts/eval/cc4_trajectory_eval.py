@@ -17,7 +17,6 @@ re-running CybORG (CPU-bound, ~2 min/episode).
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
@@ -34,23 +33,7 @@ if str(ROOT / "src") not in sys.path:
 
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_runner import load_torch_policy
-
-_OPERATIONAL_SERVER_RE = re.compile(r"^operational_zone_[ab]_subnet_server_host_\d+$")
-
-# Role ints mirror resilience_topology.RESILIENCE_ROLE_* (no JAX import needed).
-_ROLE_AUTH, _ROLE_DB, _ROLE_WEB = 1, 2, 3
-
-
-def _assign_resilience_roles(hosts: list[str], seed: int) -> dict[str, int]:
-    """Deterministically assign auth/db/web roles to three Operational Zone server hosts.
-
-    Selects the 3 eligible hosts with the lowest sorted names, mirroring
-    ``resilience_topology._assign_resilience_roles`` which picks by lowest host index.
-    The ``seed`` parameter is unused but kept for call-site compatibility.
-    """
-    candidates = sorted(h for h in hosts if _OPERATIONAL_SERVER_RE.match(h))
-    return {host: role for host, role in zip(candidates[:3], [_ROLE_AUTH, _ROLE_DB, _ROLE_WEB])}
-
+from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -236,7 +219,7 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
         resilience_roles = None
         if resilience_mode:
             hosts = list(env.unwrapped.environment_controller.state.hosts.keys())
-            resilience_roles = _assign_resilience_roles(hosts, ep_seed)
+            resilience_roles = assign_resilience_roles(hosts)
         out_path = output_dir / f"{tag}_seed{ep_seed}.jsonl"
         r, n = rollout_episode(env, agent, device, deterministic, ep_seed, model_path, out_path, resilience_roles)
         rewards.append(r)
