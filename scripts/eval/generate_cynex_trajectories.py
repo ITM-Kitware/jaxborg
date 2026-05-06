@@ -87,7 +87,7 @@ def _load_torch_model(path: str):
 
 
 # ---------------------------------------------------------------------------
-# JAX/Flax policy loading (mirrors transfer.py)
+# JAX/Flax policy loading for JAX-trained policies
 # ---------------------------------------------------------------------------
 def _load_jax_model(path: str):
     """Load a JAXborg JAX/Flax checkpoint. Returns (policy, params, policy_kind)."""
@@ -117,7 +117,7 @@ def _load_jax_model(path: str):
 # CybORG env creation
 # ---------------------------------------------------------------------------
 def make_cyborg_env(seed: int, steps: int = EPISODE_LENGTH):
-    """Create a BlueFlatWrapper CybORG env (same as transfer.py make_cyborg_env)."""
+    """Create a BlueFlatWrapper CybORG env."""
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
@@ -132,7 +132,7 @@ def make_cyborg_env(seed: int, steps: int = EPISODE_LENGTH):
 # Mask translation: CybORG wrapper -> JAX action space
 # ---------------------------------------------------------------------------
 def _build_mask_cache(wrapper, mappings, const):
-    """Precompute CybORG-to-JAX action translation tables (from transfer.py)."""
+    """Precompute CybORG-to-JAX action translation tables."""
 
     from jaxborg.actions.encoding import BLUE_SLEEP, encode_blue_action
 
@@ -167,7 +167,7 @@ def _build_mask_cache(wrapper, mappings, const):
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
-    """Translate a single CybORG action to JAX indices (from transfer.py)."""
+    """Translate a single CybORG action to JAX indices."""
 
     from jaxborg.parity.translate import cyborg_blue_to_jax
 
@@ -179,7 +179,7 @@ def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cy
 
 
 def _get_jax_mask(wrapper, agent_name, mask_cache):
-    """Get JAX-space action mask for an agent (from transfer.py)."""
+    """Get JAX-space action mask for an agent."""
     from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP
 
     controller = wrapper.env.environment_controller
@@ -207,7 +207,7 @@ def _get_jax_mask(wrapper, agent_name, mask_cache):
 
 
 def _apply_traffic_filter(mask, blocked_zones, const, agent_id):
-    """Filter no-op traffic actions from mask (from transfer.py)."""
+    """Filter no-op traffic actions from mask."""
     import jax.numpy as jnp
 
     from jaxborg.actions.encoding import (
@@ -277,7 +277,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
     from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
-    # Create env with BlueFlatWrapper (same as transfer.py)
+    # Create env with BlueFlatWrapper.
     wrapper = make_cyborg_env(seed, steps)
     observations, _ = wrapper.reset()
 

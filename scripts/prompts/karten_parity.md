@@ -33,7 +33,7 @@ JAXBORG_POLICY_CHECKPOINT=$JAXBORG_POLICY_CHECKPOINT \
   uv run pytest tests/l3/test_trained_blue_policy.py -v -x -n auto
 CYBORG_CHECKPOINT=$CYBORG_CHECKPOINT \
   uv run pytest tests/l3/test_cyborg_trained_blue.py -v -x -n auto
-uv run python scripts/eval/transfer.py \
+uv run python scripts/dev/transfer.py \
   --checkpoint $JAXBORG_POLICY_CHECKPOINT --episodes 30 --seed 42  # L4 transfer eval
 uv run ruff check --fix . && uv run ruff format .   # lint
 ```
