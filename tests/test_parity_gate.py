@@ -4,6 +4,7 @@ from scripts.dev.parity.gate import (
     GateConfig,
     aggregate_transfer_results,
     build_eval_command,
+    build_test_commands,
     build_train_command,
     parse_int_set,
     planned_training_checkpoints,
@@ -52,6 +53,16 @@ def test_eval_command_is_cpu_only_stochastic_unmatched_by_default(tmp_path):
     assert "--matched" not in command.argv
     assert command.argv[command.argv.index("--episodes") + 1] == "7"
     assert command.result_path == config.run_dir / "eval" / "00_tag" / "tost_result.json"
+
+
+def test_fast_preflight_uses_repo_fast_suite(tmp_path):
+    config = _config(tmp_path, run_fast_tests=True)
+
+    command = build_test_commands(config)[0]
+
+    assert command.name == "pytest:fast-suite"
+    assert command.argv == ["uv", "run", "pytest"]
+    assert command.log_path == config.run_dir / "logs" / "pytest_fast_suite.log"
 
 
 def test_planned_training_checkpoints_follow_tag_prefix(tmp_path):

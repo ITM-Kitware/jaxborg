@@ -240,11 +240,11 @@ def build_test_commands(config: GateConfig) -> list[PlannedCommand]:
     if config.run_fast_tests:
         commands.append(
             PlannedCommand(
-                name="pytest:fast-differential",
-                argv=["uv", "run", "pytest", "tests/differential", "-m", "not slow"],
+                name="pytest:fast-suite",
+                argv=["uv", "run", "pytest"],
                 cwd=config.root,
                 env=env,
-                log_path=config.run_dir / "logs" / "pytest_fast_differential.log",
+                log_path=config.run_dir / "logs" / "pytest_fast_suite.log",
             )
         )
     if config.run_slow_tests:
