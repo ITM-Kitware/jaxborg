@@ -85,14 +85,17 @@ class _CIARedAgent(ResilienceRedAgent):
 
 class CRedAgent(_CIARedAgent):
     """Targets auth + db servers (CIA: Confidentiality)."""
+
     _target_role_indices = frozenset({0, 1})
 
 
 class IRedAgent(_CIARedAgent):
     """Targets auth + web servers (CIA: Integrity)."""
+
     _target_role_indices = frozenset({0, 2})
 
 
 class ARedAgent(_CIARedAgent):
     """Targets auth + db + web servers (CIA: Availability)."""
+
     _target_role_indices = frozenset({0, 1, 2})

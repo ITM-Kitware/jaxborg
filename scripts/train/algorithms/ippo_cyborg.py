@@ -55,6 +55,7 @@ def make_cyborg_env(red_agent: str = "finite_state", target_weight: float = 5.0)
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     from jaxborg.scenarios.cc4.cyborg_resilience_agents import ARedAgent, CRedAgent, IRedAgent, ResilienceRedAgent
 
     _red_classes = {

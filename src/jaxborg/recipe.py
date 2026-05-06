@@ -140,7 +140,6 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-
 def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten the eval section of a recipe into a config dict.
 

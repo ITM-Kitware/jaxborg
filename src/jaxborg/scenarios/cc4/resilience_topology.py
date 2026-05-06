@@ -28,8 +28,8 @@ from jaxborg.state import SimulatorConst
 
 RESILIENCE_ROLE_NONE = jnp.int32(0)
 RESILIENCE_ROLE_AUTH = jnp.int32(1)  # authentication server
-RESILIENCE_ROLE_DB   = jnp.int32(2)  # database server
-RESILIENCE_ROLE_WEB  = jnp.int32(3)  # frontend web server
+RESILIENCE_ROLE_DB = jnp.int32(2)  # database server
+RESILIENCE_ROLE_WEB = jnp.int32(3)  # frontend web server
 
 _RESILIENCE_ZONE_SUBNETS = (
     SUBNET_IDS["OPERATIONAL_ZONE_A"],
@@ -55,8 +55,8 @@ def _assign_resilience_roles(const: SimulatorConst) -> jax.Array:
     scores = jnp.where(candidates, jnp.arange(GLOBAL_MAX_HOSTS), jnp.iinfo(jnp.int32).max)
     ranks = jnp.argsort(scores)
     auth_host = ranks[0]
-    db_host   = ranks[1]
-    web_host  = ranks[2]
+    db_host = ranks[1]
+    web_host = ranks[2]
 
     n_candidates = jnp.sum(candidates.astype(jnp.int32))
     idx = jnp.arange(GLOBAL_MAX_HOSTS)

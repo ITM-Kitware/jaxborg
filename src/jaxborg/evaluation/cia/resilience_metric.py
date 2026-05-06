@@ -38,14 +38,14 @@ from typing import Any
 # so this module has no JAX dependency.
 ROLE_NONE = 0
 ROLE_AUTH = 1
-ROLE_DB   = 2
-ROLE_WEB  = 3
+ROLE_DB = 2
+ROLE_WEB = 3
 
 _C_ROLES = frozenset({ROLE_AUTH, ROLE_DB})
 _I_ROLES = frozenset({ROLE_AUTH, ROLE_WEB})
 _A_ROLES = frozenset({ROLE_AUTH, ROLE_DB, ROLE_WEB})
 
-_RED_IMPACT_EVENTS  = frozenset({"Impact", "DegradeServices"})
+_RED_IMPACT_EVENTS = frozenset({"Impact", "DegradeServices"})
 _BLUE_RESTORE_EVENT = frozenset({"Restore"})
 
 
@@ -76,7 +76,7 @@ class ResilienceMetric:
 
     # Class-level defaults — override in subclasses or via constructor args.
     CIA_COMPOSITE_WEIGHT: dict[str, float] = {"C": 1 / 3, "I": 1 / 3, "A": 1 / 3}
-    CIA_DROP_WEIGHT: dict[str, float]      = {"C": 10.0, "I": 10.0, "A": 10.0}
+    CIA_DROP_WEIGHT: dict[str, float] = {"C": 10.0, "I": 10.0, "A": 10.0}
 
     def __init__(
         self,
@@ -88,7 +88,7 @@ class ResilienceMetric:
         # "host_resilience_roles" field (written by cc4_trajectory_eval.py).
         self.host_role_map = host_role_map
         self._composite = composite_weight if composite_weight is not None else self.CIA_COMPOSITE_WEIGHT
-        self._drop      = drop_weight      if drop_weight      is not None else self.CIA_DROP_WEIGHT
+        self._drop = drop_weight if drop_weight is not None else self.CIA_DROP_WEIGHT
 
     def score_episode(
         self,
@@ -113,9 +113,9 @@ class ResilienceMetric:
         drop_C = self._drop["C"]
         drop_I = self._drop["I"]
         drop_A = self._drop["A"]
-        w_C    = self._composite["C"]
-        w_I    = self._composite["I"]
-        w_A    = self._composite["A"]
+        w_C = self._composite["C"]
+        w_I = self._composite["I"]
+        w_A = self._composite["A"]
 
         cs, is_, as_, rs = [], [], [], []
 
@@ -124,7 +124,7 @@ class ResilienceMetric:
             for rec in step["red"].values():
                 if rec.get("success") != "TRUE":
                     continue
-                cls  = rec.get("cls", "")
+                cls = rec.get("cls", "")
                 host = rec.get("host")
                 if cls in _RED_IMPACT_EVENTS and host in impacted:
                     impacted[host] = True
@@ -140,13 +140,13 @@ class ResilienceMetric:
                         impacted[host] = False
 
             # --- Per-step CIA scores ---
-            C = I = A = 0.0
+            C = I = A = 0.0  # noqa: E741 — CIA triad domain notation
             for host, role in role_map.items():
                 if impacted[host]:
                     if role in _C_ROLES:
                         C -= drop_C
                     if role in _I_ROLES:
-                        I -= drop_I
+                        I -= drop_I  # noqa: E741
                     if role in _A_ROLES:
                         A -= drop_A
 
@@ -191,9 +191,7 @@ class ResilienceMetric:
             raise ValueError(f"no header record in {path}")
         return self.score_episode(header, steps, total_reward)
 
-    def score_trajectory_dir(
-        self, traj_dir: Path, glob: str = "*.jsonl"
-    ) -> list[ResilienceEpisodeScore]:
+    def score_trajectory_dir(self, traj_dir: Path, glob: str = "*.jsonl") -> list[ResilienceEpisodeScore]:
         """Score all trajectory files in a directory."""
         files = sorted(Path(traj_dir).glob(glob))
         if not files:

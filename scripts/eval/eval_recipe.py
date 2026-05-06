@@ -107,7 +107,11 @@ def main():
         red_agent = eval_cfg["red_agent"]
         target_weight = eval_cfg["resilience_target_weight"]
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
-        print(f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} eps/seed={args.episodes} red_agent={red_agent}", flush=True)
+        print(
+            f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
+            f"eps/seed={args.episodes} red_agent={red_agent}",
+            flush=True,
+        )
 
         state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
         agent = load_torch_policy_from_recipe(recipe, state_dict)

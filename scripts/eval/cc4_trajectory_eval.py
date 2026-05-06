@@ -49,10 +49,8 @@ def _assign_resilience_roles(hosts: list[str], seed: int) -> dict[str, int]:
     The ``seed`` parameter is unused but kept for call-site compatibility.
     """
     candidates = sorted(h for h in hosts if _OPERATIONAL_SERVER_RE.match(h))
-    return {
-        host: role
-        for host, role in zip(candidates[:3], [_ROLE_AUTH, _ROLE_DB, _ROLE_WEB])
-    }
+    return {host: role for host, role in zip(candidates[:3], [_ROLE_AUTH, _ROLE_DB, _ROLE_WEB])}
+
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -66,6 +64,7 @@ def make_env(seed, red_agent: str = "finite_state", target_weight: float = 5.0):
     from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+
     from jaxborg.scenarios.cc4.cyborg_resilience_agents import ResilienceRedAgent
 
     _red_classes = {
@@ -217,6 +216,7 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     target_weight = 5.0
     if recipe_path is not None:
         from jaxborg.recipe import load, project_eval
+
         eval_cfg = project_eval(load(recipe_path))
         resilience_mode = eval_cfg["resilience_mode"]
         red_agent = eval_cfg["red_agent"]
