@@ -7,7 +7,7 @@ Each episode is written as a JSONL file with:
     other availability-event metrics derivable post-hoc without re-rolling out)
   - one `footer` record (total reward, steps)
 
-Trajectories are then scored post-hoc by `cc4_score_trajectories.py`. Decoupling
+Trajectories are then scored post-hoc by `score_trajectories.py`. Decoupling
 rollout from scoring lets us re-evaluate with new alignment metrics without
 re-running CybORG (CPU-bound, ~2 min/episode).
 """
