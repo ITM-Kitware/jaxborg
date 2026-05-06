@@ -95,8 +95,7 @@ def make_train(config, network):
     )
     _red_agent = config.get("RED_AGENT", "")
     if _red_agent in ("c", "i", "a"):
-        from jaxborg.parity.targeted_red_env import TargetedRedCC4Env
-        inner_env = TargetedRedCC4Env(cia_target=_red_agent, **_env_kwargs)
+        inner_env = ResilienceRedCC4Env(cia_target=_red_agent, **_env_kwargs)
     elif _red_agent == "resilience" or config.get("RESILIENCE_MODE", False):
         _env_kwargs["target_weight"] = float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0))
         inner_env = ResilienceRedCC4Env(**_env_kwargs)
@@ -354,8 +353,7 @@ def main():
     _probe_kwargs = dict(num_steps=500, topology_mode=config.get("TOPOLOGY_MODE", "generative"))
     _red_agent = config.get("RED_AGENT", "")
     if _red_agent in ("c", "i", "a"):
-        from jaxborg.parity.targeted_red_env import TargetedRedCC4Env
-        inner_env = TargetedRedCC4Env(cia_target=_red_agent, **_probe_kwargs)
+        inner_env = ResilienceRedCC4Env(cia_target=_red_agent, **_probe_kwargs)
     elif _red_agent == "resilience" or config.get("RESILIENCE_MODE", True):
         _probe_kwargs["target_weight"] = float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0))
         inner_env = ResilienceRedCC4Env(**_probe_kwargs)

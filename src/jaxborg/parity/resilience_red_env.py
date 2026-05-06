@@ -5,6 +5,11 @@ build_resilience_topology to assign auth/db/web roles to three Operational Zone
 servers each episode, and routes red action selection through
 resilience_red_select_actions so those servers are targeted preferentially.
 
+Pass cia_target="c", "i", or "a" to use a CIA-specific red selector instead:
+  cia_target="c"  →  c_red_select_actions (targets AUTH+DB)
+  cia_target="i"  →  i_red_select_actions (targets AUTH+WEB)
+  cia_target="a"  →  a_red_select_actions (targets AUTH+DB+WEB)
+
 The extra per-episode data (host_resilience_role) is carried in the extended
 state type ResilienceEnvState alongside the inner ScenarioEnvState.
 """
@@ -28,7 +33,12 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
 )
-from jaxborg.scenarios.cc4.targeted_red_fsm import resilience_red_select_actions
+from jaxborg.scenarios.cc4.targeted_red_fsm import (
+    a_red_select_actions,
+    c_red_select_actions,
+    i_red_select_actions,
+    resilience_red_select_actions,
+)
 from jaxborg.scenarios.cc4.resilience_topology import _assign_resilience_roles
 
 
@@ -37,12 +47,22 @@ class ResilienceEnvState(NamedTuple):
     host_resilience_role: chex.Array  # (GLOBAL_MAX_HOSTS,) int32
 
 
+_CIA_FN = {
+    "c": c_red_select_actions,
+    "i": i_red_select_actions,
+    "a": a_red_select_actions,
+}
+
+
 class ResilienceRedCC4Env(MultiAgentEnv):
-    """Blue-only CC4 env with resilience topology and resilience-biased FSM red agents.
+    """Blue-only CC4 env with resilience topology and biased FSM red agents.
 
     Each episode the three Operational Zone servers are assigned auth/db/web roles
-    via _assign_resilience_roles.  The red FSM then targets those servers with
-    RESILIENCE_TARGET_WEIGHT times higher probability than ordinary hosts.
+    via _assign_resilience_roles.  By default the red FSM targets those servers with
+    target_weight times higher probability than ordinary hosts.
+
+    Pass cia_target="c", "i", or "a" to use a CIA-specific selector that biases
+    toward the servers relevant to one CIA component (ignores target_weight).
     """
 
     def __init__(
@@ -54,7 +74,12 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         sync_red_policy_bank: bool = False,
         training_mode: bool = False,
         target_weight: float = 5.0,
+        cia_target: str | None = None,
     ):
+        if cia_target is not None and cia_target not in _CIA_FN:
+            raise ValueError(f"Unknown CIA target {cia_target!r}; expected 'c', 'i', 'a', or None")
+        self._cia_target = cia_target
+        self._cia_fn = _CIA_FN.get(cia_target)
         self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
@@ -195,6 +220,8 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         return blue_obs, out_state, blue_rewards, blue_dones, info
 
     def _call_red_select(self, state, const, host_resilience_role, red_keys):
+        if self._cia_fn is not None:
+            return self._cia_fn(state, const, host_resilience_role, red_keys)
         return resilience_red_select_actions(state, const, host_resilience_role, red_keys, self._target_weight)
 
     @partial(jax.jit, static_argnums=[0])
@@ -216,6 +243,8 @@ class ResilienceRedCC4Env(MultiAgentEnv):
 
     @property
     def name(self) -> str:
+        if self._cia_target is not None:
+            return f"TargetedRedCC4_{self._cia_target.upper()}"
         return "ResilienceRedCC4"
 
     @property
