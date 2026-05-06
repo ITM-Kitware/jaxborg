@@ -1151,7 +1151,7 @@ class CC4DifferentialHarness:
                 blue_pending_action=blue_pending_action,
             )
 
-        # --- JAX action application via shared apply_all_actions_in_order (same as training code path) ---
+        # --- JAX action application via shared apply_all_actions (same as training code path) ---
         blue_action_arr = jnp.array(
             [
                 self._resolve_blue_action(controller, b, blue_actions.get(b, BLUE_SLEEP))

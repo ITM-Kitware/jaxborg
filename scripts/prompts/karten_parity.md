@@ -10,12 +10,12 @@ All host arrays padded to GLOBAL_MAX_HOSTS=137 with host_active masking. State
 updates use flax.struct.dataclass with `state.replace()` and `array.at[idx].set()`.
 
 ### Key Files
-- `src/jaxborg/state.py` — CC4State/CC4Const definitions
+- `src/jaxborg/state.py` — SimulatorState/SimulatorConst definitions
 - `src/jaxborg/actions/` — per-action modules (red_exploit.py, blue_monitor.py, green.py, etc.)
-- `src/jaxborg/env.py` — apply_all_actions_typed (training path), apply_all_actions_in_order (harness path), execution order shuffling
+- `src/jaxborg/env.py` — apply_all_actions and FsmRedCC4Env training path
 - `src/jaxborg/reassignment.py` — cross-subnet session reassignment after each step
-- `src/jaxborg/topology.py` — static topology construction
-- `src/jaxborg/cyborg_green_recorder.py` — records CybORG green/red/blue action events per step
+- `src/jaxborg/scenarios/cc4/topology.py` — static topology construction and snapshot I/O
+- `src/jaxborg/parity/cyborg_green_recorder.py` — records CybORG green/red/blue action events per step
 - `tests/differential/harness.py` — CC4DifferentialHarness (syncs CybORG events into JAX)
 - `tests/differential/state_comparator.py` — compare_fast, _ERROR_FIELDS classification
 - `tests/l3/` — L3 rollout tests (random blue + trained policy)
@@ -28,9 +28,13 @@ export CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu
 
 uv run pytest tests/subsystems/ -v -x -n auto   # L1 property tests
 uv run pytest tests/differential/ -v -x -n auto  # L2 interaction tests
-BLUE_CHECKPOINT=$BLUE_CHECKPOINT uv run pytest tests/l3/ -v -x -n auto  # L3 full rollout
+uv run pytest tests/l3/test_full_episode_fuzzing.py -v -x -n auto
+JAXBORG_POLICY_CHECKPOINT=$JAXBORG_POLICY_CHECKPOINT \
+  uv run pytest tests/l3/test_trained_blue_policy.py -v -x -n auto
+CYBORG_CHECKPOINT=$CYBORG_CHECKPOINT \
+  uv run pytest tests/l3/test_cyborg_trained_blue.py -v -x -n auto
 uv run python scripts/eval/transfer.py \
-  --checkpoint $BLUE_CHECKPOINT --episodes 30 --independent-rollouts --seed 42  # L4 transfer eval
+  --checkpoint $JAXBORG_POLICY_CHECKPOINT --episodes 30 --seed 42  # L4 transfer eval
 uv run ruff check --fix . && uv run ruff format .   # lint
 ```
 
@@ -52,10 +56,10 @@ ${VERIFICATION_STATUS}
 
 ### Architecture Notes
 
-**Execution order**: `apply_all_actions_typed` (training path) shuffles blue/green/red
-agent execution order within each phase per step, matching CybORG's random shuffle
-of same-priority actions. The shuffle key is derived from `key_green` with distinct
-fold-in constants per phase.
+**Execution order**: `apply_all_actions` mirrors CybORG's CC4 priority order:
+traffic-control blue actions first, then other blue actions, then green, then red.
+Within each tier, stable agent-interface insertion order is preserved. CybORG's
+bandwidth shuffle is a no-op for CC4 because every action has `bandwidth_usage=0`.
 
 **FSM host knowledge**: `fsm_host_entered` is updated from discover, scan, exploit,
 privesc, reassignment, and a post-step bulk `|= red_sessions`. This matches CybORG's

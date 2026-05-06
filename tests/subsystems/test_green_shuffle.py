@@ -51,7 +51,7 @@ class TestGreenShuffleCoversAllActive:
                 active_hosts.add(h)
         assert len(active_hosts) == n_green
 
-        # Replicate the shuffle logic from apply_all_actions_typed
+        # Replicate the historical active-only shuffle contract.
         for trial in range(20):
             key_green = jax.random.PRNGKey(trial * 100)
             shuffle_key = jax.random.fold_in(key_green, 7919)
