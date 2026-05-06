@@ -8,10 +8,10 @@ Launch:
     uv run python scripts/train/algorithms/ippo_jax.py --recipe singh --seed 42
 
 Outputs (to `$JAXBORG_EXP_DIR/ippo_jax/<tag>/`):
-    metrics.jsonl       (standardized schema, see jaxborg.metrics_schema)
-    recipe_<tag>.yaml   (resolved recipe sidecar)
-    model_<tag>.pkl     (params dict)
-    checkpoint_*.pkl    (periodic full checkpoints)
+    metrics.jsonl              (standardized schema, see jaxborg.metrics_schema)
+    recipe_<tag>.yaml          (resolved recipe sidecar)
+    model_<tag>.safetensors    (params, safetensors format)
+    checkpoint_*.safetensors   (periodic full checkpoints)
 """
 
 # ruff: noqa: E402
@@ -28,7 +28,6 @@ os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 
 import argparse
 import json
-import pickle
 import sys
 import time
 from functools import partial
@@ -47,7 +46,7 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.checkpoint import write_sidecar
+from jaxborg.checkpoint import save_jax_params, write_sidecar
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env
@@ -428,16 +427,8 @@ def main():
         ckpt_every = int(config.get("CHECKPOINT_EVERY_UPDATES", 50))
         if (update_idx + 1) % ckpt_every == 0 or update_idx == num_updates - 1:
             is_final = update_idx == num_updates - 1
-            ckpt_path = save_dir / (f"model_{tag}.pkl" if is_final else f"checkpoint_{env_steps}.pkl")
-            with open(ckpt_path, "wb") as f:
-                pickle.dump(
-                    {
-                        "params": jax.device_get(train_state.params),
-                        "arch": dict(recipe["arch"]),
-                        "action_dim": action_dim,
-                    },
-                    f,
-                )
+            ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
+            save_jax_params(ckpt_path, train_state.params, action_dim=action_dim)
             if is_final:
                 write_sidecar(
                     save_dir / f"recipe_{tag}.yaml",
