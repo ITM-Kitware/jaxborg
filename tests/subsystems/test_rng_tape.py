@@ -168,17 +168,18 @@ def test_indexed_tape_strict_miss_raises():
             sample_red_pid_delta(const=None, time=0, agent_id=0, key=jax.random.PRNGKey(0))
 
 
-def test_indexed_tape_blue_decoy_type_honors_compatibility():
+def test_indexed_tape_blue_decoy_type_returns_recorded_value():
+    """The tape is a pure lookup primitive — it returns the recorded type
+    verbatim regardless of compatibility.  Compatibility resolution lives in
+    ``apply_blue_decoy`` so the tape stays a thin replay layer."""
     tape = IndexedRNGTape()
-    # Tape says pick type 2, but compatibility rules out 2 → must fall back to
-    # the lowest compatible index.
     tape.set_blue_decoy_type(agent_id=0, value=2)
     compat = jnp.array([False, True, False, True])
     with indexed_rng_impls(**tape.as_overrides()):
         choice = sample_blue_decoy_type_choice(
             const=None, time=0, agent_id=0, compatibility=compat, key=jax.random.PRNGKey(0)
         )
-    assert int(choice) == 1
+    assert int(choice) == 2
 
 
 def test_indexed_tape_blue_decoy_pid_delta_per_respawn():

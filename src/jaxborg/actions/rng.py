@@ -124,9 +124,14 @@ def _default_blue_decoy_pid_delta(key, agent_id, respawn_index):
     return _randint_impl(key, (), minval=1, maxval=10, dtype=jnp.int32)
 
 
-def _default_red_policy(key, agent_id, field_idx):
+def _default_red_policy(key, agent_id, field_idx, probs):
+    """Categorical sample over ``probs``.
+
+    Tape impls override this to return the recorded JAX index directly.
+    """
     del agent_id, field_idx
-    return _uniform_impl(key)
+    n = probs.shape[0]
+    return jax.random.choice(key, n, p=probs).astype(jnp.int32)
 
 
 def _default_green_dest_host(key, time, host_idx, sorted_servers, num_reachable):
@@ -200,10 +205,15 @@ def sample_green_random(const: SimulatorConst, time, host_idx, field_idx, key, *
     return _purpose_impls["green"](key, time, host_idx, field_idx, int_range)
 
 
-def sample_red_policy_random(const: SimulatorConst, time, agent_id, field_idx, key):
-    """Return a red-policy choice token in ``[0, 1)``."""
+def sample_red_policy_choice(const: SimulatorConst, time, agent_id, field_idx, key, probs):
+    """Return a JAX index sampled from ``probs`` for the red FSM.
+
+    Production: categorical sample via ``jax.random.choice``.  Tape impls
+    return the recorded JAX index directly so CybORG-vs-JAX cumsum bucket
+    differences (probs and iteration order) cannot drift the replay.
+    """
     del const, time
-    return _purpose_impls["red_policy"](key, agent_id, field_idx)
+    return _purpose_impls["red_policy"](key, agent_id, field_idx, probs)
 
 
 def sample_red_pid_delta(const: SimulatorConst, time, agent_id, key):

@@ -40,10 +40,12 @@ from jaxborg.actions.rng import indexed_rng_impls
 from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     GLOBAL_MAX_HOSTS,
+    MAX_STEPS,
     MAX_TRACKED_SESSION_PIDS,
     MAX_TRACKED_SUSPICIOUS_PIDS,
     NUM_BLUE_AGENTS,
     NUM_RED_AGENTS,
+    NUM_RED_POLICY_RANDOM_FIELDS,
 )
 from jaxborg.env import apply_all_actions
 from jaxborg.parity.translate import (
@@ -242,6 +244,22 @@ def _jit_apply_all_actions(
     )
 
 
+def _make_jit_fsm_red_select_actions_tape():
+    """Build a fresh jit'd ``fsm_red_select_actions`` for the tape path.
+
+    Like :func:`_make_jit_apply_all_actions_with_forced_sessions`, the trace
+    bakes in :func:`io_callback` calls that reference a specific harness's
+    :class:`IndexedRNGTape` host buffers (via the ``red_policy`` per-purpose
+    dispatcher).  Each harness instance must therefore own its own jit cache.
+    """
+
+    @jax.jit
+    def _go(state, const, red_keys):
+        return fsm_red_select_actions(state, const, red_keys)
+
+    return _go
+
+
 def _make_jit_apply_all_actions_with_forced_sessions():
     """Build a fresh jit'd ``apply_all_actions`` for the tape path.
 
@@ -330,18 +348,17 @@ class CC4DifferentialHarness:
         # Reusable indexed-tape: populated per step from CybORG draws and
         # consumed by JAX via the per-purpose RNG dispatchers.  Active only
         # when sync_green_rng is True (i.e. when GreenRecorder is installed).
-        # strict=False is a temporary opt-out: the harness deliberately
-        # under-populates some tables (e.g. red_session_check is only set
-        # when CybORG ran the action this step) and JAX may still call the
-        # dispatcher for masked/no-op slots.  TODO: tighten populate paths
-        # so strict=True can be the default everywhere.
-        self._rng_tape = IndexedRNGTape(strict=False)
+        # ``_populate_rng_tape`` writes every slot (with a safe default for
+        # entries CybORG didn't draw this step) so strict=True can catch a
+        # genuine "we forgot to replay this draw" miss as a hard error.
+        self._rng_tape = IndexedRNGTape(strict=True)
         # Per-harness jit cache for the tape path — see
         # ``_make_jit_apply_all_actions_with_forced_sessions`` for why this
         # cannot be a module-level ``@jax.jit``.  Each harness's tape has
         # its own host buffers; the trace closes over the *names* of those
         # buffers via ``self`` in the io_callback host fns.
         self._jit_apply_all_actions_tape = _make_jit_apply_all_actions_with_forced_sessions()
+        self._jit_fsm_red_select_actions_tape = _make_jit_fsm_red_select_actions_tape()
 
     def _assert_pid_capacity(self, stage: str):
         max_session_tracked = int(MAX_TRACKED_SESSION_PIDS)
@@ -921,12 +938,15 @@ class CC4DifferentialHarness:
         self.jax_state = _jit_advance_and_clear(self.jax_state, self.jax_const)
         if use_fsm:
             self.jax_state = _jit_fsm_red_apply_delayed_update(self.jax_state)
-            # Mirror CybORG's normal flow: get_action() processes the previous
-            # observation before selecting the next action.  Since the harness
-            # provides actions externally (bypassing get_action()), we drive
-            # the FSM agents explicitly so host_states stays accurate for the
-            # comparator.
-            self._drive_cyborg_fsm_agents()
+            # Mirror CybORG's normal flow: ``get_action()`` processes the
+            # previous observation before selecting the next action.  When
+            # we're recording red picks below we let the natural
+            # ``iface.get_action`` call do that processing; otherwise we
+            # drive it explicitly so the comparator sees up-to-date
+            # ``host_states`` (the harness provides actions externally so
+            # ``controller.step`` bypasses ``get_action``).
+            if not self.record_red_policy:
+                self._drive_cyborg_fsm_agents()
 
         state_before = self.jax_state
 
@@ -936,11 +956,12 @@ class CC4DifferentialHarness:
 
         # --- Red-policy parity recording: pre-call CybORG's get_action on each
         # active red agent to capture what CybORG *would* pick given its natural
-        # RNG stream. RedPolicyRecorder fills the tape at tape[step, agent, :].
-        # We save/restore controller.np_random around each call so the shared
-        # stream is not advanced (which would break the rest of the harness's
-        # RNG sync). After these pre-calls, jax_const.red_policy_randoms is
-        # refreshed so _jit_fsm_red_select_actions reads the just-captured tokens.
+        # RNG stream. RedPolicyRecorder records JAX-space host/action/subnet
+        # indices at tape[step, agent, :]. We save/restore controller.np_random
+        # around each call so the shared stream is not advanced (which would
+        # break the rest of the harness's RNG sync). After these pre-calls,
+        # _populate_red_policy_tape writes the current row into IndexedRNGTape
+        # so the tape-backed red FSM selector consumes the captured indices.
         cyborg_pre_picks: dict[int, object] = {}
         if use_fsm and self.record_red_policy and self.red_policy_recorder is not None:
             pre_rng_state = controller.np_random.bit_generator.state
@@ -957,12 +978,27 @@ class CC4DifferentialHarness:
                 except Exception as exc:
                     cyborg_pre_picks[r] = exc
             controller.np_random.bit_generator.state = pre_rng_state
+            self._populate_red_policy_tape(int(self.jax_state.time))
+            # ``iface.get_action`` advanced CybORG's FSM as a side effect, so
+            # CybORG's ``host_states`` should now match JAX's ``fsm_host_entered``.
+            self._assert_fsm_host_entered(controller)
 
         # --- FSM red action selection (shared with FsmRedCC4Env.step_env) ---
         if use_fsm:
-            red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
-                _jit_fsm_red_select_actions(self.jax_state, self.jax_const, red_keys)
-            )
+            if self.record_red_policy:
+                with indexed_rng_impls(**self._rng_tape.as_overrides()):
+                    (
+                        red_action_arr,
+                        target_hosts_arr,
+                        target_subnets_arr,
+                        fsm_actions_arr,
+                        eligible_arr,
+                        self.jax_state,
+                    ) = self._jit_fsm_red_select_actions_tape(self.jax_state, self.jax_const, red_keys)
+            else:
+                red_action_arr, target_hosts_arr, target_subnets_arr, fsm_actions_arr, eligible_arr, self.jax_state = (
+                    _jit_fsm_red_select_actions(self.jax_state, self.jax_const, red_keys)
+                )
             red_actions = {r: int(red_action_arr[r]) for r in range(NUM_RED_AGENTS)}
 
             # --- Compare JAX picks to CybORG's pre-captured picks ---
@@ -1400,6 +1436,11 @@ class CC4DifferentialHarness:
         ``indexed_rng_impls(**tape.as_overrides())``.  Each table is keyed
         by JAX's call-site context (agent_id / host_idx / field_idx) so the
         order in which JAX traverses agents/hosts is irrelevant.
+
+        Every slot is populated (with a safe default when CybORG didn't draw
+        for that slot this step) so the tape can run in ``strict=True`` —
+        JAX dispatches some draws unconditionally inside jit/vmap and masks
+        the result, so unpopulated slots would fire false-positive misses.
         """
         tape = self._rng_tape
         tape.clear()
@@ -1409,32 +1450,40 @@ class CC4DifferentialHarness:
         # per-action draws appropriate for JAX consumption.
         tape.set_detection_queue(random_sync_report.detection_randoms)
 
-        # Per-agent red draws.  red_pid_deltas[r] is 0 when CybORG didn't draw
-        # one this step; we still write 0 so a JAX miss surfaces as a hard
-        # error rather than a silent fallback to default RNG.
+        # Per-agent red draws.  ``red_pid_deltas[r]`` is 0 when CybORG didn't
+        # draw one this step; writing 0 keeps the slot defined for masked-out
+        # JAX dispatches.
         for r in range(NUM_RED_AGENTS):
             tape.set_red_pid_delta(agent_id=r, value=int(red_pid_deltas[r]))
 
+        # red_session_check / red_privesc — CybORG only draws these for
+        # agents that actually ran the corresponding action.  Pre-fill every
+        # agent with 0 (a valid slot index) and overlay the recorded picks.
+        for r in range(NUM_RED_AGENTS):
+            tape.set_red_session_check(agent_id=r, value=0)
+            tape.set_red_privesc(agent_id=r, value=0)
         for agent_idx, slot in random_sync_report.red_session_check_choices.items():
             tape.set_red_session_check(agent_id=agent_idx, value=int(slot))
-
         for agent_idx, slot in random_sync_report.red_privesc_choices.items():
             tape.set_red_privesc(agent_id=agent_idx, value=int(slot))
 
-        # Exploit-session 1/N choice — pre-computed in _precompute_exploit_session_ok.
-        # session_id 0 holds scan data so JAX's exploit succeeds iff index==0.
-        for r, chosen_id in self._exploit_session_ids.items():
-            tape.set_exploit_session(agent_id=r, value=int(chosen_id))
+        # Exploit-session 1/N choice — pre-computed in
+        # ``_precompute_exploit_session_ok`` and overlay any harness-tracked
+        # IDs; default 0 since session 0 holds scan data so JAX's exploit
+        # succeeds iff index==0.
+        for r in range(NUM_RED_AGENTS):
+            tape.set_exploit_session(agent_id=r, value=int(self._exploit_session_ids.get(r, 0)))
 
-        # Per-(blue agent, slot) decoy pid deltas.
+        # Per-(blue agent, slot) decoy pid deltas — fully populated.
         for b in range(NUM_BLUE_AGENTS):
             for slot in range(blue_decoy_pid_deltas.shape[1]):
                 tape.set_blue_decoy_pid_delta(agent_id=b, respawn_index=slot, value=int(blue_decoy_pid_deltas[b, slot]))
 
         # Blue decoy type choice — captured by ``_validate_blue_action_randoms``
-        # by inspecting the post-step host process table to recover which
-        # decoy CybORG actually deployed (CybORG's choice() of compatible
-        # factories does not surface the result on the action object).
+        # by inspecting the post-step host process table.  Pre-fill every
+        # blue agent with 0 so masked dispatches don't trip strict-mode.
+        for b in range(NUM_BLUE_AGENTS):
+            tape.set_blue_decoy_type(agent_id=b, value=0)
         for b, decoy_type in getattr(self, "_blue_decoy_type_choices", {}).items():
             tape.set_blue_decoy_type(agent_id=int(b), value=int(decoy_type))
 
@@ -1443,6 +1492,36 @@ class CC4DifferentialHarness:
             tape.set_green_uniform(step_fields)
             int_table = self._build_green_int_range_table(step_fields)
             tape.set_green_int_range(int_table)
+
+        # Red-policy table — captured by ``RedPolicyRecorder`` during the
+        # pre-step ``iface.get_action`` calls.  Pre-fill every agent/field
+        # with 0 (any valid index) and overlay the recorded JAX indices.
+        for r in range(NUM_RED_AGENTS):
+            for f in range(NUM_RED_POLICY_RANDOM_FIELDS):
+                self._rng_tape.set_red_policy(agent_id=r, field_idx=f, value=0)
+        if self.record_red_policy and self.red_policy_recorder is not None:
+            self._populate_red_policy_tape(int(self.jax_state.time))
+
+    def _populate_red_policy_tape(self, step_idx: int) -> None:
+        """Copy ``RedPolicyRecorder._tape[step_idx]`` into the IndexedRNGTape.
+
+        Each entry is the JAX index CybORG chose for the FSM pick (host=0,
+        action=1, subnet=2).  Every slot is populated (sentinel ``-1`` from
+        the recorder maps to 0) so JAX's masked dispatches don't trip the
+        tape's strict-mode miss handler.
+        """
+        if self.red_policy_recorder is None or step_idx < 0 or step_idx >= MAX_STEPS:
+            for agent_id in range(NUM_RED_AGENTS):
+                for field_idx in range(NUM_RED_POLICY_RANDOM_FIELDS):
+                    self._rng_tape.set_red_policy(agent_id=agent_id, field_idx=field_idx, value=0)
+            return
+        row = self.red_policy_recorder.extract_step(step_idx)
+        for agent_id in range(NUM_RED_AGENTS):
+            for field_idx in range(NUM_RED_POLICY_RANDOM_FIELDS):
+                value = int(row[agent_id, field_idx])
+                if value < 0:
+                    value = 0
+                self._rng_tape.set_red_policy(agent_id=agent_id, field_idx=field_idx, value=value)
 
     def _build_green_int_range_table(self, step_fields):
         """Compute the integer override table for green RNG int_range fields.

@@ -58,6 +58,15 @@ def apply_blue_decoy(
     # When decoy_type == -1 (collapsed action space), randomly select a compatible type.
     # When decoy_type >= 0 (direct call from tests), use the explicit type.
     random_type = sample_blue_decoy_type_choice(const, state.time, agent_id, compatibility, k1)
+    # Compat-fallback: production sampler already respects compatibility, so
+    # this only kicks in when a replay tape returns a type that isn't valid in
+    # the current host state.  Falling back to ``argmax(compatibility)`` (the
+    # lowest True index) matches the default sampler's permutation-based pick.
+    n_decoys = compatibility.shape[0]
+    in_range = (random_type >= 0) & (random_type < n_decoys)
+    compat_at_chosen = jnp.where(in_range, compatibility[jnp.clip(random_type, 0, n_decoys - 1)], False)
+    fallback_type = jnp.argmax(compatibility.astype(jnp.int32))
+    random_type = jnp.where(compat_at_chosen, random_type, fallback_type).astype(jnp.int32)
     decoy_type = jnp.where(decoy_type < 0, random_type, decoy_type)
 
     compatible = compatibility[decoy_type]

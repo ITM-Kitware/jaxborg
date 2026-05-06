@@ -364,7 +364,12 @@ class ScenarioEnv(MultiAgentEnv):
             return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
 
         bank_idx = jax.random.randint(key, (), 0, self._const_bank_size)
-        return jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+        const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+        # Snapshots save the ``max_steps`` they were generated against (e.g.
+        # 500), but the env's caller may want a different episode length via
+        # ``num_steps``.  Override here so ``done = state.time >= max_steps``
+        # honours the env's configuration rather than the snapshot's default.
+        return const.replace(max_steps=jnp.int32(self.num_steps))
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         const = self._select_const(key)

@@ -237,7 +237,7 @@ class IndexedRNGTape:
         self._blue_decoy_type_set = np.zeros((NUM_BLUE_AGENTS,), dtype=np.bool_)
         self._blue_decoy_pid_delta_arr = np.zeros((NUM_BLUE_AGENTS, NUM_DECOY_TYPES), dtype=np.int32)
         self._blue_decoy_pid_delta_set = np.zeros((NUM_BLUE_AGENTS, NUM_DECOY_TYPES), dtype=np.bool_)
-        self._red_policy_arr = np.zeros((NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), dtype=np.float32)
+        self._red_policy_arr = np.zeros((NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), dtype=np.int32)
         self._red_policy_set = np.zeros((NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), dtype=np.bool_)
         # Green (consumed under vmap; tables stay numpy until lookup time).
         self._green_table: np.ndarray | None = None  # (GLOBAL_MAX_HOSTS, NUM_GREEN_RANDOM_FIELDS) float32
@@ -296,8 +296,12 @@ class IndexedRNGTape:
         self._blue_decoy_pid_delta_arr[int(agent_id), int(respawn_index)] = int(value)
         self._blue_decoy_pid_delta_set[int(agent_id), int(respawn_index)] = True
 
-    def set_red_policy(self, agent_id: int, field_idx: int, value: float) -> None:
-        self._red_policy_arr[int(agent_id), int(field_idx)] = float(value)
+    def set_red_policy(self, agent_id: int, field_idx: int, value: int) -> None:
+        """Record the JAX index chosen by CybORG for ``(agent_id, field_idx)``.
+
+        Field 0 = host_idx, field 1 = fsm_action_id, field 2 = subnet_idx.
+        """
+        self._red_policy_arr[int(agent_id), int(field_idx)] = int(value)
         self._red_policy_set[int(agent_id), int(field_idx)] = True
 
     def set_green_uniform(self, table: np.ndarray) -> None:
@@ -479,35 +483,21 @@ class IndexedRNGTape:
         )
 
     def _blue_decoy_type_impl(self, key, agent_id, compatibility):
-        """Return CybORG's recorded decoy type, gated by ``compatibility``.
+        """Return the recorded decoy type for ``agent_id``.
 
-        If the recorded type isn't compatible (or no entry was recorded), we
-        fall back to ``argmax(compatibility)`` — the lowest True index, which
-        matches the default impl's behaviour where the permutation-based
-        argmin scoring picks the first compatible slot.
+        Pure tape lookup — compatibility resolution lives at the call site in
+        ``apply_blue_decoy``.  In lenient mode a missing slot returns sentinel
+        ``-1`` so the caller's compat-fallback path picks the lowest True
+        index; strict mode raises.
         """
-        del key
-        spec = jax.ShapeDtypeStruct((), jnp.int32)
-
-        def host(a):
-            idx = int(a)
-            if not bool(self._blue_decoy_type_set[idx]):
-                # Sentinel ``-1`` so the JAX-side cond below uses the
-                # compat-fallback.  Strict-mode raise lives here as well.
-                if self._strict:
-                    raise RuntimeError(f"IndexedRNGTape miss in strict mode: blue_decoy_type: agent={idx}")
-                self._record_miss(f"blue_decoy_type: agent={idx}")
-                return np.int32(-1)
-            self._used += 1
-            return np.int32(self._blue_decoy_type_arr[idx])
-
-        chosen = io_callback(host, spec, agent_id, ordered=False)
-        # Prefer chosen if it's a valid compatible index; else lowest True.
-        compat = jnp.asarray(compatibility, dtype=jnp.bool_)
-        in_range = (chosen >= 0) & (chosen < compat.shape[0])
-        compat_at_chosen = jnp.where(in_range, compat[jnp.clip(chosen, 0, compat.shape[0] - 1)], False)
-        fallback = jnp.argmax(compat.astype(jnp.int32))
-        return jnp.where(compat_at_chosen, chosen, fallback).astype(jnp.int32)
+        del key, compatibility
+        return self._scalar_int_callback(
+            agent_id,
+            descriptor_prefix="blue_decoy_type",
+            arr_attr="_blue_decoy_type_arr",
+            set_attr="_blue_decoy_type_set",
+            sentinel=-1,
+        )
 
     def _blue_decoy_pid_delta_impl(self, key, agent_id, respawn_index):
         del key
@@ -527,17 +517,15 @@ class IndexedRNGTape:
         """Return the recorded GreenAccessService dest host directly.
 
         Reads ``_green_table[host_idx, 5]``.  If the table is missing we
-        fall back to the default ``sorted_servers[randint]`` path so
-        unrecorded hosts behave like normal generative play.
+        fall back to the default ``sorted_servers[randint(0, num_reachable)]``
+        path so unrecorded hosts behave like normal generative play — using
+        the *real* ``num_reachable`` (not ``sorted_servers.shape[0]``, which
+        includes padding sentinels).
         """
-        del num_reachable
         if self._green_table is None:
             from jaxborg.actions.rng import _default_green_dest_host
 
-            # Need num_reachable here; but the signature only forwards
-            # the value when the tape table is missing.  Restore via
-            # closure-free fallback path.
-            return _default_green_dest_host(key, time, host_idx, sorted_servers, jnp.int32(sorted_servers.shape[0]))
+            return _default_green_dest_host(key, time, host_idx, sorted_servers, num_reachable)
 
         spec = jax.ShapeDtypeStruct((), jnp.int32)
 
@@ -547,17 +535,25 @@ class IndexedRNGTape:
 
         return io_callback(host, spec, host_idx, ordered=False)
 
-    def _red_policy_impl(self, key, agent_id, field_idx):
-        del key
-        spec = jax.ShapeDtypeStruct((), jnp.float32)
+    def _red_policy_impl(self, key, agent_id, field_idx, probs):
+        """Return the recorded JAX index for the red FSM choice.
+
+        Production callers pass ``probs`` so the default impl can categorical-
+        sample; the tape ignores ``probs`` because the recorder already mapped
+        CybORG's choice into the JAX index space at recording time.  Using the
+        recorded index sidesteps any cumsum-bucket alignment between CybORG's
+        iteration order and JAX's GLOBAL_MAX_HOSTS / NUM_SUBNETS index order.
+        """
+        del key, probs
+        spec = jax.ShapeDtypeStruct((), jnp.int32)
 
         def host(a, f):
             ai = int(a)
             fi = int(f)
             if not bool(self._red_policy_set[ai, fi]):
-                return np.float32(self._on_miss_float(f"red_policy: agent={ai} field={fi}", _LENIENT_FLOAT))
+                return np.int32(self._on_miss_int(f"red_policy: agent={ai} field={fi}", _LENIENT_INT))
             self._used += 1
-            return np.float32(self._red_policy_arr[ai, fi])
+            return np.int32(self._red_policy_arr[ai, fi])
 
         return io_callback(host, spec, agent_id, field_idx, ordered=False)
 

@@ -1,10 +1,17 @@
-"""Record CybORG FiniteStateRedAgent choice outcomes as JAX-consumable choice tapes."""
+"""Record CybORG FiniteStateRedAgent choice outcomes as JAX-consumable choice tapes.
+
+Each step the recorder snapshots, for every red agent, the JAX index CybORG
+chose for the three FSM picks (host=0, action=1, subnet=2).  Values are stored
+as int32 in JAX's index space so the harness can replay them through
+``IndexedRNGTape.set_red_policy`` without needing CybORG and JAX to share
+iteration order or probability vectors.
+"""
 
 from ipaddress import IPv4Address, IPv4Network, ip_address
 
 import numpy as np
 
-from jaxborg.constants import GLOBAL_MAX_HOSTS, MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS, NUM_SUBNETS
+from jaxborg.constants import MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS
 
 _ACTION_NAME_TO_FSM = {
     "DiscoverRemoteSystems": 0,
@@ -38,10 +45,12 @@ class _ChoiceRecordingRNG:
 
 
 class RedPolicyRecorder:
-    """Capture per-step red-agent choice outcomes as exact choice tokens encoded in [0, 1)."""
+    """Capture per-step red-agent choices as JAX-space host/action/subnet indices."""
+
+    _SENTINEL = -1
 
     def __init__(self):
-        self._tape = np.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), 0.5, dtype=np.float32)
+        self._tape = np.full((MAX_STEPS, NUM_RED_AGENTS, NUM_RED_POLICY_RANDOM_FIELDS), self._SENTINEL, dtype=np.int32)
 
     def install(self, cyborg_env, mappings):
         controller = cyborg_env.environment_controller
@@ -72,7 +81,7 @@ class RedPolicyRecorder:
                     rec.choice_log.clear()
                     action = orig_fn(observation, action_space)
                     if step_idx < MAX_STEPS:
-                        tape[step_idx, ridx] = _extract_step_uniforms(rec.choice_log, mappings)
+                        tape[step_idx, ridx] = _extract_step_indices(rec.choice_log, mappings)
                     rec.choice_log.clear()
                     return action
 
@@ -89,14 +98,24 @@ class RedPolicyRecorder:
         return jnp.asarray(self._tape)
 
     def extract_step(self, step_idx: int) -> np.ndarray:
-        """Return the recorded choice-token row for a single step."""
+        """Return the (NUM_RED_AGENTS, NUM_FIELDS) JAX-index row for a step.
+
+        Entries equal to :attr:`_SENTINEL` indicate "CybORG didn't make this
+        choice for this agent this step".
+        """
         return np.array(self._tape[int(step_idx)], copy=True)
 
 
-def _extract_step_uniforms(choice_log, mappings):
-    slots = np.full(NUM_RED_POLICY_RANDOM_FIELDS, 0.5, dtype=np.float32)
+def _extract_step_indices(choice_log, mappings):
+    """Translate CybORG's recorded choices into JAX indices.
 
-    for options, result, probs in choice_log:
+    Returns ``(NUM_RED_POLICY_RANDOM_FIELDS,)`` int32 array; ``-1`` means
+    "CybORG didn't make this choice this step" (sentinel propagates as a
+    miss when JAX consumes from the tape).
+    """
+    slots = np.full(NUM_RED_POLICY_RANDOM_FIELDS, RedPolicyRecorder._SENTINEL, dtype=np.int32)
+
+    for _options, result, _probs in choice_log:
         if isinstance(result, np.ndarray) and result.shape == ():
             result = result.item()
         elif isinstance(result, np.generic):
@@ -115,20 +134,13 @@ def _extract_step_uniforms(choice_log, mappings):
 
         if host_ip in mappings.ip_to_hostname:
             host_idx = mappings.hostname_to_idx[mappings.ip_to_hostname[host_ip]]
-            slots[0] = _token_midpoint(host_idx, GLOBAL_MAX_HOSTS)
+            slots[0] = int(host_idx)
             continue
         if isinstance(result, type) and result.__name__ in _ACTION_NAME_TO_FSM:
-            del options, probs
-            slots[1] = _token_midpoint(_ACTION_NAME_TO_FSM[result.__name__], len(_ACTION_NAME_TO_FSM))
+            slots[1] = int(_ACTION_NAME_TO_FSM[result.__name__])
             continue
-        if isinstance(result, IPv4Network):
-            subnet_idx = mappings.cidr_to_subnet_idx[result]
-            del options, probs
-            slots[2] = _token_midpoint(subnet_idx, NUM_SUBNETS)
+        if isinstance(result, IPv4Network) and result in mappings.cidr_to_subnet_idx:
+            slots[2] = int(mappings.cidr_to_subnet_idx[result])
             continue
 
     return slots
-
-
-def _token_midpoint(chosen_idx, total_count):
-    return np.float32((int(chosen_idx) + 0.5) / int(total_count))
