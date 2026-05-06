@@ -146,7 +146,7 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     Returns defaults if the recipe has no ``eval`` section.
 
     Keys returned:
-        cia_metric      — "cc4" or "resilience"
+        cia_metric      — only "resilience" today; default if unset
         resilience_mode — bool; when True use resilience topology + metric
         red_agent       — red agent selector:
                           "finite_state" (default) or "sleep" for CybORG eval;
@@ -154,7 +154,7 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     """
     ev = recipe.get("eval", {})
 
-    cia_metric = ev.get("cia_metric", "cc4")
+    cia_metric = ev.get("cia_metric", "resilience")
     resilience_mode = bool(ev.get("resilience_mode", False))
     red_agent = ev.get("red_agent", "finite_state")
 
