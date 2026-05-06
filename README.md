@@ -159,7 +159,7 @@ uv run python scripts/eval/cc4_trajectory_eval.py \
     --recipe recipes/resilience.yaml
 
 # 2. Score them (CIA + resilience)
-uv run python scripts/eval/cc4_score_trajectories.py trajs/resilience_seed42 \
+uv run python scripts/eval/score_trajectories.py trajs/resilience_seed42 \
     --recipe recipes/resilience.yaml
 
 ```

@@ -64,7 +64,7 @@ cleanrl:
   num_epochs: 4
 
 eval:
-  # CIA scorer for cc4_score_trajectories.py.
+  # CIA scorer for score_trajectories.py.
   # Only "resilience" is currently registered (auth/db/web role impacts).
   cia_metric: resilience
 
