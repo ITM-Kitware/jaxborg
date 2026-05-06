@@ -200,7 +200,7 @@ class TestFsmRedEnvDifferential:
         from jaxborg.actions.encoding import encode_blue_action
         from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
         from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
-        from scripts.eval.transfer import make_cyborg_env
+        from scripts.dev.parity.cyborg_bridge import make_cyborg_env
 
         seed = 4
 

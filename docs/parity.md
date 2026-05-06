@@ -52,3 +52,61 @@ The dated investigation log — 12 follow-ups of A1, the matched-training v1/v2 
 
 - `plans/jax/cc4/parity.md` — env-mechanics parity, A1 LWF investigation, training-loop parity Tier 1 + 2.5
 - `plans/jax/cc4/training-results.md` — matched-training comparisons, v1/v2 retest, final policy audit
+
+## Merge-gate automation
+
+Use `scripts/dev/parity_gate.py` when a branch is close to merge and needs a repeatable train/eval parity check. It keeps the two expensive phases separate:
+
+- JAX policy training may use Slurm GPUs.
+- `transfer.py` evaluation is forced to CPU (`JAX_PLATFORMS=cpu`) and runs stochastic, fully independent rollouts by default. It does not pass `--matched` and does not use argmax unless `--deterministic` is explicitly requested for debugging.
+
+Dry-run the exact commands first:
+
+```bash
+uv run python scripts/dev/parity_gate.py \
+  --train \
+  --recipe default \
+  --seeds 42,100,200 \
+  --train-launcher srun \
+  --parallel-train 3 \
+  --eval-episodes 100 \
+  --eval-workers 48 \
+  --run-fast-tests \
+  --dry-run
+```
+
+Run the full gate:
+
+```bash
+uv run python scripts/dev/parity_gate.py \
+  --train \
+  --recipe default \
+  --seeds 42,100,200 \
+  --train-launcher srun \
+  --parallel-train 3 \
+  --eval-episodes 100 \
+  --eval-workers 48 \
+  --run-fast-tests
+```
+
+Evaluate already-trained checkpoints without retraining:
+
+```bash
+uv run python scripts/dev/parity_gate.py \
+  --checkpoint /path/to/model_seed42.pkl \
+  --checkpoint /path/to/model_seed100.pkl \
+  --checkpoint /path/to/model_seed200.pkl \
+  --eval-episodes 100 \
+  --eval-workers 48
+```
+
+Outputs go under `$JAXBORG_EXP_DIR/parity_gate/<run-id>/`, including per-command logs, per-checkpoint `tost_result.json`, and a pooled `summary.json`. The gate exits non-zero if the pooled independent-rollout TOST is not equivalent at the configured margin (`--tost-margin`, default `200`).
+
+The dev parity code is split under `scripts/dev/parity/`:
+
+- `transfer_cli.py` owns argument parsing and orchestration.
+- `jax_rollout.py`, `cyborg_rollout.py`, and `matched_rollout.py` own rollout execution.
+- `cyborg_bridge.py` owns CybORG environment construction and action-mask/action translation.
+- `stats.py` owns TOST and action-distribution statistics.
+- `reporting.py` and `diagnostics.py` own console reports, plots, baselines, and verbose traces.
+- `gate.py` owns the merge-gate train/eval workflow.

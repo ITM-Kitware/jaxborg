@@ -96,8 +96,8 @@ uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
     --episodes 10 --seeds 42-141
 
-# Independent rollouts on both engines + TOST (JAX checkpoints only)
-JAX_PLATFORMS=cpu uv run python scripts/eval/transfer.py \
+# Dev parity transfer check: independent rollouts on both engines + TOST
+JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
     --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
     --episodes 100
 ```
@@ -118,7 +118,7 @@ jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
 cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
 ```
 
-Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and `transfer.py` — pre-sidecar checkpoints no longer load.
+Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and the dev transfer parity check — pre-sidecar checkpoints no longer load.
 
 Add a new arch: drop a module under `src/jaxborg/policies/` exporting `JAX_FACTORY` + `TORCH_FACTORY`, register it in `policies/__init__.py`, then reference it as `arch.name: <new>` in any recipe.
 
