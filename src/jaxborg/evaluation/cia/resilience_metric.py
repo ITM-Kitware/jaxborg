@@ -34,12 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Role constants — mirror resilience_topology.RESILIENCE_ROLE_* as plain ints
-# so this module has no JAX dependency.
-ROLE_NONE = 0
-ROLE_AUTH = 1
-ROLE_DB = 2
-ROLE_WEB = 3
+from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_WEB
 
 _C_ROLES = frozenset({ROLE_AUTH, ROLE_DB})
 _I_ROLES = frozenset({ROLE_AUTH, ROLE_WEB})

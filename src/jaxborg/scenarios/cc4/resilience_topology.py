@@ -24,12 +24,22 @@ import jax.numpy as jnp
 
 from jaxborg.constants import GLOBAL_MAX_HOSTS, SUBNET_IDS
 from jaxborg.scenarios.cc4.topology import build_topology
+from jaxborg.scenarios.cc4.topology_roles import (
+    ROLE_AUTH,
+    ROLE_DB,
+    ROLE_NONE,
+    ROLE_WEB,
+)
+from jaxborg.scenarios.cc4.topology_roles import (
+    role_name as _role_name,
+)
 from jaxborg.state import SimulatorConst
 
-RESILIENCE_ROLE_NONE = jnp.int32(0)
-RESILIENCE_ROLE_AUTH = jnp.int32(1)  # authentication server
-RESILIENCE_ROLE_DB = jnp.int32(2)  # database server
-RESILIENCE_ROLE_WEB = jnp.int32(3)  # frontend web server
+# Backwards-compat aliases — prefer ROLE_* from topology_roles in new code.
+RESILIENCE_ROLE_NONE = ROLE_NONE
+RESILIENCE_ROLE_AUTH = ROLE_AUTH
+RESILIENCE_ROLE_DB = ROLE_DB
+RESILIENCE_ROLE_WEB = ROLE_WEB
 
 _RESILIENCE_ZONE_SUBNETS = (
     SUBNET_IDS["OPERATIONAL_ZONE_A"],
@@ -64,17 +74,17 @@ def _assign_resilience_roles(const: SimulatorConst) -> jax.Array:
 
     host_resilience_role = jnp.where(
         (idx == auth_host) & (n_candidates >= 1),
-        RESILIENCE_ROLE_AUTH,
+        jnp.int32(ROLE_AUTH),
         host_resilience_role,
     )
     host_resilience_role = jnp.where(
         (idx == db_host) & (n_candidates >= 2),
-        RESILIENCE_ROLE_DB,
+        jnp.int32(ROLE_DB),
         host_resilience_role,
     )
     host_resilience_role = jnp.where(
         (idx == web_host) & (n_candidates >= 3),
-        RESILIENCE_ROLE_WEB,
+        jnp.int32(ROLE_WEB),
         host_resilience_role,
     )
     return host_resilience_role
@@ -104,4 +114,4 @@ def build_resilience_topology(
 
 
 def resilience_role_name(role: int) -> str:
-    return {0: "none", 1: "auth", 2: "db", 3: "web"}.get(int(role), "unknown")
+    return _role_name(role)
