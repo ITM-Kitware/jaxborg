@@ -49,8 +49,7 @@ from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.checkpoint import save_jax_params, write_sidecar
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env
-from jaxborg.parity.resilience_red_env import ResilienceRedCC4Env
+from jaxborg.parity.fsm_red_env import make_fsm_red_env
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_jax
@@ -86,18 +85,13 @@ def compute_value_loss(value, old_value, targets, clip_eps, clip_value_loss):
 def make_train(config, network):
     """Build env and a single JIT'd collect_and_update fn from a flat config."""
     num_envs = config["NUM_ENVS"]
-    _env_kwargs = dict(
+    _red_agent = config.get("RED_AGENT") or ("resilience" if config.get("RESILIENCE_MODE", False) else "fsm")
+    inner_env = make_fsm_red_env(
         num_steps=500,
         training_mode=bool(config.get("TRAINING_MODE", True)),
+        red_agent=_red_agent,
+        target_weight=float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0)),
     )
-    _red_agent = config.get("RED_AGENT", "")
-    if _red_agent in ("c", "i", "a"):
-        inner_env = ResilienceRedCC4Env(cia_target=_red_agent, **_env_kwargs)
-    elif _red_agent == "resilience" or config.get("RESILIENCE_MODE", False):
-        _env_kwargs["target_weight"] = float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0))
-        inner_env = ResilienceRedCC4Env(**_env_kwargs)
-    else:
-        inner_env = FsmRedCC4Env(**_env_kwargs)
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
     config["NUM_ACTORS"] = num_agents * num_envs
@@ -341,15 +335,13 @@ def main():
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
     # Build a throwaway env to get action_dim for network init.
-    _probe_kwargs = dict(num_steps=500, topology_mode=config.get("TOPOLOGY_MODE", "generative"))
-    _red_agent = config.get("RED_AGENT", "")
-    if _red_agent in ("c", "i", "a"):
-        inner_env = ResilienceRedCC4Env(cia_target=_red_agent, **_probe_kwargs)
-    elif _red_agent == "resilience" or config.get("RESILIENCE_MODE", False):
-        _probe_kwargs["target_weight"] = float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0))
-        inner_env = ResilienceRedCC4Env(**_probe_kwargs)
-    else:
-        inner_env = FsmRedCC4Env(**_probe_kwargs)
+    _red_agent = config.get("RED_AGENT") or ("resilience" if config.get("RESILIENCE_MODE", False) else "fsm")
+    inner_env = make_fsm_red_env(
+        num_steps=500,
+        topology_mode=config.get("TOPOLOGY_MODE", "generative"),
+        red_agent=_red_agent,
+        target_weight=float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0)),
+    )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
         recipe["arch"]["name"],
