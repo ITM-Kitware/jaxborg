@@ -33,7 +33,7 @@ from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
 )
-from jaxborg.scenarios.cc4.targeted_red_fsm import (
+from jaxborg.scenarios.cc4.resilience_red_fsm import (
     a_red_select_actions,
     c_red_select_actions,
     i_red_select_actions,
