@@ -317,7 +317,13 @@ class IndexedRNGTape:
 
     @property
     def used(self) -> int:
-        """Number of dispatch calls that pulled from the tape (vs missed)."""
+        """Number of dispatch calls that pulled from the tape (vs missed).
+
+        Best-effort: indexed lookups run through ``io_callback(ordered=False)``
+        and may be reordered or fused by XLA, so this counter is a stat for
+        coverage diagnostics — not a value to assert on.  The FIFO detection
+        queue uses ``ordered=True`` and contributes deterministically.
+        """
         return self._used
 
     @property
