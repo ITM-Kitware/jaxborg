@@ -35,7 +35,8 @@ import jax
 import jax.numpy as jnp
 
 from jaxborg.actions.encoding import RED_SLEEP
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS, NUM_SUBNETS
+from jaxborg.actions.rng import sample_red_policy_choice
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
 from jaxborg.scenarios.cc4.red_fsm import (
     ACTION_VALID_MASK,
     FSM_ACT_DISCOVER,
@@ -43,20 +44,18 @@ from jaxborg.scenarios.cc4.red_fsm import (
     NUM_FSM_ACTIONS,
     NUM_FSM_STATES,
     PROBABILITY_MATRIX,
+    RED_POLICY_FIELD_ACTION,
+    RED_POLICY_FIELD_HOST,
     _compute_scan_source_binding,
-    _decode_choice_token,
     _fsm_action_to_jax_action,
     _pick_discover_subnet,
     _pick_exploit_action,
-    _uniform_choice_from_mask,
-    _weighted_choice_from_probs,
 )
 from jaxborg.scenarios.cc4.resilience_topology import (
     RESILIENCE_ROLE_AUTH,
     RESILIENCE_ROLE_DB,
     RESILIENCE_ROLE_WEB,
 )
-from jaxborg.actions.rng import sample_red_policy_random
 from jaxborg.state import SimulatorConst, SimulatorState
 
 # Weight multiplier for targeted servers used by CIA-specific agents.
@@ -87,9 +86,9 @@ def _role_weights(
 def _get_action_and_info(
     state: SimulatorState,
     const: SimulatorConst,
-    host_weights: jax.Array,   # (GLOBAL_MAX_HOSTS,) float32
-    prob_matrix: jax.Array,    # (NUM_FSM_STATES, NUM_FSM_ACTIONS) float32
-    valid_mask: jax.Array,     # (NUM_FSM_STATES, NUM_FSM_ACTIONS) bool
+    host_weights: jax.Array,  # (GLOBAL_MAX_HOSTS,) float32
+    prob_matrix: jax.Array,  # (NUM_FSM_STATES, NUM_FSM_ACTIONS) float32
+    valid_mask: jax.Array,  # (NUM_FSM_STATES, NUM_FSM_ACTIONS) bool
     agent_id: int,
     key: jax.Array,
 ) -> tuple:
@@ -101,25 +100,14 @@ def _get_action_and_info(
     eligible = discovered & active & fsm_known & (fsm_states != FSM_F)
 
     key1, key2, key3, key4 = jax.random.split(key, 4)
-    time_idx = jnp.minimum(jnp.int32(state.time), jnp.int32(const.red_policy_randoms.shape[0] - 1))
-
     any_eligible = jnp.any(eligible)
 
-    raw = jnp.where(eligible, host_weights, 0.0)
+    # Resilience-biased host probabilities: uniform over `eligible`, multiplied
+    # by per-host `host_weights` (role-based bias from the caller).
+    raw = jnp.where(eligible, host_weights, 0.0).astype(jnp.float32)
     host_probs = raw / jnp.maximum(jnp.sum(raw), 1e-8)
-
-    host_u = sample_red_policy_random(const, time_idx, agent_id, 0, key1)
-    recorded_host = _decode_choice_token(host_u, GLOBAL_MAX_HOSTS)
-    chosen_host = jax.lax.cond(
-        const.use_red_policy_randoms,
-        lambda _: jnp.where(
-            eligible[recorded_host],
-            recorded_host,
-            _uniform_choice_from_mask(eligible, host_u),
-        ),
-        lambda _: jax.random.choice(key1, GLOBAL_MAX_HOSTS, p=host_probs),
-        operand=None,
-    )
+    chosen_host = sample_red_policy_choice(const, state.time, agent_id, RED_POLICY_FIELD_HOST, key1, host_probs)
+    chosen_host = jnp.clip(chosen_host, 0, jnp.int32(GLOBAL_MAX_HOSTS - 1))
 
     host_state = fsm_states[chosen_host]
     host_state_clamped = jnp.clip(host_state, 0, NUM_FSM_STATES - 2)
@@ -128,33 +116,12 @@ def _get_action_and_info(
     vmask = valid_mask[host_state_clamped]
     action_probs = jnp.where(vmask, jnp.maximum(action_probs_raw, 0.0), 0.0)
     action_probs = action_probs / jnp.maximum(jnp.sum(action_probs), 1e-8)
-
-    action_u = sample_red_policy_random(const, time_idx, agent_id, 1, key2)
-    recorded_action = _decode_choice_token(action_u, NUM_FSM_ACTIONS)
-    chosen_fsm_action = jax.lax.cond(
-        const.use_red_policy_randoms,
-        lambda _: jnp.where(
-            vmask[recorded_action],
-            recorded_action,
-            _weighted_choice_from_probs(action_probs, action_u),
-        ),
-        lambda _: jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs),
-        operand=None,
+    chosen_fsm_action = sample_red_policy_choice(
+        const, state.time, agent_id, RED_POLICY_FIELD_ACTION, key2, action_probs
     )
+    chosen_fsm_action = jnp.clip(chosen_fsm_action, 0, jnp.int32(NUM_FSM_ACTIONS - 1))
 
-    discover_u = sample_red_policy_random(const, time_idx, agent_id, 2, key3)
-    recorded_subnet = _decode_choice_token(discover_u, jnp.int32(NUM_SUBNETS))
-    discover_subnet = jax.lax.cond(
-        const.use_red_policy_randoms,
-        lambda _: jnp.where(
-            const.red_agent_subnets[agent_id, recorded_subnet],
-            recorded_subnet,
-            _uniform_choice_from_mask(const.red_agent_subnets[agent_id], discover_u),
-        ),
-        lambda _: _pick_discover_subnet(state, const, agent_id, key3),
-        operand=None,
-    )
-
+    discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
     exploit_action = _pick_exploit_action(state, chosen_host, key4)
     host_subnet = const.host_subnet[chosen_host]
     target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
@@ -185,9 +152,9 @@ def _select_one_agent(
         lambda: (jnp.int32(RED_SLEEP), jnp.int32(0), jnp.int32(0), jnp.int32(0), jnp.bool_(False)),
         lambda: _get_action_and_info(state, const, host_weights, prob_matrix, valid_mask, r, key),
     )
-    eff_host    = jnp.where(is_busy, state.red_pending_target_host[r],   host)
-    eff_subnet  = jnp.where(is_busy, state.red_pending_target_subnet[r], target_subnet)
-    eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r],    fsm_act)
+    eff_host = jnp.where(is_busy, state.red_pending_target_host[r], host)
+    eff_subnet = jnp.where(is_busy, state.red_pending_target_subnet[r], target_subnet)
+    eff_fsm_act = jnp.where(is_busy, state.red_pending_fsm_action[r], fsm_act)
     eff_eligible = jnp.where(is_busy, jnp.bool_(True), eligible)
 
     new_source_kind, new_source_host = _compute_scan_source_binding(state, const, r, action)
@@ -210,13 +177,13 @@ def _red_select_actions(
         for r in range(NUM_RED_AGENTS)
     ]
 
-    red_actions    = jnp.array([r[0] for r in all_results], dtype=jnp.int32)
-    target_hosts   = jnp.array([r[1] for r in all_results], dtype=jnp.int32)
+    red_actions = jnp.array([r[0] for r in all_results], dtype=jnp.int32)
+    target_hosts = jnp.array([r[1] for r in all_results], dtype=jnp.int32)
     target_subnets = jnp.array([r[2] for r in all_results], dtype=jnp.int32)
-    fsm_actions    = jnp.array([r[3] for r in all_results], dtype=jnp.int32)
+    fsm_actions = jnp.array([r[3] for r in all_results], dtype=jnp.int32)
     eligible_flags = jnp.array([r[4] for r in all_results], dtype=jnp.bool_)
-    source_kinds   = jnp.array([r[5] for r in all_results], dtype=jnp.int32)
-    source_hosts   = jnp.array([r[6] for r in all_results], dtype=jnp.int32)
+    source_kinds = jnp.array([r[5] for r in all_results], dtype=jnp.int32)
+    source_hosts = jnp.array([r[6] for r in all_results], dtype=jnp.int32)
 
     state = state.replace(
         red_pending_fsm_action=fsm_actions,
@@ -231,6 +198,7 @@ def _red_select_actions(
 
 # ---------------------------------------------------------------------------
 # Public entry points.
+
 
 def resilience_red_select_actions(
     state: SimulatorState,
@@ -264,9 +232,7 @@ def c_red_select_actions(
     Biases host selection toward RESILIENCE_ROLE_AUTH and RESILIENCE_ROLE_DB,
     and at root-access state heavily favors Impact/DegradeServices.
     """
-    host_weights = _role_weights(
-        host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB), _CIA_TARGET_WEIGHT
-    )
+    host_weights = _role_weights(host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_DB), _CIA_TARGET_WEIGHT)
     return _red_select_actions(
         state, const, host_weights, _TARGETED_PROBABILITY_MATRIX, _TARGETED_ACTION_VALID_MASK, red_keys
     )
@@ -283,9 +249,7 @@ def i_red_select_actions(
     Biases host selection toward RESILIENCE_ROLE_AUTH and RESILIENCE_ROLE_WEB,
     and at root-access state heavily favors Impact/DegradeServices.
     """
-    host_weights = _role_weights(
-        host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_WEB), _CIA_TARGET_WEIGHT
-    )
+    host_weights = _role_weights(host_resilience_role, (RESILIENCE_ROLE_AUTH, RESILIENCE_ROLE_WEB), _CIA_TARGET_WEIGHT)
     return _red_select_actions(
         state, const, host_weights, _TARGETED_PROBABILITY_MATRIX, _TARGETED_ACTION_VALID_MASK, red_keys
     )

@@ -27,7 +27,7 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import BLUE_OBS_SIZE, GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.constants import BLUE_OBS_SIZE, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import ScenarioEnv, ScenarioEnvState
 from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
@@ -70,8 +70,6 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         num_steps: int = 500,
         *,
         topology_mode: str = "generative",
-        topology_bank_size: int = 0,
-        sync_red_policy_bank: bool = False,
         training_mode: bool = False,
         target_weight: float = 5.0,
         cia_target: str | None = None,
@@ -83,8 +81,6 @@ class ResilienceRedCC4Env(MultiAgentEnv):
         self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
-            topology_bank_size=topology_bank_size,
-            sync_red_policy_bank=sync_red_policy_bank,
             training_mode=training_mode,
         )
         self._target_weight = target_weight
@@ -237,8 +233,7 @@ class ResilienceRedCC4Env(MultiAgentEnv):
     def get_avail_actions(self, resilience_state: ResilienceEnvState) -> Dict[str, chex.Array]:
         env_state = resilience_state.env_state
         return {
-            f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state)
-            for i in range(NUM_BLUE_AGENTS)
+            f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state) for i in range(NUM_BLUE_AGENTS)
         }
 
     @property

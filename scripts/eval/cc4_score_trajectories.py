@@ -14,6 +14,7 @@ import os
 import sys
 from pathlib import Path
 from statistics import mean, stdev
+
 from jaxborg.recipe import load, project_eval
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -47,7 +48,6 @@ def main():
         resilience_mode = eval_cfg["resilience_mode"]
 
     scorer = ResilienceMetric() if resilience_mode else None
-
 
     traj_dir = Path(args.traj_dir)
     files = sorted(traj_dir.glob(args.glob))
