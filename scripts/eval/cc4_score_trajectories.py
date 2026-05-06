@@ -1,7 +1,8 @@
-"""Score CC4 trajectory JSONL files with CIA + resilience metrics.
+"""Score CC4 trajectory JSONL files with the resilience CIA metric.
 
 Reads files produced by `cc4_trajectory_eval.py`, computes per-episode
-C/I/A/Resilience, and emits a summary CSV (or JSON) plus action-type counts.
+C/I/A/Resilience, and emits a summary CSV (or JSON) plus impact counts per
+host.
 
 Re-runnable: rolling out CybORG is expensive; metric tweaks should be cheap.
 """
@@ -41,7 +42,7 @@ def main():
     parser.add_argument("--recipe", default=None, help="Path or name of recipe yaml")
     args = parser.parse_args()
 
-    eval_cfg = project_eval(load(args.recipe)) if args.recipe is not None else {"cia_metric": "cc4"}
+    eval_cfg = project_eval(load(args.recipe)) if args.recipe is not None else {}
     scorer = get_cia_scorer(eval_cfg)
 
     traj_dir = Path(args.traj_dir)
@@ -66,8 +67,7 @@ def main():
                 "I_min": s.I_min,
                 "A_min": s.A_min,
                 "R_min": s.R_min,
-                "red_events": getattr(s, "impact_counts", None) or getattr(s, "red_event_counts", {}),
-                "blue_events": getattr(s, "blue_event_counts", {}),
+                "impact_counts": s.impact_counts,
             }
         )
 
@@ -86,18 +86,12 @@ def main():
         m, s = _stats([r[k] for r in rows])
         print(f"{k:<10s} {m:+10.3f} ± {s:.3f}")
 
-    red_total = {}
-    blue_total = {}
+    impact_total: dict[str, int] = {}
     for r in rows:
-        for k, v in r["red_events"].items():
-            red_total[k] = red_total.get(k, 0) + v
-        for k, v in r["blue_events"].items():
-            blue_total[k] = blue_total.get(k, 0) + v
-    print("\nred event totals:")
-    for k, v in sorted(red_total.items(), key=lambda kv: -kv[1]):
-        print(f"  {k:35s}  {v}")
-    print("blue event totals:")
-    for k, v in sorted(blue_total.items(), key=lambda kv: -kv[1]):
+        for k, v in r["impact_counts"].items():
+            impact_total[k] = impact_total.get(k, 0) + v
+    print("\nimpact counts (per role-tagged host):")
+    for k, v in sorted(impact_total.items(), key=lambda kv: -kv[1]):
         print(f"  {k:35s}  {v}")
 
     if args.summary_json:
@@ -111,8 +105,7 @@ def main():
                     "reward_stdev": rew_s,
                     "cia_means": {k: _stats([r[k] for r in rows])[0] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
                     "cia_stdev": {k: _stats([r[k] for r in rows])[1] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
-                    "red_event_totals": red_total,
-                    "blue_event_totals": blue_total,
+                    "impact_counts": impact_total,
                 },
                 indent=2,
             )

@@ -64,9 +64,8 @@ cleanrl:
   num_epochs: 4
 
 eval:
-  # Which CIA scorer to use when running cc4_score_trajectories.py.
-  # cc4:        original composite (0.4*C + 0.4*I + 0.2*A, zone-based host weights)
-  # resilience: ResilienceMetric — scores only auth/db/web server impacts
+  # CIA scorer for cc4_score_trajectories.py.
+  # Only "resilience" is currently registered (auth/db/web role impacts).
   cia_metric: resilience
 
   # When true: assign auth/db/web roles to three Operational Zone servers at
