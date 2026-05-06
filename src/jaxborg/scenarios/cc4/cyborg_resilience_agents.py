@@ -40,7 +40,7 @@ class ResilienceRedAgent(FiniteStateRedAgent):
 
     Operational Zone A/B server hosts (the auth/db/web candidates) are
     _target_weight times more likely to be chosen than other hosts.
-    This mirrors the JAX resilience_red_select_actions behaviour so CybORG
+    This mirrors the JAX 'resilience' role-biased selector behaviour so CybORG
     training sees the same adversarial pressure as JAX training.
 
     Use ``ResilienceRedAgent.with_weight(w)`` to produce a subclass with a
@@ -70,9 +70,9 @@ class _CIARedAgent(ResilienceRedAgent):
     """Base for CIA-targeted agents; subclasses declare which role indices to target.
 
     Role index convention (fixed, since CybORG has no per-episode randomization):
-      0 → auth server  (mirrors JAX RESILIENCE_ROLE_AUTH)
-      1 → db server    (mirrors JAX RESILIENCE_ROLE_DB)
-      2 → web server   (mirrors JAX RESILIENCE_ROLE_WEB)
+      0 → auth server  (mirrors JAX ROLE_AUTH)
+      1 → db server    (mirrors JAX ROLE_DB)
+      2 → web server   (mirrors JAX ROLE_WEB)
 
     Non-targeted op-zone servers keep weight 1.0; targeted ones use _target_weight.
     """
