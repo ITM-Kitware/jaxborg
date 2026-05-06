@@ -44,7 +44,6 @@ jobs:
     name: pytest (slow)
     runs-on: ubuntu-latest
     timeout-minutes: 90
-    needs: test-fast
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
