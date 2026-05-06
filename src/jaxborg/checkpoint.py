@@ -3,7 +3,7 @@
 Each training run writes:
 
     $JAXBORG_EXP_DIR/<algo>_<backend>/
-        model_<tag>.pt              (or .pkl for jax)
+        model_<tag>.pt              (or .safetensors for jax)
         recipe_<tag>.yaml           ← this module writes it
         checkpoint_<tag>.pt         (full optimizer state, optional)
 
@@ -22,7 +22,13 @@ import time
 from pathlib import Path
 from typing import Any
 
+import jax
 import yaml
+from flax.traverse_util import flatten_dict, unflatten_dict
+from safetensors import safe_open
+from safetensors.flax import load_file, save_file
+
+_FLAX_KEY_SEP = "/"
 
 
 def _git_commit() -> str:
@@ -79,6 +85,26 @@ def write_sidecar(
 
     path.write_text(yaml.safe_dump(payload, sort_keys=False))
     return path
+
+
+def save_jax_params(path: str | Path, params: Any, *, action_dim: int) -> Path:
+    """Write Flax params + minimal metadata to a safetensors file."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    flat = flatten_dict(jax.device_get(params), sep=_FLAX_KEY_SEP)
+    save_file(flat, str(path), metadata={"action_dim": str(int(action_dim))})
+    return path
+
+
+def load_jax_params(path: str | Path) -> tuple[dict, int]:
+    """Inverse of `save_jax_params`. Returns `(params, action_dim)`."""
+    path = Path(path)
+    flat = load_file(str(path))
+    params = unflatten_dict(flat, sep=_FLAX_KEY_SEP)
+    with safe_open(str(path), framework="flax") as f:
+        meta = f.metadata() or {}
+    action_dim = int(meta.get("action_dim", 0))
+    return params, action_dim
 
 
 def read_sidecar(model_path: str | Path) -> dict[str, Any]:

@@ -39,7 +39,10 @@ def test_srun_train_command_uses_one_gpu_and_expected_checkpoint(tmp_path):
     assert "--num-envs" in command.argv
     assert command.unset_env == ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
     assert command.env["JAXBORG_EXP_DIR"] == str(config.exp_dir)
-    assert command.result_path == config.exp_dir / "ippo_jax" / "gate_default_seed42" / "model_gate_default_seed42.pkl"
+    assert (
+        command.result_path
+        == config.exp_dir / "ippo_jax" / "gate_default_seed42" / "model_gate_default_seed42.safetensors"
+    )
 
 
 def test_train_command_accepts_slurm_gpu_bind(tmp_path):
@@ -63,7 +66,7 @@ def test_train_command_can_target_cuda_device_in_wrapped_job(tmp_path):
 
 
 def test_eval_command_is_cpu_only_stochastic_unmatched_by_default(tmp_path):
-    checkpoint = tmp_path / "exp" / "ippo_jax" / "tag" / "model_tag.pkl"
+    checkpoint = tmp_path / "exp" / "ippo_jax" / "tag" / "model_tag.safetensors"
     config = _config(tmp_path, eval_episodes=7, eval_workers=3)
 
     command = build_eval_command(config, checkpoint, 0)
@@ -93,8 +96,8 @@ def test_planned_training_checkpoints_follow_tag_prefix(tmp_path):
     config = _config(tmp_path, train=True, tag_prefix="merge_gate", seeds=(1, 2))
 
     assert planned_training_checkpoints(config) == [
-        config.exp_dir / "ippo_jax" / "merge_gate_default_seed1" / "model_merge_gate_default_seed1.pkl",
-        config.exp_dir / "ippo_jax" / "merge_gate_default_seed2" / "model_merge_gate_default_seed2.pkl",
+        config.exp_dir / "ippo_jax" / "merge_gate_default_seed1" / "model_merge_gate_default_seed1.safetensors",
+        config.exp_dir / "ippo_jax" / "merge_gate_default_seed2" / "model_merge_gate_default_seed2.safetensors",
     ]
 
 
@@ -129,7 +132,7 @@ def test_aggregate_transfer_results_pools_rewards():
 
 
 def test_dry_run_writes_summary_without_executing_commands(tmp_path):
-    checkpoint = tmp_path / "missing_model.pkl"
+    checkpoint = tmp_path / "missing_model.safetensors"
     config = _config(tmp_path, checkpoints=(checkpoint,), dry_run=True)
 
     summary = run_gate(config)

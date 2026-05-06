@@ -9,7 +9,7 @@ inference, and feeds the chosen actions to BOTH CybORG and JAX via the harness.
 Any state divergence is a real bug.
 
 Usage:
-    JAXBORG_POLICY_CHECKPOINT=/path/to/model_<tag>.pkl \
+    JAXBORG_POLICY_CHECKPOINT=/path/to/model_<tag>.safetensors \
         uv run pytest -o addopts="" -m "" tests/l3/test_trained_blue_policy.py -v -x -n auto
 """
 
@@ -61,7 +61,7 @@ STEPS = 500
 
 skip_reason = None
 if CHECKPOINT_PATH is None:
-    skip_reason = f"Set {CHECKPOINT_ENV}=/path/to/model_<tag>.pkl"
+    skip_reason = f"Set {CHECKPOINT_ENV}=/path/to/model_<tag>.safetensors"
 elif not CHECKPOINT_PATH.exists():
     skip_reason = f"{CHECKPOINT_ENV} does not exist: {CHECKPOINT_PATH}"
 

@@ -1,16 +1,16 @@
 """JAX-checkpoint → CybORG rollout runner.
 
-The cross-backend transfer eval: load a Flax `.pkl` checkpoint trained by
-`scripts/train/algorithms/ippo_jax.py`, run it in pure CybORG, return per-
-episode rewards. Action translation handles the JAX action space (~300
-indices) vs CybORG's `BlueFlatWrapper` indices.
+The cross-backend transfer eval: load a Flax `.safetensors` checkpoint
+trained by `scripts/train/algorithms/ippo_jax.py`, run it in pure CybORG,
+return per-episode rewards. Action translation handles the JAX action space
+(~300 indices) vs CybORG's `BlueFlatWrapper` indices.
 
-Used by `scripts/eval/eval_recipe.py` when the model file is a Flax `.pkl`.
+Used by `scripts/eval/eval_recipe.py` when the model file is a Flax
+`.safetensors`.
 """
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -20,6 +20,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
+from jaxborg.checkpoint import load_jax_params
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import make_jax_policy
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
@@ -44,33 +45,27 @@ def make_env(seed: int | None = None):
 
 
 def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
-    """Load a Flax `.pkl` and return (policy_module, params, recipe).
+    """Load a Flax `.safetensors` and return (policy_module, params, recipe).
 
-    Requires a recipe sidecar next to the checkpoint. Pre-refactor
-    checkpoints without sidecars are no longer supported — re-train
-    under the recipe-driven layout.
+    Requires a recipe sidecar next to the checkpoint.
     """
     from jaxborg.checkpoint import read_sidecar
 
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {p}")
-    with p.open("rb") as f:
-        ckpt = pickle.load(f)
-
-    params = ckpt["params"]
-    action_dim = ckpt.get("action_dim", BLUE_ALLOW_TRAFFIC_END)
-    hidden_dim = ckpt.get("hidden_dim", 256)
-    activation = ckpt.get("activation", "tanh")
+    params, action_dim = load_jax_params(p)
+    if action_dim == 0:
+        action_dim = BLUE_ALLOW_TRAFFIC_END
 
     recipe = read_sidecar(p)
     arch = recipe["arch"]
     policy = make_jax_policy(
         arch["name"],
         action_dim=action_dim,
-        hidden_dim=int(arch.get("hidden_dim", hidden_dim)),
+        hidden_dim=int(arch.get("hidden_dim", 256)),
         hidden_layers=int(arch.get("hidden_layers", 2)),
-        activation=arch.get("activation", activation),
+        activation=arch.get("activation", "tanh"),
     )
     return policy, params, recipe
 
@@ -183,7 +178,7 @@ def evaluate_jax_on_cyborg(
     deterministic: bool = False,
     progress: bool = True,
 ) -> tuple[list[float], list[int], dict]:
-    """Load a JAX `.pkl`, evaluate against CybORG. Returns (rewards, seed_log, recipe)."""
+    """Load a JAX `.safetensors`, evaluate against CybORG. Returns (rewards, seed_log, recipe)."""
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
     rng = jax.random.PRNGKey(seeds[0] if seeds else 0)
 

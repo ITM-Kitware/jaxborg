@@ -28,6 +28,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/jaxborg"]
 
+[tool.uv]
+override-dependencies = [
+    "matplotlib>=3.9",
+]
+
 [tool.uv.sources]
 cyborg = { git = "https://github.com/PaulHax/cage-challenge-4.git", rev = "69ded9aa40b16ce87f7106fe961f68ad08d47176" }
 jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
@@ -49,6 +54,9 @@ pythonpath = ["."]
 addopts = "-n auto -m 'not slow'"
 markers = [
     "slow: integration/smoke tests that don't need to run after every core logic change",
+]
+filterwarnings = [
+    "ignore:JAXopt is no longer maintained.*:DeprecationWarning",
 ]
 
 [tool.ruff]

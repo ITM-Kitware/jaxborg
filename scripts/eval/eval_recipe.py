@@ -9,7 +9,7 @@ sidecar.
 Single entrypoint for both trained backends:
 - `.pt`  → torch state_dict from `algorithms/ippo_cyborg.py` (loaded via
   `jaxborg.evaluation.cyborg_runner`)
-- `.pkl` → Flax params from `algorithms/ippo_jax.py` (loaded via
+- `.safetensors` → Flax params from `algorithms/ippo_jax.py` (loaded via
   `jaxborg.evaluation.jax_runner`, which translates JAX action space to CybORG
   per step — the cross-backend transfer eval)
 
@@ -19,7 +19,7 @@ Usage:
         --episodes 10 --seeds 42-51
 
     uv run python scripts/eval/eval_recipe.py \
-        --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
+        --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
         --episodes 10 --seeds 42-51
 """
 
@@ -71,14 +71,18 @@ def _detect_trained_backend(model_path: Path) -> str:
     """Determine which trainer produced this model from the file suffix."""
     if model_path.suffix == ".pt":
         return "cyborg"
-    if model_path.suffix in (".pkl", ".flax", ".orbax"):
+    if model_path.suffix in (".safetensors", ".flax", ".orbax"):
         return "jax"
     raise ValueError(f"Cannot detect trained backend from suffix: {model_path}")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a recipe-trained policy on CybORG")
-    parser.add_argument("--model", required=True, help="Path to model_<tag>.pt (CybORG-trained) or .pkl (JAX-trained)")
+    parser.add_argument(
+        "--model",
+        required=True,
+        help="Path to model_<tag>.pt (CybORG-trained) or .safetensors (JAX-trained)",
+    )
     parser.add_argument("--episodes", type=int, default=10, help="Episodes per seed")
     parser.add_argument("--seeds", type=str, default="42-51", help="e.g. '42-51' or '42,43,44'")
     parser.add_argument("--deterministic", action="store_true")

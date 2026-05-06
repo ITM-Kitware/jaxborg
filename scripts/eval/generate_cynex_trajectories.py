@@ -12,7 +12,7 @@ Usage:
 
     # JAXborg JAX/Flax policy:
     python scripts/eval/generate_cynex_trajectories.py \
-        --model-jax /path/to/checkpoint_final.pkl \
+        --model-jax /path/to/checkpoint_final.safetensors \
         --tag jaxborg-g99 --seed 42 --num-episodes 2 \
         --output-dir ../../cynex/public/data/trajectories/
 """
@@ -423,7 +423,7 @@ def main():
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--model-pt", type=str, help="Path to PyTorch PPO model .pt file")
-    group.add_argument("--model-jax", type=str, help="Path to JAXborg JAX/Flax checkpoint .pkl file")
+    group.add_argument("--model-jax", type=str, help="Path to JAXborg JAX/Flax checkpoint .safetensors file")
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)

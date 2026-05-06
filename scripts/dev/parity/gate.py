@@ -128,7 +128,7 @@ def default_run_id() -> str:
 
 
 def checkpoint_for_tag(exp_dir: Path, tag: str) -> Path:
-    return exp_dir / "ippo_jax" / tag / f"model_{tag}.pkl"
+    return exp_dir / "ippo_jax" / tag / f"model_{tag}.safetensors"
 
 
 def tag_for_seed(config: GateConfig, seed: int) -> str:
@@ -496,7 +496,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--recipe", default="default")
     parser.add_argument("--seeds", default="42,100,200", help="Training seeds, e.g. 42,100,200 or 42-44")
     parser.add_argument("--train", action="store_true", help="Train JAX policies before evaluation")
-    parser.add_argument("--checkpoint", action="append", default=[], help="Existing model_<tag>.pkl to evaluate")
+    parser.add_argument(
+        "--checkpoint", action="append", default=[], help="Existing model_<tag>.safetensors to evaluate"
+    )
     parser.add_argument("--tag-prefix", default=None, help="Training tag prefix (default: run id)")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--exp-dir", default=None)
