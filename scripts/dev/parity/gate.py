@@ -27,6 +27,14 @@ from scripts.dev.parity.bootstrap import ROOT
 from scripts.dev.parity.stats import tost_equivalence
 
 DEFAULT_SEEDS = (42, 100, 200)
+CPU_ONLY_ENV = {
+    "JAX_PLATFORMS": "cpu",
+    "XLA_PYTHON_CLIENT_PREALLOCATE": "false",
+}
+TRAIN_ENV_UNSET = ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
+
+for key, value in CPU_ONLY_ENV.items():
+    os.environ.setdefault(key, value)
 
 
 @dataclass(frozen=True)
@@ -35,13 +43,19 @@ class PlannedCommand:
     argv: list[str]
     cwd: Path
     env: dict[str, str] = field(default_factory=dict)
+    unset_env: tuple[str, ...] = ()
     log_path: Path | None = None
     result_path: Path | None = None
 
     def display(self) -> str:
-        env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in sorted(self.env.items()))
-        command = shlex.join(self.argv)
-        return f"{env_prefix} {command}".strip()
+        parts: list[str] = []
+        if self.unset_env:
+            parts.append("env")
+            for key in self.unset_env:
+                parts.extend(["-u", key])
+        parts.extend(f"{k}={v}" for k, v in sorted(self.env.items()))
+        parts.extend(self.argv)
+        return shlex.join(parts)
 
 
 @dataclass(frozen=True)
@@ -185,6 +199,7 @@ def build_train_command(config: GateConfig, seed: int) -> PlannedCommand:
         argv=argv,
         cwd=config.root,
         env=env,
+        unset_env=TRAIN_ENV_UNSET,
         log_path=log_path,
         result_path=checkpoint_for_tag(config.exp_dir, tag),
     )
@@ -219,9 +234,10 @@ def build_eval_command(config: GateConfig, checkpoint: Path, index: int) -> Plan
         argv.append("--deterministic")
 
     env = {
+        **CPU_ONLY_ENV,
+        "CUDA_VISIBLE_DEVICES": "",
         "JAXBORG_EXP_DIR": str(eval_dir),
         "JAXBORG_TRANSFER_WORKERS": str(config.eval_workers),
-        "JAX_PLATFORMS": "cpu",
         "PYTHONUNBUFFERED": "1",
     }
     return PlannedCommand(
@@ -236,7 +252,11 @@ def build_eval_command(config: GateConfig, checkpoint: Path, index: int) -> Plan
 
 def build_test_commands(config: GateConfig) -> list[PlannedCommand]:
     commands: list[PlannedCommand] = []
-    env = {"PYTHONUNBUFFERED": "1"}
+    env = {
+        **CPU_ONLY_ENV,
+        "CUDA_VISIBLE_DEVICES": "",
+        "PYTHONUNBUFFERED": "1",
+    }
     if config.run_fast_tests:
         commands.append(
             PlannedCommand(
@@ -274,6 +294,8 @@ def run_logged_command(command: PlannedCommand) -> int:
     if command.log_path:
         command.log_path.parent.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    for key in command.unset_env:
+        env.pop(key, None)
     env.update(command.env)
     print(f"\n==> {command.name}")
     print(command.display())

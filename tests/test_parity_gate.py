@@ -37,6 +37,7 @@ def test_srun_train_command_uses_one_gpu_and_expected_checkpoint(tmp_path):
     assert command.argv[:4] == ["srun", "--gres=gpu:1", "--mem=64G", "--partition=community"]
     assert "--total-timesteps" in command.argv
     assert "--num-envs" in command.argv
+    assert command.unset_env == ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
     assert command.env["JAXBORG_EXP_DIR"] == str(config.exp_dir)
     assert command.result_path == config.exp_dir / "ippo_jax" / "gate_default_seed42" / "model_gate_default_seed42.pkl"
 
@@ -48,6 +49,7 @@ def test_eval_command_is_cpu_only_stochastic_unmatched_by_default(tmp_path):
     command = build_eval_command(config, checkpoint, 0)
 
     assert command.env["JAX_PLATFORMS"] == "cpu"
+    assert command.env["CUDA_VISIBLE_DEVICES"] == ""
     assert command.env["JAXBORG_TRANSFER_WORKERS"] == "3"
     assert "--deterministic" not in command.argv
     assert "--matched" not in command.argv
@@ -62,6 +64,8 @@ def test_fast_preflight_uses_repo_fast_suite(tmp_path):
 
     assert command.name == "pytest:fast-suite"
     assert command.argv == ["uv", "run", "pytest"]
+    assert command.env["JAX_PLATFORMS"] == "cpu"
+    assert command.env["CUDA_VISIBLE_DEVICES"] == ""
     assert command.log_path == config.run_dir / "logs" / "pytest_fast_suite.log"
 
 
