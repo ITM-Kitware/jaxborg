@@ -85,7 +85,6 @@ class GateConfig:
     deterministic: bool = False
     tost_margin: float = 200.0
     tost_alpha: float = 0.05
-    require_each_equivalent: bool = False
     run_fast_tests: bool = False
     run_slow_tests: bool = False
     dry_run: bool = False
@@ -472,13 +471,10 @@ def run_gate(config: GateConfig) -> dict[str, Any]:
         alpha=config.tost_alpha,
         paired=False,
     )
-    each_ok = all(bool(result.get("equivalent")) for result in transfer_results)
-    passed = bool(pooled["equivalent"]) and (each_ok or not config.require_each_equivalent)
+    passed = bool(pooled["equivalent"])
     summary.update(
         {
             "pooled_tost": pooled,
-            "require_each_equivalent": config.require_each_equivalent,
-            "each_checkpoint_equivalent": each_ok,
             "passed": passed,
         }
     )
@@ -525,7 +521,6 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--deterministic", action="store_true", help="Debug only: use argmax instead of sampling")
     parser.add_argument("--tost-margin", type=float, default=200.0)
     parser.add_argument("--tost-alpha", type=float, default=0.05)
-    parser.add_argument("--require-each-equivalent", action="store_true")
     parser.add_argument("--run-fast-tests", action="store_true")
     parser.add_argument("--run-slow-tests", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -563,7 +558,6 @@ def config_from_args(args: argparse.Namespace) -> GateConfig:
         deterministic=args.deterministic,
         tost_margin=args.tost_margin,
         tost_alpha=args.tost_alpha,
-        require_each_equivalent=args.require_each_equivalent,
         run_fast_tests=args.run_fast_tests,
         run_slow_tests=args.run_slow_tests,
         dry_run=args.dry_run,
