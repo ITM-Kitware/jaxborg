@@ -124,6 +124,21 @@ class FsmRedCC4Env(MultiAgentEnv):
         blue_obs = {a: obs[a] for a in self.agents}
         return blue_obs, FsmRedEnvState(state=inner.state, const=inner.const, extras=extras)
 
+    def wrap_scenario_state(
+        self,
+        env_state: ScenarioEnvState,
+        key: Optional[chex.PRNGKey] = None,
+    ) -> FsmRedEnvState:
+        """Wrap a manually-constructed ``ScenarioEnvState`` into ``FsmRedEnvState``.
+
+        For tests / callers that build a state from a fixed CybORG seed via
+        ``build_const_from_cyborg`` and skip ``self.reset(key)``. Synthesizes
+        the per-episode extras dict so the wrapped state is step-compatible.
+        """
+        k = key if key is not None else jax.random.PRNGKey(0)
+        extras = self._extras_factory(k, env_state.const)
+        return FsmRedEnvState(state=env_state.state, const=env_state.const, extras=extras)
+
     def _strip_inactive_red_reset_knowledge(self, env_state: ScenarioEnvState) -> ScenarioEnvState:
         """Match native FiniteStateRedAgent reset knowledge.
 

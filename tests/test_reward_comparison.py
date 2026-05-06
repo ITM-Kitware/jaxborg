@@ -60,9 +60,10 @@ def jax_fsm_from_cyborg(cyborg_flat_env):
     state = create_initial_state()
     state = state.replace(host_services=jnp.array(const.initial_services))
     state = _init_red_state(const, state)
-    env_state = ScenarioEnvState(state=state, const=const)
+    scenario_state = ScenarioEnvState(state=state, const=const)
 
     env = FsmRedCC4Env(num_steps=500)
+    env_state = env.wrap_scenario_state(scenario_state)
     return env, env_state
 
 
