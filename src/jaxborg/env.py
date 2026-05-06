@@ -11,8 +11,7 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.blue_monitor import apply_blue_monitor
 from jaxborg.actions.duration import (
-    UNKNOWN_PRIMARY_HOST,
-    UNKNOWN_PRIMARY_PID,
+    RedAgentOverrides,
     process_blue_with_duration,
     process_red_with_duration,
 )
@@ -44,11 +43,8 @@ def apply_all_actions(
     red_actions: jnp.ndarray,
     key_green: chex.PRNGKey,
     red_keys: jnp.ndarray,
-    forced_primary_hosts: jnp.ndarray,
-    forced_primary_pids: jnp.ndarray,
+    red_overrides: RedAgentOverrides | None = None,
     blue_keys: jnp.ndarray = None,
-    forced_session_check_hosts: jnp.ndarray = None,
-    forced_session_check_pids: jnp.ndarray = None,
 ) -> SimulatorState:
     """Apply one CybORG step in CybORG's deterministic priority order.
 
@@ -67,6 +63,9 @@ def apply_all_actions(
     """
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
+
+    if red_overrides is None:
+        red_overrides = RedAgentOverrides.identity(n_red)
 
     # CybORG sorts actions by priority (ControlTraffic=1, else=99) then
     # executes in deterministic agent-interface insertion order within each
@@ -112,8 +111,8 @@ def apply_all_actions(
             r,
             red_actions[r],
             red_keys[r],
-            forced_primary_host=forced_primary_hosts[r],
-            forced_primary_pid=forced_primary_pids[r],
+            forced_primary_host=red_overrides.primary_hosts[r],
+            forced_primary_pid=red_overrides.primary_pids[r],
             run_session_check=False,
             creation_visible_sessions_override=pre_green_visible_sessions[r],
         )
@@ -132,10 +131,6 @@ def apply_all_actions(
     for b in range(n_blue):
         state = apply_blue_monitor(state, const, b)
 
-    if forced_session_check_hosts is None:
-        forced_session_check_hosts = jnp.full(n_red, jnp.int32(-1), dtype=jnp.int32)
-    if forced_session_check_pids is None:
-        forced_session_check_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
     for r in range(n_red):
         session_check_key = jax.random.fold_in(jnp.asarray(red_keys[r], dtype=jnp.uint32), jnp.int32(931))
         state = apply_red_session_check(
@@ -143,8 +138,8 @@ def apply_all_actions(
             const,
             r,
             session_check_key,
-            forced_primary_host=forced_session_check_hosts[r],
-            forced_primary_pid=forced_session_check_pids[r],
+            forced_primary_host=red_overrides.session_check_hosts[r],
+            forced_primary_pid=red_overrides.session_check_pids[r],
         )
 
     # CybORG's _process_new_observations adds ALL hosts from the observation
@@ -457,8 +452,6 @@ class ScenarioEnv(MultiAgentEnv):
 
         blue_action_arr = jnp.array([actions[f"blue_{b}"] for b in range(n_blue)], dtype=jnp.int32)
         red_action_arr = jnp.array([actions[f"red_{r}"] for r in range(n_red)], dtype=jnp.int32)
-        no_forced = jnp.full(n_red, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
-        no_forced_pids = jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32)
 
         state = apply_all_actions(
             state,
@@ -467,9 +460,8 @@ class ScenarioEnv(MultiAgentEnv):
             red_action_arr,
             key_green,
             red_keys,
-            no_forced,
-            no_forced_pids,
-            blue_keys,
+            red_overrides=RedAgentOverrides.identity(n_red),
+            blue_keys=blue_keys,
         )
 
         reward_breakdown = compute_reward_breakdown(
