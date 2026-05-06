@@ -12,13 +12,10 @@ from jaxborg.evaluation.cia.cc4_cia_metric import (
     score_trajectory_file,
 )
 from jaxborg.evaluation.cia.resilience_metric import (
-    ROLE_AUTH,
-    ROLE_DB,
-    ROLE_NONE,
-    ROLE_WEB,
     ResilienceEpisodeScore,
     ResilienceMetric,
 )
+from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_NONE, ROLE_WEB
 
 
 def get_cia_scorer(eval_cfg: dict[str, Any]):
