@@ -76,6 +76,7 @@ class GateConfig:
     slurm_mem: str = "64G"
     slurm_time: str = "12:00:00"
     slurm_gpu_bind: str | None = None
+    train_cuda_visible_devices: str | None = None
     eval_episodes: int = 100
     eval_seed: int = 0
     eval_workers: int = 10
@@ -163,6 +164,9 @@ def build_train_command(config: GateConfig, seed: int) -> PlannedCommand:
         "JAXBORG_EXP_DIR": str(config.exp_dir),
         "PYTHONUNBUFFERED": "1",
     }
+    if config.train_cuda_visible_devices is not None:
+        env["CUDA_VISIBLE_DEVICES"] = config.train_cuda_visible_devices
+        env["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
     log_path = config.run_dir / "logs" / f"train_{tag}.log"
 
     if config.train_launcher == "local":
@@ -508,6 +512,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slurm-mem", default="64G")
     parser.add_argument("--slurm-time", default="12:00:00")
     parser.add_argument("--slurm-gpu-bind", default=None, help="Optional Slurm GPU binding, e.g. map_gpu:1")
+    parser.add_argument(
+        "--train-cuda-visible-devices",
+        default=None,
+        help="Optional explicit CUDA_VISIBLE_DEVICES for training jobs, e.g. 1",
+    )
     parser.add_argument("--eval-episodes", type=int, default=100)
     parser.add_argument("--eval-seed", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=10)
@@ -545,6 +554,7 @@ def config_from_args(args: argparse.Namespace) -> GateConfig:
         slurm_mem=args.slurm_mem,
         slurm_time=args.slurm_time,
         slurm_gpu_bind=args.slurm_gpu_bind,
+        train_cuda_visible_devices=args.train_cuda_visible_devices,
         eval_episodes=args.eval_episodes,
         eval_seed=args.eval_seed,
         eval_workers=args.eval_workers,

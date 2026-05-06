@@ -51,6 +51,17 @@ def test_train_command_accepts_slurm_gpu_bind(tmp_path):
     assert command.argv[command.argv.index("--gpu-bind=map_gpu:1") + 1] == "--gres=gpu:1"
 
 
+def test_train_command_can_target_cuda_device_in_wrapped_job(tmp_path):
+    config = _config(tmp_path, train=True, train_launcher="sbatch", train_cuda_visible_devices="1")
+
+    command = build_train_command(config, seed=42)
+    wrap = command.argv[command.argv.index("--wrap") + 1]
+
+    assert "CUDA_VISIBLE_DEVICES=1" in wrap
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE=false" in wrap
+    assert command.unset_env == ("JAX_PLATFORMS", "CUDA_VISIBLE_DEVICES")
+
+
 def test_eval_command_is_cpu_only_stochastic_unmatched_by_default(tmp_path):
     checkpoint = tmp_path / "exp" / "ippo_jax" / "tag" / "model_tag.pkl"
     config = _config(tmp_path, eval_episodes=7, eval_workers=3)
