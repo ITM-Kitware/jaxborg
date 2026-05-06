@@ -57,4 +57,3 @@ cleanrl:
   rollout_length: 500
   num_rollouts_per_update: 1   # 48*500=24000 steps/update → ~125 updates @ 3M; matches Matched-v2 (2026-04-25)
   num_minibatches: 16
-  num_epochs: 4
