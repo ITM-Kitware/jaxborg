@@ -42,6 +42,15 @@ def test_srun_train_command_uses_one_gpu_and_expected_checkpoint(tmp_path):
     assert command.result_path == config.exp_dir / "ippo_jax" / "gate_default_seed42" / "model_gate_default_seed42.pkl"
 
 
+def test_train_command_accepts_slurm_gpu_bind(tmp_path):
+    config = _config(tmp_path, train=True, train_launcher="sbatch", slurm_gpu_bind="map_gpu:1")
+
+    command = build_train_command(config, seed=42)
+
+    assert "--gpu-bind=map_gpu:1" in command.argv
+    assert command.argv[command.argv.index("--gpu-bind=map_gpu:1") + 1] == "--gres=gpu:1"
+
+
 def test_eval_command_is_cpu_only_stochastic_unmatched_by_default(tmp_path):
     checkpoint = tmp_path / "exp" / "ippo_jax" / "tag" / "model_tag.pkl"
     config = _config(tmp_path, eval_episodes=7, eval_workers=3)

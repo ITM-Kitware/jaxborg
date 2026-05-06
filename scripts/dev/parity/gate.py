@@ -75,6 +75,7 @@ class GateConfig:
     slurm_gres: str = "gpu:1"
     slurm_mem: str = "64G"
     slurm_time: str = "12:00:00"
+    slurm_gpu_bind: str | None = None
     eval_episodes: int = 100
     eval_seed: int = 0
     eval_workers: int = 10
@@ -175,6 +176,8 @@ def build_train_command(config: GateConfig, seed: int) -> PlannedCommand:
             f"--time={config.slurm_time}",
             *base,
         ]
+        if config.slurm_gpu_bind:
+            argv.insert(1, f"--gpu-bind={config.slurm_gpu_bind}")
     elif config.train_launcher == "sbatch":
         wrapped = shlex.join([f"{k}={v}" for k, v in env.items()] + base)
         argv = [
@@ -190,6 +193,8 @@ def build_train_command(config: GateConfig, seed: int) -> PlannedCommand:
             "--wrap",
             wrapped,
         ]
+        if config.slurm_gpu_bind:
+            argv.insert(3, f"--gpu-bind={config.slurm_gpu_bind}")
         env = {"PYTHONUNBUFFERED": "1"}
     else:
         raise ValueError(f"unknown train launcher: {config.train_launcher}")
@@ -502,6 +507,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--slurm-gres", default="gpu:1")
     parser.add_argument("--slurm-mem", default="64G")
     parser.add_argument("--slurm-time", default="12:00:00")
+    parser.add_argument("--slurm-gpu-bind", default=None, help="Optional Slurm GPU binding, e.g. map_gpu:1")
     parser.add_argument("--eval-episodes", type=int, default=100)
     parser.add_argument("--eval-seed", type=int, default=0)
     parser.add_argument("--eval-workers", type=int, default=10)
@@ -538,6 +544,7 @@ def config_from_args(args: argparse.Namespace) -> GateConfig:
         slurm_gres=args.slurm_gres,
         slurm_mem=args.slurm_mem,
         slurm_time=args.slurm_time,
+        slurm_gpu_bind=args.slurm_gpu_bind,
         eval_episodes=args.eval_episodes,
         eval_seed=args.eval_seed,
         eval_workers=args.eval_workers,
