@@ -1,5 +1,7 @@
+import chex
 import jax
 import jax.numpy as jnp
+from flax import struct
 
 from jaxborg.actions import apply_blue_action, apply_red_action
 from jaxborg.actions.encoding import (
@@ -30,6 +32,39 @@ from jaxborg.state import SimulatorConst, SimulatorState
 
 UNKNOWN_PRIMARY_HOST = jnp.int32(-2)
 UNKNOWN_PRIMARY_PID = jnp.int32(-2)
+SESSION_CHECK_NO_FORCE = jnp.int32(-1)
+
+
+@struct.dataclass
+class RedAgentOverrides:
+    """Per-agent forcing arrays for ``apply_all_actions``.
+
+    Each (n_red,) int32 array carries either a sentinel ("no override") or a
+    concrete value the differential harness has captured from CybORG:
+
+      * ``primary_hosts``        — sentinel ``UNKNOWN_PRIMARY_HOST`` (-2)
+      * ``primary_pids``         — sentinel ``UNKNOWN_PRIMARY_PID``  (-2)
+      * ``session_check_hosts``  — sentinel ``SESSION_CHECK_NO_FORCE`` (-1)
+      * ``session_check_pids``   — sentinel ``UNKNOWN_PRIMARY_PID``  (-2)
+
+    Production callers use :meth:`identity` (all sentinels) so red-action
+    selection runs free; the harness fills in entries it has captured to
+    pin JAX onto CybORG's choices.
+    """
+
+    primary_hosts: chex.Array
+    primary_pids: chex.Array
+    session_check_hosts: chex.Array
+    session_check_pids: chex.Array
+
+    @classmethod
+    def identity(cls, n_red: int) -> "RedAgentOverrides":
+        return cls(
+            primary_hosts=jnp.full(n_red, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32),
+            primary_pids=jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32),
+            session_check_hosts=jnp.full(n_red, SESSION_CHECK_NO_FORCE, dtype=jnp.int32),
+            session_check_pids=jnp.full(n_red, UNKNOWN_PRIMARY_PID, dtype=jnp.int32),
+        )
 
 
 def process_red_with_duration(

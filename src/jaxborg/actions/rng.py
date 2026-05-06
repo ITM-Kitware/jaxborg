@@ -22,7 +22,17 @@ which are jit-compatible.
 
 The per-purpose dispatchers default to calling the low-level impls, so a
 swap of ``_uniform_impl`` propagates to every purpose unless that purpose
-has been individually overridden.
+has been individually overridden — *with one exception*: ``blue_decoy_type``
+goes through ``_permutation_impl`` (not ``_uniform_impl``), so a test that
+swaps only ``uniform`` will not see the decoy-type pick redirected.
+
+Concurrency: ``_uniform_impl`` / ``_purpose_impls`` are module-level
+mutable state.  This is fine for the single-threaded test harness and for
+``pytest-xdist`` (each worker is a separate process), but the swap is
+**not thread-safe** — a multi-threaded caller would race on the globals.
+Production never mutates these slots; the context managers
+(:func:`rng_impls`, :func:`indexed_rng_impls`) are the only intended way
+to install overrides and are restored on exit.
 """
 
 import contextlib
@@ -113,6 +123,10 @@ def _default_exploit_session(key, agent_id, visible_sessions):
 
 
 def _default_blue_decoy_type(key, agent_id, compatibility):
+    # NB: routes through ``_permutation_impl`` (not ``_uniform_impl``) — a
+    # test that swaps only ``uniform`` will see no consumption here.  Use
+    # ``set_impls(permutation=...)`` or override the ``blue_decoy_type``
+    # purpose directly to redirect this pick.
     del agent_id
     perm = _permutation_impl(key, 4, independent=True)
     scores = jnp.where(compatibility, perm, jnp.int32(100))

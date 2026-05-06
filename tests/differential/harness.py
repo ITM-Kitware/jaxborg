@@ -12,6 +12,7 @@ from jaxborg.actions.blue_analyse import apply_blue_analyse
 from jaxborg.actions.blue_decoys import apply_blue_decoy
 from jaxborg.actions.blue_remove import apply_blue_remove
 from jaxborg.actions.blue_restore import apply_blue_restore
+from jaxborg.actions.duration import RedAgentOverrides
 from jaxborg.actions.encoding import (
     ACTION_TYPE_AGGRESSIVE_SCAN,
     ACTION_TYPE_DEGRADE,
@@ -229,9 +230,7 @@ def _jit_fsm_red_schedule_post_step_update(
 
 
 @jax.jit
-def _jit_apply_all_actions(
-    state, const, blue_actions, red_actions, key_green, red_keys, forced_primary_hosts, forced_primary_pids
-):
+def _jit_apply_all_actions(state, const, blue_actions, red_actions, key_green, red_keys, red_overrides):
     return apply_all_actions(
         state,
         const,
@@ -239,8 +238,7 @@ def _jit_apply_all_actions(
         red_actions,
         key_green,
         red_keys,
-        forced_primary_hosts,
-        forced_primary_pids,
+        red_overrides=red_overrides,
     )
 
 
@@ -271,18 +269,7 @@ def _make_jit_apply_all_actions_with_forced_sessions():
     """
 
     @jax.jit
-    def _go(
-        state,
-        const,
-        blue_actions,
-        red_actions,
-        key_green,
-        red_keys,
-        forced_primary_hosts,
-        forced_primary_pids,
-        forced_session_check_hosts,
-        forced_session_check_pids,
-    ):
+    def _go(state, const, blue_actions, red_actions, key_green, red_keys, red_overrides):
         return apply_all_actions(
             state,
             const,
@@ -290,10 +277,7 @@ def _make_jit_apply_all_actions_with_forced_sessions():
             red_actions,
             key_green,
             red_keys,
-            forced_primary_hosts,
-            forced_primary_pids,
-            forced_session_check_hosts=forced_session_check_hosts,
-            forced_session_check_pids=forced_session_check_pids,
+            red_overrides=red_overrides,
         )
 
     return _go
@@ -1042,12 +1026,8 @@ class CC4DifferentialHarness:
                 )
 
         cy_state = controller.state
-        # Match production path: no forced primary hosts/pids.
-        # JAX tracks session identity internally via red_scan_anchor_host.
-        from jaxborg.actions.duration import UNKNOWN_PRIMARY_HOST
-
-        forced_primary_hosts_pre = jnp.full(NUM_RED_AGENTS, UNKNOWN_PRIMARY_HOST, dtype=jnp.int32)
-        forced_primary_pids_pre = jnp.full(NUM_RED_AGENTS, -1, dtype=jnp.int32)
+        # Match production path: no forced primary hosts/pids — JAX tracks
+        # session identity internally via red_scan_anchor_host.
         pre_service_map = _capture_service_process_map(cy_state)
 
         # Snapshot session PID order per (agent, host) before the step.
@@ -1174,18 +1154,21 @@ class CC4DifferentialHarness:
         # NB: the sentinel for "no force" on the PID array is UNKNOWN_PRIMARY_PID
         # (-2) — using -1 collides with current_primary_pid=-1 and would
         # spuriously trigger forced_confirms_current_pid in apply_red_session_check.
-        from jaxborg.actions.duration import UNKNOWN_PRIMARY_PID as _UNK_PID
-
-        forced_session_check_hosts = jnp.full(NUM_RED_AGENTS, jnp.int32(-1), dtype=jnp.int32)
-        forced_session_check_pids = jnp.full(NUM_RED_AGENTS, _UNK_PID, dtype=jnp.int32)
+        red_overrides = RedAgentOverrides.identity(NUM_RED_AGENTS)
         if random_sync_report is not None:
+            session_check_hosts = red_overrides.session_check_hosts
+            session_check_pids = red_overrides.session_check_pids
             for agent_idx, host_idx in random_sync_report.red_session_check_hosts.items():
                 if 0 <= host_idx < GLOBAL_MAX_HOSTS:
-                    forced_session_check_hosts = forced_session_check_hosts.at[agent_idx].set(int(host_idx))
+                    session_check_hosts = session_check_hosts.at[agent_idx].set(int(host_idx))
                     sessions = controller.state.sessions.get(f"red_agent_{agent_idx}", {})
                     sess0 = sessions.get(0)
                     if sess0 is not None:
-                        forced_session_check_pids = forced_session_check_pids.at[agent_idx].set(int(sess0.pid))
+                        session_check_pids = session_check_pids.at[agent_idx].set(int(sess0.pid))
+            red_overrides = red_overrides.replace(
+                session_check_hosts=session_check_hosts,
+                session_check_pids=session_check_pids,
+            )
 
         if self.green_recorder and random_sync_report is not None:
             self._populate_rng_tape(random_sync_report, step_fields, red_pid_deltas, blue_decoy_pid_deltas)
@@ -1197,10 +1180,7 @@ class CC4DifferentialHarness:
                     red_action_arr,
                     key_green,
                     jnp.stack(subkeys[:NUM_RED_AGENTS]),
-                    forced_primary_hosts_pre,
-                    forced_primary_pids_pre,
-                    forced_session_check_hosts,
-                    forced_session_check_pids,
+                    red_overrides,
                 )
         else:
             self.jax_state = _jit_apply_all_actions(
@@ -1210,8 +1190,7 @@ class CC4DifferentialHarness:
                 red_action_arr,
                 key_green,
                 jnp.stack(subkeys[:NUM_RED_AGENTS]),
-                forced_primary_hosts_pre,
-                forced_primary_pids_pre,
+                red_overrides,
             )
 
         self._schedule_pending_generic_decoys(controller)
