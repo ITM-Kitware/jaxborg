@@ -21,7 +21,6 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.pids import host_current_max_pid
 from jaxborg.actions.rng import rng_impls
-from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     DECOY_IDS,
     DECOY_NAMES,
@@ -31,6 +30,7 @@ from jaxborg.constants import (
 from jaxborg.parity.translate import build_mappings_from_cyborg
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.state import create_initial_state
+from tests.differential.parity_rng_replay import RNGTape
 from tests.differential.state_comparator import compare_fast
 
 _jit_apply_blue = jax.jit(apply_blue_action, static_argnums=(2,))

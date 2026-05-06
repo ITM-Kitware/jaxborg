@@ -621,7 +621,7 @@ def build_const_arrays_from_cyborg(cyborg_env) -> dict:
         "obs_host_map": np.array(obs_host_map),
         "blue_obs_subnets": np.array(_build_blue_obs_subnets()),
         "comms_policy": np.array(_build_comms_policy()),
-        "max_steps": np.int32(500),
+        "max_steps": np.int32(sum(int(p) for p in scenario.mission_phases)),
         "num_hosts": np.int32(num_hosts),
         "green_agents_active": np.array(True),
     }

@@ -27,7 +27,6 @@ from jaxborg.actions.encoding import (
     encode_red_action,
 )
 from jaxborg.actions.rng import rng_impls
-from tests.differential.parity_rng_replay import RNGTape
 from jaxborg.constants import (
     ACTIVITY_SCAN,
     COMPROMISE_NONE,
@@ -42,6 +41,7 @@ from jaxborg.scenarios.cc4.red_fsm import FSM_K, FSM_S
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.state import create_initial_state
 from tests.conftest import setup_red_agent_session
+from tests.differential.parity_rng_replay import RNGTape
 
 _jit_apply_red = jax.jit(apply_red_action, static_argnums=(2,))
 

@@ -3,9 +3,10 @@ CybORG's `FiniteStateRedAgent.get_action` given matched RNG.
 
 Uses `CC4DifferentialHarness(record_red_policy=True)`: the harness pre-calls
 CybORG's red `get_action` with np_random save/restore so the shared RNG stream
-isn't disturbed; `RedPolicyRecorder` captures the RNG tokens; JAX consumes the
-same tokens via `jax_const.red_policy_randoms`; per-step JAX picks are compared
-against CybORG's pre-captured picks.
+isn't disturbed; `RedPolicyRecorder` maps CybORG's host/action/subnet choices
+into JAX index space, and `IndexedRNGTape` replays those indices through
+`sample_red_policy_choice`. Per-step JAX picks are compared against CybORG's
+pre-captured picks.
 
 Also checks symmetric eligibility (the set of red agents the harness considers
 "eligible to act" matches CybORG's `host_states` keys minus FSM_F).
@@ -45,7 +46,13 @@ def test_red_policy_matches_cyborg_multistep(seed: int) -> None:
 
     if harness.red_policy_mismatches:
         lines = [
-            f"  step {m['step']}: red_{m['red_agent']} cyborg={m['cyborg_pick']} jax={m['jax_pick']}"
+            (
+                f"  step {m['step']}: red_{m['red_agent']} "
+                f"cyborg=({m['cyborg_action']} fsm={m['cyborg_fsm']} host={m['cyborg_host_idx']} "
+                f"subnet={m['cyborg_subnet_idx']}) "
+                f"jax=(fsm={m['jax_fsm']} host={m['jax_host_idx']} subnet={m['jax_subnet_idx']} "
+                f"eligible={m['jax_eligible']})"
+            )
             for m in harness.red_policy_mismatches[:10]
         ]
         pytest.fail(

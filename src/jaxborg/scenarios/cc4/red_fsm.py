@@ -25,10 +25,10 @@ from jaxborg.actions.pending_source import (
     PENDING_SOURCE_KIND_SESSION_BINDING,
 )
 from jaxborg.actions.red_common import select_bound_source_host
+from jaxborg.actions.rng import sample_red_policy_choice
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
-    NUM_SUBNETS,
     SERVICE_IDS,
 )
 from jaxborg.state import SimulatorConst, SimulatorState
@@ -191,13 +191,18 @@ def _fsm_action_to_jax_action(fsm_action, target_host, target_subnet, exploit_ac
     )
 
 
+RED_POLICY_FIELD_HOST = 0
+RED_POLICY_FIELD_ACTION = 1
+RED_POLICY_FIELD_SUBNET = 2
+
+
 def _pick_discover_subnet(state, const, agent_id, key):
     # CybORG samples DiscoverRemoteSystems subnets from the controller action
     # space, which is keyed by the red agent's allowed subnets, not by current
     # session placement.
     probs = jnp.where(const.red_agent_subnets[agent_id], 1.0, 0.0)
     probs = probs / jnp.maximum(jnp.sum(probs), 1e-8)
-    return jax.random.choice(key, NUM_SUBNETS, p=probs)
+    return sample_red_policy_choice(const, state.time, agent_id, RED_POLICY_FIELD_SUBNET, key, probs)
 
 
 def fsm_red_get_action_and_info(
@@ -224,7 +229,8 @@ def fsm_red_get_action_and_info(
     host_probs = jnp.where(eligible, 1.0, 0.0).astype(jnp.float32)
     host_total = jnp.sum(host_probs)
     host_probs = host_probs / jnp.maximum(host_total, 1e-8)
-    chosen_host = jax.random.choice(key1, GLOBAL_MAX_HOSTS, p=host_probs)
+    chosen_host = sample_red_policy_choice(const, state.time, agent_id, RED_POLICY_FIELD_HOST, key1, host_probs)
+    chosen_host = jnp.clip(chosen_host, 0, jnp.int32(GLOBAL_MAX_HOSTS - 1))
 
     host_state = fsm_states[chosen_host]
     host_state_clamped = jnp.clip(host_state, 0, NUM_FSM_STATES - 2)
@@ -234,7 +240,10 @@ def fsm_red_get_action_and_info(
     action_probs = jnp.where(valid_mask, jnp.maximum(action_probs_raw, 0.0), 0.0)
     action_total = jnp.sum(action_probs)
     action_probs = action_probs / jnp.maximum(action_total, 1e-8)
-    chosen_fsm_action = jax.random.choice(key2, NUM_FSM_ACTIONS, p=action_probs)
+    chosen_fsm_action = sample_red_policy_choice(
+        const, state.time, agent_id, RED_POLICY_FIELD_ACTION, key2, action_probs
+    )
+    chosen_fsm_action = jnp.clip(chosen_fsm_action, 0, jnp.int32(NUM_FSM_ACTIONS - 1))
 
     discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
     exploit_action = _pick_exploit_action(state, chosen_host, key4)

@@ -70,6 +70,12 @@ def _fuzz_one_seed(
         check_obs=check_obs,
         check_masks=check_masks,
         strip_inactive_knowledge=strip_inactive_knowledge,
+        # Strict random-sync requires JAX's red FSM picks to track CybORG's;
+        # the IndexedRNGTape's red_policy table replays CybORG's per-step
+        # host/action/subnet choices through ``sample_red_policy_choice``.
+        # Without this, JAX's independent PRNG diverges as soon as a red
+        # agent has more than one eligible host (cf. seed_31 step 12).
+        record_red_policy=strict_random_sync,
     )
     harness.reset()
 
