@@ -9,6 +9,8 @@ it so the next refactor doesn't silently desync the four call sites.
 
 from __future__ import annotations
 
+import random
+
 from jaxborg.scenarios.cc4.topology_roles import (
     OPERATIONAL_SERVER_RE,
     ROLE_AUTH,
@@ -29,7 +31,7 @@ def test_operational_server_regex_matches_cc4_hostnames():
     assert not is_operational_server("")
 
 
-def test_assign_picks_lowest_three_sorted_op_zone_servers():
+def test_assign_picks_three_op_zone_servers_with_canonical_roles():
     hosts = [
         "router_internet",
         "operational_zone_b_subnet_server_host_2",
@@ -38,30 +40,41 @@ def test_assign_picks_lowest_three_sorted_op_zone_servers():
         "operational_zone_a_subnet_user_host_0",  # not a server — ignored
         "operational_zone_b_subnet_server_host_0",
     ]
-    roles = assign_resilience_roles(hosts)
-    # Sorted op-zone servers: a_..._1, a_..._5, b_..._0, b_..._2  (alpha sort)
-    assert roles == {
-        "operational_zone_a_subnet_server_host_1": ROLE_AUTH,
-        "operational_zone_a_subnet_server_host_5": ROLE_DB,
-        "operational_zone_b_subnet_server_host_0": ROLE_WEB,
-    }
+    roles = assign_resilience_roles(hosts, random.Random(42))
+    assert len(roles) == 3
+    assert set(roles.values()) == {ROLE_AUTH, ROLE_DB, ROLE_WEB}
+    for host in roles:
+        assert is_operational_server(host)
 
 
-def test_assign_is_deterministic_across_input_order():
-    hosts = [
-        "operational_zone_b_subnet_server_host_0",
-        "operational_zone_a_subnet_server_host_1",
-        "operational_zone_a_subnet_server_host_5",
-    ]
-    assert assign_resilience_roles(hosts) == assign_resilience_roles(reversed(hosts))
+def test_assign_is_reproducible_for_same_seed():
+    hosts = [f"operational_zone_a_subnet_server_host_{i}" for i in range(6)]
+    a = assign_resilience_roles(hosts, random.Random(123))
+    b = assign_resilience_roles(hosts, random.Random(123))
+    assert a == b
+
+
+def test_assign_is_input_order_invariant():
+    hosts = [f"operational_zone_a_subnet_server_host_{i}" for i in range(4)]
+    forward = assign_resilience_roles(hosts, random.Random(7))
+    reversed_in = assign_resilience_roles(list(reversed(hosts)), random.Random(7))
+    assert forward == reversed_in
+
+
+def test_assign_varies_across_seeds():
+    hosts = [f"operational_zone_a_subnet_server_host_{i}" for i in range(6)]
+    seeds_seen = {tuple(sorted(assign_resilience_roles(hosts, random.Random(s)).items())) for s in range(50)}
+    # 6 hosts × 3 roles = 120 permutations; expect plenty of variety in 50 seeds.
+    assert len(seeds_seen) >= 10
 
 
 def test_assign_handles_fewer_than_three_candidates():
-    assert assign_resilience_roles([]) == {}
-    assert assign_resilience_roles(["operational_zone_a_subnet_server_host_0"]) == {
+    rng = random.Random(0)
+    assert assign_resilience_roles([], random.Random(0)) == {}
+    assert assign_resilience_roles(["operational_zone_a_subnet_server_host_0"], rng) == {
         "operational_zone_a_subnet_server_host_0": ROLE_AUTH,
     }
-    assert assign_resilience_roles(["router_internet", "user_host_0"]) == {}
+    assert assign_resilience_roles(["router_internet", "user_host_0"], random.Random(0)) == {}
 
 
 def test_role_constants_and_names_match_metric_expectations():
