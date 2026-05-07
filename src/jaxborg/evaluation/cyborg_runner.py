@@ -8,6 +8,8 @@ loader and action translation).
 
 from __future__ import annotations
 
+import concurrent.futures
+import multiprocessing as mp
 import os
 from pathlib import Path
 from typing import Any
@@ -137,28 +139,62 @@ def load_torch_policy(model_path: str | Path):
     return agent, recipe
 
 
+def _cyborg_worker(args):
+    """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
+    model_path, deterministic, red_agent, target_weight, items = args
+    agent, _ = load_torch_policy(model_path)
+    out = []
+    for idx, seed in items:
+        env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
+        r = rollout_episode(env, agent, deterministic=deterministic)
+        out.append((idx, seed, r))
+    return out
+
+
 def evaluate_on_cyborg(
-    agent,
+    model_path: str | Path,
     *,
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
     red_agent: str = "finite_state",
     target_weight: float = 5.0,
+    workers: int = 1,
     progress: bool = True,
 ) -> tuple[list[float], list[int]]:
-    """Run `episodes_per_seed` episodes per seed. Returns (rewards, seed_for_each_ep)."""
-    rewards: list[float] = []
-    seed_log: list[int] = []
-    total_eps = len(seeds) * episodes_per_seed
-    n = 0
-    for s in seeds:
-        for ep in range(episodes_per_seed):
-            env = make_env(s + ep, red_agent=red_agent, target_weight=target_weight)
+    """Run `episodes_per_seed` episodes per seed. Returns (rewards, seed_for_each_ep).
+
+    Episodes are independent — set `workers > 1` to fan out across processes
+    (each worker spawns a clean Python interpreter and loads the model).
+    """
+    flat = [s + ep for s in seeds for ep in range(episodes_per_seed)]
+    total = len(flat)
+    items = list(enumerate(flat))
+    rewards: list[float] = [0.0] * total
+    seed_log: list[int] = [0] * total
+
+    if workers <= 1:
+        agent, _ = load_torch_policy(model_path)
+        for idx, seed in items:
+            env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
             r = rollout_episode(env, agent, deterministic=deterministic)
-            rewards.append(r)
-            seed_log.append(s + ep)
-            n += 1
+            rewards[idx] = r
+            seed_log[idx] = seed
             if progress:
-                print(f"  ep {n}/{total_eps} (seed={s + ep}): {r:.1f}", flush=True)
+                print(f"  ep {idx + 1}/{total} (seed={seed}): {r:.1f}", flush=True)
+        return rewards, seed_log
+
+    n_workers = min(workers, total)
+    chunks = [items[i::n_workers] for i in range(n_workers)]
+    pargs = [(str(model_path), deterministic, red_agent, target_weight, c) for c in chunks]
+    completed = 0
+    ctx = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
+        for chunk_results in ex.map(_cyborg_worker, pargs):
+            for idx, seed, r in chunk_results:
+                rewards[idx] = r
+                seed_log[idx] = seed
+                completed += 1
+                if progress:
+                    print(f"  ep {completed}/{total} (seed={seed}): {r:.1f}", flush=True)
     return rewards, seed_log
