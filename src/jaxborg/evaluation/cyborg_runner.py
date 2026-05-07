@@ -34,23 +34,16 @@ _CYBORG_RED_AGENT_NAMES = ("finite_state", "sleep", "resilience")
 
 def make_env(seed: int, red_agent: str = "finite_state", target_weight: float = 5.0):
     from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
+    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
     from CybORG.Agents.Wrappers import EnterpriseMAE
     from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 
-    from jaxborg.scenarios.cc4.cyborg_resilience_agents import ResilienceRedAgent
-
-    _red_classes = {
-        "finite_state": FiniteStateRedAgent,
-        "sleep": SleepAgent,
-        "resilience": ResilienceRedAgent.with_weight(target_weight),
-    }
-    red_cls = _red_classes.get(red_agent, FiniteStateRedAgent)
+    from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
 
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=red_cls,
+        red_agent_class=cyborg_red_class(red_agent, target_weight),
         steps=EPISODE_LENGTH,
     )
     return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
