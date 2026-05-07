@@ -134,11 +134,16 @@ def load_torch_policy(model_path: str | Path):
 
 def _cyborg_worker(args):
     """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
+    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+
     model_path, deterministic, red_agent, target_weight, items = args
     agent, _ = load_torch_policy(model_path)
+    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
     out = []
     for idx, seed in items:
         env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
+        if needs_roles:
+            inject_role_map(env, ep_seed=seed)
         r = rollout_episode(env, agent, deterministic=deterministic)
         out.append((idx, seed, r))
     return out
@@ -167,9 +172,14 @@ def evaluate_on_cyborg(
     seed_log: list[int] = [0] * total
 
     if workers <= 1:
+        from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+
         agent, _ = load_torch_policy(model_path)
+        needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
         for idx, seed in items:
             env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
+            if needs_roles:
+                inject_role_map(env, ep_seed=seed)
             r = rollout_episode(env, agent, deterministic=deterministic)
             rewards[idx] = r
             seed_log[idx] = seed

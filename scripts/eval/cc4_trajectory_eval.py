@@ -33,7 +33,7 @@ if str(ROOT / "src") not in sys.path:
 
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_runner import load_torch_policy
-from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles
+from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -211,8 +211,9 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
         env = make_env(ep_seed, red_agent=red_agent, target_weight=target_weight)
         resilience_roles = None
         if resilience_mode:
-            hosts = list(env.unwrapped.environment_controller.state.hosts.keys())
-            resilience_roles = assign_resilience_roles(hosts)
+            # Build per-episode role map from the env's full host list and push
+            # it into every red agent so red bias and recorded roles agree.
+            resilience_roles = inject_role_map(env, ep_seed)
         out_path = output_dir / f"{tag}_seed{ep_seed}.jsonl"
         r, n = rollout_episode(env, agent, device, deterministic, ep_seed, model_path, out_path, resilience_roles)
         rewards.append(r)

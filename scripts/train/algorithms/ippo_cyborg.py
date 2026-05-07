@@ -68,21 +68,37 @@ def make_cyborg_env(red_agent: str = "finite_state", target_weight: float = 5.0)
 
 
 def env_worker(pipe, env_id, red_agent: str = "finite_state", target_weight: float = 5.0):
+    import random as _random
+
+    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     env = make_cyborg_env(red_agent=red_agent, target_weight=target_weight)
+    # Per-worker RNG for per-episode resilience-role seeds. Distinct per worker
+    # so vmap-equivalent envs see different role-map sequences. Reproducible
+    # given env_id.
+    seed_rng = _random.Random(env_id)
+    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
+
+    def _reset_and_inject():
+        obs, info = env.reset()
+        if needs_roles:
+            inject_role_map(env, ep_seed=seed_rng.randrange(2**31))
+        return obs, info
+
     while True:
         try:
             cmd, data = pipe.recv()
         except EOFError:
             break
         if cmd == "reset":
-            obs, info = env.reset()
+            obs, info = _reset_and_inject()
             pipe.send((obs, info))
         elif cmd == "step":
             obs, rew, term, trunc, info = env.step(data)
             done = any(term.values()) or any(trunc.values())
             if done:
-                obs, info = env.reset()
+                obs, info = _reset_and_inject()
             pipe.send((obs, rew, done, info))
         elif cmd == "close":
             pipe.close()

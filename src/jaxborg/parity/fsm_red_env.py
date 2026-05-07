@@ -335,8 +335,7 @@ def make_fsm_red_env(
         from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles_from_const
 
         def extras_factory(key, const):
-            del key
-            return {"host_resilience_role": assign_resilience_roles_from_const(const)}
+            return {"host_resilience_role": assign_resilience_roles_from_const(const, key)}
     elif factory_name is None:
         extras_factory = _empty_extras_factory
     else:

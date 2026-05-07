@@ -176,11 +176,16 @@ def run_episode(env, policy, params, deterministic: bool, rng) -> float:
 
 def _jax_worker(args):
     """Pool worker: load checkpoint once, run a chunk of (idx, seed, rng_seed) episodes."""
+    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+
     checkpoint_path, deterministic, red_agent, target_weight, items = args
     policy, params, _ = load_jax_checkpoint(checkpoint_path)
+    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
     out = []
     for idx, seed, rng_seed in items:
         env = make_env(seed=seed, red_agent=red_agent, target_weight=target_weight)
+        if needs_roles:
+            inject_role_map(env, ep_seed=seed)
         r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
         out.append((idx, seed, r))
     return out
@@ -212,8 +217,13 @@ def evaluate_jax_on_cyborg(
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
 
     if workers <= 1:
+        from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+
+        needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
         for idx, seed, rng_seed in items:
             env = make_env(seed=seed, red_agent=red_agent, target_weight=target_weight)
+            if needs_roles:
+                inject_role_map(env, ep_seed=seed)
             r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
             rewards[idx] = r
             seed_log[idx] = seed
