@@ -86,6 +86,12 @@ def main():
     parser.add_argument("--episodes", type=int, default=10, help="Episodes per seed")
     parser.add_argument("--seeds", type=str, default="42-51", help="e.g. '42-51' or '42,43,44'")
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=max(1, (os.cpu_count() or 4) - 2),
+        help="Parallel rollout workers (1 = single process). Default: cpu_count() - 2.",
+    )
     parser.add_argument("--output", type=str, default=None, help="Override result jsonl path")
     args = parser.parse_args()
 
@@ -97,9 +103,7 @@ def main():
     seeds = _parse_seeds(args.seeds)
 
     if trained_backend == "cyborg":
-        import torch
-
-        from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg, load_torch_policy_from_recipe
+        from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
         from jaxborg.recipe import project_eval
 
         recipe = read_sidecar(model_path)
@@ -109,21 +113,19 @@ def main():
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
-            f"eps/seed={args.episodes} red_agent={red_agent}",
+            f"eps/seed={args.episodes} red_agent={red_agent} workers={args.workers}",
             flush=True,
         )
 
-        state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
-        agent = load_torch_policy_from_recipe(recipe, state_dict)
-
         t0 = time.perf_counter()
         rewards, seed_log = evaluate_on_cyborg(
-            agent,
+            model_path,
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
             red_agent=red_agent,
             target_weight=target_weight,
+            workers=args.workers,
         )
         wall = time.perf_counter() - t0
     else:
@@ -135,10 +137,15 @@ def main():
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
+            workers=args.workers,
         )
         wall = time.perf_counter() - t0
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)
-        print(f"  trained=jax arch={recipe['arch']['name']} seeds={seeds} eps/seed={args.episodes}", flush=True)
+        print(
+            f"  trained=jax arch={recipe['arch']['name']} seeds={seeds} "
+            f"eps/seed={args.episodes} workers={args.workers}",
+            flush=True,
+        )
 
     m = mean(rewards)
     s = stdev(rewards) if len(rewards) > 1 else 0.0

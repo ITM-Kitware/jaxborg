@@ -11,6 +11,8 @@ Used by `scripts/eval/eval_recipe.py` when the model file is a Flax
 
 from __future__ import annotations
 
+import concurrent.futures
+import multiprocessing as mp
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -170,30 +172,62 @@ def run_episode(env, policy, params, deterministic: bool, rng) -> float:
     return total
 
 
+def _jax_worker(args):
+    """Pool worker: load checkpoint once, run a chunk of (idx, seed, rng_seed) episodes."""
+    checkpoint_path, deterministic, items = args
+    policy, params, _ = load_jax_checkpoint(checkpoint_path)
+    out = []
+    for idx, seed, rng_seed in items:
+        env = make_env(seed=seed)
+        r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
+        out.append((idx, seed, r))
+    return out
+
+
 def evaluate_jax_on_cyborg(
     checkpoint_path: str | Path,
     *,
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
+    workers: int = 1,
     progress: bool = True,
 ) -> tuple[list[float], list[int], dict]:
-    """Load a JAX `.safetensors`, evaluate against CybORG. Returns (rewards, seed_log, recipe)."""
-    policy, params, recipe = load_jax_checkpoint(checkpoint_path)
-    rng = jax.random.PRNGKey(seeds[0] if seeds else 0)
+    """Load a JAX `.safetensors`, evaluate against CybORG. Returns (rewards, seed_log, recipe).
 
-    rewards: list[float] = []
-    seed_log: list[int] = []
-    total_eps = len(seeds) * episodes_per_seed
-    n = 0
-    for s in seeds:
-        for ep in range(episodes_per_seed):
-            env = make_env(seed=s + ep)
-            rng, _rng = jax.random.split(rng)
-            r = run_episode(env, policy, params, deterministic, _rng)
-            rewards.append(r)
-            seed_log.append(s + ep)
-            n += 1
+    Episodes are independent — set `workers > 1` to fan out across processes
+    (each worker spawns a clean Python interpreter and loads the model).
+    """
+    flat = [s + ep for s in seeds for ep in range(episodes_per_seed)]
+    total = len(flat)
+    base_seed = seeds[0] if seeds else 0
+    items = [(idx, env_seed, base_seed * 100003 + idx) for idx, env_seed in enumerate(flat)]
+    rewards: list[float] = [0.0] * total
+    seed_log: list[int] = [0] * total
+
+    policy, params, recipe = load_jax_checkpoint(checkpoint_path)
+
+    if workers <= 1:
+        for idx, seed, rng_seed in items:
+            env = make_env(seed=seed)
+            r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
+            rewards[idx] = r
+            seed_log[idx] = seed
             if progress:
-                print(f"  ep {n}/{total_eps} (seed={s + ep}): {r:.1f}", flush=True)
+                print(f"  ep {idx + 1}/{total} (seed={seed}): {r:.1f}", flush=True)
+        return rewards, seed_log, recipe
+
+    n_workers = min(workers, total)
+    chunks = [items[i::n_workers] for i in range(n_workers)]
+    pargs = [(str(checkpoint_path), deterministic, c) for c in chunks]
+    completed = 0
+    ctx = mp.get_context("spawn")
+    with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
+        for chunk_results in ex.map(_jax_worker, pargs):
+            for idx, seed, r in chunk_results:
+                rewards[idx] = r
+                seed_log[idx] = seed
+                completed += 1
+                if progress:
+                    print(f"  ep {completed}/{total} (seed={seed}): {r:.1f}", flush=True)
     return rewards, seed_log, recipe
