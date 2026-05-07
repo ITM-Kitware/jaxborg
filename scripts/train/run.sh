@@ -47,6 +47,19 @@ echo "Log: $LOG"
 
 case "$BACKEND" in
     jax)
+        # Preflight: refuse to launch if the venv has no GPU jaxlib. JAX will
+        # silently fall back to CPU on a GPU-allocated slurm job otherwise —
+        # 14 hours of wasted compute before anyone notices. Override with
+        # JAXBORG_ALLOW_CPU=1 if you genuinely want CPU jax for a smoke run.
+        if [[ "${JAXBORG_ALLOW_CPU:-}" != "1" ]]; then
+            HAS_GPU=$(uv run python -c "import jax; print(int(any(d.platform=='gpu' for d in jax.devices())))" 2>/dev/null || echo 0)
+            if [[ "$HAS_GPU" != "1" ]]; then
+                echo "ERROR: jax.devices() reports no GPU. Refusing to launch the GPU trainer." >&2
+                echo "Fix: uv sync --extra cuda  (then re-run)" >&2
+                echo "Or:  JAXBORG_ALLOW_CPU=1 ./scripts/train/run.sh ...  (smoke runs only)" >&2
+                exit 1
+            fi
+        fi
         JAXBORG_EXP_DIR="$EXP_DIR" srun --gres=gpu:1 --mem=64G \
             uv run python "$SCRIPT" \
                 --recipe "$RECIPE" --seed "$SEED" "$@" 2>&1 | tee "$LOG"
