@@ -19,7 +19,6 @@ This script doesn't enforce thresholds — it prints, you eyeball.
 from __future__ import annotations
 
 # ruff: noqa: E402
-
 import os
 import sys
 from collections import Counter
@@ -71,8 +70,10 @@ def rollout_one(env, key) -> Counter:
 def main():
     print(f"\n{'selector':<12s}  {'NONE':>10s}  {'AUTH':>10s}  {'DB':>10s}  {'WEB':>10s}  {'tagged%':>8s}")
     print("-" * 70)
-    print("(All selectors run with role_assignment='resilience' so the baseline is\n"
-          " apples-to-apples — fsm shows uniform-attack share on tagged hosts.)\n")
+    print(
+        "(All selectors run with role_assignment='resilience' so the baseline is\n"
+        " apples-to-apples — fsm shows uniform-attack share on tagged hosts.)\n"
+    )
     for name in SELECTORS:
         # Force role assignment for all selectors so "NONE %" reflects the same
         # underlying tag set; biased rows then show their lift vs the fsm baseline.
