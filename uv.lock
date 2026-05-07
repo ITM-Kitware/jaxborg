@@ -1495,7 +1495,6 @@ dependencies = [
     { name = "cyborg" },
     { name = "distrax" },
     { name = "flax" },
-    { name = "jax" },
     { name = "jaxmarl" },
     { name = "mlflow" },
     { name = "optax" },
@@ -1503,13 +1502,18 @@ dependencies = [
     { name = "torch" },
 ]
 
-[package.dev-dependencies]
+[package.optional-dependencies]
+cpu = [
+    { name = "jax" },
+]
 cuda = [
     { name = "jax-cuda12-pjrt" },
     { name = "jax-cuda12-plugin" },
     { name = "nvidia-cublas" },
     { name = "nvidia-cudnn-cu13" },
 ]
+
+[package.dev-dependencies]
 dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },
@@ -1521,21 +1525,20 @@ requires-dist = [
     { name = "cyborg", git = "https://github.com/PaulHax/cage-challenge-4.git?rev=69ded9aa40b16ce87f7106fe961f68ad08d47176" },
     { name = "distrax" },
     { name = "flax" },
-    { name = "jax" },
+    { name = "jax", extras = ["cpu"], marker = "extra == 'cpu'", specifier = "==0.4.38" },
+    { name = "jax-cuda12-pjrt", marker = "extra == 'cuda'", specifier = "==0.4.38" },
+    { name = "jax-cuda12-plugin", marker = "extra == 'cuda'", specifier = "==0.4.38" },
     { name = "jaxmarl", git = "https://github.com/FLAIROx/JaxMARL.git?branch=main" },
     { name = "mlflow", specifier = ">=3.10.0" },
+    { name = "nvidia-cublas", marker = "extra == 'cuda'", specifier = ">=13.2" },
+    { name = "nvidia-cudnn-cu13", marker = "extra == 'cuda'", specifier = ">=9.19" },
     { name = "optax" },
     { name = "pyyaml" },
     { name = "torch", specifier = ">=2.0" },
 ]
+provides-extras = ["cpu", "cuda"]
 
 [package.metadata.requires-dev]
-cuda = [
-    { name = "jax-cuda12-pjrt", specifier = "==0.4.38" },
-    { name = "jax-cuda12-plugin", specifier = "==0.4.38" },
-    { name = "nvidia-cublas", specifier = ">=13.2" },
-    { name = "nvidia-cudnn-cu13", specifier = ">=9.19" },
-]
 dev = [
     { name = "pytest-xdist" },
     { name = "ruff" },

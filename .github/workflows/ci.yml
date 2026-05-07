@@ -24,7 +24,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --extra cpu
       - run: uv run ruff check .
       - run: uv run ruff format --check .
 
@@ -37,7 +37,7 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --extra cpu
       - run: uv run pytest
 
   test-slow:
@@ -49,5 +49,5 @@ jobs:
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
-      - run: uv sync
+      - run: uv sync --extra cpu
       - run: uv run pytest -m slow

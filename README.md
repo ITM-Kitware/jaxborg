@@ -64,8 +64,11 @@ All buckets within ~1.7%. Pooled L1 distribution distance = 0.079 (max 2.0). Act
 ## Setup
 
 ```bash
-uv sync                      # CPU-only (tests, eval)
-uv sync --group cuda         # GPU support (training)
+uv sync --extra cpu          # CPU-only (tests, eval, macOS dev, CI)
+uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
+# Plain `uv sync` (no extra) is also valid but installs jaxlib only via
+# transitive resolution — pick one explicitly to avoid the silent
+# "GPU was allocated but JAX fell back to CPU" trap.
 ```
 
 ## Usage

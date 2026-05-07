@@ -9,12 +9,30 @@ dependencies = [
     "cyborg",
     "distrax",
     "flax",
-    "jax",
     "jaxmarl",
     "mlflow>=3.10.0",
     "optax",
     "pyyaml",
     "torch>=2.0",
+]
+
+# Pick exactly one — leaving both unspecified pulls jax in only via the
+# transitive deps of jaxmarl/flax (CPU jaxlib), which silently masks the
+# wrong-backend trap on GPU hosts. CI uses `--extra cpu`; GPU hosts use
+# `--extra cuda`.
+#
+# `cuda` lists the cuda12 plugin packages directly rather than via
+# `jax[cuda12]` because the latter pulls in `jax-cuda12-plugin[with-cuda]`,
+# which requires nvidia-cudnn-cu12>=9.1 — collides with cyborg's pinned
+# torch==2.2.0 (needs cudnn 8.9.2.26 in the cu12 namespace). Pinning to
+# the cu13 namespace avoids the conflict.
+[project.optional-dependencies]
+cpu = ["jax[cpu]==0.4.38"]
+cuda = [
+    "jax-cuda12-pjrt==0.4.38",
+    "jax-cuda12-plugin==0.4.38",
+    "nvidia-cublas>=13.2",
+    "nvidia-cudnn-cu13>=9.19",
 ]
 
 [project.scripts]
@@ -42,12 +60,9 @@ dev = [
     "ruff",
     "pytest-xdist",
 ]
-cuda = [
-    "jax-cuda12-pjrt==0.4.38",
-    "jax-cuda12-plugin==0.4.38",
-    "nvidia-cublas>=13.2",
-    "nvidia-cudnn-cu13>=9.19",
-]
+# The previous `[dependency-groups.cuda]` is superseded by the `cuda` extra
+# in `[project.optional-dependencies]` above. `jax[cuda12]` brings in the
+# matching cuda12 pjrt + plugin so we don't have to pin them ourselves.
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
