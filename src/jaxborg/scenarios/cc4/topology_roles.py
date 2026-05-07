@@ -17,15 +17,13 @@ from __future__ import annotations
 
 import random
 import re
-from typing import TYPE_CHECKING, Iterable, Optional
+from typing import Iterable
 
 import jax
 import jax.numpy as jnp
 
 from jaxborg.constants import GLOBAL_MAX_HOSTS, SUBNET_IDS
-
-if TYPE_CHECKING:
-    from jaxborg.state import SimulatorConst
+from jaxborg.state import SimulatorConst
 
 ROLE_NONE = 0
 ROLE_AUTH = 1  # authentication server  (CIA: C + I)
@@ -44,27 +42,16 @@ def is_operational_server(hostname: str) -> bool:
 
 def assign_resilience_roles(
     hostnames: Iterable[str],
-    rng: Optional[random.Random] = None,
+    rng: random.Random,
 ) -> dict[str, int]:
-    """Assign AUTH / DB / WEB to 3 of the operational-zone server hostnames.
+    """Assign AUTH / DB / WEB to 3 randomly-chosen operational-zone server hostnames.
 
-    With ``rng=None`` the assignment is deterministic — the 3 lowest-sorted
-    op-zone hostnames get AUTH/DB/WEB in order. This path is for tests and
-    callers that need a stable mapping (e.g. trajectory replay against a
-    recorded role map; pass the recorded mapping back via ``host_resilience_role``).
-
-    With ``rng`` supplied the candidate hostnames are shuffled and the first 3
-    get AUTH/DB/WEB. Use this at episode reset so the (3-of-N) selection
-    rotates across the op-zone server set instead of always pinning roles to
-    the same 3 hostnames. ``rng`` should be seeded from the env's per-episode
-    seed so JAX and CybORG sides produce matching maps for the same episode.
-
-    If fewer than 3 eligible hostnames exist, only the available roles are
-    assigned and the rest stay implicitly ROLE_NONE (omitted from the dict).
+    ``rng`` should be seeded from the env's per-episode seed so the same
+    episode reproduces the same role map. If fewer than 3 eligible hostnames
+    exist, only the available roles are assigned (rest stay ROLE_NONE).
     """
     candidates = sorted(h for h in hostnames if is_operational_server(h))
-    if rng is not None:
-        rng.shuffle(candidates)
+    rng.shuffle(candidates)
     return dict(zip(candidates[:3], (ROLE_AUTH, ROLE_DB, ROLE_WEB)))
 
 
@@ -85,20 +72,15 @@ _RESILIENCE_ZONE_SUBNETS = (
 
 
 def assign_resilience_roles_from_const(
-    const: "SimulatorConst",
-    key: Optional[jax.Array] = None,
+    const: SimulatorConst,
+    key: jax.Array,
 ) -> jax.Array:
     """JAX-traceable role assignment from a ``SimulatorConst``.
 
-    Tags 3 active operational-zone server hosts as AUTH / DB / WEB. Returns a
-    ``(GLOBAL_MAX_HOSTS,) int32`` array; non-tagged hosts are 0 (``ROLE_NONE``).
-
-    With ``key=None``: deterministic — picks the 3 lowest-index active op-zone
-    servers (used by tests and replay-from-recorded-roles paths).
-
-    With ``key`` supplied: random — shuffles the active-candidate ordering
-    using ``key``, then takes the first 3. Use at episode reset so role
-    assignment rotates across the op-zone server set rather than pinning to
+    Tags 3 randomly-chosen active operational-zone server hosts as AUTH /
+    DB / WEB. Returns a ``(GLOBAL_MAX_HOSTS,) int32`` array; non-tagged
+    hosts are 0 (``ROLE_NONE``). ``key`` should be a fresh per-episode key
+    so roles rotate across the op-zone server set rather than pinning to
     the same 3 hosts every episode.
     """
     is_resilience_zone = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
@@ -107,13 +89,9 @@ def assign_resilience_roles_from_const(
 
     candidates = const.host_active & const.host_is_server & is_resilience_zone
 
-    if key is None:
-        # Lowest-index-first ordering: non-candidates sort to int32-max.
-        scores = jnp.where(candidates, jnp.arange(GLOBAL_MAX_HOSTS), jnp.iinfo(jnp.int32).max)
-    else:
-        # Random ordering among candidates; non-candidates pushed to the end.
-        noise = jax.random.uniform(key, shape=(GLOBAL_MAX_HOSTS,))
-        scores = jnp.where(candidates, noise, jnp.float32(jnp.inf))
+    # Random ordering among candidates; non-candidates pushed to the end.
+    noise = jax.random.uniform(key, shape=(GLOBAL_MAX_HOSTS,))
+    scores = jnp.where(candidates, noise, jnp.float32(jnp.inf))
     ranks = jnp.argsort(scores)
     auth_host = ranks[0]
     db_host = ranks[1]
