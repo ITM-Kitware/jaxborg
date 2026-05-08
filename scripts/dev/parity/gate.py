@@ -284,7 +284,7 @@ def build_test_commands(config: GateConfig) -> list[PlannedCommand]:
                     "run",
                     "pytest",
                     "-o",
-                    "addopts=",
+                    "addopts=-n auto",
                     "-m",
                     "slow",
                     "tests/differential",
