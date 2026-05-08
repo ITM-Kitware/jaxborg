@@ -45,6 +45,10 @@ train:
   minibatch_size: 320000
   sgd_iterations: 64
   total_timesteps: 3000000
+  variant: cc4_stock
+
+eval:
+  variant: cc4_stock
 
 jax:
   num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)

@@ -68,13 +68,19 @@ def test_assign_varies_across_seeds():
     assert len(seeds_seen) >= 10
 
 
-def test_assign_handles_fewer_than_three_candidates():
-    rng = random.Random(0)
-    assert assign_resilience_roles([], random.Random(0)) == {}
-    assert assign_resilience_roles(["operational_zone_a_subnet_server_host_0"], rng) == {
-        "operational_zone_a_subnet_server_host_0": ROLE_AUTH,
-    }
-    assert assign_resilience_roles(["router_internet", "user_host_0"], random.Random(0)) == {}
+def test_assign_raises_on_fewer_than_three_candidates():
+    import pytest
+
+    with pytest.raises(ValueError, match="need ≥3"):
+        assign_resilience_roles(
+            [
+                "operational_zone_a_subnet_server_host_0",
+                "operational_zone_a_subnet_server_host_1",
+            ],
+            random.Random(0),
+        )
+    with pytest.raises(ValueError):
+        assign_resilience_roles([], random.Random(0))
 
 
 def test_role_constants_and_names_match_metric_expectations():

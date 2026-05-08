@@ -313,10 +313,12 @@ class ScenarioEnv(MultiAgentEnv):
         training_mode: bool = False,
         topology_path: str | Path | Sequence[str | Path] | None = None,
         scenario_config: ScenarioConfig = CC4_CONFIG,
+        op_zone_min_servers: int | None = None,
     ):
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.training_mode = training_mode
+        self.op_zone_min_servers = op_zone_min_servers
         self._const_bank = None
         self._const_bank_size = 0
         if topology_path is not None:
@@ -356,7 +358,12 @@ class ScenarioEnv(MultiAgentEnv):
 
     def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
         if self._const_bank is None:
-            return build_topology(key, num_steps=self.num_steps, training_mode=self.training_mode)
+            return build_topology(
+                key,
+                num_steps=self.num_steps,
+                training_mode=self.training_mode,
+                op_zone_min_servers=self.op_zone_min_servers,
+            )
 
         bank_idx = jax.random.randint(key, (), 0, self._const_bank_size)
         const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)

@@ -7,11 +7,15 @@ return type of selectors registered under known names.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 import pytest
 
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env, make_fsm_red_env
+from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+from jaxborg.scenarios.cc4.game_variants import variant_for_red
 from jaxborg.scenarios.cc4.red_selectors import (
     REGISTRY,
     fsm_selector,
@@ -54,13 +58,14 @@ def test_role_biased_selector_with_empty_target_roles_is_uniform():
 
 
 @pytest.mark.slow
-def test_make_fsm_red_env_runs_each_registered_selector():
+def test_make_jax_env_runs_each_registered_selector():
     """End-to-end: every registered name produces an env that resets+steps."""
     key0 = jax.random.PRNGKey(0)
     key1 = jax.random.PRNGKey(1)
     blue_actions = {f"blue_{i}": jnp.int32(0) for i in range(5)}
     for name in ("fsm", "resilience", "cia_c", "cia_i", "cia_a"):
-        env = make_fsm_red_env(num_steps=5, red_agent=name)
+        variant = replace(variant_for_red(name), num_steps=5)
+        env = make_jax_env(variant)
         assert isinstance(env, FsmRedCC4Env)
         obs, state = env.reset(key0)
         obs, state, rewards, dones, info = env.step(key1, state, blue_actions)
@@ -69,8 +74,8 @@ def test_make_fsm_red_env_runs_each_registered_selector():
 
 def test_default_extras_are_zeros_and_resilience_assigns_some():
     """Verify extras_factory wiring: default = zeros, resilience = nonzero."""
-    env_default = make_fsm_red_env(num_steps=5, red_agent="fsm")
-    env_res = make_fsm_red_env(num_steps=5, red_agent="resilience")
+    env_default = make_jax_env(replace(variant_for_red("fsm"), num_steps=5))
+    env_res = make_jax_env(replace(variant_for_red("resilience"), num_steps=5))
     obs, state_default = env_default.reset(jax.random.PRNGKey(0))
     obs, state_res = env_res.reset(jax.random.PRNGKey(0))
 

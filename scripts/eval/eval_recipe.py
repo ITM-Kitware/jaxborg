@@ -104,54 +104,48 @@ def main():
 
     if trained_backend == "cyborg":
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
-        from jaxborg.recipe import project_eval
+        from jaxborg.recipe import eval_variant
 
         recipe = read_sidecar(model_path)
-        eval_cfg = project_eval(recipe)
-        red_agent = eval_cfg["red_agent"]
-        target_weight = eval_cfg["resilience_target_weight"]
+        variant = eval_variant(recipe)
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
-            f"eps/seed={args.episodes} red_agent={red_agent} workers={args.workers}",
+            f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
             flush=True,
         )
 
         t0 = time.perf_counter()
         rewards, seed_log = evaluate_on_cyborg(
             model_path,
+            variant=variant,
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
-            red_agent=red_agent,
-            target_weight=target_weight,
             workers=args.workers,
         )
         wall = time.perf_counter() - t0
     else:
         from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
-        from jaxborg.recipe import project_eval
+        from jaxborg.recipe import eval_variant
 
         recipe = read_sidecar(model_path)
-        eval_cfg = project_eval(recipe)
-        red_agent = eval_cfg["red_agent"]
-        target_weight = eval_cfg["resilience_target_weight"]
+        variant = eval_variant(recipe)
 
         t0 = time.perf_counter()
         rewards, seed_log, recipe = evaluate_jax_on_cyborg(
             model_path,
+            variant=variant,
             seeds=seeds,
             episodes_per_seed=args.episodes,
             deterministic=args.deterministic,
-            red_agent=red_agent,
-            target_weight=target_weight,
             workers=args.workers,
         )
         wall = time.perf_counter() - t0
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=jax arch={recipe['arch']['name']} seeds={seeds} "
-            f"eps/seed={args.episodes} red_agent={red_agent} workers={args.workers}",
+            f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
             flush=True,
         )
 
@@ -167,7 +161,8 @@ def main():
         "recipe_path": recipe.get("meta", {}).get("source_path") or recipe.get("__source_path__", ""),
         "trained_backend": trained_backend,
         "eval_env": "cyborg",
-        "red_agent": red_agent,
+        "variant": variant.name,
+        "red_agent": variant.red_agent,
         "seeds": seeds,
         "episodes_per_seed": args.episodes,
         "stochastic": not args.deterministic,

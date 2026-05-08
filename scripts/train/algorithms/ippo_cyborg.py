@@ -42,6 +42,7 @@ from jaxborg.mlflow_setup import start_run
 from jaxborg.policies import make_torch_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_cleanrl
+from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
@@ -50,41 +51,22 @@ OBS_DIM = BLUE_OBS_SIZE
 ACT_DIM = 242
 
 
-def make_cyborg_env(red_agent: str = "finite_state", target_weight: float = 5.0):
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-    from CybORG.Agents.Wrappers import EnterpriseMAE
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
-
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=cyborg_red_class(red_agent, target_weight),
-        steps=500,
-    )
-    return EnterpriseMAE(CybORG(scenario_generator=sg))
-
-
-def env_worker(pipe, env_id, red_agent: str = "finite_state", target_weight: float = 5.0):
+def env_worker(pipe, env_id, variant: GameVariant):
     import random as _random
 
-    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+    from CybORG.Agents.Wrappers import EnterpriseMAE
+
+    from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 
     signal.signal(signal.SIGINT, signal.SIG_IGN)
-    env = make_cyborg_env(red_agent=red_agent, target_weight=target_weight)
-    # Per-worker RNG for per-episode resilience-role seeds. Distinct per worker
-    # so vmap-equivalent envs see different role-map sequences. Reproducible
-    # given env_id.
+    # Per-worker RNG for per-episode resilience-role seeds + env construction.
+    # Distinct per worker so vmap-equivalent envs see different sequences.
     seed_rng = _random.Random(env_id)
-    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
+    env = make_cyborg_env(variant, seed_rng.randrange(2**31), wrapper_class=EnterpriseMAE)
 
     def _reset_and_inject():
-        obs, info = env.reset()
-        if needs_roles:
-            inject_role_map(env, ep_seed=seed_rng.randrange(2**31))
-        return obs, info
+        r = reset_cyborg_env(env, variant, ep_seed=seed_rng.randrange(2**31))
+        return r.obs, r.info
 
     while True:
         try:
@@ -106,13 +88,13 @@ def env_worker(pipe, env_id, red_agent: str = "finite_state", target_weight: flo
 
 
 class ParallelEnvs:
-    def __init__(self, num_envs, red_agent: str = "finite_state", target_weight: float = 5.0):
+    def __init__(self, num_envs, variant: GameVariant):
         self.num_envs = num_envs
         self.pipes = []
         self.procs = []
         for i in range(num_envs):
             parent_pipe, child_pipe = Pipe()
-            proc = Process(target=env_worker, args=(child_pipe, i, red_agent, target_weight), daemon=True)
+            proc = Process(target=env_worker, args=(child_pipe, i, variant), daemon=True)
             proc.start()
             child_pipe.close()
             self.pipes.append(parent_pipe)
@@ -189,10 +171,9 @@ def train(args, recipe, cfg):
     save_dir = EXP_DIR / "ippo_cyborg" / tag
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    red_agent = cfg.get("red_agent", "finite_state")
-    target_weight = cfg.get("resilience_target_weight", 5.0)
-    print(f"Creating {cfg['num_envs']} parallel CybORG environments (red_agent={red_agent})...", flush=True)
-    envs = ParallelEnvs(cfg["num_envs"], red_agent=red_agent, target_weight=target_weight)
+    variant: GameVariant = cfg["TRAIN_VARIANT"]
+    print(f"Creating {cfg['num_envs']} parallel CybORG environments (variant={variant.name})...", flush=True)
+    envs = ParallelEnvs(cfg["num_envs"], variant=variant)
 
     agent = make_torch_policy(
         recipe["arch"]["name"],

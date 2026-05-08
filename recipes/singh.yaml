@@ -39,6 +39,10 @@ train:
   minibatch_size: 32768
   sgd_iterations: 30
   total_timesteps: 50000000
+  variant: cc4_stock
+
+eval:
+  variant: cc4_stock
 
 jax:
   num_envs: 400              # 400 * 500 * 5 agents = 1M (matches train.buffer_size)

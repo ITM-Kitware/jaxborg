@@ -16,9 +16,12 @@ from typing import Any
 
 import numpy as np
 import torch
+from CybORG.Agents.Wrappers import EnterpriseMAE
 
 from jaxborg.constants import BLUE_OBS_SIZE
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.policies import make_torch_policy
+from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
@@ -27,26 +30,6 @@ AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 OBS_DIM = BLUE_OBS_SIZE
 ACT_DIM = 242
 EPISODE_LENGTH = 500
-
-
-_CYBORG_RED_AGENT_NAMES = ("finite_state", "sleep", "resilience")
-
-
-def make_env(seed: int, red_agent: str = "finite_state", target_weight: float = 5.0):
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-    from CybORG.Agents.Wrappers import EnterpriseMAE
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
-
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=cyborg_red_class(red_agent, target_weight),
-        steps=EPISODE_LENGTH,
-    )
-    return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
 
 
 def _pad_obs_mask(obs_dict, info_dict):
@@ -60,8 +43,9 @@ def _pad_obs_mask(obs_dict, info_dict):
     return obs, mask
 
 
-def rollout_episode(env, agent, *, deterministic: bool) -> float:
-    obs_d, info_d = env.reset()
+def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool) -> float:
+    r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    obs_d, info_d = r.obs, r.info
     total = 0.0
     for _ in range(EPISODE_LENGTH):
         obs, mask = _pad_obs_mask(obs_d, info_d)
@@ -134,17 +118,12 @@ def load_torch_policy(model_path: str | Path):
 
 def _cyborg_worker(args):
     """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
-    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
-
-    model_path, deterministic, red_agent, target_weight, items = args
+    model_path, deterministic, variant, items = args
     agent, _ = load_torch_policy(model_path)
-    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
     out = []
     for idx, seed in items:
-        env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
-        if needs_roles:
-            inject_role_map(env, ep_seed=seed)
-        r = rollout_episode(env, agent, deterministic=deterministic)
+        env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
+        r = rollout_episode(env, variant, ep_seed=seed, agent=agent, deterministic=deterministic)
         out.append((idx, seed, r))
     return out
 
@@ -152,11 +131,10 @@ def _cyborg_worker(args):
 def evaluate_on_cyborg(
     model_path: str | Path,
     *,
+    variant: GameVariant,
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
-    red_agent: str = "finite_state",
-    target_weight: float = 5.0,
     workers: int = 1,
     progress: bool = True,
 ) -> tuple[list[float], list[int]]:
@@ -172,15 +150,10 @@ def evaluate_on_cyborg(
     seed_log: list[int] = [0] * total
 
     if workers <= 1:
-        from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
-
         agent, _ = load_torch_policy(model_path)
-        needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
         for idx, seed in items:
-            env = make_env(seed, red_agent=red_agent, target_weight=target_weight)
-            if needs_roles:
-                inject_role_map(env, ep_seed=seed)
-            r = rollout_episode(env, agent, deterministic=deterministic)
+            env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
+            r = rollout_episode(env, variant, ep_seed=seed, agent=agent, deterministic=deterministic)
             rewards[idx] = r
             seed_log[idx] = seed
             if progress:
@@ -189,7 +162,7 @@ def evaluate_on_cyborg(
 
     n_workers = min(workers, total)
     chunks = [items[i::n_workers] for i in range(n_workers)]
-    pargs = [(str(model_path), deterministic, red_agent, target_weight, c) for c in chunks]
+    pargs = [(str(model_path), deterministic, variant, c) for c in chunks]
     completed = 0
     ctx = mp.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
