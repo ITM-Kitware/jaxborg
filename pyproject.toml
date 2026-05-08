@@ -74,6 +74,7 @@ jaxmarl = { git = "https://github.com/FLAIROx/JaxMARL.git", branch = "main" }
 dev = [
     "ruff",
     "pytest-xdist",
+    "pytest-split",
 ]
 
 [tool.pytest.ini_options]

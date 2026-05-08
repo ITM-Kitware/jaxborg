@@ -41,13 +41,33 @@ jobs:
       - run: uv run pytest
 
   test-slow:
-    name: pytest (slow)
+    name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
-    timeout-minutes: 600
+    # 8 shards keeps the heaviest shard well under an hour even on the first
+    # run before .test_durations is populated (round-robin by test count
+    # leaves heavy parametrized tests clustered, so going wider than strictly
+    # needed buys headroom). 240min is a safety net for that first run only —
+    # GitHub hard-cancels jobs at 360min regardless of this value.
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        group: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      - run: uv run pytest -m slow
+      # .test_durations lives in the GH Actions cache, not git — committing
+      # it would thrash history every run. Each shard restores the most
+      # recent durations file (any group, any run), reuses it for balanced
+      # splitting, then saves its own updated copy under a unique key.
+      # Over runs, fresh entries from every group accumulate in the cache.
+      - uses: actions/cache@v4
+        with:
+          path: .test_durations
+          key: slow-durations-${{ github.run_id }}-${{ matrix.group }}
+          restore-keys: |
+            slow-durations-
+      - run: uv run pytest -m slow --splits 8 --group ${{ matrix.group }} --store-durations
