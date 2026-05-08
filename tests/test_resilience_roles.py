@@ -11,6 +11,10 @@ from __future__ import annotations
 
 import random
 
+import jax
+import jax.numpy as jnp
+
+from jaxborg.scenarios.cc4.topology import build_topology
 from jaxborg.scenarios.cc4.topology_roles import (
     OPERATIONAL_SERVER_RE,
     ROLE_AUTH,
@@ -92,6 +96,64 @@ def test_role_constants_and_names_match_metric_expectations():
     assert role_name(ROLE_WEB) == "web"
     assert role_name(0) == "none"
     assert role_name(99) == "unknown"
+
+
+def test_count_resilience_candidates_matches_active_op_zone_servers():
+    from jaxborg.constants import SUBNET_IDS
+    from jaxborg.scenarios.cc4.topology_roles import count_resilience_candidates
+
+    const = build_topology(jax.random.PRNGKey(0))
+    is_op = (const.host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_A"]) | (
+        const.host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_B"]
+    )
+    expected = int(jnp.sum(const.host_active & const.host_is_server & is_op))
+    assert count_resilience_candidates(const) == expected
+
+
+def test_make_jax_env_rejects_resilience_variant_with_too_few_op_zone_servers():
+    import pytest
+
+    from jaxborg.evaluation.jax_env_factory import make_jax_env
+    from jaxborg.scenarios.cc4.game_variant import GameVariant
+
+    bad = GameVariant(name="bad", resilience_roles=True, op_zone_servers=0)
+    with pytest.raises(ValueError, match="op_zone_servers=0"):
+        make_jax_env(bad)
+
+    # Sanity: a sensible variant constructs without error. The CIA metric
+    # needs at least 3 op-zone server candidates per episode.
+    make_jax_env(GameVariant(name="ok", resilience_roles=True, op_zone_servers=1))
+
+
+def test_make_jax_env_rejects_snapshot_without_enough_op_zone_servers(tmp_path):
+    import json
+
+    import numpy as np
+    import pytest
+
+    from jaxborg.constants import CC4_CONFIG
+    from jaxborg.evaluation.jax_env_factory import make_jax_env
+    from jaxborg.scenarios.cc4.game_variant import GameVariant
+    from jaxborg.scenarios.cc4.topology import (
+        TOPOLOGY_SNAPSHOT_FIELDS,
+        TOPOLOGY_SNAPSHOT_METADATA_KEY,
+        _scenario_config_digest,
+        build_topology,
+    )
+
+    const = build_topology(jax.random.PRNGKey(0))
+    const = const.replace(host_is_server=jnp.zeros_like(const.host_is_server))
+    snapshot_path = tmp_path / "no_servers.npz"
+    metadata = json.dumps({"scenario_config": _scenario_config_digest(CC4_CONFIG)})
+    np.savez(
+        snapshot_path,
+        **{name: np.asarray(getattr(const, name)) for name in TOPOLOGY_SNAPSHOT_FIELDS},
+        **{TOPOLOGY_SNAPSHOT_METADATA_KEY: np.asarray(metadata)},
+    )
+
+    bad = GameVariant(name="snap", resilience_roles=True)
+    with pytest.raises(ValueError, match="op-zone server candidates"):
+        make_jax_env(bad, topology_path=snapshot_path)
 
 
 def test_regex_is_anchored():

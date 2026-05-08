@@ -90,6 +90,12 @@ def assign_resilience_roles_from_const(
         is_resilience_zone = is_resilience_zone | (const.host_subnet == sid)
     candidates = const.host_active & const.host_is_server & is_resilience_zone
 
+    # Caller is responsible for guaranteeing ≥3 candidates (see
+    # `validate_resilience_topology`). With <3 candidates argsort's tail is
+    # filled with non-candidate indices and roles would silently leak onto
+    # non-op-zone hosts — the CIA metric reads those tagged hosts and would
+    # produce a meaningless score. Enforce the precondition at env
+    # construction rather than masking the bug here.
     noise = jax.random.uniform(key, shape=(GLOBAL_MAX_HOSTS,))
     scores = jnp.where(candidates, noise, jnp.float32(jnp.inf))
     ranks = jnp.argsort(scores)
@@ -101,3 +107,16 @@ def assign_resilience_roles_from_const(
     host_resilience_role = jnp.where(idx == db_host, jnp.int32(ROLE_DB), host_resilience_role)
     host_resilience_role = jnp.where(idx == web_host, jnp.int32(ROLE_WEB), host_resilience_role)
     return host_resilience_role
+
+
+def count_resilience_candidates(const: SimulatorConst) -> int:
+    """Eager Python count of op-zone server candidates in ``const``.
+
+    Used at env-construction time to validate that a topology can support
+    AUTH / DB / WEB role assignment before any episode runs.
+    """
+    is_resilience_zone = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
+    for sid in _RESILIENCE_ZONE_SUBNETS:
+        is_resilience_zone = is_resilience_zone | (const.host_subnet == sid)
+    candidates = const.host_active & const.host_is_server & is_resilience_zone
+    return int(jnp.sum(candidates))
