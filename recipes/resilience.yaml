@@ -45,9 +45,8 @@ train:
   minibatch_size: 320000
   sgd_iterations: 64
   total_timesteps: 3000000
-  # Red agent used during CybORG training (ippo_cyborg.py).
-  # "finite_state" | "sleep" | "resilience" | c | i | a
-  red_agent: resilience
+  # Game-rules bundle used during training (registry: src/jaxborg/scenarios/cc4/game_variants.py).
+  variant: cia_resilience
 
 jax:
   num_envs: 48              # matches CybORG side; 48*500=24000 steps/update → 125 updates @ 3M; matches Matched-v2 (kernel_split_matched_v2/jax/seed0/config.json)
@@ -68,15 +67,5 @@ eval:
   # Only "resilience" is currently registered (auth/db/web role impacts).
   cia_metric: resilience
 
-  # When true: assign auth/db/web roles to three Operational Zone servers at
-  # rollout time (stored in each trajectory header) and use ResilienceMetric
-  # for scoring.
-  resilience_mode: true
-
-  # Red agent used during CybORG evaluation (eval_recipe.py).
-  # "finite_state" | "sleep" (no adversary) | "resilience" | c | i | a
-  red_agent: c
-
-  # Host-selection bias weight for the resilience red agent (CybORG and JAX).
-  # Operational zone servers are this many times more likely to be targeted.
-  resilience_target_weight: 5.0
+  # Game-rules bundle used during CybORG evaluation (eval_recipe.py).
+  variant: cia_c

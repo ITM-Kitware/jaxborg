@@ -20,32 +20,17 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 import numpy as np
+from CybORG.Agents.Wrappers import BlueFlatWrapper
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
 from jaxborg.checkpoint import load_jax_params
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import make_jax_policy
+from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
 EPISODE_LENGTH = 500
-
-
-def make_env(seed: int | None = None, red_agent: str = "finite_state", target_weight: float = 5.0):
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-    from CybORG.Agents.Wrappers import BlueFlatWrapper
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
-
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=cyborg_red_class(red_agent, target_weight),
-        steps=EPISODE_LENGTH,
-    )
-    cyborg = CybORG(sg, "sim", seed=seed)
-    return BlueFlatWrapper(env=cyborg, pad_spaces=True)
 
 
 def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
@@ -145,8 +130,9 @@ def _raw_step(wrapper, actions):
     return observations, rewards, terminated, truncated
 
 
-def run_episode(env, policy, params, deterministic: bool, rng) -> float:
-    observations, _ = env.reset()
+def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, deterministic: bool, rng) -> float:
+    r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    observations = r.obs
     inner = env.env
     const = build_const_from_cyborg(inner)
     mappings = build_mappings_from_cyborg(inner)
@@ -176,17 +162,20 @@ def run_episode(env, policy, params, deterministic: bool, rng) -> float:
 
 def _jax_worker(args):
     """Pool worker: load checkpoint once, run a chunk of (idx, seed, rng_seed) episodes."""
-    from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
-
-    checkpoint_path, deterministic, red_agent, target_weight, items = args
+    checkpoint_path, deterministic, variant, items = args
     policy, params, _ = load_jax_checkpoint(checkpoint_path)
-    needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
     out = []
     for idx, seed, rng_seed in items:
-        env = make_env(seed=seed, red_agent=red_agent, target_weight=target_weight)
-        if needs_roles:
-            inject_role_map(env, ep_seed=seed)
-        r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
+        env = make_cyborg_env(variant, seed, wrapper_class=BlueFlatWrapper, wrapper_kwargs={"pad_spaces": True})
+        r = run_episode(
+            env,
+            variant,
+            ep_seed=seed,
+            policy=policy,
+            params=params,
+            deterministic=deterministic,
+            rng=jax.random.PRNGKey(rng_seed),
+        )
         out.append((idx, seed, r))
     return out
 
@@ -194,11 +183,10 @@ def _jax_worker(args):
 def evaluate_jax_on_cyborg(
     checkpoint_path: str | Path,
     *,
+    variant: GameVariant,
     seeds: list[int],
     episodes_per_seed: int,
     deterministic: bool = False,
-    red_agent: str = "finite_state",
-    target_weight: float = 5.0,
     workers: int = 1,
     progress: bool = True,
 ) -> tuple[list[float], list[int], dict]:
@@ -217,14 +205,17 @@ def evaluate_jax_on_cyborg(
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
 
     if workers <= 1:
-        from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
-
-        needs_roles = red_agent in ("resilience", "c", "i", "a", "cia_c", "cia_i", "cia_a")
         for idx, seed, rng_seed in items:
-            env = make_env(seed=seed, red_agent=red_agent, target_weight=target_weight)
-            if needs_roles:
-                inject_role_map(env, ep_seed=seed)
-            r = run_episode(env, policy, params, deterministic, jax.random.PRNGKey(rng_seed))
+            env = make_cyborg_env(variant, seed, wrapper_class=BlueFlatWrapper, wrapper_kwargs={"pad_spaces": True})
+            r = run_episode(
+                env,
+                variant,
+                ep_seed=seed,
+                policy=policy,
+                params=params,
+                deterministic=deterministic,
+                rng=jax.random.PRNGKey(rng_seed),
+            )
             rewards[idx] = r
             seed_log[idx] = seed
             if progress:
@@ -233,7 +224,7 @@ def evaluate_jax_on_cyborg(
 
     n_workers = min(workers, total)
     chunks = [items[i::n_workers] for i in range(n_workers)]
-    pargs = [(str(checkpoint_path), deterministic, red_agent, target_weight, c) for c in chunks]
+    pargs = [(str(checkpoint_path), deterministic, variant, c) for c in chunks]
     completed = 0
     ctx = mp.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:

@@ -14,7 +14,8 @@ from pathlib import Path
 import pytest
 
 from jaxborg.policies import POLICY_REGISTRY
-from jaxborg.recipe import load, project_cleanrl, project_jax
+from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, train_variant
+from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
 RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.glob("*.yaml"))
@@ -96,6 +97,16 @@ def test_cleanrl_projection(recipe):
         f"({cfg['num_envs']}*{cfg['rollout_length']}*{cfg['num_rollouts_per_update']})) — "
         f"too few to train"
     )
+
+
+def test_train_variant_resolves(recipe):
+    v = train_variant(recipe)
+    assert isinstance(v, GameVariant)
+
+
+def test_eval_variant_resolves(recipe):
+    v = eval_variant(recipe)
+    assert isinstance(v, GameVariant)
 
 
 def test_minibatch_divides_batch(recipe):

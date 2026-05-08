@@ -31,32 +31,19 @@ if str(ROOT) not in sys.path:
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
 
+from CybORG.Agents.Wrappers import EnterpriseMAE
+
 from jaxborg.constants import BLUE_OBS_SIZE
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.evaluation.cyborg_runner import load_torch_policy
-from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 OBS_DIM = BLUE_OBS_SIZE  # 210
 ACT_DIM = 242
 EPISODE_LENGTH = 500
-
-
-def make_env(seed, red_agent: str = "finite_state", target_weight: float = 5.0):
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, SleepAgent
-    from CybORG.Agents.Wrappers import EnterpriseMAE
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
-
-    from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
-
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=cyborg_red_class(red_agent, target_weight),
-        steps=EPISODE_LENGTH,
-    )
-    return EnterpriseMAE(CybORG(sg, "sim", seed=seed))
 
 
 def pad_obs_mask(obs_dict, info_dict):
@@ -103,8 +90,10 @@ def _capture_agent_records(unwrap, agent_ids):
     return out
 
 
-def rollout_episode(env, agent, device, deterministic, episode_seed, model_path, out_path, resilience_roles=None):
-    obs_d, info_d = env.reset()
+def rollout_episode(env, variant, agent, device, deterministic, episode_seed, model_path, out_path):
+    r = reset_cyborg_env(env, variant, ep_seed=episode_seed)
+    obs_d, info_d = r.obs, r.info
+    resilience_roles = r.role_map
     unwrap = env.unwrapped if hasattr(env, "unwrapped") else env
     ec = unwrap.environment_controller
     hosts = list(ec.state.hosts.keys())
@@ -187,16 +176,11 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     device = torch.device("cpu")
     agent, _recipe = load_torch_policy(model_path)
 
-    resilience_mode = False
-    red_agent = "finite_state"
-    target_weight = 5.0
+    variant: GameVariant = CC4_STOCK
     if recipe_path is not None:
-        from jaxborg.recipe import load, project_eval
+        from jaxborg.recipe import eval_variant, load
 
-        eval_cfg = project_eval(load(recipe_path))
-        resilience_mode = eval_cfg["resilience_mode"]
-        red_agent = eval_cfg["red_agent"]
-        target_weight = eval_cfg["resilience_target_weight"]
+        variant = eval_variant(load(recipe_path))
 
     torch.manual_seed(seed)
     np.random.seed(seed)
@@ -204,18 +188,13 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     output_dir = Path(output_dir)
     tag = tag or Path(model_path).stem.replace("model_", "")
 
-    print(f"red_agent: {red_agent}", flush=True)
+    print(f"variant: {variant.name} (red_agent={variant.red_agent})", flush=True)
     rewards = []
     for ep in range(episodes):
         ep_seed = seed + ep
-        env = make_env(ep_seed, red_agent=red_agent, target_weight=target_weight)
-        resilience_roles = None
-        if resilience_mode:
-            # Build per-episode role map from the env's full host list and push
-            # it into every red agent so red bias and recorded roles agree.
-            resilience_roles = inject_role_map(env, ep_seed)
+        env = make_cyborg_env(variant, ep_seed, wrapper_class=EnterpriseMAE)
         out_path = output_dir / f"{tag}_seed{ep_seed}.jsonl"
-        r, n = rollout_episode(env, agent, device, deterministic, ep_seed, model_path, out_path, resilience_roles)
+        r, n = rollout_episode(env, variant, agent, device, deterministic, ep_seed, model_path, out_path)
         rewards.append(r)
         print(f"  ep {ep + 1}/{episodes}: reward={r:+9.1f} steps={n}  → {out_path.name}", flush=True)
 
@@ -223,7 +202,7 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     print(f"episodes:     {episodes}")
     print(f"reward mean:  {sum(rewards) / len(rewards):+.4f}")
     print(f"trajectories: {output_dir}")
-    if resilience_mode:
+    if variant.resilience_roles:
         print("resilience_mode: ON (host_resilience_roles written to each trajectory header)")
 
 

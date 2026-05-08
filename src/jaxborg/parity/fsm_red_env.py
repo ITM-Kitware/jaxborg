@@ -94,6 +94,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         topology_path: str | Path | Sequence[str | Path] | None = None,
         red_selector: RedSelector = fsm_selector,
         extras_factory: ExtrasFactory = _empty_extras_factory,
+        op_zone_min_servers: int | None = None,
         name: Optional[str] = None,
     ):
         self._env = ScenarioEnv(
@@ -101,6 +102,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             topology_mode=topology_mode,
             training_mode=training_mode,
             topology_path=topology_path,
+            op_zone_min_servers=op_zone_min_servers,
         )
         self._red_selector = red_selector
         self._extras_factory = extras_factory
@@ -300,53 +302,3 @@ class FsmRedCC4Env(MultiAgentEnv):
     @property
     def agent_classes(self) -> dict:
         return {"blue_agents": self.agents}
-
-
-# ---------------------------------------------------------------------------
-# Convenience constructor — recipe-friendly.
-
-
-def make_fsm_red_env(
-    num_steps: int = 500,
-    *,
-    topology_mode: str = "generative",
-    training_mode: bool = False,
-    topology_path: str | Path | Sequence[str | Path] | None = None,
-    red_agent: str = "fsm",
-    target_weight: float = 5.0,
-    role_assignment: str | None = None,
-    **selector_kwargs: Any,
-) -> FsmRedCC4Env:
-    """Build an env from recipe-style names.
-
-    ``red_agent``: registry name (e.g. ``"fsm"``, ``"resilience"``, ``"cia_a"``).
-    ``role_assignment``: extras-factory name (currently only ``"resilience"``
-    is supplied; default ``None`` means no role assignment, and role-biased
-    selectors run with no bias). Auto-defaults to ``"resilience"`` when
-    ``red_agent`` requires roles.
-    """
-    from jaxborg.scenarios.cc4.red_selectors import make_red_selector
-
-    selector = make_red_selector(red_agent, target_weight=target_weight, **selector_kwargs)
-
-    needs_roles = red_agent not in ("fsm", "finite_state")
-    factory_name = role_assignment if role_assignment is not None else ("resilience" if needs_roles else None)
-    if factory_name == "resilience":
-        from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles_from_const
-
-        def extras_factory(key, const):
-            return {"host_resilience_role": assign_resilience_roles_from_const(const, key)}
-    elif factory_name is None:
-        extras_factory = _empty_extras_factory
-    else:
-        raise ValueError(f"Unknown role_assignment: {factory_name!r}")
-
-    return FsmRedCC4Env(
-        num_steps=num_steps,
-        topology_mode=topology_mode,
-        training_mode=training_mode,
-        topology_path=topology_path,
-        red_selector=selector,
-        extras_factory=extras_factory,
-        name=f"FsmRedCC4_{red_agent}",
-    )

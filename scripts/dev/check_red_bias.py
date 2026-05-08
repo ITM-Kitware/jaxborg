@@ -29,10 +29,13 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
+from dataclasses import replace
+
 import jax
 import jax.numpy as jnp
 
-from jaxborg.parity.fsm_red_env import make_fsm_red_env
+from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.scenarios.cc4.game_variants import variant_for_red
 from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_NONE, ROLE_WEB
 
 NUM_EPISODES = 3
@@ -77,7 +80,8 @@ def main():
     for name in SELECTORS:
         # Force role assignment for all selectors so "NONE %" reflects the same
         # underlying tag set; biased rows then show their lift vs the fsm baseline.
-        env = make_fsm_red_env(num_steps=EPISODE_STEPS, red_agent=name, role_assignment="resilience")
+        variant = replace(variant_for_red(name, resilience_roles=True), num_steps=EPISODE_STEPS)
+        env = make_jax_env(variant)
         agg: Counter = Counter()
         for ep in range(NUM_EPISODES):
             agg += rollout_one(env, jax.random.PRNGKey(1000 + ep))
