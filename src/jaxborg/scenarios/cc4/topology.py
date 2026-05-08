@@ -219,7 +219,13 @@ def load_topology(
     return create_initial_const(scenario_config).replace(**replacements)
 
 
-def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool = False) -> SimulatorConst:
+def build_topology(
+    key: jax.Array,
+    num_steps: int = 500,
+    *,
+    training_mode: bool = False,
+    op_zone_min_servers: int | None = None,
+) -> SimulatorConst:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
@@ -233,7 +239,12 @@ def build_topology(key: jax.Array, num_steps: int = 500, *, training_mode: bool 
     k_users, k_servers = jax.random.split(k_counts)
 
     n_users = jax.random.randint(k_users, (8,), 3, 11)
-    n_servers = jax.random.randint(k_servers, (8,), 1, 7)
+    random_n = jax.random.randint(k_servers, (8,), 1, 7)
+    if op_zone_min_servers is not None:
+        op_zone_alpha = jnp.array([False, False, False, True, True, False, False, False])
+        n_servers = jnp.where(op_zone_alpha, jnp.int32(op_zone_min_servers), random_n)
+    else:
+        n_servers = random_n
 
     hosts_per_alpha = jnp.concatenate([1 + n_servers + n_users, jnp.array([1])])
     cumsum = jnp.cumsum(hosts_per_alpha)

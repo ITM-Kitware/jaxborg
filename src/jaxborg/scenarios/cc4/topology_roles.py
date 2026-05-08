@@ -51,8 +51,10 @@ def assign_resilience_roles(
     exist, only the available roles are assigned (rest stay ROLE_NONE).
     """
     candidates = sorted(h for h in hostnames if is_operational_server(h))
+    if len(candidates) < 3:
+        raise ValueError(f"need ≥3 op-zone server candidates for AUTH/DB/WEB, got {len(candidates)}")
     rng.shuffle(candidates)
-    return dict(zip(candidates[:3], (ROLE_AUTH, ROLE_DB, ROLE_WEB)))
+    return dict(zip(candidates, (ROLE_AUTH, ROLE_DB, ROLE_WEB)))
 
 
 def role_name(role: int) -> str:
@@ -86,23 +88,16 @@ def assign_resilience_roles_from_const(
     is_resilience_zone = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.bool_)
     for sid in _RESILIENCE_ZONE_SUBNETS:
         is_resilience_zone = is_resilience_zone | (const.host_subnet == sid)
-
     candidates = const.host_active & const.host_is_server & is_resilience_zone
 
-    # Random ordering among candidates; non-candidates pushed to the end.
     noise = jax.random.uniform(key, shape=(GLOBAL_MAX_HOSTS,))
     scores = jnp.where(candidates, noise, jnp.float32(jnp.inf))
     ranks = jnp.argsort(scores)
-    auth_host = ranks[0]
-    db_host = ranks[1]
-    web_host = ranks[2]
+    auth_host, db_host, web_host = ranks[0], ranks[1], ranks[2]
 
-    n_candidates = jnp.sum(candidates.astype(jnp.int32))
     idx = jnp.arange(GLOBAL_MAX_HOSTS)
     host_resilience_role = jnp.zeros(GLOBAL_MAX_HOSTS, dtype=jnp.int32)
-    host_resilience_role = jnp.where(
-        (idx == auth_host) & (n_candidates >= 1), jnp.int32(ROLE_AUTH), host_resilience_role
-    )
-    host_resilience_role = jnp.where((idx == db_host) & (n_candidates >= 2), jnp.int32(ROLE_DB), host_resilience_role)
-    host_resilience_role = jnp.where((idx == web_host) & (n_candidates >= 3), jnp.int32(ROLE_WEB), host_resilience_role)
+    host_resilience_role = jnp.where(idx == auth_host, jnp.int32(ROLE_AUTH), host_resilience_role)
+    host_resilience_role = jnp.where(idx == db_host, jnp.int32(ROLE_DB), host_resilience_role)
+    host_resilience_role = jnp.where(idx == web_host, jnp.int32(ROLE_WEB), host_resilience_role)
     return host_resilience_role

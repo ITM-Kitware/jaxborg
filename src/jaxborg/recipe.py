@@ -26,6 +26,9 @@ from typing import Any
 
 import yaml
 
+from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.scenarios.cc4.game_variants import VARIANTS
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
 
@@ -59,13 +62,23 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         raise ValueError(f"{source}: core.lr is required")
 
 
+def train_variant(recipe: dict[str, Any]) -> GameVariant:
+    name = recipe.get("train", {}).get("variant", "cc4_stock")
+    return VARIANTS[name]
+
+
+def eval_variant(recipe: dict[str, Any]) -> GameVariant:
+    eval_cfg = recipe.get("eval") or {}
+    name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
+    return VARIANTS[name]
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]
     arch = recipe["arch"]
     train = recipe["train"]
     jax_ = recipe.get("jax", {})
-    eval_ = recipe.get("eval", {})
     return {
         "LR": float(core["lr"]),
         "GAMMA": float(core["gamma"]),
@@ -89,9 +102,8 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),
-        "RED_AGENT": train.get("red_agent") or eval_.get("red_agent", "finite_state"),
-        "RESILIENCE_MODE": bool(eval_.get("resilience_mode", False)),
-        "RESILIENCE_TARGET_WEIGHT": float(eval_.get("resilience_target_weight", 5.0)),
+        "TRAIN_VARIANT": train_variant(recipe),
+        "EVAL_VARIANT": eval_variant(recipe),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
     }
@@ -111,9 +123,6 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         rollouts_per_update = int(cr["num_rollouts_per_update"])
     else:
         rollouts_per_update = max(1, math.ceil(int(train["buffer_size"]) / per_rollout))
-
-    ev = recipe.get("eval", {})
-    train_red_agent = train.get("red_agent") or ev.get("red_agent", "finite_state")
 
     return {
         "lr": float(core["lr"]),
@@ -135,34 +144,22 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         "num_epochs": int(cr.get("num_epochs", 4)),
         "num_minibatches": int(cr.get("num_minibatches", 16)),
         "total_timesteps": int(train["total_timesteps"]),
-        "red_agent": train_red_agent,
-        "resilience_target_weight": float(ev.get("resilience_target_weight", 5.0)),
+        "TRAIN_VARIANT": train_variant(recipe),
+        "EVAL_VARIANT": eval_variant(recipe),
     }
 
 
 def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten the eval section of a recipe into a config dict.
 
-    Returns defaults if the recipe has no ``eval`` section.
-
     Keys returned:
-        cia_metric      — only "resilience" today; default if unset
-        resilience_mode — bool; when True use resilience topology + metric
-        red_agent       — red agent selector:
-                          "finite_state" (default) or "sleep" for CybORG eval;
-                          "c", "i", "a" for JAX targeted training agents
+        cia_metric    — only "resilience" today; default if unset
+        EVAL_VARIANT  — resolved GameVariant
     """
-    ev = recipe.get("eval", {})
-
-    cia_metric = ev.get("cia_metric", "resilience")
-    resilience_mode = bool(ev.get("resilience_mode", False))
-    red_agent = ev.get("red_agent", "finite_state")
-
+    ev = recipe.get("eval") or {}
     return {
-        "cia_metric": cia_metric,
-        "resilience_mode": resilience_mode,
-        "red_agent": red_agent,
-        "resilience_target_weight": float(ev.get("resilience_target_weight", 5.0)),
+        "cia_metric": ev.get("cia_metric", "resilience"),
+        "EVAL_VARIANT": eval_variant(recipe),
     }
 
 

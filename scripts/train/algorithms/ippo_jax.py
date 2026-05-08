@@ -47,12 +47,13 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.checkpoint import save_jax_params, write_sidecar
+from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
-from jaxborg.parity.fsm_red_env import make_fsm_red_env
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_jax
+from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 
 class Transition(NamedTuple):
@@ -85,12 +86,10 @@ def compute_value_loss(value, old_value, targets, clip_eps, clip_value_loss):
 def make_train(config, network):
     """Build env and a single JIT'd collect_and_update fn from a flat config."""
     num_envs = config["NUM_ENVS"]
-    _red_agent = config.get("RED_AGENT") or ("resilience" if config.get("RESILIENCE_MODE", False) else "fsm")
-    inner_env = make_fsm_red_env(
-        num_steps=500,
+    variant: GameVariant = config["TRAIN_VARIANT"]
+    inner_env = make_jax_env(
+        variant,
         training_mode=bool(config.get("TRAINING_MODE", True)),
-        red_agent=_red_agent,
-        target_weight=float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0)),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
@@ -335,12 +334,10 @@ def main():
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
     # Build a throwaway env to get action_dim for network init.
-    _red_agent = config.get("RED_AGENT") or ("resilience" if config.get("RESILIENCE_MODE", False) else "fsm")
-    inner_env = make_fsm_red_env(
-        num_steps=500,
+    variant: GameVariant = config["TRAIN_VARIANT"]
+    inner_env = make_jax_env(
+        variant,
         topology_mode=config.get("TOPOLOGY_MODE", "generative"),
-        red_agent=_red_agent,
-        target_weight=float(config.get("RESILIENCE_TARGET_WEIGHT", 5.0)),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
