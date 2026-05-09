@@ -12,9 +12,9 @@ CIA_RESILIENCE = GameVariant(
     op_zone_servers=3,
     resilience_roles=True,
 )
-CIA_C = replace(CIA_RESILIENCE, name="cia_c", red_agent="c")
-CIA_I = replace(CIA_RESILIENCE, name="cia_i", red_agent="i")
-CIA_A = replace(CIA_RESILIENCE, name="cia_a", red_agent="a")
+CIA_C = replace(CIA_RESILIENCE, name="cia_c", red_agent="c", target_weight=10.0)
+CIA_I = replace(CIA_RESILIENCE, name="cia_i", red_agent="i", target_weight=10.0)
+CIA_A = replace(CIA_RESILIENCE, name="cia_a", red_agent="a", target_weight=10.0)
 
 VARIANTS: dict[str, GameVariant] = {v.name: v for v in (CC4_STOCK, CIA_RESILIENCE, CIA_C, CIA_I, CIA_A)}
 
