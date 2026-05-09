@@ -43,7 +43,12 @@ jobs:
   test-slow:
     name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    # Cold-cache headroom: with no .test_durations_cache populated yet,
+    # pytest-split round-robins by test count and heavy parametrized tests
+    # cluster into a couple of shards (~70 min wall serial). Once a clean
+    # run finishes, the per-shard partials accumulate in cache and steady-
+    # state per shard drops well under 30 min.
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
