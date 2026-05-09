@@ -26,7 +26,7 @@ def test_cia_subvariants_share_topology_constraints():
     for v in (CIA_C, CIA_I, CIA_A):
         assert v.op_zone_servers == 3
         assert v.resilience_roles is True
-        assert v.target_weight == 5.0
+        assert v.target_weight == 10.0
 
 
 def test_variants_registry_is_complete():

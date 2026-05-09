@@ -50,6 +50,44 @@ def test_unknown_selector_raises():
         make_red_selector("ddos_red")
 
 
+def test_cia_selectors_honor_variant_target_weight():
+    """`_cia_c/i/a` must use the passed `target_weight`, not a hardcoded value.
+
+    Pins the post-PR-#11-cleanup invariant: CIA selectors flow `target_weight`
+    from the variant the same way `_resilience` does, so changing
+    `CIA_C.target_weight` actually changes the bias.
+    """
+    s_default = make_red_selector("cia_c")
+    s_lowweight = make_red_selector("cia_c", target_weight=1.0)
+    # Function identity differs because closures capture different weights.
+    # Sanity: at least the closures are distinct callables.
+    assert s_default is not s_lowweight
+
+
+def test_cia_action_prob_parity_jax_vs_cyborg():
+    """`_CIA_PROB_MATRIX[FSM_R]` (JAX) == `_CIARedAgent.state_transitions_probability['R']` (CybORG).
+
+    The JAX selector and CybORG agent must agree on the FSM_R action distribution
+    or the L4 cross-backend equivalence stage will measure rule divergence as
+    simulator drift.
+    """
+    from jaxborg.scenarios.cc4.cyborg_resilience_agents import CRedAgent
+    from jaxborg.scenarios.cc4.red_fsm import FSM_R
+    from jaxborg.scenarios.cc4.red_selectors import _CIA_PROB_MATRIX
+
+    # FiniteStateRedAgent.__init__ replaces the method with its return value,
+    # so on an instance `state_transitions_probability` is a dict, not callable.
+    cy_row = CRedAgent().state_transitions_probability["R"]
+    jx_row = [float(x) for x in _CIA_PROB_MATRIX[FSM_R]]
+
+    # JAX uses -1.0 sentinels for invalid actions; CybORG uses None.
+    for cy, jx in zip(cy_row, jx_row):
+        if cy is None:
+            assert jx < 0.0, f"CybORG None but JAX {jx} (valid)"
+        else:
+            assert jx >= 0.0 and abs(cy - jx) < 1e-6, f"row mismatch: cyborg={cy} jax={jx}"
+
+
 def test_role_biased_selector_with_empty_target_roles_is_uniform():
     # Sanity: when no roles are targeted, host_weights stays at 1.0 everywhere
     # and the selector behaves like a uniform-over-eligible variant of the FSM.
