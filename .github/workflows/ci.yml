@@ -43,12 +43,7 @@ jobs:
   test-slow:
     name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
-    # 8 shards keeps the heaviest shard well under an hour even on the first
-    # run before .test_durations is populated (round-robin by test count
-    # leaves heavy parametrized tests clustered, so going wider than strictly
-    # needed buys headroom). 240min is a safety net for that first run only —
-    # GitHub hard-cancels jobs at 360min regardless of this value.
-    timeout-minutes: 240
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -59,15 +54,39 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      # .test_durations lives in the GH Actions cache, not git — committing
-      # it would thrash history every run. Each shard restores the most
-      # recent durations file (any group, any run), reuses it for balanced
-      # splitting, then saves its own updated copy under a unique key.
-      # Over runs, fresh entries from every group accumulate in the cache.
+      # Per-shard duration partials live in .test_durations_cache/ as
+      # group-N.json. Each shard restores the latest cache (any shard's
+      # snapshot — most recent wins), merges all known partials into
+      # .test_durations for pytest-split, runs its slice with
+      # --store-durations, then snapshots its own partial back and saves.
+      # Over successive runs partials from every shard accumulate.
       - uses: actions/cache@v4
         with:
-          path: .test_durations
+          path: .test_durations_cache
           key: slow-durations-${{ github.run_id }}-${{ matrix.group }}
           restore-keys: |
             slow-durations-
-      - run: uv run pytest -m slow --splits 8 --group ${{ matrix.group }} --store-durations
+      - name: Merge cached duration partials
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          merged = {}
+          cache = pathlib.Path('.test_durations_cache')
+          if cache.is_dir():
+              for f in sorted(cache.glob('group-*.json')):
+                  try:
+                      merged.update(json.loads(f.read_text()))
+                  except Exception:
+                      pass
+          if merged:
+              pathlib.Path('.test_durations').write_text(json.dumps(merged, indent=2))
+          PY
+      # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
+      # parallelism axis here, and stacking xdist on top contends on the JAX
+      # persistent-cache lock (cold cache + many tiny compiles).
+      - run: uv run pytest -o "addopts=" -m slow --splits 8 --group ${{ matrix.group }} --store-durations
+      - name: Snapshot this shard's partial durations
+        if: always()
+        run: |
+          mkdir -p .test_durations_cache
+          [ -f .test_durations ] && cp .test_durations .test_durations_cache/group-${{ matrix.group }}.json || true
