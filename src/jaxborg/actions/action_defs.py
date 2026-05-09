@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from jaxborg.constants import (
     BLUE_ACTION_HOST_SLOTS,
     BLUE_MAX_OBSERVED_SUBNETS,
@@ -190,19 +192,17 @@ def _global_host_to_relative_slot(const: SimulatorConst, global_host: int, agent
     Returns -1 if the host's subnet is not in the agent's observed subnets
     or the host is not in obs_host_map.
     """
-    sid = int(const.host_subnet[global_host])
-    # Find which relative index (0, 1, 2) this subnet maps to for this agent
-    rel_idx = -1
-    for i in range(BLUE_MAX_OBSERVED_SUBNETS):
-        if int(const.blue_obs_subnets[agent_id, i]) == sid:
-            rel_idx = i
-            break
-    if rel_idx < 0:
+    sid = int(np.asarray(const.host_subnet[global_host]))
+    blue_subnets = np.asarray(const.blue_obs_subnets[agent_id, :BLUE_MAX_OBSERVED_SUBNETS])
+    rel_matches = np.flatnonzero(blue_subnets == sid)
+    if rel_matches.size == 0:
         return -1
-    for slot in range(OBS_VECTOR_HOSTS_PER_SUBNET):
-        if int(const.obs_host_map[sid, slot]) == global_host:
-            return rel_idx * OBS_VECTOR_HOSTS_PER_SUBNET + slot
-    return -1
+    rel_idx = int(rel_matches[0])
+    obs_row = np.asarray(const.obs_host_map[sid, :OBS_VECTOR_HOSTS_PER_SUBNET])
+    slot_matches = np.flatnonzero(obs_row == global_host)
+    if slot_matches.size == 0:
+        return -1
+    return rel_idx * OBS_VECTOR_HOSTS_PER_SUBNET + int(slot_matches[0])
 
 
 def _abs_subnet_to_relative(const: SimulatorConst, subnet_id: int, agent_id: int) -> int:
@@ -210,10 +210,9 @@ def _abs_subnet_to_relative(const: SimulatorConst, subnet_id: int, agent_id: int
 
     Returns -1 if the subnet is not in the agent's observed subnets.
     """
-    for i in range(BLUE_MAX_OBSERVED_SUBNETS):
-        if int(const.blue_obs_subnets[agent_id, i]) == subnet_id:
-            return i
-    return -1
+    blue_subnets = np.asarray(const.blue_obs_subnets[agent_id, :BLUE_MAX_OBSERVED_SUBNETS])
+    matches = np.flatnonzero(blue_subnets == subnet_id)
+    return int(matches[0]) if matches.size else -1
 
 
 def encode_blue_action(

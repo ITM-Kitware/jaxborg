@@ -12,6 +12,8 @@ jaxborg-exp/
 mlruns/
 .agent_handoff/
 .jax_cache/
+.test_durations
+.test_durations_cache/
 slurm-*.out
 scripts/dev/catalog_status.json
 outputs/*
