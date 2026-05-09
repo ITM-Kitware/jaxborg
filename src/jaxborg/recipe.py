@@ -73,6 +73,31 @@ def eval_variant(recipe: dict[str, Any]) -> GameVariant:
     return VARIANTS[name]
 
 
+def resolve_eval_variant(
+    *,
+    recipe_name: str | None = None,
+    checkpoint: str | Path | None = None,
+    default: GameVariant | None = None,
+) -> GameVariant:
+    """Resolve the eval variant by precedence: explicit recipe → checkpoint sidecar → default.
+
+    One canonical helper for every entry-point script. ``recipe_name`` accepts
+    either a recipe name (``"singh"``) or an absolute path. ``checkpoint`` is
+    a ``.safetensors`` path whose paired ``recipe_*.yaml`` sidecar is read
+    when ``recipe_name`` is unset. If both are unset, returns ``default``
+    (or ``CC4_STOCK`` if ``default`` is None).
+    """
+    from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+
+    if recipe_name is not None:
+        return eval_variant(load(recipe_name))
+    if checkpoint is not None:
+        from jaxborg.checkpoint import read_sidecar
+
+        return eval_variant(read_sidecar(checkpoint))
+    return default if default is not None else CC4_STOCK
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]

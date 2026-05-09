@@ -13,6 +13,7 @@ from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, OBS_VECTOR_HOSTS_PER_SUBNET
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env
 from jaxborg.parity.translate import build_mappings_from_cyborg, describe_blue_action, jax_blue_to_cyborg
+from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from scripts.dev.parity.cyborg_bridge import (
     _live_blue_wrapper_mask_in_jax_space,
@@ -23,13 +24,15 @@ from scripts.dev.parity.policy import policy_dist
 from scripts.dev.parity.stats import ACTION_TYPE_NAMES, ACTION_TYPE_RANGES
 
 
-def run_sleep_baseline(episodes=5):
+def run_sleep_baseline(episodes=5, *, variant=None):
     from CybORG.Simulator.Actions import Sleep
 
     totals = []
     for ep in range(episodes):
-        env = make_cyborg_env(seed=ep)
+        env = make_cyborg_env(seed=ep, variant=variant)
         env.reset()
+        if variant is not None and variant.resilience_roles:
+            inject_role_map(env, ep_seed=ep)
         total = 0.0
         for _ in range(500):
             actions = {a: Sleep() for a in env.agents}
@@ -39,12 +42,15 @@ def run_sleep_baseline(episodes=5):
     return mean(totals)
 
 
-def run_random_baseline(episodes=5, seed=42):
+def run_random_baseline(episodes=5, seed=42, *, variant=None):
     rng = np.random.default_rng(seed)
     totals = []
     for ep in range(episodes):
-        env = make_cyborg_env(seed=seed + ep)
+        ep_seed = seed + ep
+        env = make_cyborg_env(seed=ep_seed, variant=variant)
         _, _ = env.reset()
+        if variant is not None and variant.resilience_roles:
+            inject_role_map(env, ep_seed=ep_seed)
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)

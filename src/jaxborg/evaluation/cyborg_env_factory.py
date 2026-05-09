@@ -30,9 +30,15 @@ def make_cyborg_env(
     variant: GameVariant,
     seed: int,
     *,
-    wrapper_class: type,
+    wrapper_class: type | None,
     wrapper_kwargs: dict | None = None,
 ):
+    """Build a CybORG env from a :class:`GameVariant`.
+
+    ``wrapper_class=None`` returns the raw :class:`CybORG` instance for callers
+    that need to drive ``parallel_step`` directly. Otherwise the wrapper is
+    instantiated as ``wrapper_class(env=cyborg, **wrapper_kwargs)``.
+    """
     sg_kwargs = dict(
         blue_agent_class=SleepAgent,
         green_agent_class=EnterpriseGreenAgent,
@@ -47,6 +53,8 @@ def make_cyborg_env(
 
     sg = sg_class(**sg_kwargs)
     cyborg = CybORG(sg, "sim", seed=seed)
+    if wrapper_class is None:
+        return cyborg
     return wrapper_class(env=cyborg, **(wrapper_kwargs or {}))
 
 

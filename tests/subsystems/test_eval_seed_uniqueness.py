@@ -29,14 +29,24 @@ def test_make_cyborg_env_accepts_distinct_seeds():
     We don't actually instantiate the env (CybORG is heavyweight); inspecting
     the source is enough to catch the regression class we care about (someone
     silently re-introducing a ``seed * N`` collapse inside ``make_cyborg_env``).
+
+    The bridge delegates to ``evaluation.cyborg_env_factory.make_cyborg_env``,
+    so we check both layers: bridge passes ``seed`` unmodified, and the
+    factory threads it into ``CybORG(...)``.
     """
-    src = inspect.getsource(cyborg_bridge.make_cyborg_env)
-    # The function must thread `seed` straight through to CybORG without
-    # any deterministic mod/divide/bank-index transform.
-    assert 'CybORG(sg, "sim", seed=seed)' in src or "seed=seed" in src
-    # No leftover bank-index helpers.
-    assert "cyborg_bank_seed_from_seed" not in src
-    assert "cyborg_bank_index_from_key" not in src
+    from jaxborg.evaluation import cyborg_env_factory
+
+    bridge_src = inspect.getsource(cyborg_bridge.make_cyborg_env)
+    factory_src = inspect.getsource(cyborg_env_factory.make_cyborg_env)
+
+    # Bridge must pass `seed` through to the factory unmodified.
+    assert "seed," in bridge_src or "seed=seed" in bridge_src
+    # Factory must thread `seed` into the CybORG constructor.
+    assert 'CybORG(sg, "sim", seed=seed)' in factory_src or "seed=seed" in factory_src
+    # No leftover bank-index helpers anywhere.
+    for src in (bridge_src, factory_src):
+        assert "cyborg_bank_seed_from_seed" not in src
+        assert "cyborg_bank_index_from_key" not in src
 
 
 def test_eval_loops_use_seed_plus_ep():
