@@ -1,0 +1,53 @@
+meta:
+  name: cec_phase6_C00
+  source: "Phase 6 plan — plans/jax/cc4/cec/cec-phase6-plan.md (Test 2 / 2×2 factorial)"
+  added: 2026-05-09
+  notes: |
+    Phase 6 ZSC training matrix — arm C00 (control: fixed shape, fixed mission).
+    Forks Matched-Training v2 hyperparameters from recipes/default.yaml.
+
+    Run matrix per the plan: 4 arms × 3 seeds × 3M timesteps. CEC-faithful —
+    training partner is fixed (cc4_stock variant's red = fsm). Eval-time
+    held-out partner sweep happens via eval_recipe.py's --eval-red flag
+    (recipes are training-side only).
+
+algorithm: ippo
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 3000000
+  variant: cc4_stock
+
+eval:
+  variant: cc4_stock
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
