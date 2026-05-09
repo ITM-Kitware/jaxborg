@@ -27,7 +27,7 @@ from typing import Any
 import yaml
 
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.scenarios.cc4.game_variants import VARIANTS
+from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
@@ -68,9 +68,26 @@ def train_variant(recipe: dict[str, Any]) -> GameVariant:
 
 
 def eval_variant(recipe: dict[str, Any]) -> GameVariant:
+    """Resolve the eval-time GameVariant.
+
+    Precedence:
+      1. ``eval.red`` (if set) — overrides the variant's red selector. The
+         base variant (``eval.variant`` or ``train.variant``) is used only to
+         decide ``resilience_roles`` for the fsm path; CIA-biased reds
+         (``cia_c`` / ``cia_i`` / ``cia_a`` / ``resilience``) carry their
+         own resilience_roles=True since their selectors require role tags.
+         This means setting ``eval.red: cia_a`` on a ``cc4_stock`` recipe
+         forces ``resilience_roles=True`` to keep the selector consistent.
+      2. ``eval.variant`` — full variant name in ``VARIANTS``.
+      3. ``train.variant`` — fallback if no eval section is configured.
+    """
     eval_cfg = recipe.get("eval") or {}
-    name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
-    return VARIANTS[name]
+    base_name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
+    base = VARIANTS[base_name]
+    red = eval_cfg.get("red")
+    if red is None:
+        return base
+    return variant_for_red(red, resilience_roles=base.resilience_roles)
 
 
 def resolve_eval_variant(
