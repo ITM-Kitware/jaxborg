@@ -19,6 +19,34 @@ from jaxborg.constants import (
     SUBNET_NAMES,
 )
 
+# Phase 6 axis B (mission-profile multiplier bank).  Per ``env.reset``, sample
+# one ``(LWF, ASF, RIA)`` triple from this bank to scale ``const.phase_rewards``.
+# Bank[0] is the default ``(1, 1, 1)`` — when the bank is reduced to that single
+# entry (or disabled), behavior matches legacy CC4 exactly.
+#
+# The default 4-entry bank uses 3× amplification on one CIA component at a time
+# (Phase 6 plan §"Axis B"), with a 10× fallback exposed via the
+# ``mission_bank_amplify`` recipe knob.  ``mission_bank_amplify`` multiplies the
+# *entire* sampled triple element-wise — applied after sampling, so amplify=10
+# with a (1, 3, 1) entry yields (10, 30, 10), not (1, 30, 1).  This keeps the
+# implementation simple (no special-casing of the off-axis 1.0 entries).
+#
+# Order: ``LWF=0, ASF=1, RIA=2`` per ``src/jaxborg/rewards.py``.
+MISSION_PROFILE_MULTIPLIERS: tuple[tuple[float, float, float], ...] = (
+    # (LWF, ASF, RIA)
+    (1.0, 1.0, 1.0),  # default — balanced
+    (3.0, 1.0, 1.0),  # productivity-heavy: amplify LWF
+    (1.0, 3.0, 1.0),  # availability-heavy: amplify ASF
+    (1.0, 1.0, 3.0),  # CI-heavy: amplify RIA
+)
+NUM_MISSION_PROFILES = len(MISSION_PROFILE_MULTIPLIERS)
+
+
+def get_mission_profile_multipliers() -> np.ndarray:
+    """(NUM_MISSION_PROFILES, 3) float32 multipliers in (LWF, ASF, RIA) order."""
+    return np.asarray(MISSION_PROFILE_MULTIPLIERS, dtype=np.float32)
+
+
 _ROUTER_LINKS = {
     "INTERNET": [
         "RESTRICTED_ZONE_A",

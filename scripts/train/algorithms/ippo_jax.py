@@ -90,6 +90,8 @@ def make_train(config, network):
     inner_env = make_jax_env(
         variant,
         training_mode=bool(config.get("TRAINING_MODE", True)),
+        mission_bank=config.get("MISSION_BANK"),
+        mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
@@ -338,6 +340,8 @@ def main():
     inner_env = make_jax_env(
         variant,
         topology_mode=config.get("TOPOLOGY_MODE", "generative"),
+        mission_bank=config.get("MISSION_BANK"),
+        mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(

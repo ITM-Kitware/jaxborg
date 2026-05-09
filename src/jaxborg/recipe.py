@@ -98,6 +98,26 @@ def resolve_eval_variant(
     return default if default is not None else CC4_STOCK
 
 
+def _project_mission_bank(train: dict[str, Any]) -> list[list[float]] | None:
+    """Project ``train.mission_bank`` to a list of (LWF, ASF, RIA) triples.
+
+    Returns ``None`` when the recipe omits ``mission_bank`` or supplies an
+    empty list — both signal "no per-reset variation" (legacy behavior).
+    """
+    bank = train.get("mission_bank")
+    if bank is None:
+        return None
+    out: list[list[float]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(f"train.mission_bank entries must be (LWF, ASF, RIA) triples; got {entry!r}")
+        out.append([float(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]
@@ -131,6 +151,8 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "EVAL_VARIANT": eval_variant(recipe),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
+        "MISSION_BANK": _project_mission_bank(train),
+        "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
     }
 
 

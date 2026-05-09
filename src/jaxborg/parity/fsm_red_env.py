@@ -95,6 +95,8 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_selector: RedSelector = fsm_selector,
         extras_factory: ExtrasFactory = _empty_extras_factory,
         op_zone_min_servers: int | None = None,
+        mission_bank: Sequence[Sequence[float]] | None = None,
+        mission_bank_amplify: float = 1.0,
         name: Optional[str] = None,
     ):
         self._env = ScenarioEnv(
@@ -103,6 +105,8 @@ class FsmRedCC4Env(MultiAgentEnv):
             training_mode=training_mode,
             topology_path=topology_path,
             op_zone_min_servers=op_zone_min_servers,
+            mission_bank=mission_bank,
+            mission_bank_amplify=mission_bank_amplify,
         )
         self._red_selector = red_selector
         self._extras_factory = extras_factory
