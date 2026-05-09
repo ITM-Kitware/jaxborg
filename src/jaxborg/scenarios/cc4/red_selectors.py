@@ -227,8 +227,6 @@ def _select_all_red_agents(
 # ---------------------------------------------------------------------------
 # Registry — name → factory(**kwargs) → RedSelector.
 
-_FIXED_CIA_TARGET_WEIGHT = 10.0
-
 
 def _resilience(target_weight: float = 5.0, **_) -> RedSelector:
     return role_biased_selector(
@@ -237,28 +235,28 @@ def _resilience(target_weight: float = 5.0, **_) -> RedSelector:
     )
 
 
-def _cia_c(**_) -> RedSelector:
+def _cia_c(target_weight: float = 10.0, **_) -> RedSelector:
     return role_biased_selector(
         target_roles=(ROLE_AUTH, ROLE_DB),
-        target_weight=_FIXED_CIA_TARGET_WEIGHT,
+        target_weight=float(target_weight),
         prob_matrix=_CIA_PROB_MATRIX,
         valid_mask=_CIA_VALID_MASK,
     )
 
 
-def _cia_i(**_) -> RedSelector:
+def _cia_i(target_weight: float = 10.0, **_) -> RedSelector:
     return role_biased_selector(
         target_roles=(ROLE_AUTH, ROLE_WEB),
-        target_weight=_FIXED_CIA_TARGET_WEIGHT,
+        target_weight=float(target_weight),
         prob_matrix=_CIA_PROB_MATRIX,
         valid_mask=_CIA_VALID_MASK,
     )
 
 
-def _cia_a(**_) -> RedSelector:
+def _cia_a(target_weight: float = 10.0, **_) -> RedSelector:
     return role_biased_selector(
         target_roles=(ROLE_AUTH, ROLE_DB, ROLE_WEB),
-        target_weight=_FIXED_CIA_TARGET_WEIGHT,
+        target_weight=float(target_weight),
         prob_matrix=_CIA_PROB_MATRIX,
         valid_mask=_CIA_VALID_MASK,
     )

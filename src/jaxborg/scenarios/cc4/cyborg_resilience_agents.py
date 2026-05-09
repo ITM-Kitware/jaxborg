@@ -73,6 +73,12 @@ class _CIARedAgent(ResilienceRedAgent):
     ``_target_roles`` selects which of {ROLE_AUTH, ROLE_DB, ROLE_WEB} the bias
     points at. Hosts whose role is in that set get ``_target_weight``; all
     others (including untagged op-zone servers) keep weight 1.0.
+
+    Action selection at the root-access state ``R`` is also biased: the stock
+    ``FiniteStateRedAgent`` matrix splits ``R`` between Discover (0.50),
+    Impact (0.25), and Degrade (0.25); CIA agents shift mass toward Impact
+    (0.45) and Degrade (0.45) with only 0.10 left on Discover. Mirrors the
+    JAX ``_CIA_PROB_MATRIX``.
     """
 
     _target_roles: frozenset[int] = frozenset({ROLE_AUTH, ROLE_DB, ROLE_WEB})
@@ -88,6 +94,11 @@ class _CIARedAgent(ResilienceRedAgent):
         total = sum(weights)
         probs = [w / total for w in weights]
         return self.np_random.choice(host_options, p=probs)
+
+    def state_transitions_probability(self):
+        m = super().state_transitions_probability()
+        m["R"] = [0.10, None, None, None, None, None, 0.45, 0.45, 0.0]
+        return m
 
 
 class CRedAgent(_CIARedAgent):
