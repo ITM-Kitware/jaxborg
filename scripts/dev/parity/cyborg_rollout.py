@@ -18,6 +18,7 @@ import numpy as np
 
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.parity.translate import build_mappings_from_cyborg, jax_blue_to_cyborg
+from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from scripts.dev.parity.cyborg_bridge import (
     _build_cyborg_mask_cache,
@@ -31,13 +32,16 @@ from scripts.dev.parity.rollout_types import CyborgRollout
 
 def _rollout_cyborg_single_episode(args_tuple):
     """Run a single CybORG episode in its own process. Returns (ep, reward, actions_by_agent)."""
-    ep, checkpoint_path, deterministic, seed = args_tuple
+    ep, checkpoint_path, deterministic, seed, variant = args_tuple
 
     policy, params = load_checkpoint(checkpoint_path)
     batched_step = make_batched_inference_fn(policy, params, deterministic)
 
-    env = make_cyborg_env(seed=seed + ep)
+    ep_seed = seed + ep
+    env = make_cyborg_env(seed=ep_seed, variant=variant)
     observations, _ = env.reset()
+    if variant is not None and variant.resilience_roles:
+        inject_role_map(env, ep_seed=ep_seed)
     inner = env.env
     const = build_const_from_cyborg(inner)
     mappings = build_mappings_from_cyborg(inner)
@@ -150,6 +154,7 @@ def rollout_cyborg(
     checkpoint_path=None,
     parallel=True,
     max_workers=None,
+    variant=None,
 ):
     if parallel and checkpoint_path:
         import multiprocessing
@@ -161,7 +166,7 @@ def rollout_cyborg(
 
         print(f"  Running {num_episodes} CybORG episodes in parallel ({max_workers} workers)...", flush=True)
         t0 = time.perf_counter()
-        args_list = [(ep, checkpoint_path, deterministic, seed) for ep in range(num_episodes)]
+        args_list = [(ep, checkpoint_path, deterministic, seed, variant) for ep in range(num_episodes)]
         all_actions_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         all_busy_by_agent = [[] for _ in range(NUM_BLUE_AGENTS)]
         all_phase_per_step: list = [[] for _ in range(num_episodes)]
@@ -214,8 +219,11 @@ def rollout_cyborg(
 
     for ep in range(num_episodes):
         t0 = time.perf_counter()
-        env = make_cyborg_env(seed=seed + ep)
+        ep_seed = seed + ep
+        env = make_cyborg_env(seed=ep_seed, variant=variant)
         observations, _ = env.reset()
+        if variant is not None and variant.resilience_roles:
+            inject_role_map(env, ep_seed=ep_seed)
         inner = env.env
         const = build_const_from_cyborg(inner)
         mappings = build_mappings_from_cyborg(inner)

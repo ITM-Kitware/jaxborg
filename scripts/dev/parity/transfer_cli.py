@@ -16,6 +16,7 @@ from statistics import stdev
 import numpy as np
 
 from jaxborg.constants import NUM_BLUE_AGENTS
+from jaxborg.recipe import resolve_eval_variant
 from scripts.dev.parity.cyborg_rollout import rollout_cyborg
 from scripts.dev.parity.diagnostics import (
     print_mask_summary,
@@ -78,6 +79,8 @@ def main():
 
     print(f"Loading checkpoint: {args.checkpoint}")
     policy, params = load_checkpoint(args.checkpoint)
+    variant = resolve_eval_variant(checkpoint=args.checkpoint)
+    print(f"Eval variant: {variant.name} (red_agent={variant.red_agent}, resilience_roles={variant.resilience_roles})")
 
     if args.mask_summary:
         print_mask_summary()
@@ -96,6 +99,7 @@ def main():
             args.episodes,
             deterministic,
             seed=args.seed,
+            variant=variant,
         )
         jax_actions = jax_rollout.actions
         jax_rewards = jax_rollout.rewards
@@ -184,6 +188,7 @@ def main():
                 args.episodes,
                 deterministic,
                 seed=args.seed,
+                variant=variant,
             )
 
         def _run_cyborg():
@@ -195,6 +200,7 @@ def main():
                 deterministic,
                 seed=args.seed,
                 checkpoint_path=args.checkpoint,
+                variant=variant,
             )
 
         with ThreadPoolExecutor(max_workers=2) as pool:
@@ -417,13 +423,13 @@ def main():
         print("\n" + "=" * 70)
         print("SLEEP BASELINE")
         print("=" * 70)
-        sleep_score = run_sleep_baseline(args.episodes)
+        sleep_score = run_sleep_baseline(args.episodes, variant=variant)
         print(f"Sleep baseline ({args.episodes} episodes): {sleep_score:.1f}")
 
         print("\n" + "=" * 70)
         print("RANDOM POLICY (with JAXborg action mask)")
         print("=" * 70)
-        random_score = run_random_baseline(args.episodes, seed=args.seed)
+        random_score = run_random_baseline(args.episodes, seed=args.seed, variant=variant)
         print(f"Random policy ({args.episodes} episodes): {random_score:.1f}")
 
     # Optional: verbose trace

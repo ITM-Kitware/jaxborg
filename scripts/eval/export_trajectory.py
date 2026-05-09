@@ -22,14 +22,24 @@ import numpy as np
 import torch
 import torch.nn as nn
 from CybORG import CybORG
-from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import EnterpriseMAE
 from CybORG.Shared.BlueRewardMachine import BlueRewardMachine
 from CybORG.Simulator.Actions import Sleep
 from CybORG.Simulator.Actions.AbstractActions.Impact import Impact
 from CybORG.Simulator.Actions.GreenActions import GreenAccessService, GreenLocalWork
-from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from torch.distributions import Categorical
+
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
+from jaxborg.recipe import resolve_eval_variant
+from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+
+
+def _variant_red_agent_class_name(variant) -> str:
+    """Resolve the CybORG red-agent class name for the trajectory JSON header."""
+    return cyborg_red_class(variant.red_agent, variant.target_weight).__name__
+
 
 EPISODE_LENGTH = 500
 NUM_AGENTS = 5
@@ -65,29 +75,25 @@ class PPOAgent(nn.Module):
         return dist.sample()
 
 
-def make_env(seed: int, steps: int = EPISODE_LENGTH) -> CybORG:
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=steps,
-    )
-    return CybORG(sg, "sim", seed=seed)
+def make_env(seed: int, steps: int = EPISODE_LENGTH, *, variant=None) -> CybORG:
+    """Raw CybORG env. ``variant=None`` defaults to vanilla CC4."""
+    from dataclasses import replace
+
+    v = variant if variant is not None else CC4_STOCK
+    if v.num_steps != steps:
+        v = replace(v, num_steps=steps)
+    return make_cyborg_env(v, seed, wrapper_class=None)
 
 
-def make_wrapped_env(seed: int, steps: int = EPISODE_LENGTH) -> EnterpriseMAE:
-    # CybORG bug: EnterpriseScenarioGenerator.determine_done() uses
-    # `step_count >= steps - 1`, which terminates one step early through
-    # the EnterpriseMAE wrapper (499 steps instead of 500). Raw
-    # CybORG.parallel_step() doesn't hit this. Pass steps+1 to compensate.
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=steps + 1,
-    )
-    cyborg = CybORG(sg, "sim", seed=seed)
-    return EnterpriseMAE(cyborg)
+def make_wrapped_env(seed: int, steps: int = EPISODE_LENGTH, *, variant=None) -> EnterpriseMAE:
+    """EnterpriseMAE-wrapped env. Pass +1 to compensate for an upstream CybORG bug:
+    ``EnterpriseScenarioGenerator.determine_done()`` uses ``step_count >= steps - 1``,
+    which terminates one step early through the wrapper (499 steps instead of 500)."""
+    from dataclasses import replace
+
+    v = variant if variant is not None else CC4_STOCK
+    v = replace(v, num_steps=steps + 1)
+    return make_cyborg_env(v, seed, wrapper_class=EnterpriseMAE)
 
 
 def _clean_subnet_name(name) -> str:
@@ -370,10 +376,11 @@ def compute_reward_breakdown(cyborg, state, green_agents, red_agents) -> dict:
     return {"ria": ria, "lwf": lwf, "asf": asf, "action_cost": action_cost}
 
 
-def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) -> dict:
+def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH, *, variant=None) -> dict:
     """Run one CybORG CC4 episode with SleepAgent blue and return the trajectory dict."""
-    cyborg = make_env(seed, steps)
-    cyborg.reset()
+    v = variant if variant is not None else CC4_STOCK
+    cyborg = make_env(seed, steps, variant=v)
+    reset_cyborg_env(cyborg, v, ep_seed=seed)
 
     ctrl = cyborg.environment_controller
     state = ctrl.state
@@ -460,6 +467,7 @@ def run_episode_sleep(seed: int, episode_num: int, steps: int = EPISODE_LENGTH) 
         subnet_metadata,
         agent_actions,
         step_states,
+        _red_agent_name=_variant_red_agent_class_name(v),
     )
 
 
@@ -469,10 +477,15 @@ def run_episode_policy(
     model: PPOAgent,
     deterministic: bool = False,
     steps: int = EPISODE_LENGTH,
+    *,
+    variant=None,
 ) -> dict:
     """Run one CybORG CC4 episode with a trained PPO policy for blue."""
-    env = make_wrapped_env(seed, steps)
+    v = variant if variant is not None else CC4_STOCK
+    env = make_wrapped_env(seed, steps, variant=v)
     obs, info = env.reset()
+    if v.resilience_roles:
+        inject_role_map(env, ep_seed=seed)
 
     # Access the underlying CybORG for raw state extraction
     cyborg = env.env
@@ -575,6 +588,7 @@ def run_episode_policy(
         subnet_metadata,
         agent_actions,
         step_states,
+        _red_agent_name=_variant_red_agent_class_name(v),
     )
 
 
@@ -590,6 +604,8 @@ def _build_trajectory_dict(
     subnet_metadata,
     agent_actions,
     step_states,
+    *,
+    _red_agent_name: str = "FiniteStateRedAgent",
 ) -> dict:
     """Build the V2 trajectory dict from collected episode data."""
     # Build flattened backward-compat arrays (interleaved all blue / all red)
@@ -620,7 +636,7 @@ def _build_trajectory_dict(
         "metric_scores": [],
         # Backward compatibility
         "blue_agent_name": blue_agent_name,
-        "red_agent_name": "FiniteStateRedAgent",
+        "red_agent_name": _red_agent_name,
         "blue_actions": flat_blue,
         "red_actions": flat_red,
     }
@@ -644,7 +660,15 @@ def main():
     parser.add_argument("--model", type=str, default=None, help="Path to trained PPO model .pt file")
     parser.add_argument("--deterministic", action="store_true", help="Use deterministic (argmax) actions")
     parser.add_argument("--tag", type=str, default=None, help="Custom tag for output filename")
+    parser.add_argument(
+        "--recipe",
+        type=str,
+        default=None,
+        help="Recipe path or name; defaults to cc4_stock (vanilla CC4 + FiniteStateRedAgent)",
+    )
     args = parser.parse_args()
+
+    variant = resolve_eval_variant(recipe_name=args.recipe)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -664,9 +688,9 @@ def main():
         print(f"Episode {ep} (seed={seed}):")
 
         if model:
-            trajectory = run_episode_policy(seed, ep, model, args.deterministic, args.steps)
+            trajectory = run_episode_policy(seed, ep, model, args.deterministic, args.steps, variant=variant)
         else:
-            trajectory = run_episode_sleep(seed, ep, args.steps)
+            trajectory = run_episode_sleep(seed, ep, args.steps, variant=variant)
 
         filename = f"cc4-{tag}-seed{seed}-E{ep}.json"
         filepath = output_dir / filename
