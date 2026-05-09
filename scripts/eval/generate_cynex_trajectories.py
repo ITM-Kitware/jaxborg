@@ -27,20 +27,23 @@ import numpy as np
 # ---------------------------------------------------------------------------
 # CybORG imports
 # ---------------------------------------------------------------------------
-from CybORG import CybORG
-from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 from CybORG.Simulator.Actions import Sleep
-from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
 from export_trajectory import (
     EPISODE_LENGTH,
     _build_trajectory_dict,
+    _variant_red_agent_class_name,
     action_to_dict,
     compute_reward_breakdown,
     extract_subnet_metadata,
     extract_topology,
     get_host_compromise,
 )
+
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env as _factory_make_cyborg_env
+from jaxborg.recipe import resolve_eval_variant
+from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -116,16 +119,14 @@ def _load_jax_model(path: str):
 # ---------------------------------------------------------------------------
 # CybORG env creation
 # ---------------------------------------------------------------------------
-def make_cyborg_env(seed: int, steps: int = EPISODE_LENGTH):
-    """Create a BlueFlatWrapper CybORG env."""
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=steps,
-    )
-    cyborg = CybORG(sg, "sim", seed=seed)
-    return BlueFlatWrapper(env=cyborg, pad_spaces=True)
+def make_cyborg_env(seed: int, steps: int = EPISODE_LENGTH, *, variant=None):
+    """Create a BlueFlatWrapper CybORG env honoring the recipe :class:`GameVariant`."""
+    from dataclasses import replace
+
+    v = variant if variant is not None else CC4_STOCK
+    if v.num_steps != steps:
+        v = replace(v, num_steps=steps)
+    return _factory_make_cyborg_env(v, seed, wrapper_class=BlueFlatWrapper, wrapper_kwargs={"pad_spaces": True})
 
 
 # ---------------------------------------------------------------------------
@@ -262,14 +263,14 @@ def _cyborg_blocked_zones(controller):
 # ---------------------------------------------------------------------------
 # Episode runners
 # ---------------------------------------------------------------------------
-def run_episode_torch(seed, episode_num, model, deterministic=False, steps=EPISODE_LENGTH):
+def run_episode_torch(seed, episode_num, model, deterministic=False, steps=EPISODE_LENGTH, *, variant=None):
     """Run CybORG episode with PyTorch PPO policy (delegates to export_trajectory)."""
     from export_trajectory import run_episode_policy
 
-    return run_episode_policy(seed, episode_num, model, deterministic, steps)
+    return run_episode_policy(seed, episode_num, model, deterministic, steps, variant=variant)
 
 
-def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, steps=EPISODE_LENGTH):
+def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, steps=EPISODE_LENGTH, *, variant=None):
     """Run CybORG episode with JAXborg JAX/Flax policy."""
     import jax
     import jax.numpy as jnp
@@ -278,8 +279,11 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
     # Create env with BlueFlatWrapper.
-    wrapper = make_cyborg_env(seed, steps)
+    v = variant if variant is not None else CC4_STOCK
+    wrapper = make_cyborg_env(seed, steps, variant=v)
     observations, _ = wrapper.reset()
+    if v.resilience_roles:
+        inject_role_map(wrapper, ep_seed=seed)
 
     cyborg = wrapper.env
     ctrl = cyborg.environment_controller
@@ -406,6 +410,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
         subnet_metadata,
         agent_actions,
         step_states,
+        _red_agent_name=_variant_red_agent_class_name(v),
     )
 
 
@@ -420,6 +425,12 @@ def main():
     parser.add_argument("--output-dir", type=str, default=".", help="Output directory")
     parser.add_argument("--tag", type=str, required=True, help="Filename tag (e.g., jaxborg-g99)")
     parser.add_argument("--deterministic", action="store_true", help="Deterministic (argmax) actions")
+    parser.add_argument(
+        "--recipe",
+        type=str,
+        default=None,
+        help="Recipe path or name (overrides --model-jax sidecar); defaults to cc4_stock",
+    )
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--model-pt", type=str, help="Path to PyTorch PPO model .pt file")
@@ -428,6 +439,9 @@ def main():
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    variant = resolve_eval_variant(recipe_name=args.recipe, checkpoint=args.model_jax)
+    print(f"Variant: {variant.name} (red_agent={variant.red_agent})")
 
     # Load the appropriate model
     if args.model_pt:
@@ -443,9 +457,9 @@ def main():
         t0 = time.perf_counter()
 
         if torch_model is not None:
-            trajectory = run_episode_torch(seed, ep, torch_model, args.deterministic, args.steps)
+            trajectory = run_episode_torch(seed, ep, torch_model, args.deterministic, args.steps, variant=variant)
         else:
-            trajectory = run_episode_jax(seed, ep, jax_model, args.deterministic, args.steps)
+            trajectory = run_episode_jax(seed, ep, jax_model, args.deterministic, args.steps, variant=variant)
 
         elapsed = time.perf_counter() - t0
         filename = f"cc4-{args.tag}-seed{seed}-E{ep}.json"

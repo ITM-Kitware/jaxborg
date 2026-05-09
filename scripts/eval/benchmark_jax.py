@@ -67,15 +67,18 @@ def run_benchmark(num_updates: int = 5, clear_cache: bool = False):
     import jax.numpy as jnp
     from ippo_jax import RewardNormState, make_train
 
-    from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+    from jaxborg.evaluation.jax_env_factory import make_jax_env
     from jaxborg.policies import make_jax_policy
+    from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 
     print(f"\nConfig: NUM_ENVS={config['NUM_ENVS']}, NUM_STEPS={config['NUM_STEPS']}")
     print(f"Benchmark: {num_updates} updates\n")
 
     # --- Setup ---
+    # Steady-state throughput is selector-independent, so this benchmark always
+    # uses the stock variant. If you need per-variant numbers, run it twice.
     t_setup_start = time.perf_counter()
-    inner_env = FsmRedCC4Env(num_steps=500)
+    inner_env = make_jax_env(CC4_STOCK)
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(
         "shared",

@@ -11,8 +11,12 @@ configure_runtime()
 import jax.numpy as jnp
 import numpy as np
 
+from CybORG.Agents.Wrappers import BlueFlatWrapper
+
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
+from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env as _factory_make_cyborg_env
 from jaxborg.parity.translate import cyborg_blue_to_jax
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const, cyborg_state):
@@ -150,17 +154,16 @@ def _raw_cyborg_step_with_flat_obs(wrapper, actions, messages=None):
     return observations, rewards, terminated, truncated, info
 
 
-def make_cyborg_env(seed=42):
-    from CybORG import CybORG
-    from CybORG.Agents import EnterpriseGreenAgent, FiniteStateRedAgent, SleepAgent
-    from CybORG.Agents.Wrappers import BlueFlatWrapper
-    from CybORG.Simulator.Scenarios import EnterpriseScenarioGenerator
+def make_cyborg_env(seed=42, *, variant=None):
+    """Build a CybORG env for parity rollouts.
 
-    sg = EnterpriseScenarioGenerator(
-        blue_agent_class=SleepAgent,
-        green_agent_class=EnterpriseGreenAgent,
-        red_agent_class=FiniteStateRedAgent,
-        steps=500,
+    ``variant=None`` defaults to vanilla CC4 (FiniteStateRedAgent, no roles).
+    Pass a :class:`GameVariant` to honor the recipe's red selector + role
+    assignment so the L4 stage actually exercises the variant under test.
+    """
+    return _factory_make_cyborg_env(
+        variant if variant is not None else CC4_STOCK,
+        seed,
+        wrapper_class=BlueFlatWrapper,
+        wrapper_kwargs={"pad_spaces": True},
     )
-    cyborg = CybORG(sg, "sim", seed=seed)
-    return BlueFlatWrapper(env=cyborg, pad_spaces=True)

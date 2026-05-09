@@ -15,15 +15,22 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from dataclasses import replace
+
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.constants import COMPROMISE_PRIVILEGED, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_RED_AGENTS
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 from scripts.dev.parity.policy import make_batched_inference_fn
 from scripts.dev.parity.rollout_types import EpisodeResult, JaxRollout, StepSnapshot
 
 
-def _make_jax_eval_env():
-    return FsmRedCC4Env(num_steps=DEFAULT_NUM_STEPS)
+def _make_jax_eval_env(variant=None):
+    """Build the JAX eval env, honouring a recipe :class:`GameVariant` if given."""
+    v = variant if variant is not None else CC4_STOCK
+    if v.num_steps != DEFAULT_NUM_STEPS:
+        v = replace(v, num_steps=DEFAULT_NUM_STEPS)
+    return make_jax_env(v)
 
 
 def _all_blue_masks(const, state):
@@ -111,6 +118,7 @@ def rollout_jaxborg_scan(
     num_episodes=3,
     deterministic=False,
     seed=0,
+    variant=None,
 ):
     """JAXborg-only eval using jax.lax.scan + jax.vmap — all episodes in parallel.
 
@@ -118,7 +126,7 @@ def rollout_jaxborg_scan(
     First call triggers XLA compilation (~5-10 min, cached to disk).
     Subsequent runs load from XLA cache and execute all episodes in one GPU pass.
     """
-    env = _make_jax_eval_env()
+    env = _make_jax_eval_env(variant)
     scan_fn = make_scan_eval_fn(env, policy, deterministic)
 
     # Build keys for all episodes
@@ -201,8 +209,9 @@ def rollout_jaxborg(
     num_episodes=3,
     deterministic=False,
     seed=0,
+    variant=None,
 ):
-    env = _make_jax_eval_env()
+    env = _make_jax_eval_env(variant)
     batched_step = make_batched_inference_fn(policy, params, deterministic)
     all_actions = []
     episode_rewards = []

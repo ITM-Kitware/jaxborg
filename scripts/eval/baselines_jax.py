@@ -1,13 +1,15 @@
-"""Evaluate JAX baselines (sleep and random blue) on FsmRedCC4Env."""
+"""Evaluate JAX baselines (sleep and random blue) on a recipe-driven JAX env."""
 
 import argparse
+from dataclasses import replace
 from statistics import mean, stdev
 
 import jax
 import jax.numpy as jnp
 
 from jaxborg.constants import NUM_BLUE_AGENTS
-from jaxborg.parity.fsm_red_env import FsmRedCC4Env
+from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.recipe import resolve_eval_variant
 
 EPISODE_LENGTH = 500
 
@@ -44,8 +46,11 @@ def run_random_episode(env, key):
     return total
 
 
-def evaluate(policy, seed, max_eps):
-    env = FsmRedCC4Env(num_steps=EPISODE_LENGTH)
+def evaluate(policy, seed, max_eps, recipe_name=None, checkpoint=None):
+    variant = resolve_eval_variant(recipe_name=recipe_name, checkpoint=checkpoint)
+    if variant.num_steps != EPISODE_LENGTH:
+        variant = replace(variant, num_steps=EPISODE_LENGTH)
+    env = make_jax_env(variant)
     run_fn = run_sleep_episode if policy == "sleep" else run_random_episode
 
     episode_rewards = []
@@ -53,6 +58,7 @@ def evaluate(policy, seed, max_eps):
         key = jax.random.PRNGKey(seed + ep if seed is not None else ep)
         episode_rewards.append(run_fn(env, key))
 
+    print(f"variant:   {variant.name} (red_agent={variant.red_agent})")
     print(f"policy:    {policy}")
     print(f"episodes:  {max_eps}")
     print(f"mean:      {mean(episode_rewards):.4f}")
@@ -63,9 +69,15 @@ def evaluate(policy, seed, max_eps):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Evaluate JAX baselines on FsmRedCC4Env")
+    parser = argparse.ArgumentParser(description="Evaluate JAX baselines on a recipe-driven JAX env")
     parser.add_argument("--policy", choices=["sleep", "random"], default="sleep")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-eps", type=int, default=10)
+    parser.add_argument("--recipe", default=None, help="Recipe path or name (overrides --checkpoint sidecar)")
+    parser.add_argument(
+        "--checkpoint",
+        default=None,
+        help="Checkpoint .safetensors; variant auto-resolved from its sidecar if --recipe is not set",
+    )
     args = parser.parse_args()
-    evaluate(args.policy, args.seed, args.max_eps)
+    evaluate(args.policy, args.seed, args.max_eps, recipe_name=args.recipe, checkpoint=args.checkpoint)
