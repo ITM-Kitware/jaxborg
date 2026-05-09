@@ -98,6 +98,20 @@ def resolve_eval_variant(
     return default if default is not None else CC4_STOCK
 
 
+def _resolve_topology_bank(train: dict[str, Any]) -> tuple[Path, ...]:
+    """Resolve ``train.topology_bank`` paths against the repo root."""
+    bank = train.get("topology_bank") or ()
+    if isinstance(bank, (str, Path)):
+        bank = [bank]
+    resolved: list[Path] = []
+    for entry in bank:
+        p = Path(entry)
+        if not p.is_absolute():
+            p = REPO_ROOT / p
+        resolved.append(p)
+    return tuple(resolved)
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]
@@ -131,6 +145,7 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "EVAL_VARIANT": eval_variant(recipe),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
+        "TOPOLOGY_BANK": _resolve_topology_bank(train),
     }
 
 
