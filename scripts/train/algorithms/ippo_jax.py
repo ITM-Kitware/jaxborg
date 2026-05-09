@@ -87,9 +87,11 @@ def make_train(config, network):
     """Build env and a single JIT'd collect_and_update fn from a flat config."""
     num_envs = config["NUM_ENVS"]
     variant: GameVariant = config["TRAIN_VARIANT"]
+    topology_bank = config.get("TOPOLOGY_BANK") or None
     inner_env = make_jax_env(
         variant,
         training_mode=bool(config.get("TRAINING_MODE", True)),
+        topology_path=list(topology_bank) if topology_bank else None,
         mission_bank=config.get("MISSION_BANK"),
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
     )
@@ -337,9 +339,11 @@ def main():
 
     # Build a throwaway env to get action_dim for network init.
     variant: GameVariant = config["TRAIN_VARIANT"]
+    topology_bank = config.get("TOPOLOGY_BANK") or None
     inner_env = make_jax_env(
         variant,
         topology_mode=config.get("TOPOLOGY_MODE", "generative"),
+        topology_path=list(topology_bank) if topology_bank else None,
         mission_bank=config.get("MISSION_BANK"),
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
     )

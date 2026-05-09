@@ -118,6 +118,20 @@ def _project_mission_bank(train: dict[str, Any]) -> list[list[float]] | None:
     return out
 
 
+def _resolve_topology_bank(train: dict[str, Any]) -> tuple[Path, ...]:
+    """Resolve ``train.topology_bank`` paths against the repo root."""
+    bank = train.get("topology_bank") or ()
+    if isinstance(bank, (str, Path)):
+        bank = [bank]
+    resolved: list[Path] = []
+    for entry in bank:
+        p = Path(entry)
+        if not p.is_absolute():
+            p = REPO_ROOT / p
+        resolved.append(p)
+    return tuple(resolved)
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]
@@ -153,6 +167,7 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "MLFLOW_ENABLED": True,
         "MISSION_BANK": _project_mission_bank(train),
         "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
+        "TOPOLOGY_BANK": _resolve_topology_bank(train),
     }
 
 
