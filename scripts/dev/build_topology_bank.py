@@ -6,7 +6,9 @@ topology snapshots that vary along three axes:
 1. Router adjacency — perturbations of `_ROUTER_LINKS` post-applied to
    `data_links` (e.g. add an op-zone-A ↔ op-zone-B router cross-link, drop
    the office ↔ admin link).
-2. Subnet sizing — `op_zone_min_servers ∈ {2, 3, 4}` plus seed-driven user
+2. Subnet sizing — per-zone op-server floors targeting totals
+   `op_zone_servers ∈ {3, 6, 9}` (multiples of 3 so the AUTH/DB/WEB role
+   assignment splits the candidate pool evenly), plus seed-driven user
    host counts.
 3. Cross-segment allow-list — perturbations of `allowed_subnet_pairs`
    (zero-out one phase pair on certain shapes).
@@ -40,28 +42,32 @@ from jaxborg.state import SimulatorConst
 # 4 perturbation patterns × 4 base seeds = 16 shapes by default.
 # Patterns vary along multiple axes simultaneously so that even a small
 # bank covers router-adjacency, sizing, and allow-list variation.
+# op_zone_min_servers is (alpha-zone-A floor, alpha-zone-B floor). The
+# total op-zone server count = a_floor + b_floor; targets are
+# {3, 6, 9} — all multiples of 3 so AUTH/DB/WEB role candidates split
+# evenly across the bank.
 _PATTERNS = (
     {
-        "name": "P0_baseline_minservers3",
-        "op_zone_min_servers": 3,
+        "name": "P0_baseline_total6",
+        "op_zone_min_servers": (3, 3),  # 6 total
         "router_perturbation": "none",
         "allowlist_perturbation": "none",
     },
     {
-        "name": "P1_minservers2_dropOA",
-        "op_zone_min_servers": 2,
+        "name": "P1_total3_dropOA",
+        "op_zone_min_servers": (1, 2),  # 3 total
         "router_perturbation": "drop_office_admin",
         "allowlist_perturbation": "none",
     },
     {
-        "name": "P2_minservers4_OPxlink",
-        "op_zone_min_servers": 4,
+        "name": "P2_total9_OPxlink",
+        "op_zone_min_servers": (4, 5),  # 9 total
         "router_perturbation": "add_opzone_xlink",
         "allowlist_perturbation": "none",
     },
     {
-        "name": "P3_minservers3_restrictpairs",
-        "op_zone_min_servers": 3,
+        "name": "P3_total6_restrictpairs",
+        "op_zone_min_servers": (3, 3),  # 6 total
         "router_perturbation": "none",
         "allowlist_perturbation": "drop_phase1_contractor_admin",
     },

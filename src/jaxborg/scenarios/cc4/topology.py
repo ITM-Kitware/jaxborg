@@ -224,13 +224,20 @@ def build_topology(
     num_steps: int = 500,
     *,
     training_mode: bool = False,
-    op_zone_min_servers: int | None = None,
+    op_zone_min_servers: int | tuple[int, int] | None = None,
 ) -> SimulatorConst:
     """Build CC4 topology in pure JAX — JIT-compatible.
 
     Mimics EnterpriseScenarioGenerator: for each non-internet subnet, generates
     1 router + random server hosts (1-6) + random user hosts (3-10).
     Internet subnet gets 1 host (root_internet_host_0).
+
+    ``op_zone_min_servers`` controls the operational-zone server floor.
+    Pass an int to force both OPS-A and OPS-B to the same value (legacy
+    behavior). Pass a 2-tuple ``(a_floor, b_floor)`` to set them
+    independently — used by the topology bank builder to produce totals
+    that aren't multiples of 2 (e.g. 3 = 1+2 for balanced AUTH/DB/WEB
+    role assignment across three resilience candidates).
 
     Host indices follow alphabetical hostname ordering (same as build_const_from_cyborg):
     subnets ordered by CYBORG_SUBNET_SUFFIX, within each subnet: router < servers < users.
@@ -241,8 +248,15 @@ def build_topology(
     n_users = jax.random.randint(k_users, (8,), 3, 11)
     random_n = jax.random.randint(k_servers, (8,), 1, 7)
     if op_zone_min_servers is not None:
-        op_zone_alpha = jnp.array([False, False, False, True, True, False, False, False])
-        n_servers = jnp.where(op_zone_alpha, jnp.int32(op_zone_min_servers), random_n)
+        if isinstance(op_zone_min_servers, tuple):
+            a_floor, b_floor = op_zone_min_servers
+        else:
+            a_floor = b_floor = int(op_zone_min_servers)
+        # alpha-order positions 3 and 4 are OPERATIONAL_ZONE_A / OPERATIONAL_ZONE_B.
+        floor_per_alpha = jnp.array(
+            [-1, -1, -1, int(a_floor), int(b_floor), -1, -1, -1], dtype=jnp.int32
+        )
+        n_servers = jnp.where(floor_per_alpha >= 0, floor_per_alpha, random_n)
     else:
         n_servers = random_n
 

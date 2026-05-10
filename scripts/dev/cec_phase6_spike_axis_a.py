@@ -8,15 +8,17 @@ two conditions and reports the σ-ratio of per-episode reward.
 
 Pre-registered pass threshold: σ-ratio (AXIS-A / FIXED) ≥ 1.5.
 
-Both arms run a *sleep policy* (every blue agent picks action 0 every step).
-This mirrors ``cec_phase5_diversity_spike.py``: the σ-ratio test is policy-
-agnostic for a heuristic spread spike — it asks whether the new env knob
-moves per-episode reward at all, not whether a learned policy responds to it.
+Default: load the matched-v2 ``default_seed42`` 3M-step checkpoint and
+roll out with deterministic argmax — the plan's pre-registered protocol.
+Set ``CEC_SPIKE_CHECKPOINT=sleep`` to fall back to the always-action-0
+baseline for sanity comparisons.
 
 Env vars:
-    CEC_SPIKE_EPISODES   episodes per arm (default 32, matching Phase 5)
+    CEC_SPIKE_EPISODES   episodes per arm (default 128, plan default)
     CEC_SPIKE_STEPS      steps per episode (default 500)
     CEC_SPIKE_VARIANT    variant name (default ``cc4_stock``)
+    CEC_SPIKE_CHECKPOINT path to .safetensors, or ``sleep`` for sleep policy
+                         (default: default_seed42 model in JAXBORG_EXP_DIR)
 
 Exit code: 0 on PASS (σ-ratio ≥ 1.5), 1 on FAIL.
 """
@@ -38,6 +40,10 @@ from jaxborg.scenarios.cc4.game_variants import VARIANTS
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BANK_DIR = REPO_ROOT / "scripts" / "dev" / "topology_bank"
 
+DEFAULT_CKPT = (
+    "/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/ippo_jax/"
+    "default_seed42/model_default_seed42.safetensors"
+)
 PASS_THRESHOLD = 1.5
 
 
@@ -56,25 +62,47 @@ def _rollout_episode_rewards(
     num_episodes: int,
     num_steps: int,
     seed: int,
+    policy=None,
+    params=None,
 ) -> np.ndarray:
-    """Run ``num_episodes`` independent episodes with a sleep policy; return totals."""
+    """Run ``num_episodes`` independent episodes; return per-episode totals.
+
+    When ``policy``/``params`` are given, action selection is deterministic
+    argmax of the masked actor head. Otherwise blue plays sleep (action 0).
+    """
 
     blue_agents = tuple(f"blue_{i}" for i in range(NUM_BLUE_AGENTS))
+    use_policy = policy is not None and params is not None
 
     @jax.jit
     def _run_one(key):
         reset_key, scan_key = jax.random.split(key)
         obs, env_state = env.reset(reset_key)
+        mask = env.get_avail_actions(env_state) if use_policy else None
 
         def step_fn(carry, _):
-            state, k = carry
+            state, obs, mask, k = carry
             k, step_key = jax.random.split(k)
-            actions = {a: jnp.int32(0) for a in blue_agents}
-            _, new_state, rewards, _, _ = env.step(step_key, state, actions)
-            mean_reward = jnp.stack([rewards[a] for a in blue_agents]).mean()
-            return (new_state, k), mean_reward
+            if use_policy:
+                obs_stack = jnp.stack([obs[a] for a in blue_agents])
+                mask_stack = jnp.stack([mask[a] for a in blue_agents])
 
-        (_, _), per_step = jax.lax.scan(step_fn, (env_state, scan_key), None, length=num_steps)
+                def _fwd(o, m):
+                    pi, _ = policy.apply(params, o, m)
+                    return pi.logits
+
+                logits = jax.vmap(_fwd)(obs_stack, mask_stack)
+                acts = jnp.argmax(logits, axis=-1)
+                actions = {a: acts[i] for i, a in enumerate(blue_agents)}
+            else:
+                actions = {a: jnp.int32(0) for a in blue_agents}
+            new_obs, new_state, rewards, _, _ = env.step(step_key, state, actions)
+            new_mask = env.get_avail_actions(new_state) if use_policy else mask
+            mean_reward = jnp.stack([rewards[a] for a in blue_agents]).mean()
+            return (new_state, new_obs, new_mask, k), mean_reward
+
+        init_carry = (env_state, obs, mask, scan_key)
+        (_, _, _, _), per_step = jax.lax.scan(step_fn, init_carry, None, length=num_steps)
         return per_step.sum()
 
     keys = jax.random.split(jax.random.PRNGKey(seed), num_episodes)
@@ -83,10 +111,26 @@ def _rollout_episode_rewards(
 
 
 def main() -> int:
-    n_eps = int(os.environ.get("CEC_SPIKE_EPISODES", "32"))
+    n_eps = int(os.environ.get("CEC_SPIKE_EPISODES", "128"))
     n_steps = int(os.environ.get("CEC_SPIKE_STEPS", "500"))
     variant_name = os.environ.get("CEC_SPIKE_VARIANT", "cc4_stock")
+    ckpt_arg = os.environ.get("CEC_SPIKE_CHECKPOINT", DEFAULT_CKPT)
     variant = VARIANTS[variant_name]
+
+    use_sleep = ckpt_arg.lower() == "sleep"
+    policy = params = None
+    if not use_sleep:
+        from jaxborg.evaluation.jax_runner import load_jax_checkpoint
+
+        ckpt = Path(ckpt_arg)
+        if not ckpt.is_file():
+            print(f"[axis-a] checkpoint not found: {ckpt} — falling back to sleep", flush=True)
+            use_sleep = True
+        else:
+            policy, params, _recipe = load_jax_checkpoint(ckpt)
+            print(f"[axis-a] policy: {ckpt.name}", flush=True)
+    if use_sleep:
+        print("[axis-a] policy: sleep (action 0)", flush=True)
 
     bank = _bank_paths()
     print(
@@ -98,10 +142,14 @@ def main() -> int:
     bank_env = make_jax_env(variant, topology_path=list(bank))
 
     print("[axis-a] rolling out ENV-FIXED ...", flush=True)
-    fixed_rewards = _rollout_episode_rewards(fixed_env, num_episodes=n_eps, num_steps=n_steps, seed=20260509)
+    fixed_rewards = _rollout_episode_rewards(
+        fixed_env, num_episodes=n_eps, num_steps=n_steps, seed=20260510, policy=policy, params=params
+    )
 
     print("[axis-a] rolling out ENV-AXIS-A ...", flush=True)
-    axis_rewards = _rollout_episode_rewards(bank_env, num_episodes=n_eps, num_steps=n_steps, seed=20260509)
+    axis_rewards = _rollout_episode_rewards(
+        bank_env, num_episodes=n_eps, num_steps=n_steps, seed=20260510, policy=policy, params=params
+    )
 
     sigma_fixed = float(np.std(fixed_rewards, ddof=1)) if n_eps > 1 else 0.0
     sigma_axis = float(np.std(axis_rewards, ddof=1)) if n_eps > 1 else 0.0
