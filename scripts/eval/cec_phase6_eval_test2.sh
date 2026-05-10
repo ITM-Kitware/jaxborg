@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Phase 6 Test 2 eval orchestrator — runs JAX-native held-out red sweep.
+# Phase 6 Test 2 eval orchestrator — runs JAX-native held-out red sweep on CPU.
 #
 # Per checkpoint × held-out red, runs scripts/eval/cec_phase6_eval_jax.py
 # at --episodes 90 (plan default for stat power; --episodes 30 for a smoke
 # pass). Each (ckpt, red) job is independent and embarrassingly parallel —
-# we submit them as individual sbatch jobs so they fan out across the
-# cluster.
+# we submit them as individual CPU sbatch jobs so they fan out across the
+# cluster without competing with training/diagnostic GPU jobs.
 #
-# Total: 6 ckpts × 5 reds = 30 jobs, ~3 min each on JAX GPU = ~1.5 hr serial,
-# ~10 min on 6 GPUs in parallel.
+# Total: 6 ckpts × 5 reds = 30 jobs. CPU JAX is mostly bottlenecked on
+# JIT compile (~3 min) plus a sub-minute rollout — ~5 min wall per cell,
+# ~30 min total if 5+ jobs run concurrently on the cluster.
 #
 # Usage:
 #   ./scripts/eval/cec_phase6_eval_test2.sh                       # full sweep
@@ -52,15 +53,17 @@ submit_one() {
     return
   fi
   local jobname="eval_${tag}_${red}"
+  # CPU-only — eval jobs do not need GPU and should not compete with
+  # training jobs for GPU allocation. JAX_PLATFORMS=cpu pins the backend.
   local cmd=(
     sbatch
-    --gres=gpu:1
+    --cpus-per-task=8
     --mem=32G
     --time=00:30:00
     --partition=community
     --job-name="${jobname}"
     --output="${SLURM_LOG_DIR}/${jobname}_%j.log"
-    --wrap "set -euo pipefail; cd ${WORKDIR}; unset JAX_PLATFORMS; JAXBORG_EXP_DIR=${EXP_DIR} uv run --extra cuda python scripts/eval/cec_phase6_eval_jax.py --model ${model} --eval-red ${red} --episodes ${EPISODES} --seed ${EVAL_SEED}"
+    --wrap "set -euo pipefail; cd ${WORKDIR}; JAX_PLATFORMS=cpu JAXBORG_EXP_DIR=${EXP_DIR} uv run python scripts/eval/cec_phase6_eval_jax.py --model ${model} --eval-red ${red} --episodes ${EPISODES} --seed ${EVAL_SEED}"
   )
   if [ "$DRY" -eq 1 ]; then
     printf '%q ' "${cmd[@]}"; echo
