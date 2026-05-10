@@ -1,15 +1,19 @@
 meta:
   name: cec_phase6_C00
-  source: "Phase 6 plan — plans/jax/cc4/cec/cec-phase6-plan.md (Test 2 / 2×2 factorial)"
+  source: "Phase 6 plan — plans/jax/cc4/cec/cec-phase6-plan.md (Test 2 — control)"
   added: 2026-05-09
   notes: |
-    Phase 6 ZSC training matrix — arm C00 (control: fixed shape, fixed mission).
+    Phase 6 Test 2 — arm C00, the canonical-config control.
     Forks Matched-Training v2 hyperparameters from recipes/default.yaml.
 
-    Run matrix per the plan: 4 arms × 3 seeds × 3M timesteps. CEC-faithful —
-    training partner is fixed (cc4_stock variant's red = fsm). Eval-time
-    held-out partner sweep happens via eval_recipe.py's --eval-red flag
-    (recipes are training-side only).
+    No env-diversity banks active: fixed canonical topology, fixed (1,1,1)
+    mission profile, fixed phase boundaries [0, 167, 333], fixed canonical
+    phase_rewards. CEC-faithful: training partner is fixed (cc4_stock
+    variant's red = fsm). Eval-time held-out partner sweep happens via
+    eval_recipe.py's --eval-red flag.
+
+    Paired against C11 (full env-diversity cocktail) — paired delta on each
+    held-out red is the Phase 6 headline DV.
 
 algorithm: ippo
 

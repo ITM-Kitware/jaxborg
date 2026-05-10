@@ -25,10 +25,13 @@ import pytest
 from jaxborg.recipe import load, project_jax
 
 EXPECTED_MISSION_BANK = [[1.0, 1.0, 1.0], [3.0, 3.0, 1.0], [1.0, 3.0, 3.0], [3.0, 1.0, 3.0]]
+# Test 2 collapsed to just the control + full-cocktail arm: C00 (no banks) and
+# C11 (topology + mission anti-corr + phase-boundary + phase-rewards rotation
+# all active). The original 2×2 factorial arms C01/C10 were dropped after
+# the σ-ratio policy-mediation finding made the per-axis ablations
+# uninformative without training-time exposure.
 ARMS = {
     "cec_phase6_C00": (0, None),
-    "cec_phase6_C10": (16, None),
-    "cec_phase6_C01": (0, EXPECTED_MISSION_BANK),
     "cec_phase6_C11": (16, EXPECTED_MISSION_BANK),
 }
 
