@@ -46,7 +46,10 @@ submit_one() {
     --partition=community
     --job-name="${tag}"
     --output="${SLURM_LOG_DIR}/${tag}_%j.log"
-    --wrap "set -euo pipefail; cd ${WORKDIR}; unset JAX_PLATFORMS; JAXBORG_EXP_DIR=${EXP_DIR} uv run --extra cuda python scripts/train/algorithms/ippo_jax.py --recipe ${recipe} --seed ${seed} --tag ${tag}"
+    --wrap "set -eu
+cd ${WORKDIR}
+unset JAX_PLATFORMS
+JAXBORG_EXP_DIR=${EXP_DIR} uv run --extra cuda python scripts/train/algorithms/ippo_jax.py --recipe ${recipe} --seed ${seed} --tag ${tag}"
   )
   if [ "$DRY" -eq 1 ]; then
     printf '%q ' "${cmd[@]}"; echo

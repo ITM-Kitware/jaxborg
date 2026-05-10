@@ -63,7 +63,9 @@ submit_one() {
     --partition=community
     --job-name="${jobname}"
     --output="${SLURM_LOG_DIR}/${jobname}_%j.log"
-    --wrap "set -euo pipefail; cd ${WORKDIR}; JAX_PLATFORMS=cpu JAXBORG_EXP_DIR=${EXP_DIR} uv run python scripts/eval/cec_phase6_eval_jax.py --model ${model} --eval-red ${red} --episodes ${EPISODES} --seed ${EVAL_SEED}"
+    --wrap "set -eu
+cd ${WORKDIR}
+JAX_PLATFORMS=cpu JAXBORG_EXP_DIR=${EXP_DIR} uv run python scripts/eval/cec_phase6_eval_jax.py --model ${model} --eval-red ${red} --episodes ${EPISODES} --seed ${EVAL_SEED}"
   )
   if [ "$DRY" -eq 1 ]; then
     printf '%q ' "${cmd[@]}"; echo
