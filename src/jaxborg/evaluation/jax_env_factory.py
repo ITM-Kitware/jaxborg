@@ -67,6 +67,8 @@ def make_jax_env(
     topology_path: str | Path | Sequence[str | Path] | None = None,
     mission_bank: Sequence[Sequence[float]] | None = None,
     mission_bank_amplify: float = 1.0,
+    phase_boundary_bank: Sequence[Sequence[int]] | None = None,
+    phase_rewards_bank: Sequence | None = None,
     name: str | None = None,
 ) -> FsmRedCC4Env:
     if variant.resilience_roles:
@@ -83,5 +85,7 @@ def make_jax_env(
         op_zone_min_servers=variant.op_zone_servers,
         mission_bank=mission_bank,
         mission_bank_amplify=mission_bank_amplify,
+        phase_boundary_bank=phase_boundary_bank,
+        phase_rewards_bank=phase_rewards_bank,
         name=name,
     )

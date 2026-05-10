@@ -24,7 +24,7 @@ import pytest
 
 from jaxborg.recipe import load, project_jax
 
-EXPECTED_MISSION_BANK = [[1.0, 1.0, 1.0], [3.0, 1.0, 1.0], [1.0, 3.0, 1.0], [1.0, 1.0, 3.0]]
+EXPECTED_MISSION_BANK = [[1.0, 1.0, 1.0], [3.0, 3.0, 1.0], [1.0, 3.0, 3.0], [3.0, 1.0, 3.0]]
 ARMS = {
     "cec_phase6_C00": (0, None),
     "cec_phase6_C10": (16, None),

@@ -149,6 +149,44 @@ def _resolve_topology_bank(train: dict[str, Any]) -> tuple[Path, ...]:
     return tuple(resolved)
 
 
+def _project_phase_boundary_bank(train: dict[str, Any]) -> list[list[int]] | None:
+    """Project ``train.phase_boundary_bank`` to a list of int triples."""
+    bank = train.get("phase_boundary_bank")
+    if bank is None:
+        return None
+    out: list[list[int]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(
+                "train.phase_boundary_bank entries must be 3-tuples "
+                f"(phase0_start, phase1_start, phase2_start); got {entry!r}"
+            )
+        out.append([int(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
+def _project_phase_rewards_bank(train: dict[str, Any]):
+    """Resolve ``train.phase_rewards_bank`` to a stacked numpy bank or None.
+
+    Recipe accepts either a bool (``true`` → use the canonical 6-entry
+    crown-jewel rotation bank from topology_numpy) or a list of explicit
+    ``(MISSION_PHASES, NUM_SUBNETS, 3)`` arrays for custom banks. Most
+    callers want the bool form.
+    """
+    val = train.get("phase_rewards_bank")
+    if val is None or val is False:
+        return None
+    if val is True:
+        from jaxborg.scenarios.cc4.topology_numpy import get_phase_rewards_bank
+
+        return get_phase_rewards_bank()
+    # Explicit list of arrays — pass through (caller stacks).
+    return val
+
+
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
     """Flatten recipe into the dict shape ippo_jax.py's config expects."""
     core = recipe["core"]
@@ -185,6 +223,8 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "MISSION_BANK": _project_mission_bank(train),
         "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
         "TOPOLOGY_BANK": _resolve_topology_bank(train),
+        "PHASE_BOUNDARY_BANK": _project_phase_boundary_bank(train),
+        "PHASE_REWARDS_BANK": _project_phase_rewards_bank(train),
     }
 
 

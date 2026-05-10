@@ -54,11 +54,12 @@ train:
     - scripts/dev/topology_bank/shape_13.snapshot.npz
     - scripts/dev/topology_bank/shape_14.snapshot.npz
     - scripts/dev/topology_bank/shape_15.snapshot.npz
+  # Anti-correlated bank — see cec_phase6_C01.yaml for rationale.
   mission_bank:
     - [1, 1, 1]
-    - [3, 1, 1]
-    - [1, 3, 1]
-    - [1, 1, 3]
+    - [3, 3, 1]
+    - [1, 3, 3]
+    - [3, 1, 3]
   mission_bank_amplify: 1.0
 
 eval:

@@ -94,6 +94,8 @@ def make_train(config, network):
         topology_path=list(topology_bank) if topology_bank else None,
         mission_bank=config.get("MISSION_BANK"),
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
+        phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
+        phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
@@ -346,6 +348,8 @@ def main():
         topology_path=list(topology_bank) if topology_bank else None,
         mission_bank=config.get("MISSION_BANK"),
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
+        phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
+        phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = make_jax_policy(

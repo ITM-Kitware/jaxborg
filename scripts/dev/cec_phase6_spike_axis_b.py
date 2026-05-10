@@ -42,11 +42,14 @@ from jaxborg.scenarios.cc4.game_variants import VARIANTS
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BANK_DIR = REPO_ROOT / "scripts" / "dev" / "topology_bank"
 
+# Anti-correlated default — each non-baseline entry boosts 2 of 3 components
+# so a "boost the loud one" policy can't artificially clear the σ-ratio gate
+# via reward-channel scaling. See `MISSION_PROFILE_ANTI_CORR` in topology_numpy.
 DEFAULT_MISSION_BANK = [
     [1.0, 1.0, 1.0],
-    [3.0, 1.0, 1.0],
-    [1.0, 3.0, 1.0],
-    [1.0, 1.0, 3.0],
+    [3.0, 3.0, 1.0],
+    [1.0, 3.0, 3.0],
+    [3.0, 1.0, 3.0],
 ]
 DEFAULT_CKPT = (
     "/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/ippo_jax/"

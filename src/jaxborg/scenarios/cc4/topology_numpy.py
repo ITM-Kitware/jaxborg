@@ -41,10 +41,123 @@ MISSION_PROFILE_MULTIPLIERS: tuple[tuple[float, float, float], ...] = (
 )
 NUM_MISSION_PROFILES = len(MISSION_PROFILE_MULTIPLIERS)
 
+# Anti-correlated bank: each non-baseline entry boosts TWO components, never
+# just one — so a "boost the loud component" memorization fails because every
+# component is sometimes loud and sometimes quiet. This is the answer to the
+# Phase 6 Test 1 critique that Axis B's σ-ratio PASS was partly mechanical
+# scaling: anti-correlated profiles can't be solved by scaling-up one channel.
+MISSION_PROFILE_ANTI_CORR: tuple[tuple[float, float, float], ...] = (
+    (1.0, 1.0, 1.0),  # baseline so legacy default behavior is reachable
+    (3.0, 3.0, 1.0),  # boost LWF + ASF, dampen relative weight of RIA
+    (1.0, 3.0, 3.0),  # boost ASF + RIA
+    (3.0, 1.0, 3.0),  # boost LWF + RIA
+)
+
 
 def get_mission_profile_multipliers() -> np.ndarray:
     """(NUM_MISSION_PROFILES, 3) float32 multipliers in (LWF, ASF, RIA) order."""
     return np.asarray(MISSION_PROFILE_MULTIPLIERS, dtype=np.float32)
+
+
+def get_mission_profile_anti_corr() -> np.ndarray:
+    """(4, 3) float32 anti-correlated multipliers in (LWF, ASF, RIA) order."""
+    return np.asarray(MISSION_PROFILE_ANTI_CORR, dtype=np.float32)
+
+
+# Phase-boundary jitter bank. Each entry is a 3-tuple of step indices
+# ``(phase0_start, phase1_start, phase2_start)``; phase0 always starts at 0.
+# Assumes 500-step episodes (the canonical CC4 episode length); shorter banks
+# scale linearly. Boundaries control when the allow-list flips and when
+# ``phase_rewards`` switches its emphasis between OPS-A (phase 1) and OPS-B
+# (phase 2), so jittering these breaks "deploy decoys at step 167" memorization.
+PHASE_BOUNDARIES_BANK: tuple[tuple[int, int, int], ...] = (
+    (0, 167, 333),  # canonical CC4 split (3 ~equal phases)
+    (0, 100, 300),  # short setup, balanced mid+late
+    (0, 200, 400),  # long setup, short late
+    (0, 150, 250),  # short mid-phase, late starts at 250
+)
+
+
+def get_phase_boundaries_bank() -> np.ndarray:
+    """(N, 3) int32 phase-boundary triples for 500-step episodes."""
+    return np.asarray(PHASE_BOUNDARIES_BANK, dtype=np.int32)
+
+
+def _build_phase_rewards_bank() -> np.ndarray:
+    """Build the crown-jewel rotation bank.
+
+    Each entry is a ``(MISSION_PHASES, NUM_SUBNETS, 3)`` phase_rewards array;
+    bank[0] is the canonical CC4 table (matches ``_build_phase_rewards``
+    exactly), so a recipe with ``phase_rewards_bank: true`` and a 1-entry bank
+    reproduces legacy behavior. Remaining entries permute *which subnet is
+    high-value in which phase*: the canonical table emphasizes OPS_A in
+    phase 1 and OPS_B in phase 2; bank entries 1+ rotate that across other
+    operational/administrative subnets so the same physical topology
+    generates different reward gradients per episode.
+
+    The policy must read which-subnet-is-which from the observation rather
+    than memorizing "phase 1 → focus on subnet index 3" — directly addresses
+    the Phase 6 Test 1 finding that Axis A's σ-ratio was null because subnet
+    *labels* were stable across the topology bank.
+    """
+    canonical = _build_phase_rewards()
+    S = SUBNET_IDS
+    OA, OB = S["OPERATIONAL_ZONE_A"], S["OPERATIONAL_ZONE_B"]
+    RA, RB = S["RESTRICTED_ZONE_A"], S["RESTRICTED_ZONE_B"]
+    ADMIN, OFFICE = S["ADMIN_NETWORK"], S["OFFICE_NETWORK"]
+
+    bank = [canonical]
+
+    # Entry 1: swap OPS_A ↔ OPS_B in phases 1 and 2 (and their RZ pairs).
+    # Phase 1 now emphasizes OPS_B; phase 2 emphasizes OPS_A. The "primary
+    # mission target" rotates between episodes.
+    swap_AB = canonical.copy()
+    swap_AB[1, OA] = canonical[1, OB]
+    swap_AB[1, OB] = canonical[1, OA]
+    swap_AB[1, RA] = canonical[1, RB]
+    swap_AB[1, RB] = canonical[1, RA]
+    swap_AB[2, OA] = canonical[2, OB]
+    swap_AB[2, OB] = canonical[2, OA]
+    swap_AB[2, RA] = canonical[2, RB]
+    swap_AB[2, RB] = canonical[2, RA]
+    bank.append(swap_AB)
+
+    # Entry 2: emphasize ADMIN_NETWORK as a phase-1 priority (analyst console
+    # network — same shape topology, different "what blue is told to protect").
+    admin_priority = canonical.copy()
+    # Boost ADMIN per-component weight in phase 1 to match the OPS_A intensity.
+    admin_priority[1, ADMIN] = np.array([-5, -2, -5], dtype=np.float32)
+    bank.append(admin_priority)
+
+    # Entry 3: emphasize OFFICE_NETWORK in phase 2 (insider-threat scenario).
+    office_priority = canonical.copy()
+    office_priority[2, OFFICE] = np.array([-5, -2, -5], dtype=np.float32)
+    bank.append(office_priority)
+
+    # Entry 4: phase 1 protects BOTH OPS_A and OPS_B simultaneously
+    # (heightened-alert scenario; no rotation, just intensity in phase 1).
+    both_ops = canonical.copy()
+    both_ops[1, OB] = canonical[1, OA]  # OPS_B gets the OPS_A treatment too
+    bank.append(both_ops)
+
+    # Entry 5: full rotation — phase 1 emphasizes OPS_B + ADMIN; phase 2
+    # emphasizes OPS_A + OFFICE. Tests whether the policy can adapt to a
+    # full reframing of mission priority structure.
+    full_rotate = canonical.copy()
+    full_rotate[1, OA] = canonical[1, OB]
+    full_rotate[1, OB] = canonical[1, OA]
+    full_rotate[1, ADMIN] = np.array([-5, -2, -5], dtype=np.float32)
+    full_rotate[2, OA] = canonical[2, OB]
+    full_rotate[2, OB] = canonical[2, OA]
+    full_rotate[2, OFFICE] = np.array([-5, -2, -5], dtype=np.float32)
+    bank.append(full_rotate)
+
+    return np.stack(bank, axis=0)
+
+
+def get_phase_rewards_bank() -> np.ndarray:
+    """(N, MISSION_PHASES, NUM_SUBNETS, 3) float32 crown-jewel rotation bank."""
+    return _build_phase_rewards_bank()
 
 
 _ROUTER_LINKS = {

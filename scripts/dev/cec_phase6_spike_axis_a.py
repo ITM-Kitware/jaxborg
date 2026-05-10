@@ -36,6 +36,10 @@ import numpy as np
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.scenarios.cc4.game_variants import VARIANTS
+from jaxborg.scenarios.cc4.topology_numpy import (
+    PHASE_BOUNDARIES_BANK,
+    get_phase_rewards_bank,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BANK_DIR = REPO_ROOT / "scripts" / "dev" / "topology_bank"
@@ -138,8 +142,20 @@ def main() -> int:
         flush=True,
     )
 
+    # ENV-AXIS-A: topology bank + phase-boundary jitter + crown-jewel rotation.
+    # The new banks (P2/P3) make topology variation actually reach the reward
+    # channel — without them, subnet labels are stable across snapshots and
+    # the trained policy can't perceive shape diversity.
+    pb_bank = [list(t) for t in PHASE_BOUNDARIES_BANK]
+    pr_bank = get_phase_rewards_bank()
+
     fixed_env = make_jax_env(variant, topology_path=bank[0])
-    bank_env = make_jax_env(variant, topology_path=list(bank))
+    bank_env = make_jax_env(
+        variant,
+        topology_path=list(bank),
+        phase_boundary_bank=pb_bank,
+        phase_rewards_bank=pr_bank,
+    )
 
     print("[axis-a] rolling out ENV-FIXED ...", flush=True)
     fixed_rewards = _rollout_episode_rewards(

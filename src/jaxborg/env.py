@@ -316,6 +316,8 @@ class ScenarioEnv(MultiAgentEnv):
         op_zone_min_servers: int | None = None,
         mission_bank: Sequence[Sequence[float]] | None = None,
         mission_bank_amplify: float = 1.0,
+        phase_boundary_bank: Sequence[Sequence[int]] | None = None,
+        phase_rewards_bank: Sequence | None = None,
     ):
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
@@ -341,6 +343,42 @@ class ScenarioEnv(MultiAgentEnv):
             amplify = float(mission_bank_amplify)
             self._mission_bank = arr * amplify
             self._mission_bank_size = int(arr.shape[0])
+
+        # Phase 6 P2 — phase-boundary jitter bank. Per-reset sample of
+        # (phase0_start, phase1_start, phase2_start). Replaces
+        # ``const.phase_boundaries`` so phase transitions, allow-list flips,
+        # and phase_rewards index switches all move with the sampled split.
+        # Empty/None → fast path, behavior unchanged.
+        if phase_boundary_bank is None or len(phase_boundary_bank) == 0:
+            self._phase_boundary_bank = None
+            self._phase_boundary_bank_size = 0
+        else:
+            pb_arr = jnp.asarray(phase_boundary_bank, dtype=jnp.int32)
+            if pb_arr.ndim != 2 or pb_arr.shape[1] != 3:
+                raise ValueError(
+                    f"phase_boundary_bank must be a sequence of 3-tuples; got shape {pb_arr.shape}"
+                )
+            self._phase_boundary_bank = pb_arr
+            self._phase_boundary_bank_size = int(pb_arr.shape[0])
+
+        # Phase 6 P3 — phase_rewards bank (crown-jewel rotation). Per-reset
+        # sample of an entire (MISSION_PHASES, NUM_SUBNETS, 3) phase_rewards
+        # array. Each entry rotates which subnet is "high-value" in which
+        # phase, so the same physical topology generates different reward
+        # gradients per episode and the policy must read state instead of
+        # memorizing subnet indices. Empty/None → fast path, unchanged.
+        if phase_rewards_bank is None or len(phase_rewards_bank) == 0:
+            self._phase_rewards_bank = None
+            self._phase_rewards_bank_size = 0
+        else:
+            pr_arr = jnp.asarray(phase_rewards_bank, dtype=jnp.float32)
+            if pr_arr.ndim != 4:
+                raise ValueError(
+                    "phase_rewards_bank entries must be (MISSION_PHASES, NUM_SUBNETS, 3) "
+                    f"arrays; got shape {pr_arr.shape}"
+                )
+            self._phase_rewards_bank = pr_arr
+            self._phase_rewards_bank_size = int(pr_arr.shape[0])
         if topology_path is not None:
             if topology_mode != "generative":
                 raise ValueError(
@@ -377,10 +415,10 @@ class ScenarioEnv(MultiAgentEnv):
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
 
     def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
-        # Split the input key so the mission-bank index sample is independent
-        # of (and reproducible from) the same input key passed to topology
-        # construction.  Same input key → same const + same multiplier triple.
-        key_const, key_mission = jax.random.split(key)
+        # Split the input key so each bank's index sample is independent of
+        # (and reproducible from) the same input key — same input key →
+        # same const + same triples + same boundaries + same crown-jewel.
+        key_const, key_mission, key_pb, key_pr = jax.random.split(key, 4)
 
         if self._const_bank is None:
             const = build_topology(
@@ -399,6 +437,15 @@ class ScenarioEnv(MultiAgentEnv):
             # snapshot's default.
             const = const.replace(max_steps=jnp.int32(self.num_steps))
 
+        # Phase 6 P3 — crown-jewel rotation. Replace ``const.phase_rewards``
+        # with a sampled bank entry BEFORE the mission-bank multiplier so
+        # both transformations compose: bank picks "which subnet is the
+        # crown jewel this episode," then multiplier scales the per-component
+        # weights. Skipped on fast path when no bank is configured.
+        if self._phase_rewards_bank is not None:
+            pr_idx = jax.random.randint(key_pr, (), 0, self._phase_rewards_bank_size)
+            const = const.replace(phase_rewards=self._phase_rewards_bank[pr_idx])
+
         # Phase 6 axis B — post-multiply ``const.phase_rewards`` by a sampled
         # ``(LWF, ASF, RIA)`` triple.  Mirrors the diversity-branch approach
         # (topology.py:540–555): keeps SimulatorState shape unchanged and
@@ -409,6 +456,13 @@ class ScenarioEnv(MultiAgentEnv):
             mp_multipliers = self._mission_bank[mp_idx]  # (3,) float32
             phase_rewards = const.phase_rewards * mp_multipliers[None, None, :]
             const = const.replace(phase_rewards=phase_rewards)
+
+        # Phase 6 P2 — phase-boundary jitter. Replace ``const.phase_boundaries``
+        # with a sampled bank entry. Phase transitions, allow-list flips,
+        # and per-phase reward emphasis all reindex against the sampled split.
+        if self._phase_boundary_bank is not None:
+            pb_idx = jax.random.randint(key_pb, (), 0, self._phase_boundary_bank_size)
+            const = const.replace(phase_boundaries=self._phase_boundary_bank[pb_idx])
 
         return const
 
