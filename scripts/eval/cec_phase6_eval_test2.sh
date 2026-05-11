@@ -63,7 +63,7 @@ submit_one() {
     sbatch
     --cpus-per-task=8
     --mem=32G
-    --time=00:30:00
+    --time=01:30:00
     --partition=community
     --job-name="${jobname}"
     --output="${SLURM_LOG_DIR}/${jobname}_%j.log"
