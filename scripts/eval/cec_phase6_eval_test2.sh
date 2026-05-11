@@ -26,7 +26,11 @@ mkdir -p "$SLURM_LOG_DIR"
 
 ARMS=("C00" "C11")
 SEEDS=(42 142 242)
-REDS=("fsm" "cia_c" "cia_i" "cia_a" "random")
+# RandomSelectRedAgent is a CybORG-side construct; the JAX red-selector
+# REGISTRY only has fsm + the CIA-biased reds, so the JAX-native eval skips
+# "random" here. To get a random-red noise-floor row, run eval_recipe.py
+# (CybORG-side) with --eval-red random instead.
+REDS=("fsm" "cia_c" "cia_i" "cia_a")
 EPISODES=90
 EVAL_SEED=1000
 DRY=0

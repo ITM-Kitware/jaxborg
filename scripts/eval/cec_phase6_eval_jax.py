@@ -134,8 +134,10 @@ def run_eval(
 def main():
     parser = argparse.ArgumentParser(description="JAX-native held-out red eval for Phase 6 Test 2")
     parser.add_argument("--model", required=True, help=".safetensors checkpoint with sibling recipe sidecar")
+    # NOTE: "random" (CybORG's RandomSelectRedAgent) is not in the JAX red-
+    # selector REGISTRY; route that through eval_recipe.py (CybORG eval).
     parser.add_argument(
-        "--eval-red", required=True, choices=["fsm", "cia_c", "cia_i", "cia_a", "random", "resilience", "sleep"]
+        "--eval-red", required=True, choices=["fsm", "cia_c", "cia_i", "cia_a", "resilience", "sleep"]
     )
     parser.add_argument("--episodes", type=int, default=90, help="Episodes (plan default 90 for stat power)")
     parser.add_argument("--seed", type=int, default=1000, help="PRNG seed for the rollout batch")

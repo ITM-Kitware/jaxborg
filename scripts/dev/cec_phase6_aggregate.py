@@ -25,7 +25,9 @@ import os
 from pathlib import Path
 
 ARMS = ("C00", "C11")
-REDS = ("fsm", "cia_c", "cia_i", "cia_a", "random")
+# "random" was originally in the plan's noise-floor list, but the JAX-native
+# eval doesn't include a random red (CybORG-only). Drop from the JAX agg.
+REDS = ("fsm", "cia_c", "cia_i", "cia_a")
 SEEDS = (42, 142, 242)
 
 CONFIRM_REWARD_DELTA = 200.0
