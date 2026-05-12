@@ -27,6 +27,13 @@ import time
 from pathlib import Path
 from statistics import mean, stdev
 
+# Set persistent XLA compile cache BEFORE importing jax — non-interactive bash
+# (slurm --wrap, bash -c) doesn't source ~/.bashrc so we set this defensively
+# so re-runs hit the cache instead of paying ~20 min CPU compile per cell.
+os.environ.setdefault("JAX_ENABLE_COMPILATION_CACHE", "1")
+os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", os.path.expanduser("~/.cache/jaxborg/xla"))
+os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "1")
+
 import jax
 import jax.numpy as jnp
 import numpy as np

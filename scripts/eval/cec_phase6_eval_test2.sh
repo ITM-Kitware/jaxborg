@@ -24,7 +24,12 @@ EXP_DIR="${JAXBORG_EXP_DIR:-$WORKDIR/../../jaxborg-exp}"
 SLURM_LOG_DIR="$EXP_DIR/slurm"
 mkdir -p "$SLURM_LOG_DIR"
 
-ARMS=("C00" "C11")
+if [ -n "${PHASE6_ARMS:-}" ]; then
+  # shellcheck disable=SC2206
+  ARMS=($PHASE6_ARMS)
+else
+  ARMS=("C00" "C11")
+fi
 SEEDS=(42 142 242)
 # RandomSelectRedAgent is a CybORG-side construct; the JAX red-selector
 # REGISTRY only has fsm + the CIA-biased reds, so the JAX-native eval skips

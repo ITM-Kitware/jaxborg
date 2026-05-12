@@ -24,7 +24,8 @@ import math
 import os
 from pathlib import Path
 
-ARMS = ("C00", "C11")
+# Override via PHASE6_ARMS env var (space-separated, e.g. "C00_10M C11_10M").
+ARMS = tuple(os.environ.get("PHASE6_ARMS", "C00 C11").split())
 # "random" was originally in the plan's noise-floor list, but the JAX-native
 # eval doesn't include a random red (CybORG-only). Drop from the JAX agg.
 REDS = ("fsm", "cia_c", "cia_i", "cia_a")
@@ -56,8 +57,10 @@ def _stderr(values: list[float]) -> float:
 
 
 def _arm_from_recipe(recipe_name: str) -> str:
+    # Exact-suffix match: "cec_phase6_C00_10M" matches arm "C00_10M" but NOT
+    # arm "C00". Prevents 3M-tag rows from pooling with 10M-tag rows.
     for arm in ARMS:
-        if arm in recipe_name:
+        if recipe_name.endswith(f"_{arm}") or recipe_name == arm:
             return arm
     return "?"
 
@@ -71,16 +74,25 @@ def _seed_from_model(model_path: str) -> int:
 
 def aggregate(eval_dir: Path) -> dict:
     rows = _load_rows(eval_dir)
-    table: dict[tuple[str, int, str], float] = {}
+    # Collect ALL per-episode rewards per (arm, seed, red) across every
+    # eval batch (e.g. seed=1000 + seed=2000 result rows), then mean across
+    # the union — that's a larger effective N per cell than any single batch.
+    per_episode_pool: dict[tuple[str, int, str], list[float]] = {}
     for row in rows:
         arm = _arm_from_recipe(row.get("recipe_name", ""))
         seed = _seed_from_model(row.get("model", ""))
         red = row.get("eval_red", "?")
         if arm in ARMS and seed in SEEDS and red in REDS:
             key = (arm, seed, red)
-            if key in table:
-                print(f"WARN: duplicate row for {key}; keeping latest by file order")
-            table[key] = float(row["mean_reward"])
+            pe = row.get("per_episode") or []
+            if pe:
+                per_episode_pool.setdefault(key, []).extend(float(x) for x in pe)
+            else:
+                # fallback for rows without per_episode (older format)
+                per_episode_pool.setdefault(key, []).append(float(row["mean_reward"]))
+    table: dict[tuple[str, int, str], float] = {k: sum(v) / len(v) for k, v in per_episode_pool.items() if v}
+    batches_per_cell: dict[tuple[str, int, str], int] = {k: len(v) for k, v in per_episode_pool.items()}
+    summary_n_episodes = batches_per_cell
 
     summary = {
         "per_arm_red": {},
@@ -97,18 +109,27 @@ def aggregate(eval_dir: Path) -> dict:
                     summary["missing_cells"].append((arm, s, red))
             mean = sum(present) / len(present) if present else float("nan")
             stderr = _stderr(present) if len(present) >= 2 else 0.0
+            n_eps = [summary_n_episodes.get((arm, s, red), 0) for s in SEEDS]
             summary["per_arm_red"][f"{arm}/{red}"] = {
                 "n": len(present),
                 "mean": mean,
                 "stderr": stderr,
                 "per_seed": vals,
+                "episodes_per_seed": n_eps,
             }
 
+    # Pick the two arms used for the paired-delta. With the default
+    # ("C00", "C11"), this matches the original 3M experiment. With
+    # PHASE6_ARMS="C00_10M C11_10M" it matches Option B. The first arm is the
+    # control, the second is the treatment; the delta is treatment − control.
+    if len(ARMS) < 2:
+        raise SystemExit(f"Need at least 2 arms for paired delta; got {ARMS}")
+    arm_ctrl, arm_trt = ARMS[0], ARMS[1]
     for red in REDS:
         deltas = []
         for s in SEEDS:
-            v00 = table.get(("C00", s, red))
-            v11 = table.get(("C11", s, red))
+            v00 = table.get((arm_ctrl, s, red))
+            v11 = table.get((arm_trt, s, red))
             if v00 is None or v11 is None:
                 continue
             deltas.append(v11 - v00)
@@ -142,10 +163,11 @@ def aggregate(eval_dir: Path) -> dict:
 
 def _print_table(summary: dict) -> None:
     print("\n=== Per-arm × held-out red mean reward (across seeds) ===")
-    print(f"{'arm/red':<12} {'n':>3} {'mean':>10} {'± stderr':>10}  per-seed")
+    print(f"{'arm/red':<12} {'n':>3} {'mean':>10} {'± stderr':>10}  per-seed (eps/seed)")
     for k, v in summary["per_arm_red"].items():
         ps = ", ".join(f"{x:.0f}" if x is not None else "—" for x in v["per_seed"])
-        print(f"{k:<12} {v['n']:>3} {v['mean']:>10.1f} {v['stderr']:>10.1f}  [{ps}]")
+        eps = ", ".join(str(e) for e in v.get("episodes_per_seed", []))
+        print(f"{k:<12} {v['n']:>3} {v['mean']:>10.1f} {v['stderr']:>10.1f}  [{ps}] ({eps} eps)")
 
     print("\n=== Paired delta (C11 − C00), per held-out red ===")
     print(f"{'red':<10} {'n':>3} {'Δmean':>10} {'± stderr':>10} {'lower_bound':>12}  verdict")
