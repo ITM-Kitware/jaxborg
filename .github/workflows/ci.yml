@@ -43,12 +43,12 @@ jobs:
   test-slow:
     name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
-    # Cold-cache headroom: with no .test_durations_cache populated yet,
-    # pytest-split round-robins by test count and heavy parametrized tests
-    # cluster into a couple of shards (~70 min wall serial). Once a clean
-    # run finishes, the per-shard partials accumulate in cache and steady-
-    # state per shard drops well under 30 min.
-    timeout-minutes: 120
+    # Cold-cache headroom: with no aggregated .test_durations yet,
+    # pytest-split round-robins by test count and heavy parametrized
+    # tests cluster into a couple of shards. Once aggregate-durations
+    # has populated the shared cache, per-shard wall time drops well
+    # under 30 min.
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -59,39 +59,76 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      # Per-shard duration partials live in .test_durations_cache/ as
-      # group-N.json. Each shard restores the latest cache (any shard's
-      # snapshot — most recent wins), merges all known partials into
-      # .test_durations for pytest-split, runs its slice with
-      # --store-durations, then snapshots its own partial back and saves.
-      # Over successive runs partials from every shard accumulate.
-      - uses: actions/cache@v4
+      # actions/cache restores exactly one cache per step, so we cannot
+      # save per-shard partials and hope to merge them at restore time.
+      # Instead, aggregate-durations (below) merges every shard's output
+      # into a single .test_durations and saves it under a stable
+      # prefix; each shard restores the most recent aggregate here.
+      - name: Restore aggregated slow test durations
+        uses: actions/cache/restore@v4
         with:
-          path: .test_durations_cache
-          key: slow-durations-${{ github.run_id }}-${{ matrix.group }}
+          path: .test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}
           restore-keys: |
-            slow-durations-
-      - name: Merge cached duration partials
+            slow-durations-aggregated-
+      # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
+      # parallelism axis here, and stacking xdist on top contends on the
+      # JAX persistent-cache lock (cold cache + many tiny compiles).
+      - run: uv run pytest -o "addopts=" -m slow --splits 8 --group ${{ matrix.group }} --store-durations
+      - name: Upload this shard's durations
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slow-durations-${{ matrix.group }}
+          path: .test_durations
+          retention-days: 1
+          if-no-files-found: ignore
+
+  aggregate-durations:
+    name: aggregate slow durations
+    needs: test-slow
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Restore previous aggregate
+        uses: actions/cache/restore@v4
+        with:
+          path: previous/.test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}
+          restore-keys: |
+            slow-durations-aggregated-
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: slow-durations-*
+          path: shards/
+      # Merge the prior aggregate with each completed shard's partial.
+      # Shards that timed out / crashed before --store-durations wrote
+      # the file simply contribute nothing; the previous aggregate keeps
+      # their entries until a future run refreshes them.
+      - name: Merge into aggregate
         run: |
           python - <<'PY'
           import json, pathlib
           merged = {}
-          cache = pathlib.Path('.test_durations_cache')
-          if cache.is_dir():
-              for f in sorted(cache.glob('group-*.json')):
-                  try:
-                      merged.update(json.loads(f.read_text()))
-                  except Exception:
-                      pass
+          prev = pathlib.Path('previous/.test_durations')
+          if prev.is_file():
+              try:
+                  merged.update(json.loads(prev.read_text()))
+              except Exception:
+                  pass
+          for f in sorted(pathlib.Path('shards').glob('slow-durations-*/.test_durations')):
+              try:
+                  merged.update(json.loads(f.read_text()))
+              except Exception:
+                  pass
           if merged:
               pathlib.Path('.test_durations').write_text(json.dumps(merged, indent=2))
+              print(f"aggregated {len(merged)} test durations")
           PY
-      # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
-      # parallelism axis here, and stacking xdist on top contends on the JAX
-      # persistent-cache lock (cold cache + many tiny compiles).
-      - run: uv run pytest -o "addopts=" -m slow --splits 8 --group ${{ matrix.group }} --store-durations
-      - name: Snapshot this shard's partial durations
-        if: always()
-        run: |
-          mkdir -p .test_durations_cache
-          [ -f .test_durations ] && cp .test_durations .test_durations_cache/group-${{ matrix.group }}.json || true
+      - name: Save aggregated durations
+        if: hashFiles('.test_durations') != ''
+        uses: actions/cache/save@v4
+        with:
+          path: .test_durations
+          key: slow-durations-aggregated-${{ github.run_id }}
