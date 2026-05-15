@@ -25,7 +25,7 @@ from tests.differential.harness import CC4DifferentialHarness
 pytestmark = pytest.mark.slow
 
 
-@pytest.mark.parametrize("seed", [1000, 1001, 1002, 1003, 1004])
+@pytest.mark.parametrize("seed", [0, 1000, 1001, 1002, 1003, 1004])
 def test_red_policy_matches_cyborg_multistep(seed: int) -> None:
     """JAX red picks identical to CybORG red picks across 200 steps under matched RNG."""
     harness = CC4DifferentialHarness(
