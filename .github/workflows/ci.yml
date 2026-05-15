@@ -71,6 +71,19 @@ jobs:
           key: slow-durations-aggregated-${{ github.run_id }}
           restore-keys: |
             slow-durations-aggregated-
+      # First-run / cross-scope bootstrap: when no cache exists yet
+      # (new PR, branch with its own cache scope, or main right after
+      # merge), download a known-good durations file from the URL in
+      # `vars.SLOW_DURATIONS_SEED_URL`. Once a real run populates the
+      # cache this step is skipped. Keeping timings out of the repo
+      # means we can refresh the seed gist without churning git history.
+      - name: Seed durations from URL if cache empty
+        if: hashFiles('.test_durations') == '' && vars.SLOW_DURATIONS_SEED_URL != ''
+        run: |
+          curl -sSfL "${SEED_URL}" -o .test_durations
+          echo "Seeded $(jq 'length' .test_durations) durations from SLOW_DURATIONS_SEED_URL"
+        env:
+          SEED_URL: ${{ vars.SLOW_DURATIONS_SEED_URL }}
       # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
       # parallelism axis here, and stacking xdist on top contends on the
       # JAX persistent-cache lock (cold cache + many tiny compiles).
@@ -81,6 +94,9 @@ jobs:
         with:
           name: slow-durations-${{ matrix.group }}
           path: .test_durations
+          # upload-artifact@v4 excludes hidden files by default;
+          # `.test_durations` is dot-prefixed so we must opt in.
+          include-hidden-files: true
           retention-days: 1
           if-no-files-found: ignore
 
