@@ -7,7 +7,6 @@ match to CybORG's PPOAgent before the Singh recipe.
 
 from __future__ import annotations
 
-import distrax
 import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
@@ -17,6 +16,7 @@ from flax.linen.initializers import constant, orthogonal
 from torch.distributions import Categorical
 
 from .base import BUFFER_LAYOUT_FLAT
+from .categorical import Categorical as JaxCategorical
 
 
 class _JaxSharedActorCritic(nn.Module):
@@ -41,7 +41,7 @@ class _JaxSharedActorCritic(nn.Module):
         logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
         if avail_actions is not None:
             logits = logits - (1 - avail_actions) * 1e10
-        pi = distrax.Categorical(logits=logits)
+        pi = JaxCategorical(logits=logits)
 
         value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(h)
         value = jnp.squeeze(value, axis=-1)

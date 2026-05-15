@@ -8,9 +8,10 @@ from scripts.dev.parity.bootstrap import configure_runtime
 
 configure_runtime()
 
-import distrax
 import jax
 import jax.numpy as jnp
+
+from jaxborg.policies.categorical import Categorical as JaxCategorical
 
 
 def load_checkpoint(path):
@@ -48,7 +49,7 @@ def make_batched_inference_fn(policy, params, deterministic):
         @jax.jit
         def batched_step(obs_stack, mask_stack, keys):
             logits = jax.vmap(_fwd)(obs_stack, mask_stack)
-            actions = jax.vmap(lambda lg, k: distrax.Categorical(logits=lg).sample(seed=k))(logits, keys)
+            actions = jax.vmap(lambda lg, k: JaxCategorical(logits=lg).sample(seed=k))(logits, keys)
             return actions, logits
 
     return batched_step

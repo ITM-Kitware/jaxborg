@@ -10,7 +10,6 @@ configure_runtime()
 
 import time
 
-import distrax
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -18,6 +17,7 @@ import numpy as np
 from dataclasses import replace
 
 from jaxborg.actions.masking import compute_blue_action_mask
+from jaxborg.policies.categorical import Categorical as JaxCategorical
 from jaxborg.constants import COMPROMISE_PRIVILEGED, COMPROMISE_USER, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
@@ -74,7 +74,7 @@ def make_scan_eval_fn(env, policy, deterministic):
             actions_arr = jnp.argmax(logits, axis=-1)
         else:
             act_keys = jax.random.split(_rng, NUM_BLUE_AGENTS)
-            actions_arr = jax.vmap(lambda lg, k: distrax.Categorical(logits=lg).sample(seed=k))(logits, act_keys)
+            actions_arr = jax.vmap(lambda lg, k: JaxCategorical(logits=lg).sample(seed=k))(logits, act_keys)
 
         actions = {f"blue_{i}": actions_arr[i] for i in range(NUM_BLUE_AGENTS)}
 

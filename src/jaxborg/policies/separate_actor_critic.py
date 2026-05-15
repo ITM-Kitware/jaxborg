@@ -9,7 +9,6 @@ layer".
 
 from __future__ import annotations
 
-import distrax
 import flax.linen as nn
 import jax.numpy as jnp
 import numpy as np
@@ -19,6 +18,7 @@ from flax.linen.initializers import constant, orthogonal
 from torch.distributions import Categorical
 
 from .base import BUFFER_LAYOUT_FLAT
+from .categorical import Categorical as JaxCategorical
 
 
 class _ActorTrunk(nn.Module):
@@ -41,7 +41,7 @@ class _ActorTrunk(nn.Module):
         logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
         if avail_actions is not None:
             logits = logits - (1 - avail_actions) * 1e10
-        return distrax.Categorical(logits=logits)
+        return JaxCategorical(logits=logits)
 
 
 class _CriticTrunk(nn.Module):
