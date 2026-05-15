@@ -15,7 +15,7 @@ Two factories instead of a single `BasePolicy` class because the underlying
 frameworks (Flax functional vs torch nn.Module) are too different to wrap
 in a single concrete type without leaking abstractions. The contract that
 *does* unify them is: the JAX module's `__call__(obs, avail_actions)`
-returns `(distrax.Categorical, value)`; the torch module's
+returns `(policies.categorical.Categorical, value)`; the torch module's
 `get_action_and_value(obs, mask, action=None)` returns
 `(action, log_prob, entropy, value)`. Algorithm scripts on each backend
 already speak their backend's framework — they don't try to be backend-

@@ -180,9 +180,10 @@ def _jax_loss(params, network, obs, actions, mask, old_logp, mb_adv, mb_targets,
 def test_forward_pass_parity():
     """torch and flax forward passes on identical params + inputs match.
 
-    Compares per-action log-probs and values rather than raw logits because
-    `distrax.Categorical.logits` returns log-softmax-normalized logits while
-    torch's logits are raw — the difference would mask real divergence.
+    Compares per-action log-probs and values rather than raw logits: torch
+    and flax may emit raw logits that differ by a constant shift along the
+    action axis (both still produce identical softmax and log_softmax), so
+    a raw-logits comparison would flag a non-divergence as a divergence.
     """
     torch.manual_seed(0)
     agent = TinyPPOAgent()

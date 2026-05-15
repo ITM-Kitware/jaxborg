@@ -1,13 +1,12 @@
 [project]
 name = "jaxborg"
 version = "0.1.0"
-description = "Add your description here"
+description = "JAX reimplementation of the CC4 enterprise cyber-defense environment, plus a parity harness against CybORG."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "chex",
     "cyborg",
-    "distrax",
     "flax",
     "jaxmarl",
     "mlflow>=3.10.0",
@@ -16,24 +15,22 @@ dependencies = [
     "torch>=2.0",
 ]
 
-# Pick exactly one — leaving both unspecified pulls jax in only via the
-# transitive deps of jaxmarl/flax (CPU jaxlib), which silently masks the
-# wrong-backend trap on GPU hosts. CI uses `--extra cpu`; GPU hosts use
-# `--extra cuda`.
+# Pick exactly one extra. Leaving both unspecified lets jax come in only
+# via the transitive deps of jaxmarl/flax (CPU jaxlib), which silently
+# masks the wrong-backend trap on GPU hosts. CI uses `--extra cpu`; GPU
+# hosts use `--extra cuda`.
 #
-# `cuda` lists the cuda12 plugin packages directly rather than via
-# `jax[cuda12]` because the latter pulls in `jax-cuda12-plugin[with-cuda]`,
-# which requires nvidia-cudnn-cu12>=9.1 — collides with cyborg's pinned
-# torch==2.2.0 (needs cudnn 8.9.2.26 in the cu12 namespace). Pinning to
-# the cu13 namespace avoids the conflict.
+# JAX is pinned to >=0.7.1 for the persistent-cache miscompile fix
+# (jax-ml/jax#31733). 0.5.x silently returns stale ``.at[].set()`` updates
+# inside ``lax.fori_loop`` / ``lax.cond`` on cache hit — corrupts the env
+# step. 0.4.38 silently no-ops the cache (#25768). 0.7.1 is the line the
+# upstream reporter explicitly confirmed fixed. Reaching it also required
+# dropping ``distrax`` (its transitive ``tensorflow-probability<=0.25``
+# imports a JAX-0.7-removed symbol); see
+# ``src/jaxborg/policies/categorical.py`` for the local replacement.
 [project.optional-dependencies]
-cpu = ["jax[cpu]==0.4.38"]
-cuda = [
-    "jax-cuda12-pjrt==0.4.38",
-    "jax-cuda12-plugin==0.4.38",
-    "nvidia-cublas>=13.2",
-    "nvidia-cudnn-cu13>=9.19",
-]
+cpu = ["jax[cpu]>=0.7.1"]
+cuda = ["jax[cuda12]>=0.7.1"]
 
 [project.scripts]
 export-generated-topology = "jaxborg.scenarios.cc4.topology_cli:export_generated_main"
@@ -46,9 +43,27 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/jaxborg"]
 
+# Overrides for upstream pins that lag the rest of the stack. Each line
+# answers "what package pins this lower than we can use, and why is the
+# bump safe":
+#   * matplotlib: cyborg pins ==3.8.2. Bumped for newer features and to
+#     match the rest of the matplotlib ecosystem.
+#   * jax / jaxlib: jaxmarl pins <=0.4.38 ("until we can test 0.5",
+#     commit 3ffa5b8f, upstream issue FLAIROx/JaxMARL#175). See the
+#     [project.optional-dependencies] note above for why we need 0.7+.
+#   * numpy: cyborg pins ==1.26.4. ml-dtypes (transitive via JAX 0.7+)
+#     requires numpy>=2.1; cyborg's runtime is numpy-2-compatible
+#     empirically (fast + slow suites green).
+#   * scipy: jaxmarl pins <=1.12 (numpy-1-era upper bound).
+#   * torch: cyborg pins ==2.2.0 (numpy-1-only).
 [tool.uv]
 override-dependencies = [
     "matplotlib>=3.9",
+    "jax>=0.7.1",
+    "jaxlib>=0.7.1",
+    "numpy>=2.1,<2.4",
+    "scipy>=1.14",
+    "torch>=2.4",
 ]
 
 [tool.uv.sources]
@@ -60,9 +75,6 @@ dev = [
     "ruff",
     "pytest-xdist",
 ]
-# The previous `[dependency-groups.cuda]` is superseded by the `cuda` extra
-# in `[project.optional-dependencies]` above. `jax[cuda12]` brings in the
-# matching cuda12 pjrt + plugin so we don't have to pin them ourselves.
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
