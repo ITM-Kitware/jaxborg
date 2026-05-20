@@ -1,0 +1,49 @@
+meta:
+  name: cec_phase6_C00_10M
+  source: "Phase 6 plan — Option B (10M timesteps × 3 seeds, control replicate)"
+  added: 2026-05-11
+  notes: |
+    Canonical-config control at 10M timesteps. Identical to cec_phase6_C00
+    except total_timesteps. Paired against cec_phase6_C11_10M and each
+    single-axis ablation arm.
+
+algorithm: ippo
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 10000000
+  variant: cc4_stock
+
+eval:
+  variant: cc4_stock
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16

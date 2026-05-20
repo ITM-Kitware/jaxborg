@@ -27,7 +27,7 @@ from typing import Any
 import yaml
 
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.scenarios.cc4.game_variants import VARIANTS
+from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
@@ -68,9 +68,26 @@ def train_variant(recipe: dict[str, Any]) -> GameVariant:
 
 
 def eval_variant(recipe: dict[str, Any]) -> GameVariant:
+    """Resolve the eval-time GameVariant.
+
+    Precedence:
+      1. ``eval.red`` (if set) — overrides the variant's red selector. The
+         base variant (``eval.variant`` or ``train.variant``) is used only to
+         decide ``resilience_roles`` for the fsm path; CIA-biased reds
+         (``cia_c`` / ``cia_i`` / ``cia_a`` / ``resilience``) carry their
+         own resilience_roles=True since their selectors require role tags.
+         This means setting ``eval.red: cia_a`` on a ``cc4_stock`` recipe
+         forces ``resilience_roles=True`` to keep the selector consistent.
+      2. ``eval.variant`` — full variant name in ``VARIANTS``.
+      3. ``train.variant`` — fallback if no eval section is configured.
+    """
     eval_cfg = recipe.get("eval") or {}
-    name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
-    return VARIANTS[name]
+    base_name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
+    base = VARIANTS[base_name]
+    red = eval_cfg.get("red")
+    if red is None:
+        return base
+    return variant_for_red(red, resilience_roles=base.resilience_roles)
 
 
 def resolve_eval_variant(
@@ -96,6 +113,78 @@ def resolve_eval_variant(
 
         return eval_variant(read_sidecar(checkpoint))
     return default if default is not None else CC4_STOCK
+
+
+def _project_mission_bank(train: dict[str, Any]) -> list[list[float]] | None:
+    """Project ``train.mission_bank`` to a list of (LWF, ASF, RIA) triples.
+
+    Returns ``None`` when the recipe omits ``mission_bank`` or supplies an
+    empty list — both signal "no per-reset variation" (legacy behavior).
+    """
+    bank = train.get("mission_bank")
+    if bank is None:
+        return None
+    out: list[list[float]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(f"train.mission_bank entries must be (LWF, ASF, RIA) triples; got {entry!r}")
+        out.append([float(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
+def _resolve_topology_bank(train: dict[str, Any]) -> tuple[Path, ...]:
+    """Resolve ``train.topology_bank`` paths against the repo root."""
+    bank = train.get("topology_bank") or ()
+    if isinstance(bank, (str, Path)):
+        bank = [bank]
+    resolved: list[Path] = []
+    for entry in bank:
+        p = Path(entry)
+        if not p.is_absolute():
+            p = REPO_ROOT / p
+        resolved.append(p)
+    return tuple(resolved)
+
+
+def _project_phase_boundary_bank(train: dict[str, Any]) -> list[list[int]] | None:
+    """Project ``train.phase_boundary_bank`` to a list of int triples."""
+    bank = train.get("phase_boundary_bank")
+    if bank is None:
+        return None
+    out: list[list[int]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(
+                "train.phase_boundary_bank entries must be 3-tuples "
+                f"(phase0_start, phase1_start, phase2_start); got {entry!r}"
+            )
+        out.append([int(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
+def _project_phase_rewards_bank(train: dict[str, Any]):
+    """Resolve ``train.phase_rewards_bank`` to a stacked numpy bank or None.
+
+    Recipe accepts either a bool (``true`` → use the canonical 6-entry
+    crown-jewel rotation bank from topology_numpy) or a list of explicit
+    ``(MISSION_PHASES, NUM_SUBNETS, 3)`` arrays for custom banks. Most
+    callers want the bool form.
+    """
+    val = train.get("phase_rewards_bank")
+    if val is None or val is False:
+        return None
+    if val is True:
+        from jaxborg.scenarios.cc4.topology_numpy import get_phase_rewards_bank
+
+        return get_phase_rewards_bank()
+    # Explicit list of arrays — pass through (caller stacks).
+    return val
 
 
 def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
@@ -131,6 +220,11 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "EVAL_VARIANT": eval_variant(recipe),
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
+        "MISSION_BANK": _project_mission_bank(train),
+        "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
+        "TOPOLOGY_BANK": _resolve_topology_bank(train),
+        "PHASE_BOUNDARY_BANK": _project_phase_boundary_bank(train),
+        "PHASE_REWARDS_BANK": _project_phase_rewards_bank(train),
     }
 
 
