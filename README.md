@@ -85,23 +85,32 @@ uv run pytest -m ""      # everything
 # Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
 ./scripts/train/run.sh cleanrl default 42
 
+# Opt-in simultaneous Blue/Red self-play (fresh policy for each team)
+./scripts/train/run.sh jax cotraining 42
+./scripts/train/run.sh cleanrl cotraining 42
+
 # Multi-seed sweep (3 seeds, parallel for cleanrl, sequential under srun for jax)
 ./scripts/train/run_seeds.sh cleanrl default 3 0
 ./scripts/train/run_seeds.sh jax default 3 0
 
-# Evaluate any policy on CybORG via recipe sidecar
-# (.pt → torch state_dict; .pkl → JAX Flax params with action translation)
+# Legacy contract evaluation: learned Blue vs scripted Red in CybORG
 uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
     --episodes 10 --seeds 42-141
 
 uv run python scripts/eval/eval_recipe.py \
-    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
+    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --episodes 10 --seeds 42-141
+
+# Learned Blue from one run vs learned Red from another, in JAX CC4
+uv run python scripts/eval/eval_matchup.py \
+    --recipe my_matchup --policy-backend jax \
+    --blue-experiment blue_seed42 --red-experiment red_seed42 \
+    --episodes 10 --seeds 42-51
 
 # Dev parity transfer check: independent rollouts on both engines + TOST
 JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
-    --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.pkl \
+    --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --episodes 100
 ```
 
@@ -114,6 +123,9 @@ A recipe is a single YAML under `recipes/` that drives both backends. The `algor
 ```yaml
 # recipes/default.yaml — Matched-Training v2 baseline
 algorithm: ippo
+wandb: false                    # set true to log training + 5%-interval evals
+wandb_project: jaxborg
+wandb_run_name: null            # defaults to the YAML filename
 core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
 arch:    {name: shared, hidden_dim: 256, hidden_layers: 2}
 train:   {episode_length: 500, total_timesteps: 3000000}
@@ -121,28 +133,46 @@ jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
 cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
 ```
 
+`train.teams` selects `blue`, `red`, or `both` and defaults to `blue`, so
+existing recipes retain Blue-versus-scripted-Red behavior. In `both` mode the
+teams have independent parameter-sharing policies, act from the same pre-step
+state, and update independently. `train.team_overrides.<team>` deep-merges
+team-specific `core` and `arch` values. A one-team run can name a frozen
+learned opponent with `train.opponents`; Red-only training requires a Blue
+opponent, while Blue-only training still defaults to scripted Red.
+
+Model references accept either `path` or `experiment`. A relative path is
+resolved from the recipe directory and takes precedence; an experiment is
+resolved below `$JAXBORG_EXP_DIR/<algorithm>_<backend>/<experiment>/`, using
+the enclosing recipe's `algorithm`. See
+[`recipes/cotraining.yaml`](recipes/cotraining.yaml) and
+[`docs/training.md`](docs/training.md) for complete examples.
+
 Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and the dev transfer parity check — pre-sidecar checkpoints no longer load.
 
 Add a new arch: drop a module under `src/jaxborg/policies/` exporting `JAX_FACTORY` + `TORCH_FACTORY`, register it in `policies/__init__.py`, then reference it as `arch.name: <new>` in any recipe.
 
 ## Network Architecture
 
-Both engines use the same network architecture — a single shared-trunk actor-critic for all 5 blue agents:
+Both engines use the same parameter-sharing architecture. A Blue policy is
+shared by all five Blue agents; a distinct Red policy is shared by all six Red
+agents. `both` does not share weights across teams.
 
-|                  | jaxborg IPPO (Flax/JAX)      | CybORG CleanRL PPO (PyTorch) |
-| ---------------- | ---------------------------- | ---------------------------- |
-| **Policy**       | 1 shared across all 5 agents | 1 shared across all 5 agents |
-| **Obs dim**      | 210                          | 210                          |
-| **Action dim**   | 242                          | 242                          |
-| **Architecture** | Shared trunk [256, 256] tanh | Shared trunk [256, 256] tanh |
-| **Heads**        | Single-layer actor + critic  | Single-layer actor + critic  |
-| **Params**       | ~182K                        | ~182K                        |
+| team | agents | observation | policy actions | sharing |
+| --- | ---: | ---: | ---: | --- |
+| Blue | 5 | 210 | 242 | one policy across Blue agents |
+| Red | 6 | 706 | 1,106 | one separate policy across Red agents |
 
 Agents 0-3 each observe one subnet; agent 4 observes three (the full 210-dim vector). Agents 0-3 are zero-padded to 210 obs / 242 actions, with action masking to prevent invalid actions.
 
+Exports are versioned `.safetensors` (JAX/Flax) or `.pt` (CybORG/Torch)
+bundles. A bundle contains every active learned policy, including a frozen
+learned opponent, plus team, dimensions, architecture, trainable status, and
+source provenance. Legacy unversioned files remain Blue-only.
+
 ## Resilience Metric and Alignment
 
-The [Resilience meric](https://github.com/xcadet/CyberResilience) is implemented using a separate topology that labels an operational host in each subnet as CIA-tied assets. An example configuration can be found in the `recipe/resilience.yaml` configuration. Resilience metric training and evaluation can be done with the following:
+The [Resilience metric](https://github.com/xcadet/CyberResilience) is implemented using a separate topology that labels an operational host in each subnet as CIA-tied assets. An example configuration can be found in the `recipe/resilience.yaml` configuration. Resilience metric training and evaluation can be done with the following:
 
 ```bash
 

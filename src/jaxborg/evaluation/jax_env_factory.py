@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
+from jaxborg.joint_env import JointPolicyCC4Env
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env, _empty_extras_factory
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.red_selectors import make_red_selector
@@ -78,6 +79,28 @@ def make_jax_env(
         topology_path=topology_path,
         red_selector=selector,
         extras_factory=extras,
+        op_zone_min_servers=variant.op_zone_servers,
+        name=name,
+    )
+
+
+def make_joint_jax_env(
+    variant: GameVariant,
+    *,
+    topology_mode: str = "generative",
+    training_mode: bool = False,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+    name: str | None = None,
+) -> JointPolicyCC4Env:
+    """Build the all-policy JAX env used for learned Red or joint training."""
+
+    if variant.resilience_roles:
+        _validate_resilience_topology(variant, topology_path)
+    return JointPolicyCC4Env(
+        num_steps=variant.num_steps,
+        topology_mode=topology_mode,
+        training_mode=training_mode,
+        topology_path=topology_path,
         op_zone_min_servers=variant.op_zone_servers,
         name=name,
     )

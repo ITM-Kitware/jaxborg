@@ -94,3 +94,10 @@ MAX_TRACKED_SESSION_PIDS = CC4_CONFIG.max_tracked_session_pids
 MAX_TRACKED_SUSPICIOUS_PIDS = CC4_CONFIG.max_tracked_suspicious_pids
 ABSTRACT_RANK_NONE = 1_000_000
 BLUE_OBS_SIZE = CC4_CONFIG.blue_obs_size
+
+# Learned-Red policy contract.  These dimensions deliberately do not replace
+# ScenarioEnv's legacy raw-Red interface: the raw simulator action ABI remains
+# the 2,202 actions ending at ``RED_WITHDRAW_END``.  Learned policies use a
+# compact, backend-neutral view which is translated at the environment edge.
+RED_OBS_SIZE = MISSION_PHASES + 3 + NUM_RED_AGENTS + NUM_SUBNETS + 5 * GLOBAL_MAX_HOSTS
+RED_POLICY_ACTION_DIM = 1 + NUM_SUBNETS + 8 * GLOBAL_MAX_HOSTS

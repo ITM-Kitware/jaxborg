@@ -1,0 +1,57 @@
+meta:
+  name: cotraining
+  source: "Dual-team simultaneous self-play baseline"
+  added: 2026-08-16
+  notes: |
+    Opt-in Blue/Red co-training recipe. Both parameter-sharing policies start
+    from fresh weights, act on the same pre-step state, and learn from the same
+    game payoff (with the Red objective equal to the negative Blue score).
+
+algorithm: ippo
+
+# W&B is enabled for this Blue/Red co-training recipe. Set false for local-only
+# MLflow tracking. A null run name resolves to this filename ("cotraining").
+wandb: true
+wandb_project: jaxborg
+wandb_run_name: null
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 3000000
+  variant: cc4_stock
+
+eval:
+  variant: cc4_stock
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
+  num_epochs: 4

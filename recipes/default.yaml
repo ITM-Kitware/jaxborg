@@ -23,6 +23,10 @@ meta:
 
 algorithm: ippo
 
+wandb: false
+wandb_project: jaxborg
+wandb_run_name: null  # defaults to this config filename: default
+
 core:
   lr: 3.0e-4
   gamma: 0.99

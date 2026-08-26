@@ -38,6 +38,11 @@ class MetricsRow(TypedDict, total=False):
 
     lr: float
 
+    # Dual-team runs use dotted, team-qualified keys in the serialized row,
+    # e.g. ``team.blue.loss_policy`` and ``team.red.return``.  TypedDict
+    # cannot spell every dotted extension cleanly, so these remain optional
+    # runtime fields added by ``add_team_metrics`` below.
+
 
 REQUIRED_KEYS: tuple[str, ...] = (
     "update_idx",
@@ -103,4 +108,19 @@ def make_row(
     if backend_extras:
         for k, v in backend_extras.items():
             row[f"backend.{k}"] = v
+    return row
+
+
+def add_team_metrics(row: dict, team: str, metrics: dict) -> dict:
+    """Add scalar metrics under a stable ``team.<colour>.`` namespace.
+
+    The input row is updated and returned so callers can use the helper in a
+    fluent style.  Legacy top-level fields remain untouched; joint trainers
+    populate those from Blue for dashboard compatibility.
+    """
+    if team not in ("blue", "red"):
+        raise ValueError(f"unknown team {team!r}")
+    for key, value in metrics.items():
+        if isinstance(value, (int, float)):
+            row[f"team.{team}.{key}"] = float(value)
     return row

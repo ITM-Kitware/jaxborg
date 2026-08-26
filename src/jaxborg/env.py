@@ -45,6 +45,7 @@ def apply_all_actions(
     red_keys: jnp.ndarray,
     red_overrides: RedAgentOverrides | None = None,
     blue_keys: jnp.ndarray = None,
+    red_creation_visible_sessions_override: jnp.ndarray | None = None,
 ) -> SimulatorState:
     """Apply one CybORG step in CybORG's deterministic priority order.
 
@@ -105,6 +106,11 @@ def apply_all_actions(
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
     # red_order = arange so r == i; n_red is small (6) and static — unroll directly.
     for r in range(n_red):
+        creation_visible_sessions = (
+            pre_green_visible_sessions[r]
+            if red_creation_visible_sessions_override is None
+            else red_creation_visible_sessions_override[r]
+        )
         state = process_red_with_duration(
             state,
             const,
@@ -114,7 +120,7 @@ def apply_all_actions(
             forced_primary_host=red_overrides.primary_hosts[r],
             forced_primary_pid=red_overrides.primary_pids[r],
             run_session_check=False,
-            creation_visible_sessions_override=pre_green_visible_sessions[r],
+            creation_visible_sessions_override=creation_visible_sessions,
         )
 
     # --- Post-step processing ---
@@ -433,6 +439,7 @@ class ScenarioEnv(MultiAgentEnv):
         key: chex.PRNGKey,
         env_state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
+        red_creation_visible_sessions_override: jnp.ndarray | None = None,
     ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         state = env_state.state
         const = env_state.const
@@ -469,6 +476,7 @@ class ScenarioEnv(MultiAgentEnv):
             red_keys,
             red_overrides=RedAgentOverrides.identity(n_red),
             blue_keys=blue_keys,
+            red_creation_visible_sessions_override=red_creation_visible_sessions_override,
         )
 
         reward_breakdown = compute_reward_breakdown(

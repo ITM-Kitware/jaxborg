@@ -13,6 +13,7 @@ dependencies = [
     "optax",
     "pyyaml",
     "torch>=2.0",
+    "wandb",
 ]
 
 # Pick exactly one extra. Leaving both unspecified lets jax come in only

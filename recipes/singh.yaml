@@ -18,6 +18,10 @@ meta:
 
 algorithm: ippo
 
+wandb: false
+wandb_project: jaxborg
+wandb_run_name: null  # defaults to this config filename: singh
+
 core:
   lr: 5.0e-5
   gamma: 0.99

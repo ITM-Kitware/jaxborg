@@ -87,31 +87,47 @@ def load_torch_policy(model_path: str | Path):
     """
     import warnings
 
+    from jaxborg.checkpoint import load_torch_policy as load_bundle_policy
     from jaxborg.checkpoint import read_sidecar
 
     model_path = Path(model_path)
-    state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
+    entry = load_bundle_policy(
+        model_path,
+        "blue",
+        expected_obs_dim=OBS_DIM,
+        expected_action_dim=ACT_DIM,
+    )
+    state_dict = entry.weights
     try:
         recipe = read_sidecar(model_path)
     except FileNotFoundError:
-        warnings.warn(
-            f"No recipe sidecar next to {model_path}; falling back to "
-            "key-based arch detection. Re-train under the new layout to "
-            "remove this fallback.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        if not entry.arch.get("name"):
+            warnings.warn(
+                f"No recipe sidecar next to {model_path}; falling back to "
+                "key-based arch detection. Re-train under the new layout to "
+                "remove this fallback.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         is_separate = any(k.startswith("actor_features.") for k in state_dict)
-        recipe = {
-            "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
-            "algorithm": "ippo",
-            "arch": {
+        arch = (
+            dict(entry.arch)
+            if entry.arch.get("name")
+            else {
                 "name": "separate" if is_separate else "shared",
                 "hidden_dim": 256,
                 "hidden_layers": 2,
                 "activation": "tanh",
-            },
+            }
+        )
+        recipe = {
+            "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
+            "algorithm": "ippo",
+            "arch": arch,
         }
+    if entry.arch.get("name"):
+        recipe = dict(recipe)
+        recipe["arch"] = dict(entry.arch)
     agent = load_torch_policy_from_recipe(recipe, state_dict)
     return agent, recipe
 

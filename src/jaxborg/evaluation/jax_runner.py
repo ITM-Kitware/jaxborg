@@ -23,7 +23,8 @@ import numpy as np
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
-from jaxborg.checkpoint import load_jax_params
+from jaxborg.checkpoint import load_jax_policy
+from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import make_jax_policy
@@ -43,12 +44,16 @@ def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {p}")
-    params, action_dim = load_jax_params(p)
+    entry = load_jax_policy(p, team="blue", expected_obs_dim=BLUE_OBS_SIZE)
+    params, action_dim = entry.weights, entry.action_dim
     if action_dim == 0:
         action_dim = BLUE_ALLOW_TRAFFIC_END
 
     recipe = read_sidecar(p)
-    arch = recipe["arch"]
+    arch = entry.arch if entry.arch.get("name") else recipe["arch"]
+    if entry.arch.get("name"):
+        recipe = dict(recipe)
+        recipe["arch"] = dict(entry.arch)
     policy = make_jax_policy(
         arch["name"],
         action_dim=action_dim,

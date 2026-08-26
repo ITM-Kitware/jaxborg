@@ -39,6 +39,9 @@ from export_trajectory import (
     extract_topology,
     get_host_compromise,
 )
+from export_trajectory import (
+    load_model as _load_export_torch_model,
+)
 
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env as _factory_make_cyborg_env
 from jaxborg.recipe import load as load_recipe
@@ -58,37 +61,7 @@ ACT_DIM = 242
 
 
 def _load_torch_model(path: str):
-    import torch
-    import torch.nn as nn
-    from torch.distributions import Categorical
-
-    class PPOAgent(nn.Module):
-        def __init__(self, obs_dim, act_dim, hidden_dims=(256, 256)):
-            super().__init__()
-            layers = []
-            in_dim = obs_dim
-            for h in hidden_dims:
-                layers.append(nn.Linear(in_dim, h))
-                layers.append(nn.Tanh())
-                in_dim = h
-            self.features = nn.Sequential(*layers)
-            self.actor = nn.Linear(in_dim, act_dim)
-            self.critic = nn.Linear(in_dim, 1)
-
-        def get_action(self, obs, action_mask, deterministic=False):
-            features = self.features(obs)
-            logits = self.actor(features)
-            logits = logits + (action_mask.float() - 1.0) * 1e10
-            if deterministic:
-                return logits.argmax(dim=-1)
-            dist = Categorical(logits=logits)
-            return dist.sample()
-
-    model = PPOAgent(OBS_DIM, ACT_DIM)
-    model.load_state_dict(torch.load(path, weights_only=True))
-    model.eval()
-    print(f"Loaded PyTorch model from {path}")
-    return model
+    return _load_export_torch_model(path)
 
 
 # ---------------------------------------------------------------------------
