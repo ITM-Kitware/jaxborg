@@ -676,6 +676,10 @@ def train_legacy(args, recipe, cfg):
     envs.close()
     print(f"\nDone in {elapsed:.1f}s ({elapsed / 3600:.1f}h). Final ep reward: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
+    if total_steps >= cfg["total_timesteps"]:
+        from jaxborg.evaluation.scripted_red import run_configured_after_training
+
+        run_configured_after_training(model_path, recipe)
 
 
 @dataclass
@@ -1318,6 +1322,10 @@ def train_joint(args, recipe, cfg):
         print(f"MLflow finalize warning: {exc}")
     metrics_file.close()
     print(f"\nDone in {elapsed:.1f}s. Saved joint bundle to: {model_path}")
+    if total_steps >= cfg["total_timesteps"]:
+        from jaxborg.evaluation.scripted_red import run_configured_after_training
+
+        run_configured_after_training(model_path, recipe)
 
 
 def train(args, recipe, cfg):

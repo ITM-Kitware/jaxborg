@@ -604,6 +604,12 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Blue score: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
 
+    # Run in a fresh CPU process only after the canonical final bundle and its
+    # sidecar exist and the training MLflow run has been closed.
+    from jaxborg.evaluation.scripted_red import run_configured_after_training
+
+    run_configured_after_training(final_model, recipe)
+
 
 def main():
     parser = argparse.ArgumentParser(description="IPPO-FF on JAX, recipe-driven")
@@ -819,6 +825,10 @@ def main():
 
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Final reward: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
+
+    from jaxborg.evaluation.scripted_red import run_configured_after_training
+
+    run_configured_after_training(final_model, recipe)
 
 
 if __name__ == "__main__":

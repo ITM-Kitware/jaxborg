@@ -85,7 +85,8 @@ uv run pytest -m ""      # everything
 # Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
 ./scripts/train/run.sh cleanrl default 42
 
-# Opt-in simultaneous Blue/Red self-play (fresh policy for each team)
+# Opt-in simultaneous Blue/Red self-play (fresh policy for each team).
+# The recipe automatically evaluates final trained Blue vs FSM + CIA-C/I/A.
 ./scripts/train/run.sh jax cotraining 42
 ./scripts/train/run.sh cleanrl cotraining 42
 
@@ -96,11 +97,17 @@ uv run pytest -m ""      # everything
 # Legacy contract evaluation: learned Blue vs scripted Red in CybORG
 uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
-    --episodes 10 --seeds 42-141
+    --episodes 1 --seeds 42-141
 
 uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-    --episodes 10 --seeds 42-141
+    --episodes 1 --seeds 42-141
+
+# Manual/re-run sweep: trained Blue vs FSM and all three CIA Red agents.
+# Works for either final .safetensors or .pt bundle.
+JAX_PLATFORMS=cpu uv run python scripts/eval/eval_scripted_reds.py \
+    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
+    --seeds 1000-1099 --episodes-per-seed 1 --workers 8
 
 # Learned Blue from one run vs learned Red from another, in JAX CC4
 uv run python scripts/eval/eval_matchup.py \
@@ -144,7 +151,20 @@ artifacts, evaluates that checkpoint for `episodes` episodes, and logs
 `eval.checkpoint.red.mean_reward` at the checkpoint's environment step. MLflow
 plots those scalar histories automatically. Only trained teams are evaluated:
 a joint run records both curves, while Blue-only or Red-only training records
-the corresponding single curve.
+the corresponding single curve. For co-training this periodic curve is the
+learned Blue-vs-learned Red matchup; it is separate from the final
+Blue-vs-scripted-Red sweep.
+
+`recipes/cotraining.yaml` also enables `eval.scripted_red.after_training`.
+After training succeeds, each trainer passes its exact final model path to a
+fresh CPU evaluator. The evaluator selects trained Blue from the joint bundle,
+ignores bundled learned Red, and evaluates Blue against `fsm`, `cia_c`,
+`cia_i`, and `cia_a` in CybORG. Results go to one JSONL suite under
+`$JAXBORG_EXP_DIR/eval/` and to red-qualified MLflow keys under
+`eval.scripted_red.<opponent>.blue.*`. A failed required sweep makes the
+overall command fail after leaving the final model safely on disk. Set
+`JAXBORG_SKIP_SCRIPTED_RED_EVAL=1` only for an intentional training-only smoke
+run; the sweep can then be run manually with `eval_scripted_reds.py`.
 
 `train.teams` selects `blue`, `red`, or `both` and defaults to `blue`, so
 existing recipes retain Blue-versus-scripted-Red behavior. In `both` mode the

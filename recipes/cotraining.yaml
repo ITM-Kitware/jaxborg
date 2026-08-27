@@ -9,8 +9,8 @@ meta:
 
 algorithm: ippo
 
-# Evaluate frozen checkpoints every 5% of this 3M-step run and attach both
-# trainable teams' curves to the active local MLflow run.
+# Evaluate frozen learned-vs-learned checkpoints every 100k steps and attach
+# both trainable teams' curves to the active local MLflow run.
 mlflow:
   checkpoint_eval:
     every_steps: 100000
@@ -45,6 +45,18 @@ train:
 
 eval:
   variant: cc4_stock
+
+  # After the durable final bundle and sidecar are written, extract the Blue
+  # policy from that exact two-policy bundle and evaluate it in CybORG against
+  # the stock FSM plus each CIA-biased scripted Red. The same paired seeds are
+  # reused for every opponent. Increase to 1000-1099 for a 100-episode study.
+  scripted_red:
+    after_training: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+    workers: 1
 
 jax:
   num_envs: 48

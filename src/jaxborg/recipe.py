@@ -138,6 +138,14 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         for team, ref in policies.items():
             _validate_model_ref(ref, source=f"{source}: eval.policies.{team}", expected_backend=backend)
 
+    # Keep post-training evaluation failures discoverable at recipe-load time,
+    # before an hours-long training run starts.
+    from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
+
+    scripted_red = ScriptedRedEvalSettings.from_recipe(recipe)
+    if scripted_red.after_training and mode == "red":
+        raise ValueError(f"{source}: eval.scripted_red.after_training requires Blue to be trainable")
+
 
 def _validate_model_ref(ref: Any, *, source: str, expected_backend: str | None = None) -> None:
     """Validate a path/experiment reference without touching the filesystem."""
@@ -528,6 +536,7 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
     Keys returned:
         cia_metric    — only "resilience" today; default if unset
         EVAL_VARIANT  — resolved GameVariant
+        scripted_red  — optional final trained-Blue scripted-opponent sweep
     """
     ev = recipe.get("eval") or {}
     return {
@@ -535,6 +544,7 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
         "EVAL_VARIANT": eval_variant(recipe),
         "policy_backend": ev.get("policy_backend"),
         "policies": copy.deepcopy(ev.get("policies") or {}),
+        "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
     }
 
 
