@@ -105,6 +105,17 @@ def main():
     parser.add_argument("--reuse", action="store_true", help="Reuse a fully validated completed evaluation")
     parser.add_argument("--supersedes-eval-run-id", default=None, help="Original evaluation corrected by this new run")
     parser.add_argument("--bug-reference", default=None)
+    parser.add_argument(
+        "--eval-red",
+        type=str,
+        default=None,
+        help=(
+            "Force the eval env's red selector regardless of recipe. "
+            "Precedence: CLI --eval-red > recipe eval.red > recipe eval.variant > "
+            "train.variant. One of: fsm | cia_c | cia_i | cia_a | random | "
+            "resilience | sleep."
+        ),
+    )
     args = parser.parse_args()
 
     model_path = resolve_artifact(args.model)
@@ -164,6 +175,8 @@ def main():
         from jaxborg.recipe import eval_variant
 
         recipe = read_sidecar(model_path)
+        if args.eval_red is not None:
+            recipe.setdefault("eval", {})["red"] = args.eval_red
         variant = eval_variant(recipe)
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
@@ -199,6 +212,8 @@ def main():
         from jaxborg.recipe import eval_variant
 
         recipe = read_sidecar(model_path)
+        if args.eval_red is not None:
+            recipe.setdefault("eval", {})["red"] = args.eval_red
         variant = eval_variant(recipe)
 
         t0 = time.perf_counter()
