@@ -3,8 +3,9 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-WANDB_MODE=offline JAXBORG_EXP_DIR=./exp \
-  uv run python scripts/train/algorithms/ippo_jax.py \
+JAXBORG_EXP_DIR=./exp \
+  uv run --with "jax-cuda12-plugin[with-cuda]==0.10.2" \
+    python scripts/train/algorithms/ippo_jax.py \
     --recipe cotraining \
     --seed 0 \
     --num-envs 4 \

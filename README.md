@@ -123,15 +123,28 @@ A recipe is a single YAML under `recipes/` that drives both backends. The `algor
 ```yaml
 # recipes/default.yaml — Matched-Training v2 baseline
 algorithm: ippo
-wandb: false                    # set true to log training + 5%-interval evals
-wandb_project: jaxborg
-wandb_run_name: null            # defaults to the YAML filename
+mlflow:
+  checkpoint_eval:
+    every_steps: 0              # 0 disables checkpoint evaluation
+    episodes: 10
+    seed: null                  # defaults to the training seed + 100000
+    deterministic: false
 core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
 arch:    {name: shared, hidden_dim: 256, hidden_layers: 2}
 train:   {episode_length: 500, total_timesteps: 3000000}
 jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
 cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
 ```
+
+MLflow checkpoint evaluation works in both trainers. At the first completed
+update that crosses each `every_steps` boundary, and again at the final update,
+the trainer freezes the exact portable checkpoint and recipe sidecar as MLflow
+artifacts, evaluates that checkpoint for `episodes` episodes, and logs
+`eval.checkpoint.blue.mean_reward` and/or
+`eval.checkpoint.red.mean_reward` at the checkpoint's environment step. MLflow
+plots those scalar histories automatically. Only trained teams are evaluated:
+a joint run records both curves, while Blue-only or Red-only training records
+the corresponding single curve.
 
 `train.teams` selects `blue`, `red`, or `both` and defaults to `blue`, so
 existing recipes retain Blue-versus-scripted-Red behavior. In `both` mode the

@@ -14,6 +14,7 @@ from typing import Iterator
 
 import numpy as np
 
+from jaxborg.mlflow_setup import CheckpointEvalSettings
 from jaxborg.recipe import eval_variant, training_teams
 
 
@@ -24,8 +25,8 @@ def _uses_learned_red(recipe: dict) -> bool:
 
 
 @contextmanager
-def _preserve_process_rng(*, torch_rng: bool) -> Iterator[None]:
-    """Keep checkpoint evaluation from perturbing the trainer's RNG streams."""
+def _paired_eval_rng(*, seed: int, torch_rng: bool) -> Iterator[None]:
+    """Use paired eval randomness without perturbing the trainer's RNG streams."""
 
     python_state = random.getstate()
     numpy_state = np.random.get_state()
@@ -37,6 +38,10 @@ def _preserve_process_rng(*, torch_rng: bool) -> Iterator[None]:
         torch = torch_module
         torch_state = torch.random.get_rng_state()
     try:
+        random.seed(seed)
+        np.random.seed(seed % (2**32))
+        if torch is not None:
+            torch.manual_seed(seed)
         yield
     finally:
         random.setstate(python_state)
@@ -68,11 +73,14 @@ def evaluate_training_checkpoint(
         raise ValueError(f"backend must be 'jax' or 'cyborg', got {backend!r}")
 
     checkpoint_path = Path(checkpoint_path)
-    eval_seed = int(recipe.get("wandb_eval_seed", int(seed) + 100_000))
-    deterministic = bool(recipe.get("wandb_eval_deterministic", False))
+    settings = CheckpointEvalSettings.from_recipe(recipe)
+    configured_seed = settings.seed
+    eval_seed = int(seed) + 100_000 if configured_seed is None else int(configured_seed)
+    deterministic = settings.deterministic
     variant = eval_variant(recipe)
+    trainable_teams = training_teams(recipe)
 
-    with _preserve_process_rng(torch_rng=backend_name == "cyborg"):
+    with _paired_eval_rng(seed=eval_seed, torch_rng=backend_name == "cyborg"):
         if _uses_learned_red(recipe):
             from jaxborg.evaluation.matchup_runner import evaluate_matchup
 
@@ -86,10 +94,11 @@ def evaluate_training_checkpoint(
                 deterministic=deterministic,
                 progress=False,
             )
-            return {
+            means = {
                 "blue": float(np.mean(result.blue_returns)),
                 "red": float(np.mean(result.red_returns)),
             }
+            return {team: means[team] for team in trainable_teams}
 
         if backend_name == "jax":
             from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg

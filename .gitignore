@@ -9,6 +9,7 @@ build/
 .cache/
 jaxborg-exp/
 .bank_cache/
+.ruff_cache/
 mlruns/
 .agent_handoff/
 .jax_cache/
@@ -19,3 +20,4 @@ scripts/dev/catalog_status.json
 outputs/*
 
 docs/
+exp/

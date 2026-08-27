@@ -1,0 +1,89 @@
+# Fully explicit simultaneous Blue/Red self-play recipe. Optional settings that
+# are incompatible with fresh co-training are kept as empty mappings below.
+
+meta:
+  name: cotraining  # Stable recipe/run name used in logs and checkpoint metadata.
+  source: "Dual-team simultaneous self-play baseline"  # Human-readable provenance only.
+  added: 2026-08-16  # Documentation metadata; it does not affect training.
+  notes: |  # Free-form experiment documentation stored with recipe sidecars.
+    Opt-in Blue/Red co-training recipe. Both parameter-sharing policies start
+    from fresh weights, act on the same pre-step state, and learn from the same
+    game payoff (with the Red objective equal to the negative Blue score).
+
+# Selects scripts/train/algorithms/ippo_{jax,cyborg}.py.
+algorithm: ippo
+
+# MLflow checkpoint evaluation. The trainer freezes and evaluates the first
+# completed update crossing each interval, plus the final update.
+mlflow:
+  checkpoint_eval:
+    every_steps: 150000  # Evaluate every 5% of this 3M-step run.
+    episodes: 10  # Episodes evaluated from each frozen checkpoint.
+    seed: null  # null uses the training seed + 100000 for paired curves.
+    deterministic: false  # false samples actions; true takes argmax actions.
+
+# PPO settings shared by both backends and, unless overridden, both teams.
+core:
+  lr: 3.0e-4  # Adam learning rate for each team's independent optimizer.
+  gamma: 0.99  # Discount applied to future rewards.
+  gae_lambda: 0.95  # Bias/variance trade-off for generalized advantage estimation.
+  clip_eps: 0.2  # PPO policy probability-ratio clipping radius.
+  vf_coef: 0.5  # Value-loss contribution to the total PPO loss.
+  max_grad_norm: 0.5  # Global gradient-norm clipping threshold.
+  ent_coef: 0.01  # Entropy bonus coefficient encouraging exploration.
+  norm_rewards: true  # Normalize each team's reward using running return statistics.
+  reward_scale: 1.0  # Post-normalization reward multiplier (currently JAX-only).
+  anneal_lr: false  # If true, linearly decay the learning rate over the run.
+
+# Policy network used independently by Blue and Red; weights are not shared
+# between teams, while agents within one team do share that team's weights.
+arch:
+  name: shared  # shared = common actor/critic trunk; separate = two trunks.
+  hidden_dim: 256  # Neurons in every hidden layer.
+  hidden_layers: 2  # Number of hidden layers in each trunk.
+  activation: tanh  # JAX supports tanh/relu; the Torch implementation uses tanh.
+
+train:
+  teams: both  # blue, red, or both; both enables fresh simultaneous self-play.
+
+  # Frozen opponents and initial weights are forbidden for teams: both because
+  # both policies must start fresh and learn against each other. Model refs can
+  # specify path or experiment plus an optional backend; path takes precedence.
+  opponents: {}  # For one-team runs only: map the frozen opposing team to a model ref.
+  initial_weights: {}  # Reserved model-weight sources; must remain empty for both.
+  team_overrides: {}  # Optional blue/red maps that deep-merge core and arch settings.
+
+  episode_length: 500  # PPO rollout horizon; it does not change environment termination.
+  total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
+  variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
+
+  # These legacy cross-backend targets document the intended batch shape.
+  # With explicit backend controls below, only buffer_size is used as a
+  # CleanRL fallback when num_rollouts_per_update is omitted.
+  buffer_size: 5120000  # Target rollout samples retained for recipe provenance.
+  minibatch_size: 320000  # Informational target; active controls are below.
+  sgd_iterations: 64  # Informational target; epochs * minibatches gives actual updates.
+
+eval:
+  variant: cc4_stock  # Game variant used for checkpoint/evaluation rollouts.
+  cia_metric: resilience  # CIA trajectory scorer; resilience is the only registered metric.
+  policy_backend: jax  # Backend for separately sourced eval policies: jax or cyborg.
+  policies: {}  # Empty for checkpoint eval; matchup eval requires blue/red model refs.
+
+# Active controls for the JAX/Flax trainer.
+jax:
+  num_envs: 48  # Parallel environments; 48 * 500 = 24,000 env steps per update.
+  num_minibatches: 16  # Split each team's rollout samples into this many minibatches.
+  update_epochs: 4  # PPO passes over every rollout; 16 * 4 = 64 optimizer steps/update.
+  checkpoint_every_updates: 50  # Save periodically, plus MLflow evaluation checkpoints.
+  busy_masking: false  # Compatibility field; current trainer applies fixed busy masking.
+  grad_clip_mode: global  # Compatibility field; global clipping is the current behavior.
+
+# Active controls for the CPU CybORG/Torch trainer.
+cleanrl:
+  num_envs: 48  # Parallel reference CybORG environments.
+  rollout_length: 500  # Steps collected per environment in one rollout.
+  num_rollouts_per_update: 1  # Rollouts accumulated before each PPO update.
+  num_minibatches: 16  # Number of shuffled minibatches per epoch.
+  num_epochs: 4  # PPO passes over each collected batch.
+  checkpoint_every_updates: 50  # Save a model bundle every N updates.

@@ -9,11 +9,14 @@ meta:
 
 algorithm: ippo
 
-# W&B is enabled for this Blue/Red co-training recipe. Set false for local-only
-# MLflow tracking. A null run name resolves to this filename ("cotraining").
-wandb: true
-wandb_project: jaxborg
-wandb_run_name: null
+# Evaluate frozen checkpoints every 5% of this 3M-step run and attach both
+# trainable teams' curves to the active local MLflow run.
+mlflow:
+  checkpoint_eval:
+    every_steps: 150000
+    episodes: 10
+    seed: null  # Defaults to the training seed + 100000.
+    deterministic: false
 
 core:
   lr: 3.0e-4
@@ -47,7 +50,7 @@ jax:
   num_envs: 48
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 50
+  checkpoint_every_updates: 0  # Keep only the final model; MLflow eval files are transient.
 
 cleanrl:
   num_envs: 48
@@ -55,3 +58,4 @@ cleanrl:
   num_rollouts_per_update: 1
   num_minibatches: 16
   num_epochs: 4
+  checkpoint_every_updates: 0  # Keep only the final local model.

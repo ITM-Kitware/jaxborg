@@ -19,7 +19,6 @@ Outputs (to `$JAXBORG_EXP_DIR/ippo_cyborg/<tag>/`):
 import argparse
 import copy
 import json
-import math
 import os
 import signal
 import sys
@@ -44,7 +43,7 @@ from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.cyborg_joint import POLICY_AGENT_IDS, TEAM_SPECS, CyborgJointAdapter
 from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
 from jaxborg.metrics_schema import add_team_metrics, make_row
-from jaxborg.mlflow_setup import start_run
+from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
 from jaxborg.policies import make_torch_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import (
@@ -54,7 +53,6 @@ from jaxborg.recipe import (
     training_teams,
 )
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.wandb_setup import WandbCallback
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
@@ -299,9 +297,9 @@ def train_legacy(args, recipe, cfg):
     masks_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, ACT_DIM))
     actor_active_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS), dtype=torch.bool)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="cyborg", seed=args.seed)
     train_run_id = run.info.run_id
-    wandb_callback = WandbCallback(recipe, backend="cyborg", seed=args.seed)
 
     metrics_path = save_dir / "metrics.jsonl"
     metrics_file = open(metrics_path, "w")
@@ -321,7 +319,6 @@ def train_legacy(args, recipe, cfg):
 
     steps_per_update = num_envs * num_steps * cfg["num_rollouts_per_update"]
     total_updates = max(1, cfg["total_timesteps"] // steps_per_update)
-    planned_updates = max(1, math.ceil(cfg["total_timesteps"] / steps_per_update))
     checkpoint_every = int(recipe.get("cleanrl", {}).get("checkpoint_every_updates", 50))
 
     print(f"\n{'=' * 70}")
@@ -546,16 +543,17 @@ def train_legacy(args, recipe, cfg):
                 mlflow.log_metrics(safe, step=total_steps)
             except Exception:
                 pass
-            wandb_callback.log_training(row)
-
             print(
                 f"  upd {num_updates:4d} | steps {total_steps:>9,} | ep_rew {ep_rew:>8.1f} | "
                 f"pg {avg_pg:.4f} vf {avg_vf:.4f} ent {avg_ent:.3f} kl {avg_kl:.4f} | "
                 f"{sps:.0f} sps | {elapsed / 3600:.2f}h",
                 flush=True,
             )
-            milestones = wandb_callback.milestones(num_updates, planned_updates)
-            if num_updates % checkpoint_every == 0 or milestones:
+            is_final = total_steps >= cfg["total_timesteps"]
+            previous_steps = total_steps - steps_per_update
+            eval_due = checkpoint_evaluator.due(previous_steps, total_steps, final=is_final)
+            periodic_checkpoint = checkpoint_every > 0 and num_updates % checkpoint_every == 0
+            if periodic_checkpoint or eval_due:
                 checkpoint_path = save_torch_bundle(
                     save_dir / f"checkpoint_{total_steps}.pt",
                     {
@@ -586,25 +584,29 @@ def train_legacy(args, recipe, cfg):
                     train_run_id=train_run_id,
                     extra={"train_teams": ["blue"], "model": f"checkpoint_{total_steps}.pt"},
                 )
-                if milestones:
+                if eval_due:
                     print(
-                        f"  W&B checkpoint at {','.join(f'{percent}%' for percent in milestones)}; "
-                        f"evaluating {wandb_callback.settings.eval_episodes} episodes...",
+                        f"  MLflow checkpoint evaluation at step {total_steps:,}; "
+                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
                         flush=True,
                     )
-                    wandb_callback.on_checkpoint(
-                        checkpoint_path,
-                        sidecar_path,
-                        env_steps=total_steps,
-                        milestones=milestones,
-                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                    try:
+                        checkpoint_evaluator.on_checkpoint(
                             checkpoint_path,
-                            backend="cyborg",
-                            recipe=recipe,
-                            seed=args.seed,
-                            episodes=episodes,
-                        ),
-                    )
+                            sidecar_path,
+                            env_steps=total_steps,
+                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                                checkpoint_path,
+                                backend="cyborg",
+                                recipe=recipe,
+                                seed=args.seed,
+                                episodes=episodes,
+                            ),
+                        )
+                    finally:
+                        if checkpoint_every <= 0:
+                            checkpoint_path.unlink(missing_ok=True)
+                            sidecar_path.unlink(missing_ok=True)
 
     except KeyboardInterrupt:
         print("\nInterrupted", flush=True)
@@ -669,7 +671,6 @@ def train_legacy(args, recipe, cfg):
         mlflow.end_run()
     except Exception as e:
         print(f"MLflow finalize warning: {e}")
-    wandb_callback.finish()
 
     metrics_file.close()
     envs.close()
@@ -1101,9 +1102,9 @@ def train_joint(args, recipe, cfg):
     trainable = {team: runtime for team, runtime in runtimes.items() if runtime.trainable}
     envs = ParallelJointEnvs(num_envs, args.seed, variant)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="cyborg", seed=args.seed)
     train_run_id = run.info.run_id
-    wandb_callback = WandbCallback(recipe, backend="cyborg", seed=args.seed)
     metrics_path = save_dir / "metrics.jsonl"
     metrics_file = open(metrics_path, "w")
     all_obs, all_info = envs.reset()
@@ -1115,7 +1116,6 @@ def train_joint(args, recipe, cfg):
     rollouts_collected = 0
     steps_per_update = num_envs * num_steps * cfg["num_rollouts_per_update"]
     total_updates = max(1, cfg["total_timesteps"] // steps_per_update)
-    planned_updates = max(1, math.ceil(cfg["total_timesteps"] / steps_per_update))
     ckpt_every = int(recipe.get("cleanrl", {}).get("checkpoint_every_updates", 50))
     start = time.perf_counter()
     print(
@@ -1204,16 +1204,17 @@ def train_joint(args, recipe, cfg):
                 )
             except Exception:
                 pass
-            wandb_callback.log_training(row)
-
             print(
                 f"  upd {update_idx:4d} | steps {total_steps:>9,} | blue {blue_return:>8.1f} | "
                 + " ".join(f"{team}:pg={value['loss_policy']:.4f}" for team, value in stats.items())
                 + f" | {sps:.0f} sps",
                 flush=True,
             )
-            milestones = wandb_callback.milestones(update_idx, planned_updates)
-            if update_idx % ckpt_every == 0 or milestones:
+            is_final = total_steps >= cfg["total_timesteps"]
+            previous_steps = total_steps - steps_per_update
+            eval_due = checkpoint_evaluator.due(previous_steps, total_steps, final=is_final)
+            periodic_checkpoint = ckpt_every > 0 and update_idx % ckpt_every == 0
+            if periodic_checkpoint or eval_due:
                 checkpoint_path = _save_joint_bundle(
                     save_dir / f"checkpoint_{total_steps}.pt",
                     runtimes,
@@ -1238,25 +1239,29 @@ def train_joint(args, recipe, cfg):
                         "model": checkpoint_path.name,
                     },
                 )
-                if milestones:
+                if eval_due:
                     print(
-                        f"  W&B checkpoint at {','.join(f'{percent}%' for percent in milestones)}; "
-                        f"evaluating {wandb_callback.settings.eval_episodes} episodes...",
+                        f"  MLflow checkpoint evaluation at step {total_steps:,}; "
+                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
                         flush=True,
                     )
-                    wandb_callback.on_checkpoint(
-                        checkpoint_path,
-                        sidecar_path,
-                        env_steps=total_steps,
-                        milestones=milestones,
-                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                    try:
+                        checkpoint_evaluator.on_checkpoint(
                             checkpoint_path,
-                            backend="cyborg",
-                            recipe=recipe,
-                            seed=args.seed,
-                            episodes=episodes,
-                        ),
-                    )
+                            sidecar_path,
+                            env_steps=total_steps,
+                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                                checkpoint_path,
+                                backend="cyborg",
+                                recipe=recipe,
+                                seed=args.seed,
+                                episodes=episodes,
+                            ),
+                        )
+                    finally:
+                        if ckpt_every <= 0:
+                            checkpoint_path.unlink(missing_ok=True)
+                            sidecar_path.unlink(missing_ok=True)
     except KeyboardInterrupt:
         print("\nInterrupted", flush=True)
     finally:
@@ -1311,7 +1316,6 @@ def train_joint(args, recipe, cfg):
         mlflow.end_run()
     except Exception as exc:
         print(f"MLflow finalize warning: {exc}")
-    wandb_callback.finish()
     metrics_file.close()
     print(f"\nDone in {elapsed:.1f}s. Saved joint bundle to: {model_path}")
 

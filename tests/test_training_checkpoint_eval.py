@@ -54,8 +54,12 @@ def test_joint_checkpoint_eval_uses_one_bundle_and_ten_episodes(
 
     monkeypatch.setattr(matchup_runner, "evaluate_matchup", fake_evaluate_matchup)
     recipe = _recipe(teams="both")
-    recipe["wandb_eval_seed"] = 777
-    recipe["wandb_eval_deterministic"] = True
+    recipe["mlflow"] = {
+        "checkpoint_eval": {
+            "seed": 777,
+            "deterministic": True,
+        }
+    }
     checkpoint = Path("checkpoints/checkpoint_500.pt")
 
     rewards = evaluate_training_checkpoint(
@@ -79,6 +83,39 @@ def test_joint_checkpoint_eval_uses_one_bundle_and_ten_episodes(
     assert kwargs["episodes_per_seed"] == 10
     assert kwargs["deterministic"] is True
     assert kwargs["progress"] is False
+
+
+@pytest.mark.parametrize(
+    ("teams", "expected"),
+    [
+        ("blue", {"blue": pytest.approx(4.0)}),
+        ("red", {"red": pytest.approx(-4.0)}),
+    ],
+)
+def test_learned_matchup_returns_only_trained_team(monkeypatch, teams, expected):
+    from jaxborg.evaluation import matchup_runner
+
+    monkeypatch.setattr(
+        matchup_runner,
+        "evaluate_matchup",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            blue_returns=[1.0, 7.0],
+            red_returns=[-1.0, -7.0],
+        ),
+    )
+    recipe = _recipe(teams=teams)
+    if teams == "blue":
+        recipe["train"]["opponents"] = {"red": "frozen-red.safetensors"}
+
+    assert (
+        evaluate_training_checkpoint(
+            "checkpoint.safetensors",
+            backend="jax",
+            recipe=recipe,
+            seed=1,
+        )
+        == expected
+    )
 
 
 def test_legacy_jax_checkpoint_eval_dispatches_to_cyborg_contract(monkeypatch):

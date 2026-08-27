@@ -62,7 +62,7 @@ from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.metrics_schema import add_team_metrics, make_row
-from jaxborg.mlflow_setup import start_run
+from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
 from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import (
@@ -72,7 +72,6 @@ from jaxborg.recipe import (
     training_teams,
 )
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.wandb_setup import WandbCallback
 from scripts.train.algorithms.ippo_jax_joint import initial_reward_norm_state, make_joint_train
 
 
@@ -407,9 +406,9 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         )
     print("=" * 60, flush=True)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="jax", seed=args.seed)
     train_run_id = run.info.run_id
-    wandb_callback = WandbCallback(recipe, backend="jax", seed=args.seed)
     t0 = time.perf_counter()
     env, obs, env_state, init_states, collect_and_update = make_joint_train(
         configs,
@@ -529,8 +528,6 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 },
                 step=env_steps,
             )
-            wandb_callback.log_training(row)
-
             if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
                 print(
                     f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
@@ -540,9 +537,11 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 )
 
             checkpoint_every = int(configs["blue"].get("CHECKPOINT_EVERY_UPDATES", 50))
-            milestones = wandb_callback.milestones(update_idx + 1, num_updates)
-            if (update_idx + 1) % checkpoint_every == 0 or update_idx == num_updates - 1 or milestones:
-                is_final = update_idx == num_updates - 1
+            is_final = update_idx == num_updates - 1
+            previous_steps = update_idx * num_steps * num_envs
+            eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+            periodic_checkpoint = checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0
+            if periodic_checkpoint or is_final or eval_due:
                 name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
                 checkpoint_path = save_dir / name
                 save_bundle(checkpoint_path, env_steps)
@@ -560,25 +559,29 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                         "model": name,
                     },
                 )
-                if milestones:
+                if eval_due:
                     print(
-                        f"  W&B checkpoint at {','.join(f'{percent}%' for percent in milestones)}; "
-                        f"evaluating {wandb_callback.settings.eval_episodes} episodes...",
+                        f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
                         flush=True,
                     )
-                    wandb_callback.on_checkpoint(
-                        checkpoint_path,
-                        sidecar_path,
-                        env_steps=env_steps,
-                        milestones=milestones,
-                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                    try:
+                        checkpoint_evaluator.on_checkpoint(
                             checkpoint_path,
-                            backend="jax",
-                            recipe=recipe,
-                            seed=args.seed,
-                            episodes=episodes,
-                        ),
-                    )
+                            sidecar_path,
+                            env_steps=env_steps,
+                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                                checkpoint_path,
+                                backend="jax",
+                                recipe=recipe,
+                                seed=args.seed,
+                                episodes=episodes,
+                            ),
+                        )
+                    finally:
+                        if not is_final and checkpoint_every <= 0:
+                            checkpoint_path.unlink(missing_ok=True)
+                            sidecar_path.unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - start
     sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
@@ -591,7 +594,6 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         mlflow.log_artifact(str(final_model))
     if sidecar.exists():
         mlflow.log_artifact(str(sidecar))
-    wandb_callback.finish()
     mlflow.end_run()
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Blue score: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
@@ -654,9 +656,9 @@ def main():
     print(f"  arch={recipe['arch']['name']} hidden_dim={config['HIDDEN_DIM']}")
     print("=" * 60, flush=True)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="jax", seed=args.seed)
     train_run_id = run.info.run_id
-    wandb_callback = WandbCallback(recipe, backend="jax", seed=args.seed)
 
     t0 = time.perf_counter()
     env, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config, network)
@@ -721,8 +723,6 @@ def main():
             {k: v for k, v in row.items() if isinstance(v, (int, float)) and k != "update_idx"},
             step=env_steps,
         )
-        wandb_callback.log_training(row)
-
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             print(
                 f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
@@ -731,9 +731,11 @@ def main():
             )
 
         ckpt_every = int(config.get("CHECKPOINT_EVERY_UPDATES", 50))
-        milestones = wandb_callback.milestones(update_idx + 1, num_updates)
-        if (update_idx + 1) % ckpt_every == 0 or update_idx == num_updates - 1 or milestones:
-            is_final = update_idx == num_updates - 1
+        is_final = update_idx == num_updates - 1
+        previous_steps = update_idx * num_steps * num_envs
+        eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+        periodic_checkpoint = ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0
+        if periodic_checkpoint or is_final or eval_due:
             ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
             save_jax_bundle(
                 ckpt_path,
@@ -765,25 +767,29 @@ def main():
                 train_run_id=train_run_id,
                 extra={"trainable_teams": ["blue"], "model": ckpt_path.name},
             )
-            if milestones:
+            if eval_due:
                 print(
-                    f"  W&B checkpoint at {','.join(f'{percent}%' for percent in milestones)}; "
-                    f"evaluating {wandb_callback.settings.eval_episodes} episodes...",
+                    f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                    f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
                     flush=True,
                 )
-                wandb_callback.on_checkpoint(
-                    ckpt_path,
-                    sidecar_path,
-                    env_steps=env_steps,
-                    milestones=milestones,
-                    evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                try:
+                    checkpoint_evaluator.on_checkpoint(
                         ckpt_path,
-                        backend="jax",
-                        recipe=recipe,
-                        seed=args.seed,
-                        episodes=episodes,
-                    ),
-                )
+                        sidecar_path,
+                        env_steps=env_steps,
+                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                            ckpt_path,
+                            backend="jax",
+                            recipe=recipe,
+                            seed=args.seed,
+                            episodes=episodes,
+                        ),
+                    )
+                finally:
+                    if not is_final and ckpt_every <= 0:
+                        ckpt_path.unlink(missing_ok=True)
+                        sidecar_path.unlink(missing_ok=True)
 
     metrics_file.close()
     elapsed = time.perf_counter() - start
@@ -797,7 +803,6 @@ def main():
     sidecar = save_dir / f"recipe_{tag}.yaml"
     if sidecar.exists():
         mlflow.log_artifact(str(sidecar))
-    wandb_callback.finish()
     mlflow.end_run()
 
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Final reward: {final_reward:.1f}")

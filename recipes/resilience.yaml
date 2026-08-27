@@ -23,9 +23,12 @@ meta:
 
 algorithm: ippo
 
-wandb: false
-wandb_project: jaxborg
-wandb_run_name: null  # defaults to this config filename: resilience
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes: 10
+    seed: null
+    deterministic: false
 
 core:
   lr: 3.0e-4
