@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet_from_source_host,
+    observed_exploit_ports,
     scan_sources,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
@@ -77,6 +78,12 @@ def apply_scan_unified(
         state.red_scan_source_pid.at[agent_id, source_idx].set(executing_pid),
         state.red_scan_source_pid,
     )
+    observed_ports = observed_exploit_ports(state, target_host)
+    red_scanned_ports = jnp.where(
+        success,
+        state.red_scanned_ports.at[agent_id, target_host].set(observed_ports),
+        state.red_scanned_ports,
+    )
 
     red_scan_success = jnp.where(
         success,
@@ -94,6 +101,7 @@ def apply_scan_unified(
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
         red_scan_source_pid=red_scan_source_pid,
+        red_scanned_ports=red_scanned_ports,
         red_scan_success=red_scan_success,
         red_activity_this_step=activity,
         host_activity_detected=scan_detected,

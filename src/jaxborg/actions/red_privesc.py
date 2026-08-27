@@ -158,6 +158,7 @@ def apply_privesc(
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    red_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
     any_suspicious = jnp.any(red_suspicious_process_count[:, target_host] > 0)
     host_suspicious_process = jnp.where(
         is_active & has_session & single_session_sandboxed,
@@ -178,6 +179,7 @@ def apply_privesc(
         red_discovered_hosts=red_discovered_hosts,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         host_compromised=host_compromised,
         host_max_pid=host_max_pid,
         host_suspicious_process=host_suspicious_process,

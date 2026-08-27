@@ -27,8 +27,11 @@ from jaxborg.constants import (
     ABSTRACT_RANK_NONE,
     ACTIVITY_EXPLOIT,
     COMPROMISE_USER,
+    DECOY_IDS,
     GLOBAL_MAX_HOSTS,
     NUM_SUBNETS,
+    RED_SCANNED_PORT_IDS,
+    SERVICE_IDS,
 )
 from jaxborg.state import SimulatorConst, SimulatorState
 
@@ -115,6 +118,37 @@ def scan_sources(state: SimulatorState) -> chex.Array:
     return state.red_scanned_source_hosts
 
 
+def observed_exploit_ports(state: SimulatorState, target_host: chex.Array) -> chex.Array:
+    """Project the target's current open processes into CybORG scan-port memory.
+
+    This helper is called only when a service scan succeeds.  Exploit selection
+    subsequently reads the saved result instead of consulting live host state.
+    The projection includes Blue decoys because CybORG's Portscan records their
+    open ports indistinguishably from real services.
+    """
+
+    services = state.host_services[target_host]
+    decoys = state.host_decoys[target_host]
+    has_port_80 = services[SERVICE_IDS["APACHE2"]] | decoys[DECOY_IDS["Apache"]] | decoys[DECOY_IDS["Vsftpd"]]
+    return (
+        jnp.zeros_like(state.red_scanned_ports[0, 0])
+        # CybORG's Vsftpd decoy has a compatibility check for port 21 but its
+        # process actually opens port 80, so port 21 remains absent in CC4.
+        .at[RED_SCANNED_PORT_IDS[21]]
+        .set(False)
+        .at[RED_SCANNED_PORT_IDS[22]]
+        .set(services[SERVICE_IDS["SSHD"]])
+        .at[RED_SCANNED_PORT_IDS[25]]
+        .set(services[SERVICE_IDS["SMTP"]] | decoys[DECOY_IDS["HarakaSMPT"]])
+        .at[RED_SCANNED_PORT_IDS[80]]
+        .set(has_port_80)
+        .at[RED_SCANNED_PORT_IDS[443]]
+        .set(decoys[DECOY_IDS["Tomcat"]])
+        .at[RED_SCANNED_PORT_IDS[3390]]
+        .set(services[SERVICE_IDS["MYSQLD"]])
+    )
+
+
 def recompute_scanned_hosts_from_sources(source_matrix: chex.Array) -> chex.Array:
     """Derive scanned-host view from source ownership."""
     return jnp.any(source_matrix, axis=2)
@@ -139,9 +173,11 @@ def sync_scan_memory_fields(
         & const.host_active[None, None, :]
     )
     red_scanned_hosts = recompute_scanned_hosts_from_sources(valid_sources)
+    red_scanned_ports = state.red_scanned_ports & red_scanned_hosts[:, :, None]
     return state.replace(
         red_scanned_source_hosts=valid_sources,
         red_scanned_hosts=red_scanned_hosts,
+        red_scanned_ports=red_scanned_ports,
     )
 
 
@@ -439,6 +475,9 @@ def apply_red_session_check(
     cleared_scanned_for_agent = jnp.any(cleared_agent_sources, axis=1)
     final_scanned_for_agent = jnp.where(should_clear_scan, cleared_scanned_for_agent, old_scanned_row)
     red_scanned_hosts = state.red_scanned_hosts.at[agent_id].set(final_scanned_for_agent)
+    red_scanned_ports = state.red_scanned_ports.at[agent_id].set(
+        state.red_scanned_ports[agent_id] & final_scanned_for_agent[:, None]
+    )
     # Clear scan-owning PID on old anchor when scan memory is cleared.
     cur_scan_pid = state.red_scan_source_pid[agent_id, old_anchor_idx]
     new_scan_pid = jnp.where(should_clear_scan, jnp.int32(-1), cur_scan_pid)
@@ -454,6 +493,7 @@ def apply_red_session_check(
         red_session_privileged_pids=red_session_privileged_pids,
         red_scanned_source_hosts=red_scanned_source_hosts,
         red_scanned_hosts=red_scanned_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
     )
 

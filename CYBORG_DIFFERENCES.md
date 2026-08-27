@@ -35,6 +35,54 @@ behavior/interface difference for users of `CC4Env`.
 ### Open workarounds
 None currently tracked.
 
+## Learned-Red Partial-Observation Parity
+
+These contracts keep the learned-Red policy edge aligned with information an
+agent could have accumulated in CybORG. They do not add service, decoy, or
+whole-network fields to the 706-value policy observation.
+
+### Generic Exploit resolves from remembered scan ports
+CybORG's abstract `ExploitRemoteService` chooses its concrete exploit from the
+ports remembered by the Red session that scanned the target. It does not choose
+from the target's current ground-truth processes.
+
+JAXborg snapshots the exploit-relevant ports, including ports opened by decoys,
+when a Red service scan succeeds. The snapshot is cleared with the associated
+scan/session memory. Both the internal FSM selector and learned Red's
+`compact_red_action_to_raw` resolve generic Exploit from that snapshot, so the
+learned policy no longer receives an environment-side advantage from live
+service state. The policy still chooses only a generic Exploit target; port
+values are not added to its observation.
+
+The JAX snapshot is compact and per-agent/per-target rather than a separate
+arbitrary port list for every source session. Existing source-host/PID
+ownership controls its lifetime, but manually constructed concurrent sessions
+cannot represent different historical scans of the same target.
+
+- CybORG: `Simulator/Actions/AbstractActions/ExploitRemoteService.py`
+  (`state.sessions[agent][session].ports`)
+- JAXborg memory: `src/jaxborg/state.py`,
+  `src/jaxborg/actions/red_common.py`, and the Red scan action modules
+- JAXborg consumers: `src/jaxborg/scenarios/cc4/red_fsm.py` and
+  `src/jaxborg/learned_red.py`
+
+### Action-space-only start hosts stay hidden from learned Red
+CybORG pre-seeds each Red agent's configured start-host IP in its controller
+action space, including for inactive agents. That bit is not an observation
+processed into `FiniteStateRedAgent.host_states`, so merely activating an agent
+must not reveal the configured host to its policy.
+
+`ScenarioEnv` retains the richer action-space bit for raw differential replay,
+but learned Red's discovery plane and mask now require the host to have been
+actually observed or acquired through a session (`fsm_host_entered`). The
+native `CyborgJointAdapter` likewise accumulates discovery from each agent's
+filtered observations rather than from its pre-seeded action space.
+
+- CybORG FSM: `Agents/SimpleAgents/FiniteStateRedAgent.py`
+  (`_process_new_observations`)
+- JAXborg learned policy: `src/jaxborg/learned_red.py`
+- Native learned-policy adapter: `src/jaxborg/cyborg_joint.py`
+
 ## Intentionally Matched CybORG Quirks
 
 These are CybORG behaviors that look like bugs but are intentionally replicated

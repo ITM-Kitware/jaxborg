@@ -78,6 +78,13 @@ ACTIVITY_EXPLOIT = 2
 NUM_GREEN_RANDOM_FIELDS = CC4_CONFIG.num_green_random_fields
 NUM_RED_POLICY_RANDOM_FIELDS = CC4_CONFIG.num_red_policy_random_fields
 
+# Exploit-relevant ports retained from each successful Red service scan.
+# CybORG stores the actual port list on the scanning RedAbstractSession; JAX
+# uses this compact fixed-width projection because CC4 only models these ports.
+RED_SCANNED_PORTS = (21, 22, 25, 80, 443, 3390)
+RED_SCANNED_PORT_IDS = {port: i for i, port in enumerate(RED_SCANNED_PORTS)}
+NUM_RED_SCANNED_PORTS = len(RED_SCANNED_PORTS)
+
 MIN_HOSTS_PER_SUBNET = CC4_CONFIG.min_hosts_per_subnet
 MAX_HOSTS_PER_SUBNET = CC4_CONFIG.max_hosts_per_subnet
 

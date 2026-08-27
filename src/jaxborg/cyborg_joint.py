@@ -100,7 +100,8 @@ class CyborgJointAdapter:
         self._discovered = [set() for _ in RED_AGENT_IDS]
         self._scanned_by_primary = [set() for _ in RED_AGENT_IDS]
         self._primary_identity = [None for _ in RED_AGENT_IDS]
-        self._sync_discovered_from_action_spaces()
+        red_observations = {agent: self.raw_env.get_observation(agent) for agent in RED_AGENT_IDS}
+        self._update_discovery_memory(red_observations)
         self._sync_primary_identities()
         return self._collect_observations(reset.obs), self._collect_infos(reset.info)
 
@@ -132,7 +133,7 @@ class CyborgJointAdapter:
             skip_valid_action_check=True,
         )
         self._update_scan_memory(raw_obs)
-        self._sync_discovered_from_action_spaces()
+        self._update_discovery_memory(raw_obs)
         self._sync_primary_identities()
 
         blue_obs = {
@@ -368,12 +369,14 @@ class CyborgJointAdapter:
             if target is not None:
                 self._scanned_by_primary[agent_idx].add(target)
 
-    def _sync_discovered_from_action_spaces(self) -> None:
-        """Accumulate only knowledge visible while an agent is active.
+    def _update_discovery_memory(self, observations: dict[str, dict]) -> None:
+        """Accumulate hosts from each active agent's filtered observation.
 
-        CybORG pre-seeds a future start host in inactive agents' action spaces.
-        The JAX policy contract intentionally hides that seed until activation,
-        so reading inactive action spaces directly would leak one host early.
+        CybORG pre-seeds a configured start host in every Red action space,
+        including inactive agents.  Reading the action space when an agent
+        activates would expose that host even though ``FiniteStateRedAgent``
+        never processed it.  Using the same filtered observations as the FSM
+        keeps learned Red's discovery memory aligned with ``host_states``.
         """
 
         assert self.mappings is not None
@@ -381,11 +384,20 @@ class CyborgJointAdapter:
         for agent_idx, agent_name in enumerate(RED_AGENT_IDS):
             if not controller.agent_interfaces[agent_name].active:
                 continue
-            action_space = self.raw_env.get_action_space(agent_name)
-            for ip, known in action_space.get("ip_address", {}).items():
-                if not known:
+            for host_id, host_details in observations.get(agent_name, {}).items():
+                if host_id in {"success", "action", "message"} or not isinstance(host_details, dict):
                     continue
-                hostname = self.mappings.ip_to_hostname.get(ip)
+
+                hostname = host_id if host_id in self.mappings.hostname_to_idx else None
+                if hostname is None:
+                    hostname = self.mappings.ip_to_hostname.get(host_id)
+                if hostname is None:
+                    hostname = host_details.get("System info", {}).get("Hostname")
+                if hostname is None:
+                    for interface in host_details.get("Interface", ()):
+                        hostname = self.mappings.ip_to_hostname.get(interface.get("ip_address"))
+                        if hostname is not None:
+                            break
                 target = self.mappings.hostname_to_idx.get(hostname)
                 if target is not None:
                     self._discovered[agent_idx].add(target)

@@ -55,6 +55,25 @@ from jaxborg.scenarios.cc4.red_fsm import _pick_exploit_action
 from jaxborg.state import SimulatorConst, SimulatorState
 
 
+def _red_policy_discovered_hosts(
+    state: SimulatorState,
+    const: SimulatorConst,
+    agent_id: int,
+) -> chex.Array:
+    """Hosts that have actually entered this agent's local knowledge.
+
+    ``ScenarioEnv`` retains CybORG's pre-seeded start-host action-space bit for
+    inactive Red agents so raw translated-action replay stays faithful.  That
+    bit is not an observation processed by ``FiniteStateRedAgent``.  The
+    ``fsm_host_entered`` field tracks hosts that were genuinely observed or
+    acquired through a session for every Red execution mode, so intersecting
+    it here prevents the learned policy from gaining the pre-seeded host when
+    the agent later activates.
+    """
+
+    return state.red_discovered_hosts[agent_id] & state.fsm_host_entered[agent_id] & const.host_active
+
+
 def red_primary_session_host(
     state: SimulatorState,
     const: SimulatorConst,
@@ -119,10 +138,7 @@ def get_red_policy_obs(
     identity = jax.nn.one_hot(agent_id, NUM_RED_AGENTS, dtype=jnp.float32)
     allowed_subnets = const.red_agent_subnets[agent_id].astype(jnp.float32)
 
-    # Scenario topology construction pre-seeds future agents' start-host action
-    # spaces. Hide those planes until activation so a policy cannot infer its
-    # future foothold early; this also matches the CybORG joint adapter.
-    discovered = (state.red_discovered_hosts[agent_id] & const.host_active & agent_active).astype(jnp.float32)
+    discovered = (_red_policy_discovered_hosts(state, const, agent_id) & agent_active).astype(jnp.float32)
     primary_scanned = (red_primary_scanned_hosts(state, const, agent_id) & agent_active).astype(jnp.float32)
     own_session = (state.red_sessions[agent_id] & const.host_active & agent_active).astype(jnp.float32)
     own_privileged = (
@@ -165,7 +181,7 @@ def compute_red_policy_action_mask(
 ) -> chex.Array:
     """Return the state-aware compact action mask for one Red agent."""
 
-    discovered = state.red_discovered_hosts[agent_id] & const.host_active
+    discovered = _red_policy_discovered_hosts(state, const, agent_id)
     primary_scanned = red_primary_scanned_hosts(state, const, agent_id)
     own_session = state.red_sessions[agent_id] & const.host_active
     own_privileged = own_session & (state.red_privilege[agent_id] >= COMPROMISE_PRIVILEGED)
@@ -198,10 +214,10 @@ def compact_red_action_to_raw(
 ) -> chex.Array:
     """Translate a learned-Red action to the unchanged raw simulator ABI.
 
-    Generic Exploit is resolved inside this adapter using the simulator's
-    existing exploit selector and hidden service state.  The policy only sees
-    whether its primary session scanned the host.  Inactive/busy agents and
-    out-of-range indices are forced to raw Sleep.
+    Generic Exploit is resolved inside this adapter from the agent's remembered
+    scan-time ports.  The policy only sees whether its primary session scanned
+    the host; it never receives the port values themselves.  Inactive/busy
+    agents and out-of-range indices are forced to raw Sleep.
     """
 
     action = jnp.asarray(action_idx, dtype=jnp.int32)
@@ -231,7 +247,7 @@ def compact_red_action_to_raw(
 
     is_exploit = (action >= RED_POLICY_EXPLOIT_START) & (action < RED_POLICY_EXPLOIT_END)
     exploit_host = jnp.clip(action - RED_POLICY_EXPLOIT_START, 0, GLOBAL_MAX_HOSTS - 1)
-    concrete_exploit = _pick_exploit_action(state, exploit_host, key)
+    concrete_exploit = _pick_exploit_action(state, agent_id, exploit_host, key)
     raw_action = jnp.where(is_exploit, concrete_exploit, raw_action)
 
     return jnp.where(in_range & available, raw_action, jnp.int32(RED_SLEEP))

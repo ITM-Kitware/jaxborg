@@ -9,8 +9,11 @@ from jaxborg.actions.encoding import (
     RED_DEGRADE_START,
     RED_DISCOVER_DECEPTION_START,
     RED_DISCOVER_START,
+    RED_EXPLOIT_ETERNALBLUE_START,
+    RED_EXPLOIT_FTP_START,
     RED_EXPLOIT_HARAKA_START,
     RED_EXPLOIT_HTTP_START,
+    RED_EXPLOIT_HTTPS_START,
     RED_EXPLOIT_SQL_START,
     RED_EXPLOIT_SSH_START,
     RED_IMPACT_START,
@@ -29,7 +32,7 @@ from jaxborg.actions.rng import sample_red_policy_choice
 from jaxborg.constants import (
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
-    SERVICE_IDS,
+    RED_SCANNED_PORT_IDS,
 )
 from jaxborg.state import SimulatorConst, SimulatorState
 
@@ -105,21 +108,18 @@ PROBABILITY_MATRIX = jnp.array(
 
 ACTION_VALID_MASK = PROBABILITY_MATRIX >= 0.0
 
-SSH_SERVICE_IDX = SERVICE_IDS["SSHD"]
-APACHE_SERVICE_IDX = SERVICE_IDS["APACHE2"]
-MYSQL_SERVICE_IDX = SERVICE_IDS["MYSQLD"]
-SMTP_SERVICE_IDX = SERVICE_IDS["SMTP"]
-
 GENERIC_EXPLOIT_STARTS = jnp.array(
     [
         RED_EXPLOIT_HTTP_START,
+        RED_EXPLOIT_HTTPS_START,
         RED_EXPLOIT_SSH_START,
         RED_EXPLOIT_SQL_START,
         RED_EXPLOIT_HARAKA_START,
+        RED_EXPLOIT_FTP_START,
     ],
     dtype=jnp.int32,
 )
-GENERIC_EXPLOIT_WEIGHTS = jnp.array([3.0, 0.1, 5.0, 6.0], dtype=jnp.float32)
+GENERIC_EXPLOIT_WEIGHTS = jnp.array([3.0, 4.0, 0.1, 5.0, 6.0, 7.0], dtype=jnp.float32)
 
 
 def _uniform_choice_from_mask(mask, u):
@@ -141,19 +141,32 @@ def _decode_choice_token(u, total_count):
     return jnp.minimum(jnp.floor(u * total).astype(jnp.int32), total - 1)
 
 
-def _pick_exploit_action(state, target_host, key):
-    host_services = state.host_services[target_host]
+def _pick_exploit_action(state, agent_id, target_host, key):
+    """Resolve generic Exploit from the agent's scan-time port snapshot.
+
+    Native CybORG selects a concrete exploit from ``session.ports``.  Reading
+    live services here would let both FSM and learned Red react to changes they
+    have not re-scanned.
+    """
+
+    observed_ports = state.red_scanned_ports[agent_id, target_host]
+    has_web_port = observed_ports[RED_SCANNED_PORT_IDS[80]] | observed_ports[RED_SCANNED_PORT_IDS[443]]
     candidates = jnp.array(
         [
-            host_services[APACHE_SERVICE_IDX],
-            host_services[SSH_SERVICE_IDX],
-            host_services[APACHE_SERVICE_IDX] & host_services[MYSQL_SERVICE_IDX],
-            host_services[SMTP_SERVICE_IDX],
+            observed_ports[RED_SCANNED_PORT_IDS[80]],
+            observed_ports[RED_SCANNED_PORT_IDS[443]],
+            observed_ports[RED_SCANNED_PORT_IDS[22]],
+            observed_ports[RED_SCANNED_PORT_IDS[3390]] & has_web_port,
+            observed_ports[RED_SCANNED_PORT_IDS[25]],
+            observed_ports[RED_SCANNED_PORT_IDS[21]],
         ],
         dtype=jnp.bool_,
     )
     num_candidates = jnp.sum(candidates.astype(jnp.int32))
-    fallback = RED_EXPLOIT_SSH_START + target_host
+    # Native ExploitRemoteService returns failure without executing a concrete
+    # exploit when the remembered port list has no applicable candidate.  The
+    # EBlue slot is a no-op in CC4's unified executor and preserves duration.
+    fallback = RED_EXPLOIT_ETERNALBLUE_START + target_host
 
     def _choose_candidate(_):
         weights = jnp.where(candidates, GENERIC_EXPLOIT_WEIGHTS, 0.0)
@@ -246,7 +259,7 @@ def fsm_red_get_action_and_info(
     chosen_fsm_action = jnp.clip(chosen_fsm_action, 0, jnp.int32(NUM_FSM_ACTIONS - 1))
 
     discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
-    exploit_action = _pick_exploit_action(state, chosen_host, key4)
+    exploit_action = _pick_exploit_action(state, agent_id, chosen_host, key4)
     host_subnet = const.host_subnet[chosen_host]
     target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
     jax_action = _fsm_action_to_jax_action(chosen_fsm_action, chosen_host, target_subnet, exploit_action)

@@ -108,6 +108,7 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    red_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
 
     host_services = jnp.where(
         covers_host,
@@ -189,6 +190,7 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         host_services=host_services,

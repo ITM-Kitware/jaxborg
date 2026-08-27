@@ -364,6 +364,7 @@ def apply_blue_remove(
     )
     new_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     new_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    new_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
     # Per-session scan memory clearing: CybORG stores port knowledge on the
     # specific session object that performed the scan.  When blue Remove kills
     # that session (but other sessions survive on the same host), the scan
@@ -386,6 +387,7 @@ def apply_blue_remove(
         jnp.any(new_scanned_source_hosts, axis=2),
         new_scanned_hosts,
     )
+    new_scanned_ports = new_scanned_ports & new_scanned_hosts[:, :, None]
     new_scan_source_pid = state.red_scan_source_pid.at[:, target_host].set(
         jnp.where(owner_killed, jnp.int32(-1), state.red_scan_source_pid[:, target_host])
     )
@@ -401,6 +403,7 @@ def apply_blue_remove(
         red_scan_anchor_host=red_scan_anchor_host,
         red_scanned_hosts=new_scanned_hosts,
         red_scanned_source_hosts=new_scanned_source_hosts,
+        red_scanned_ports=new_scanned_ports,
         red_scan_source_pid=new_scan_source_pid,
         host_compromised=new_host_compromised,
         host_max_pid=host_max_pid,

@@ -29,7 +29,8 @@ def test_cyborg_red_policy_projection_matches_jax_at_reset():
     adapter._discovered = [set() for _ in RED_AGENT_IDS]
     adapter._scanned_by_primary = [set() for _ in RED_AGENT_IDS]
     adapter._primary_identity = [None for _ in RED_AGENT_IDS]
-    adapter._sync_discovered_from_action_spaces()
+    red_observations = {agent: adapter.raw_env.get_observation(agent) for agent in RED_AGENT_IDS}
+    adapter._update_discovery_memory(red_observations)
     adapter._sync_primary_identities()
 
     for agent_idx in range(len(RED_AGENT_IDS)):

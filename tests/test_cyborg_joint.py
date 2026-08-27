@@ -29,6 +29,7 @@ def test_joint_adapter_contract_and_local_red_observation():
         assert infos["red_agent_0"]["action_mask"].shape == (RED_POLICY_ACTION_DIM,)
         assert infos["red_agent_1"]["actor_active"] is False
         assert np.flatnonzero(infos["red_agent_1"]["action_mask"]).tolist() == [0]
+        assert env._discovered[1] == set()
 
         # The host planes begin after phase/time/status/identity/subnets.
         plane_start = 3 + 3 + 6 + 9

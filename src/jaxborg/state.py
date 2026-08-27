@@ -2,7 +2,7 @@ import chex
 import jax.numpy as jnp
 from flax import struct
 
-from jaxborg.constants import ABSTRACT_RANK_NONE, CC4_CONFIG
+from jaxborg.constants import ABSTRACT_RANK_NONE, CC4_CONFIG, NUM_RED_SCANNED_PORTS
 from jaxborg.scenarios.config import ScenarioConfig
 
 
@@ -70,6 +70,8 @@ class SimulatorState:
     red_discovered_hosts: chex.Array  # (num_red_agents, num_hosts) bool
     red_scanned_hosts: chex.Array  # (num_red_agents, num_hosts) bool
     red_scanned_source_hosts: chex.Array  # (num_red_agents, num_hosts, num_hosts) bool
+    # (num_red_agents, num_hosts, num_exploit_ports) bool — scan-time port snapshot
+    red_scanned_ports: chex.Array
     red_scan_source_pid: chex.Array  # (num_red_agents, num_hosts) int32 — PID owning scan memory per source host
     red_scan_anchor_host: chex.Array  # (num_red_agents,) int — host owning CybORG-like scan memory session
     red_primary_is_abstract: chex.Array  # (num_red_agents,) bool — session-0 equiv is abstract
@@ -211,6 +213,7 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         red_discovered_hosts=jnp.zeros((n_red, n_hosts), dtype=jnp.bool_),
         red_scanned_hosts=jnp.zeros((n_red, n_hosts), dtype=jnp.bool_),
         red_scanned_source_hosts=jnp.zeros((n_red, n_hosts, n_hosts), dtype=jnp.bool_),
+        red_scanned_ports=jnp.zeros((n_red, n_hosts, NUM_RED_SCANNED_PORTS), dtype=jnp.bool_),
         red_scan_source_pid=jnp.full((n_red, n_hosts), -1, dtype=jnp.int32),
         red_scan_anchor_host=jnp.full(n_red, -1, dtype=jnp.int32),
         red_primary_is_abstract=jnp.ones(n_red, dtype=jnp.bool_),

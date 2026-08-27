@@ -3,6 +3,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet_from_source_host,
+    observed_exploit_ports,
     scan_sources,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
@@ -55,6 +56,12 @@ def apply_scan(
         state.red_scan_source_pid.at[agent_id, source_idx].set(executing_pid),
         state.red_scan_source_pid,
     )
+    observed_ports = observed_exploit_ports(state, target_host)
+    red_scanned_ports = jnp.where(
+        success,
+        state.red_scanned_ports.at[agent_id, target_host].set(observed_ports),
+        state.red_scanned_ports,
+    )
 
     # CybORG's _process_new_observations adds hosts from ANY observation to
     # host_states.  A successful scan reveals the target in the observation.
@@ -67,6 +74,7 @@ def apply_scan(
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
         red_scan_source_pid=red_scan_source_pid,
+        red_scanned_ports=red_scanned_ports,
         red_activity_this_step=activity,
         fsm_host_entered=fsm_host_entered,
     )

@@ -13,7 +13,7 @@ algorithm: ippo
 # trainable teams' curves to the active local MLflow run.
 mlflow:
   checkpoint_eval:
-    every_steps: 150000
+    every_steps: 100000
     episodes: 10
     seed: null  # Defaults to the training seed + 100000.
     deterministic: false
@@ -40,7 +40,7 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 3000000
+  total_timesteps: 10000000
   variant: cc4_stock
 
 eval:

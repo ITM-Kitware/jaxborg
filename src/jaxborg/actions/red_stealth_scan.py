@@ -4,6 +4,7 @@ import jax.numpy as jnp
 
 from jaxborg.actions.red_common import (
     can_reach_subnet_from_source_host,
+    observed_exploit_ports,
     scan_sources,
     select_scan_execution_source_host,
     sync_scan_memory_fields,
@@ -67,9 +68,16 @@ def apply_stealth_scan(
         state.fsm_host_entered.at[agent_id, target_host].set(True),
         state.fsm_host_entered,
     )
+    observed_ports = observed_exploit_ports(state, target_host)
+    red_scanned_ports = jnp.where(
+        success,
+        state.red_scanned_ports.at[agent_id, target_host].set(observed_ports),
+        state.red_scanned_ports,
+    )
 
     next_state = state.replace(
         red_scan_anchor_host=red_scan_anchor_host,
+        red_scanned_ports=red_scanned_ports,
         red_activity_this_step=activity,
         fsm_host_entered=fsm_host_entered,
     )

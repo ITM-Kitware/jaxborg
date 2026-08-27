@@ -10,6 +10,7 @@ from jaxborg.actions.action_defs import (
     RED_DEGRADE_START,
     RED_DISCOVER_DECEPTION_START,
     RED_DISCOVER_START,
+    RED_EXPLOIT_HTTP_START,
     RED_EXPLOIT_SSH_START,
     RED_IMPACT_START,
     RED_PRIVESC_START,
@@ -18,6 +19,7 @@ from jaxborg.actions.action_defs import (
     RED_WITHDRAW_END,
     RED_WITHDRAW_START,
 )
+from jaxborg.actions.red_common import sync_scan_memory_fields
 from jaxborg.actions.red_policy import (
     RED_POLICY_ACTION_DIM,
     RED_POLICY_AGGRESSIVE_SCAN_START,
@@ -34,13 +36,16 @@ from jaxborg.actions.red_policy import (
     RedPolicyActionType,
     decode_red_policy_action,
 )
+from jaxborg.actions.red_scan_unified import apply_scan_unified
 from jaxborg.constants import (
     BLUE_OBS_SIZE,
     COMPROMISE_PRIVILEGED,
+    DECOY_IDS,
     GLOBAL_MAX_HOSTS,
     NUM_RED_AGENTS,
     NUM_SUBNETS,
     RED_OBS_SIZE,
+    RED_SCANNED_PORT_IDS,
     SERVICE_IDS,
 )
 from jaxborg.joint_env import JointPolicyCC4Env, force_sleep_for_unavailable_actions
@@ -111,6 +116,28 @@ def test_observation_layout_has_local_metadata(joint_reset):
         np.asarray(env_state.const.red_agent_subnets[0], dtype=np.float32),
     )
     assert _PRIMARY.stop == RED_OBS_SIZE
+
+
+def test_preseeded_future_start_host_requires_actual_observation(joint_reset):
+    _, _, env_state = joint_reset
+    agent_id = 1
+    start_host = int(env_state.const.red_start_hosts[agent_id])
+    state = env_state.state.replace(
+        red_agent_active=env_state.state.red_agent_active.at[agent_id].set(True),
+        red_discovered_hosts=env_state.state.red_discovered_hosts.at[agent_id, start_host].set(True),
+        fsm_host_entered=env_state.state.fsm_host_entered.at[agent_id, start_host].set(False),
+    )
+
+    obs = get_red_policy_obs(state, env_state.const, agent_id)
+    mask = compute_red_policy_action_mask(state, env_state.const, agent_id)
+    assert obs[_DISCOVERED.start + start_host] == 0.0
+    assert not mask[RED_POLICY_AGGRESSIVE_SCAN_START + start_host]
+
+    observed = state.replace(fsm_host_entered=state.fsm_host_entered.at[agent_id, start_host].set(True))
+    observed_obs = get_red_policy_obs(observed, env_state.const, agent_id)
+    observed_mask = compute_red_policy_action_mask(observed, env_state.const, agent_id)
+    assert observed_obs[_DISCOVERED.start + start_host] == 1.0
+    assert observed_mask[RED_POLICY_AGGRESSIVE_SCAN_START + start_host]
 
 
 def test_observation_does_not_leak_hidden_or_other_agent_state(joint_reset):
@@ -223,6 +250,7 @@ def test_compact_to_raw_mapping_and_generic_exploit(joint_reset):
         red_agent_active=state.red_agent_active.at[0].set(True),
         red_pending_ticks=state.red_pending_ticks.at[0].set(0),
         host_services=(state.host_services.at[target].set(False).at[target, SERVICE_IDS["SSHD"]].set(True)),
+        red_scanned_ports=state.red_scanned_ports.at[0, target, RED_SCANNED_PORT_IDS[22]].set(True),
     )
     key = jax.random.PRNGKey(9)
     cases = (
@@ -242,6 +270,70 @@ def test_compact_to_raw_mapping_and_generic_exploit(joint_reset):
     busy = controlled.replace(red_pending_ticks=controlled.red_pending_ticks.at[0].set(1))
     assert int(compact_red_action_to_raw(busy, const, 0, RED_POLICY_EXPLOIT_START + target, key)) == RED_SLEEP
     assert int(compact_red_action_to_raw(controlled, const, 0, RED_POLICY_ACTION_DIM, key)) == RED_SLEEP
+
+
+def test_learned_exploit_uses_scan_snapshot_not_live_services(joint_reset):
+    _, _, env_state = joint_reset
+    state = env_state.state
+    const = env_state.const
+    source = int(state.red_scan_anchor_host[0])
+    target = next(int(h) for h in _active_hosts(const) if int(h) != source)
+
+    scan_state = state.replace(
+        red_discovered_hosts=state.red_discovered_hosts.at[0, target].set(True),
+        blocked_zones=jnp.zeros_like(state.blocked_zones),
+        host_services=state.host_services.at[target].set(False).at[target, SERVICE_IDS["SSHD"]].set(True),
+        host_decoys=state.host_decoys.at[target].set(False),
+    )
+    scanned = apply_scan_unified(
+        scan_state,
+        const,
+        0,
+        jnp.int32(target),
+        jax.random.PRNGKey(21),
+        jnp.bool_(False),
+        jnp.float32(0.0),
+    )
+    assert scanned.red_scanned_ports[0, target, RED_SCANNED_PORT_IDS[22]]
+
+    # Changing the real network without another scan must not change the
+    # generic exploit chosen for learned Red.
+    changed_live_state = scanned.replace(
+        host_services=scanned.host_services.at[target].set(False).at[target, SERVICE_IDS["APACHE2"]].set(True),
+        host_decoys=scanned.host_decoys.at[target, DECOY_IDS["Tomcat"]].set(True),
+    )
+    compact = RED_POLICY_EXPLOIT_START + target
+    assert int(compact_red_action_to_raw(changed_live_state, const, 0, compact, jax.random.PRNGKey(22))) == (
+        RED_EXPLOIT_SSH_START + target
+    )
+
+    # A re-scan overwrites the snapshot, including ports exposed by decoys.
+    decoy_only = changed_live_state.replace(
+        host_services=changed_live_state.host_services.at[target].set(False),
+        host_decoys=changed_live_state.host_decoys.at[target].set(False).at[target, DECOY_IDS["Apache"]].set(True),
+    )
+    rescanned = apply_scan_unified(
+        decoy_only,
+        const,
+        0,
+        jnp.int32(target),
+        jax.random.PRNGKey(23),
+        jnp.bool_(False),
+        jnp.float32(0.0),
+    )
+    assert rescanned.red_scanned_ports[0, target, RED_SCANNED_PORT_IDS[80]]
+    assert int(compact_red_action_to_raw(rescanned, const, 0, compact, jax.random.PRNGKey(24))) == (
+        RED_EXPLOIT_HTTP_START + target
+    )
+
+    # Port knowledge disappears with the abstract session that owns the scan.
+    owner = int(rescanned.red_scan_anchor_host[0])
+    without_owner = rescanned.replace(
+        red_sessions=rescanned.red_sessions.at[0, owner].set(False),
+        red_session_is_abstract=rescanned.red_session_is_abstract.at[0, owner].set(False),
+    )
+    cleared = sync_scan_memory_fields(without_owner, const)
+    assert not jnp.any(cleared.red_scanned_ports[0, target])
 
 
 def test_joint_force_sleep_handles_blue_busy_and_red_inactive(joint_reset):

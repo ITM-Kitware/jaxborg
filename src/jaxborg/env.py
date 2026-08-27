@@ -22,7 +22,7 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.actions.red_common import apply_red_session_check
+from jaxborg.actions.red_common import apply_red_session_check, observed_exploit_ports
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER
 from jaxborg.observations import get_blue_obs, get_red_obs
 from jaxborg.reassignment import reassign_cross_subnet_sessions
@@ -194,6 +194,7 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
     red_abstract_host_rank = state.red_abstract_host_rank
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_source_hosts = state.red_scanned_source_hosts
+    red_scanned_ports = state.red_scanned_ports
     red_scan_source_pid = state.red_scan_source_pid
     red_session_pids = state.red_session_pids
     red_session_abstract_pids = state.red_session_abstract_pids
@@ -202,6 +203,9 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
 
     # Only red_agent_0 is active at reset; others activate via session reassignment
     red_agent_active = state.red_agent_active.at[0].set(True)
+    initial_observed_ports = jax.vmap(lambda h: observed_exploit_ports(state, h))(
+        jnp.arange(state.host_services.shape[0], dtype=jnp.int32)
+    )
 
     n_red = state.red_agent_active.shape[0]
     for r in range(n_red):
@@ -260,6 +264,15 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         red_scanned_source_hosts = red_scanned_source_hosts.at[r, :, start_host].set(
             jnp.where(is_active, initially_scanned, prior_scan_col)
         )
+        prior_scanned_ports = red_scanned_ports[r]
+        initial_scanned_ports = jnp.where(
+            initially_scanned[:, None],
+            initial_observed_ports,
+            prior_scanned_ports,
+        )
+        red_scanned_ports = red_scanned_ports.at[r].set(
+            jnp.where(is_active, initial_scanned_ports, prior_scanned_ports)
+        )
         # Record scan-owning PID for initial knowledge sourced from start_host.
         has_initial_scan = jnp.any(initially_scanned)
         red_scan_source_pid = red_scan_source_pid.at[r, start_host].set(
@@ -284,6 +297,7 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_pid=red_primary_pid,
@@ -361,9 +375,7 @@ class ScenarioEnv(MultiAgentEnv):
         else:
             pb_arr = jnp.asarray(phase_boundary_bank, dtype=jnp.int32)
             if pb_arr.ndim != 2 or pb_arr.shape[1] != 3:
-                raise ValueError(
-                    f"phase_boundary_bank must be a sequence of 3-tuples; got shape {pb_arr.shape}"
-                )
+                raise ValueError(f"phase_boundary_bank must be a sequence of 3-tuples; got shape {pb_arr.shape}")
             self._phase_boundary_bank = pb_arr
             self._phase_boundary_bank_size = int(pb_arr.shape[0])
 
