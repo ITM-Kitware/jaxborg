@@ -89,10 +89,12 @@ class JointPolicyCC4Env(MultiAgentEnv):
         self.topology_mode = self._env.topology_mode
         self.blue_agents = list(self._env.blue_agents)
         self.red_agents = list(self._env.red_agents)
-        self.agents = self.blue_agents + self.red_agents
         self._name = name or "JointPolicyCC4"
 
-        super().__init__(num_agents=len(self.agents))
+        super().__init__(num_agents=len(self.blue_agents) + len(self.red_agents))
+        # JaxMARL's base constructor installs generic ``agent_N`` names.
+        # Preserve the policy-facing Blue/Red identifiers used by this env.
+        self.agents = self.blue_agents + self.red_agents
         for agent in self.blue_agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
             self.observation_spaces[agent] = Box(

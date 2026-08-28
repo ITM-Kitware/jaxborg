@@ -421,9 +421,12 @@ class ScenarioEnv(MultiAgentEnv):
 
         self.blue_agents = [f"blue_{i}" for i in range(self.cfg.num_blue_agents)]
         self.red_agents = [f"red_{i}" for i in range(self.cfg.num_red_agents)]
-        self.agents = self.blue_agents + self.red_agents
 
         super().__init__(num_agents=self.cfg.num_blue_agents + self.cfg.num_red_agents)
+        # JaxMARL initialises ``agents`` to generic ``agent_N`` names. Keep
+        # the simulator's public action/observation keys aligned with the
+        # domain-specific names used throughout JAXborg.
+        self.agents = self.blue_agents + self.red_agents
 
         for agent in self.blue_agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)

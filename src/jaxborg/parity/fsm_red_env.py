@@ -115,9 +115,11 @@ class FsmRedCC4Env(MultiAgentEnv):
         self._red_selector = red_selector
         self._extras_factory = extras_factory
         self._name = name or "FsmRedCC4"
-        self.agents = list(self._env.blue_agents)
 
         super().__init__(num_agents=NUM_BLUE_AGENTS)
+        # JaxMARL's base constructor installs generic ``agent_N`` names.
+        # Restore the Blue-facing API expected by observations and actions.
+        self.agents = list(self._env.blue_agents)
 
         for agent in self.agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
