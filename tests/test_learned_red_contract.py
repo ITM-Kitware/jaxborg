@@ -166,7 +166,10 @@ def test_observation_does_not_leak_hidden_or_other_agent_state(joint_reset):
     candidates = _active_hosts(const)[~np.asarray(state.red_discovered_hosts[0])[_active_hosts(const)]]
     if candidates.size:
         target = int(candidates[0])
-        local_change = state.replace(red_discovered_hosts=state.red_discovered_hosts.at[0, target].set(True))
+        local_change = state.replace(
+            red_discovered_hosts=state.red_discovered_hosts.at[0, target].set(True),
+            fsm_host_entered=state.fsm_host_entered.at[0, target].set(True),
+        )
         changed = get_red_policy_obs(local_change, const, 0)
         assert changed[_DISCOVERED.start + target] == 1.0
         assert not jnp.array_equal(changed, before)
@@ -210,6 +213,9 @@ def test_mask_encodes_knowledge_sessions_privilege_and_availability(joint_reset)
         red_agent_active=state.red_agent_active.at[0].set(True),
         red_pending_ticks=state.red_pending_ticks.at[0].set(0),
         red_discovered_hosts=state.red_discovered_hosts.at[0].set(False).at[0, target].set(True),
+        fsm_host_entered=(
+            state.fsm_host_entered.at[0].set(False).at[0, target].set(True).at[0, privileged_target].set(True)
+        ),
         red_sessions=state.red_sessions.at[0].set(False).at[0, target].set(True).at[0, privileged_target].set(True),
         red_privilege=(state.red_privilege.at[0].set(0).at[0, privileged_target].set(COMPROMISE_PRIVILEGED)),
         red_scanned_source_hosts=state.red_scanned_source_hosts.at[0].set(False),
