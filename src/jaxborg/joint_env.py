@@ -116,6 +116,15 @@ class JointPolicyCC4Env(MultiAgentEnv):
         _, env_state = self._env.reset(key)
         return self.get_obs(env_state), env_state
 
+    def reset_at_topology(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
+        """Reset on one exact entry of the configured snapshot bank."""
+        _, env_state = self._env.reset_at_topology(key, topology_index)
+        return self.get_obs(env_state), env_state
+
     @partial(jax.jit, static_argnums=[0])
     def _translate_actions(
         self,

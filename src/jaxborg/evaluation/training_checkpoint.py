@@ -15,7 +15,7 @@ from typing import Iterator
 import numpy as np
 
 from jaxborg.mlflow_setup import CheckpointEvalSettings
-from jaxborg.recipe import eval_variant, training_teams
+from jaxborg.recipe import eval_variant, project_eval, training_teams
 
 
 def _uses_learned_red(recipe: dict) -> bool:
@@ -84,6 +84,8 @@ def evaluate_training_checkpoint(
         if _uses_learned_red(recipe):
             from jaxborg.evaluation.matchup_runner import evaluate_matchup
 
+            eval_config = project_eval(recipe, materialize_topologies=True)
+            topology_bank = eval_config["TOPOLOGY_BANK"] or None
             result = evaluate_matchup(
                 checkpoint_path,
                 checkpoint_path,
@@ -93,6 +95,8 @@ def evaluate_training_checkpoint(
                 episodes_per_seed=episodes,
                 deterministic=deterministic,
                 progress=False,
+                topology_path=topology_bank,
+                topology_sampling=eval_config["TOPOLOGY_SAMPLING"],
             )
             means = {
                 "blue": float(np.mean(result.blue_returns)),

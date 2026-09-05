@@ -131,6 +131,24 @@ class FsmRedCC4Env(MultiAgentEnv):
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
         key, key_extras = jax.random.split(key)
         obs, inner = self._env.reset(key)
+        return self._wrap_reset(obs, inner, key_extras)
+
+    def reset_at_topology(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
+        """Reset on one exact entry of the configured snapshot bank."""
+        key, key_extras = jax.random.split(key)
+        obs, inner = self._env.reset_at_topology(key, topology_index)
+        return self._wrap_reset(obs, inner, key_extras)
+
+    def _wrap_reset(
+        self,
+        obs: Dict[str, chex.Array],
+        inner: ScenarioEnvState,
+        key_extras: chex.PRNGKey,
+    ) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
         inner = self._strip_inactive_red_reset_knowledge(inner)
         extras = self._extras_factory(key_extras, inner.const)
         blue_obs = {a: obs[a] for a in self.agents}

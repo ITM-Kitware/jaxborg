@@ -25,7 +25,8 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from jaxborg.evaluation.matchup_runner import evaluate_matchup
 from jaxborg.mlflow_setup import attach_eval_metrics
-from jaxborg.recipe import eval_variant, load, resolve_eval_policies
+from jaxborg.recipe import eval_variant, load, project_eval, resolve_eval_policies
+from jaxborg.topology_banks import validate_eval_topology_override
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
@@ -72,6 +73,18 @@ def main() -> None:
     parser.add_argument("--episodes", type=int, default=10, help="Episodes per seed")
     parser.add_argument("--seeds", default="42-51")
     parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument(
+        "--topology-path",
+        action="append",
+        default=None,
+        help="Topology snapshot to sample during evaluation; repeat for a held-out bank",
+    )
+    parser.add_argument(
+        "--topology-sampling",
+        choices=("exhaustive", "random"),
+        default=None,
+        help="Bank assignment (default: recipe value or exhaustive)",
+    )
     parser.add_argument("--output", default=None)
     args = parser.parse_args()
 
@@ -96,6 +109,12 @@ def main() -> None:
     model_paths = resolve_eval_policies(recipe, exp_dir=EXP_DIR)
     variant = eval_variant(recipe)
     seeds = _parse_seeds(args.seeds)
+    if args.topology_path:
+        topology_paths = [Path(path).expanduser().resolve() for path in args.topology_path]
+        validate_eval_topology_override(recipe, topology_paths, repo_root=_REPO_ROOT)
+    else:
+        topology_paths = list(project_eval(recipe, materialize_topologies=True)["TOPOLOGY_BANK"]) or None
+    topology_sampling = args.topology_sampling or eval_cfg.get("topology_sampling", "exhaustive")
 
     print(
         f"JAX matchup: backend={backend} variant={variant.name} seeds={seeds} episodes/seed={args.episodes}",
@@ -103,6 +122,11 @@ def main() -> None:
     )
     print(f"  Blue: {model_paths['blue']}", flush=True)
     print(f"  Red:  {model_paths['red']}", flush=True)
+    if topology_paths:
+        print(
+            f"  Topology bank: {len(topology_paths)} snapshots ({topology_sampling})",
+            flush=True,
+        )
     t0 = time.perf_counter()
     result = evaluate_matchup(
         model_paths["blue"],
@@ -112,6 +136,8 @@ def main() -> None:
         seeds=seeds,
         episodes_per_seed=args.episodes,
         deterministic=args.deterministic,
+        topology_path=topology_paths,
+        topology_sampling=topology_sampling,
     )
     wall = time.perf_counter() - t0
     blue_mean = mean(result.blue_returns)
@@ -129,6 +155,8 @@ def main() -> None:
         "policies": result.policies,
         "seeds": seeds,
         "episodes_per_seed": args.episodes,
+        "episodes_per_topology": (len(seeds) * args.episodes if result.topology_sampling == "exhaustive" else None),
+        "total_episodes": len(result.blue_returns),
         "stochastic": not args.deterministic,
         "blue_mean_return": blue_mean,
         "blue_std_return": blue_std,
@@ -143,6 +171,9 @@ def main() -> None:
         "per_episode_blue_returns": result.blue_returns,
         "per_episode_red_returns": result.red_returns,
         "per_episode_seeds": result.episode_seeds,
+        "topology_paths": result.topology_paths,
+        "topology_sampling": result.topology_sampling,
+        "per_episode_topology_paths": result.episode_topology_paths,
     }
 
     output = (

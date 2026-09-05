@@ -57,6 +57,21 @@ train:
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
   variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
 
+  # Optional JAX topology pool. Omit both declarations to generate a fresh
+  # topology on every reset. topology_bank and topology_generation are
+  # mutually exclusive; the latter creates one immutable cached snapshot per
+  # source seed. Relative paths are resolved from the repository root.
+  # topology_bank:
+  #   - topology_banks/my_experiment/train/shape_00.snapshot.npz
+  #   - topology_banks/my_experiment/train/shape_01.snapshot.npz
+  # topology_generation:
+  #   generator: cyborg  # cyborg = CAGE EnterpriseScenarioGenerator; jax = pure-JAX generator.
+  #   seed_start: 0  # First source seed, inclusive.
+  #   count: 100  # Pool size (maximum 10,000); use exactly one of count or seed_end.
+  #   seed_end: 99  # Inclusive alternative to count; leave one of these two fields commented.
+  #   cache_dir: topology_banks/my_experiment/train
+  #   output_dir: topology_banks/my_experiment/train  # Alias for cache_dir; leave one field commented.
+
   # These legacy cross-backend targets document the intended batch shape.
   # With explicit backend controls below, only buffer_size is used as a
   # CleanRL fallback when num_rollouts_per_update is omitted.
@@ -69,6 +84,20 @@ eval:
   cia_metric: resilience  # CIA trajectory scorer; resilience is the only registered metric.
   policy_backend: jax  # Backend for separately sourced eval policies: jax or cyborg.
   policies: {}  # Empty for checkpoint eval; matchup eval requires blue/red model refs.
+  # exhaustive (default) runs every requested dynamics seed on every topology;
+  # random keeps the requested episode count and samples the bank with replacement.
+  topology_sampling: exhaustive
+
+  # Optional held-out JAX evaluation pool. It never falls back to the training
+  # pool. Keep its paths and (generator, source-seed) pairs disjoint from train.
+  # topology_bank:
+  #   - topology_banks/my_experiment/test/shape_00.snapshot.npz
+  #   - topology_banks/my_experiment/test/shape_01.snapshot.npz
+  # topology_generation:
+  #   generator: cyborg
+  #   seed_start: 100
+  #   count: 20  # Seeds 100 through 119; seed_end: 119 is equivalent.
+  #   cache_dir: topology_banks/my_experiment/test
 
 # Active controls for the JAX/Flax trainer.
 jax:

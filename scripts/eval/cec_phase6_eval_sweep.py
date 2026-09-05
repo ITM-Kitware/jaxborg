@@ -17,13 +17,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 from pathlib import Path
 
 # Import the run_eval helper from the per-cell script — shares the JIT
 # rollout body so behavior is identical.
-import sys
-
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "eval"))
 from cec_phase6_eval_jax import run_eval  # noqa: E402
@@ -42,6 +41,19 @@ def main():
     parser.add_argument("--reds", nargs="+", default=list(REDS))
     parser.add_argument("--arms", nargs="+", default=list(ARMS))
     parser.add_argument("--train-seeds", nargs="+", type=int, default=list(SEEDS))
+    parser.add_argument(
+        "--topology-path",
+        action="extend",
+        nargs="+",
+        default=None,
+        help="Topology snapshot(s) to sample during evaluation; may be repeated for a held-out bank",
+    )
+    parser.add_argument(
+        "--topology-sampling",
+        choices=("exhaustive", "random"),
+        default=None,
+        help="Bank assignment (default: checkpoint recipe value or exhaustive)",
+    )
     args = parser.parse_args()
 
     out_dir = EXP_DIR / "eval"
@@ -67,12 +79,23 @@ def main():
     for i, (tag, model, red) in enumerate(cells, 1):
         print(f"\n[{i}/{len(cells)}] {tag} vs {red}", flush=True)
         t0 = time.perf_counter()
-        row = run_eval(model_path=model, eval_red=red, episodes=args.episodes, seed=args.seed)
+        row = run_eval(
+            model_path=model,
+            eval_red=red,
+            episodes=args.episodes,
+            seed=args.seed,
+            topology_path=args.topology_path,
+            topology_sampling=args.topology_sampling,
+        )
         eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{args.seed}_{red}"
         row["eval_id"] = eval_id
         out_path = out_dir / f"phase6_{row['recipe_name']}_{model.stem}_{eval_id}.jsonl"
         out_path.write_text(json.dumps(row, indent=2) + "\n")
-        print(f"  mean={row['mean_reward']:.1f} ± {row['std_reward']:.1f} n={row['n_episodes']} wall={time.perf_counter() - t0:.1f}s", flush=True)
+        print(
+            f"  mean={row['mean_reward']:.1f} ± {row['std_reward']:.1f} "
+            f"n={row['n_episodes']} wall={time.perf_counter() - t0:.1f}s",
+            flush=True,
+        )
         print(f"  wrote {out_path.name}", flush=True)
 
     print(f"\nTotal wall: {time.perf_counter() - t0_all:.1f}s", flush=True)

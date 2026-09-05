@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import jax
@@ -211,6 +212,35 @@ def test_jitted_update_accepts_aliased_reward_normalizer_leaves(tiny_joint):
     assert int(states["red"].step) == 1
     assert float(norm_states["blue"].mean) > 0.0
     assert float(norm_states["red"].mean) < 0.0
+
+
+def test_joint_train_forwards_shared_topology_bank(tiny_joint, monkeypatch):
+    networks, configs = tiny_joint
+    fake_env = joint.make_joint_jax_env(None)
+    bank = (Path("shape_00.snapshot.npz"), Path("shape_01.snapshot.npz"))
+    for config in configs.values():
+        config["TOPOLOGY_BANK"] = bank
+
+    captured = {}
+
+    def capture_factory(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return fake_env
+
+    monkeypatch.setattr(joint, "make_joint_jax_env", capture_factory)
+    joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+
+    assert captured["kwargs"]["topology_path"] == list(bank)
+
+
+def test_joint_train_rejects_different_team_topology_banks(tiny_joint):
+    networks, configs = tiny_joint
+    configs["blue"]["TOPOLOGY_BANK"] = (Path("blue.snapshot.npz"),)
+    configs["red"]["TOPOLOGY_BANK"] = (Path("red.snapshot.npz"),)
+
+    with pytest.raises(ValueError, match="red must share TOPOLOGY_BANK"):
+        joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
 
 
 def test_actor_and_critic_masks_update_only_their_separate_heads():

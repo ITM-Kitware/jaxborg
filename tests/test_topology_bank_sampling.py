@@ -21,8 +21,8 @@ import numpy as np
 import pytest
 
 from jaxborg.env import ScenarioEnv
-from jaxborg.evaluation.jax_env_factory import _validate_resilience_topology, make_jax_env
-from jaxborg.scenarios.cc4.game_variants import CIA_RESILIENCE
+from jaxborg.evaluation.jax_env_factory import _validate_resilience_topology, make_jax_env, make_joint_jax_env
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK, CIA_RESILIENCE
 from jaxborg.scenarios.cc4.topology import load_topology
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -122,3 +122,71 @@ def test_env_with_full_bank_produces_distinct_consts(bank_paths: list[Path]) -> 
         _, state = env.reset(k)
         seen.add(np.asarray(state.const.host_subnet).tobytes())
     assert len(seen) >= 3, f"expected ≥3 distinct host_subnet arrays across 32 resets, got {len(seen)}"
+
+
+def test_joint_env_samples_only_from_configured_topology_bank(bank_paths: list[Path]) -> None:
+    selected_paths = bank_paths[:4]
+    env = make_joint_jax_env(CC4_STOCK, topology_path=selected_paths)
+
+    assert env.topology_mode == "snapshot"
+    assert env._env._const_bank_size == len(selected_paths)
+
+    expected = set()
+    for path in selected_paths:
+        const = load_topology(path)
+        expected.add(
+            (
+                np.asarray(const.host_subnet).tobytes(),
+                np.asarray(const.data_links).tobytes(),
+                np.asarray(const.allowed_subnet_pairs).tobytes(),
+            )
+        )
+
+    observed = set()
+    for key in jax.random.split(jax.random.PRNGKey(2027), 32):
+        obs, state = env.reset(key)
+        observed.add(
+            (
+                np.asarray(state.const.host_subnet).tobytes(),
+                np.asarray(state.const.data_links).tobytes(),
+                np.asarray(state.const.allowed_subnet_pairs).tobytes(),
+            )
+        )
+        assert set(obs) == set(env.agents)
+
+    assert 2 <= len(observed) <= len(selected_paths)
+    assert observed <= expected
+
+
+def test_joint_env_can_reset_on_each_exact_bank_entry(bank_paths: list[Path]) -> None:
+    selected_paths = bank_paths[:4]
+    env = make_joint_jax_env(CC4_STOCK, topology_path=selected_paths)
+    key = jax.random.PRNGKey(901)
+
+    for topology_index, path in enumerate(selected_paths):
+        _, state = env.reset_at_topology(key, topology_index)
+        expected = load_topology(path)
+        np.testing.assert_array_equal(state.const.host_subnet, expected.host_subnet)
+        np.testing.assert_array_equal(state.const.data_links, expected.data_links)
+
+
+@pytest.mark.parametrize("topology_index", [-1, 4, jnp.int32(-1), jnp.int32(4)])
+def test_joint_env_rejects_invalid_concrete_topology_index(
+    bank_paths: list[Path],
+    topology_index,
+) -> None:
+    env = make_joint_jax_env(CC4_STOCK, topology_path=bank_paths[:4])
+
+    with pytest.raises(IndexError, match="topology_index must be in"):
+        env.reset_at_topology(jax.random.PRNGKey(902), topology_index)
+
+
+@pytest.mark.parametrize("topology_index", [True, 1.0, jnp.asarray([1], dtype=jnp.int32)])
+def test_joint_env_rejects_non_integer_scalar_topology_index(
+    bank_paths: list[Path],
+    topology_index,
+) -> None:
+    env = make_joint_jax_env(CC4_STOCK, topology_path=bank_paths[:4])
+
+    with pytest.raises(TypeError, match="topology_index must be a scalar integer"):
+        env.reset_at_topology(jax.random.PRNGKey(903), topology_index)

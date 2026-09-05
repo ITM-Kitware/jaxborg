@@ -8,9 +8,9 @@ explicit.  The legacy CybORG Blue-vs-scripted-Red evaluator remains separate.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Sequence
 
 import jax
 import jax.numpy as jnp
@@ -129,6 +129,9 @@ class MatchupEvaluation:
     red_returns: list[float]
     episode_seeds: list[int]
     policies: dict[str, dict[str, Any]]
+    topology_paths: list[str] = field(default_factory=list)
+    episode_topology_paths: list[str | None] = field(default_factory=list)
+    topology_sampling: str = "generative"
 
 
 def _normalise_backend(backend: str) -> PolicyBackend:
@@ -255,6 +258,9 @@ def run_matchup_episode(
     variant: GameVariant,
     seed: int,
     deterministic: bool = False,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+    env: Any | None = None,
+    topology_index: int | jax.Array | None = None,
 ) -> float:
     """Run one episode and return the Blue game score."""
     if set(policies) != {"blue", "red"}:
@@ -264,10 +270,20 @@ def run_matchup_episode(
         raise ValueError("mixed JAX/Torch matchup policies are not supported")
     backend = next(iter(backends))
 
-    env = make_joint_jax_env(variant, training_mode=False)
+    if env is None:
+        env = make_joint_jax_env(
+            variant,
+            training_mode=False,
+            topology_path=topology_path,
+        )
+    elif topology_path is not None:
+        raise ValueError("topology_path cannot be supplied with a pre-built env")
     rng = jax.random.PRNGKey(seed)
     rng, reset_key = jax.random.split(rng)
-    obs, state = env.reset(reset_key)
+    if topology_index is None:
+        obs, state = env.reset(reset_key)
+    else:
+        obs, state = env.reset_at_topology(reset_key, topology_index)
     team_agents = {"blue": tuple(env.blue_agents), "red": tuple(env.red_agents)}
     total = 0.0
 
@@ -331,36 +347,86 @@ def evaluate_matchup(
     episodes_per_seed: int = 1,
     deterministic: bool = False,
     progress: bool = True,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+    topology_sampling: str = "exhaustive",
 ) -> MatchupEvaluation:
-    """Evaluate independently sourced learned policies in the JAX simulator."""
+    """Evaluate independently sourced learned policies in the JAX simulator.
+
+    A configured bank defaults to exhaustive evaluation: every expanded
+    episode seed is run once on every topology. ``random`` retains the
+    training-style behavior where each reset samples the complete bank with
+    replacement.
+    """
     backend_name = _normalise_backend(backend)
     policies = {
         "blue": load_matchup_policy(blue_model, team="blue", backend=backend_name),
         "red": load_matchup_policy(red_model, team="red", backend=backend_name),
     }
+    if topology_path is None:
+        topology_paths: list[Path] = []
+    elif isinstance(topology_path, (str, Path)):
+        topology_paths = [Path(topology_path).expanduser().resolve()]
+    else:
+        topology_paths = [Path(path).expanduser().resolve() for path in topology_path]
+        if not topology_paths:
+            raise ValueError("topology_path must contain at least one snapshot path")
+    if topology_sampling not in ("exhaustive", "random"):
+        raise ValueError("topology_sampling must be 'exhaustive' or 'random'")
+
+    # Load and stack the bank once. Reconstructing an environment per episode
+    # becomes prohibitively expensive for exhaustive held-out evaluations.
+    env = make_joint_jax_env(
+        variant,
+        training_mode=False,
+        topology_path=topology_paths or None,
+    )
+
     blue_returns = []
     episode_seeds = []
-    total_episodes = len(seeds) * episodes_per_seed
+    episode_topology_paths: list[str | None] = []
+    if topology_paths and topology_sampling == "exhaustive":
+        topology_assignments: list[tuple[int | None, str | None]] = [
+            (index, str(path)) for index, path in enumerate(topology_paths)
+        ]
+        sampling_label = "exhaustive"
+    elif topology_paths:
+        topology_assignments = [(None, None)]
+        sampling_label = "random"
+    else:
+        topology_assignments = [(None, None)]
+        sampling_label = "generative"
+    total_episodes = len(topology_assignments) * len(seeds) * episodes_per_seed
     idx = 0
-    for base_seed in seeds:
-        for episode_idx in range(episodes_per_seed):
-            episode_seed = base_seed + episode_idx
-            score = run_matchup_episode(
-                policies,
-                variant=variant,
-                seed=episode_seed,
-                deterministic=deterministic,
-            )
-            blue_returns.append(score)
-            episode_seeds.append(episode_seed)
-            idx += 1
-            if progress:
-                print(f"  ep {idx}/{total_episodes} (seed={episode_seed}): Blue {score:.1f}", flush=True)
+    for topology_index, topology_label in topology_assignments:
+        for base_seed in seeds:
+            for episode_idx in range(episodes_per_seed):
+                episode_seed = base_seed + episode_idx
+                score = run_matchup_episode(
+                    policies,
+                    variant=variant,
+                    seed=episode_seed,
+                    deterministic=deterministic,
+                    env=env,
+                    topology_index=topology_index,
+                )
+                blue_returns.append(score)
+                episode_seeds.append(episode_seed)
+                episode_topology_paths.append(topology_label)
+                idx += 1
+                if progress:
+                    topology_text = f", topology={Path(topology_label).name}" if topology_label else ""
+                    print(
+                        f"  ep {idx}/{total_episodes} (seed={episode_seed}{topology_text}): Blue {score:.1f}",
+                        flush=True,
+                    )
     return MatchupEvaluation(
         blue_returns=blue_returns,
         red_returns=[-score for score in blue_returns],
         episode_seeds=episode_seeds,
         policies={team: policy.source for team, policy in policies.items()},
+        topology_paths=[str(path) for path in topology_paths],
+        episode_topology_paths=episode_topology_paths,
+        topology_sampling=sampling_label,
     )
 
 

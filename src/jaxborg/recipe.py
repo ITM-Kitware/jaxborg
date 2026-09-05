@@ -30,6 +30,7 @@ import yaml
 
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
+from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
@@ -120,6 +121,12 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     ev = recipe.get("eval") or {}
     if not isinstance(ev, dict):
         raise ValueError(f"{source}: eval must be a mapping")
+    topology_sampling = ev.get("topology_sampling", "exhaustive")
+    if topology_sampling not in ("exhaustive", "random"):
+        raise ValueError(
+            f"{source}: eval.topology_sampling must be 'exhaustive' or 'random', got {topology_sampling!r}"
+        )
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
     backend = ev.get("policy_backend")
     if backend is not None and backend not in POLICY_BACKENDS:
         raise ValueError(f"{source}: eval.policy_backend must be one of {POLICY_BACKENDS}, got {backend!r}")
@@ -364,18 +371,9 @@ def _project_mission_bank(train: dict[str, Any]) -> list[list[float]] | None:
     return out
 
 
-def _resolve_topology_bank(train: dict[str, Any]) -> tuple[Path, ...]:
-    """Resolve ``train.topology_bank`` paths against the repo root."""
-    bank = train.get("topology_bank") or ()
-    if isinstance(bank, (str, Path)):
-        bank = [bank]
-    resolved: list[Path] = []
-    for entry in bank:
-        p = Path(entry)
-        if not p.is_absolute():
-            p = REPO_ROOT / p
-        resolved.append(p)
-    return tuple(resolved)
+def _resolve_topology_bank(section: dict[str, Any], *, scope: str = "train") -> tuple[Path, ...]:
+    """Resolve or materialize one section's topology-bank declaration."""
+    return materialize_topology_bank(section, scope=scope, repo_root=REPO_ROOT)
 
 
 def _project_phase_boundary_bank(train: dict[str, Any]) -> list[list[int]] | None:
@@ -424,6 +422,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
     select Blue for this one-policy view and should use ``project_team_configs``
     to obtain both views.
     """
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
     teams = training_teams(recipe)
     selected_team = team or (teams[0] if len(teams) == 1 else "blue")
     resolved = team_recipe(recipe, selected_team)
@@ -467,7 +466,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "MLFLOW_ENABLED": True,
         "MISSION_BANK": _project_mission_bank(train),
         "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
-        "TOPOLOGY_BANK": _resolve_topology_bank(train),
+        "TOPOLOGY_BANK": _resolve_topology_bank(train, scope="train"),
         "PHASE_BOUNDARY_BANK": _project_phase_boundary_bank(train),
         "PHASE_REWARDS_BANK": _project_phase_rewards_bank(train),
     }
@@ -530,14 +529,24 @@ def project_team_configs(recipe: dict[str, Any], backend: str) -> dict[str, dict
     return {team: projector(recipe, team=team) for team in training_teams(recipe)}
 
 
-def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
+def project_eval(
+    recipe: dict[str, Any],
+    *,
+    materialize_topologies: bool = False,
+) -> dict[str, Any]:
     """Flatten the eval section of a recipe into a config dict.
 
     Keys returned:
         cia_metric    — only "resilience" today; default if unset
         EVAL_VARIANT  — resolved GameVariant
         scripted_red  — optional final trained-Blue scripted-opponent sweep
+        TOPOLOGY_BANK — resolved evaluation topology snapshot paths
+
+    ``materialize_topologies=True`` creates missing seed-generated snapshots.
+    The default remains read-only because metric-only consumers also use this
+    projection without constructing an evaluation environment.
     """
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
     ev = recipe.get("eval") or {}
     return {
         "cia_metric": ev.get("cia_metric", "resilience"),
@@ -545,6 +554,12 @@ def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
         "policy_backend": ev.get("policy_backend"),
         "policies": copy.deepcopy(ev.get("policies") or {}),
         "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
+        "TOPOLOGY_BANK": (
+            _resolve_topology_bank(ev, scope="eval")
+            if materialize_topologies
+            else expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT)
+        ),
+        "TOPOLOGY_SAMPLING": ev.get("topology_sampling", "exhaustive"),
     }
 
 

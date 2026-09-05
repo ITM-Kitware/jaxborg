@@ -200,14 +200,25 @@ def test_evaluate_matchup_expands_seeds_and_reports_zero_sum_returns(monkeypatch
             {"path": str(path), "source_run": f"run-{team}"},
         )
 
+    sentinel_env = object()
     episode_calls = []
 
-    def fake_episode(policies, *, variant, seed, deterministic=False):
-        episode_calls.append((set(policies), variant.name, seed, deterministic))
+    def fake_episode(
+        policies,
+        *,
+        variant,
+        seed,
+        deterministic=False,
+        topology_path=None,
+        env=None,
+        topology_index=None,
+    ):
+        episode_calls.append((set(policies), variant.name, seed, deterministic, env, topology_index))
         return float(seed)
 
     monkeypatch.setattr(matchup_runner, "load_matchup_policy", fake_load)
     monkeypatch.setattr(matchup_runner, "run_matchup_episode", fake_episode)
+    monkeypatch.setattr(matchup_runner, "make_joint_jax_env", lambda *args, **kwargs: sentinel_env)
 
     result = matchup_runner.evaluate_matchup(
         "blue-a.safetensors",
@@ -226,8 +237,148 @@ def test_evaluate_matchup_expands_seeds_and_reports_zero_sum_returns(monkeypatch
     ]
     assert [call[2] for call in episode_calls] == [10, 11, 20, 21]
     assert all(call[0] == {"blue", "red"} and call[3] for call in episode_calls)
+    assert all(call[4:] == (sentinel_env, None) for call in episode_calls)
     assert result.episode_seeds == [10, 11, 20, 21]
     assert result.blue_returns == [10.0, 11.0, 20.0, 21.0]
     assert result.red_returns == [-10.0, -11.0, -20.0, -21.0]
     assert result.policies["blue"]["source_run"] == "run-blue"
     assert result.policies["red"]["source_run"] == "run-red"
+    assert result.topology_paths == []
+    assert result.episode_topology_paths == [None, None, None, None]
+    assert result.topology_sampling == "generative"
+
+
+def test_evaluate_matchup_forwards_and_reports_held_out_topology_bank(tmp_path, monkeypatch):
+    bank = [tmp_path / "held-out-a.npz", tmp_path / "held-out-b.npz"]
+
+    def fake_load(path, *, team, backend):
+        return LoadedMatchupPolicy(team, "jax", None, None, {"path": str(path)})
+
+    sentinel_env = object()
+    factory_calls = []
+    episode_assignments = []
+
+    def fake_episode(
+        policies,
+        *,
+        variant,
+        seed,
+        deterministic=False,
+        topology_path=None,
+        env=None,
+        topology_index=None,
+    ):
+        episode_assignments.append((env, topology_index))
+        return 0.0
+
+    monkeypatch.setattr(matchup_runner, "load_matchup_policy", fake_load)
+    monkeypatch.setattr(matchup_runner, "run_matchup_episode", fake_episode)
+    monkeypatch.setattr(
+        matchup_runner,
+        "make_joint_jax_env",
+        lambda *args, **kwargs: factory_calls.append((args, kwargs)) or sentinel_env,
+    )
+
+    result = matchup_runner.evaluate_matchup(
+        "blue.safetensors",
+        "red.safetensors",
+        backend="jax",
+        variant=CC4_STOCK,
+        seeds=[7, 8],
+        progress=False,
+        topology_path=bank,
+    )
+
+    resolved_bank = [path.resolve() for path in bank]
+    assert len(factory_calls) == 1
+    assert factory_calls[0][1] == {"training_mode": False, "topology_path": resolved_bank}
+    assert episode_assignments == [
+        (sentinel_env, 0),
+        (sentinel_env, 0),
+        (sentinel_env, 1),
+        (sentinel_env, 1),
+    ]
+    assert result.topology_paths == [str(path) for path in resolved_bank]
+    assert result.episode_topology_paths == [
+        str(resolved_bank[0]),
+        str(resolved_bank[0]),
+        str(resolved_bank[1]),
+        str(resolved_bank[1]),
+    ]
+    assert result.topology_sampling == "exhaustive"
+    assert result.episode_seeds == [7, 8, 7, 8]
+
+
+def test_evaluate_matchup_can_sample_held_out_bank_randomly(tmp_path, monkeypatch):
+    bank = [tmp_path / "held-out-a.npz", tmp_path / "held-out-b.npz"]
+
+    monkeypatch.setattr(
+        matchup_runner,
+        "load_matchup_policy",
+        lambda path, *, team, backend: LoadedMatchupPolicy(team, "jax", None, None, {}),
+    )
+    sentinel_env = object()
+    factory_calls = []
+    episode_assignments = []
+
+    def fake_episode(
+        policies,
+        *,
+        variant,
+        seed,
+        deterministic=False,
+        topology_path=None,
+        env=None,
+        topology_index=None,
+    ):
+        episode_assignments.append((env, topology_index))
+        return 0.0
+
+    monkeypatch.setattr(matchup_runner, "run_matchup_episode", fake_episode)
+    monkeypatch.setattr(
+        matchup_runner,
+        "make_joint_jax_env",
+        lambda *args, **kwargs: factory_calls.append((args, kwargs)) or sentinel_env,
+    )
+    result = matchup_runner.evaluate_matchup(
+        "blue.safetensors",
+        "red.safetensors",
+        backend="jax",
+        variant=CC4_STOCK,
+        seeds=[7, 8],
+        progress=False,
+        topology_path=bank,
+        topology_sampling="random",
+    )
+
+    resolved_bank = [path.resolve() for path in bank]
+    assert len(factory_calls) == 1
+    assert factory_calls[0][1] == {"training_mode": False, "topology_path": resolved_bank}
+    assert episode_assignments == [(sentinel_env, None), (sentinel_env, None)]
+    assert result.episode_topology_paths == [None, None]
+    assert result.topology_sampling == "random"
+
+
+def test_run_matchup_episode_forwards_topology_bank_to_joint_env(monkeypatch):
+    policies = {
+        "blue": LoadedMatchupPolicy("blue", "jax", None, None, {}),
+        "red": LoadedMatchupPolicy("red", "jax", None, None, {}),
+    }
+    bank = [Path("held-out-a.npz"), Path("held-out-b.npz")]
+    captured = {}
+
+    def fake_env(variant, **kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("environment captured")
+
+    monkeypatch.setattr(matchup_runner, "make_joint_jax_env", fake_env)
+
+    with pytest.raises(RuntimeError, match="environment captured"):
+        matchup_runner.run_matchup_episode(
+            policies,
+            variant=CC4_STOCK,
+            seed=42,
+            topology_path=bank,
+        )
+
+    assert captured == {"training_mode": False, "topology_path": bank}

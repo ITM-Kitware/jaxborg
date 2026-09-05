@@ -180,6 +180,8 @@ resolved below `$JAXBORG_EXP_DIR/<algorithm>_<backend>/<experiment>/`, using
 the enclosing recipe's `algorithm`. See
 [`recipes/cotraining.yaml`](recipes/cotraining.yaml) and
 [`docs/training.md`](docs/training.md) for complete examples.
+For reproducible CAGE/JAX topology pools, disjoint train/test seed ranges, and
+held-out evaluation, see [`docs/topologies.md`](docs/topologies.md).
 
 Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and the dev transfer parity check — pre-sidecar checkpoints no longer load.
 

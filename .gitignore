@@ -19,6 +19,8 @@ slurm-*.out
 scripts/dev/catalog_status.json
 outputs/*
 
-docs/
+docs/*
+!docs/parity.md
+!docs/topologies.md
 exp/
 logs/

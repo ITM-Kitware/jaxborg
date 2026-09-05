@@ -83,6 +83,37 @@ def test_joint_checkpoint_eval_uses_one_bundle_and_ten_episodes(
     assert kwargs["episodes_per_seed"] == 10
     assert kwargs["deterministic"] is True
     assert kwargs["progress"] is False
+    assert kwargs["topology_path"] is None
+    assert kwargs["topology_sampling"] == "exhaustive"
+
+
+def test_joint_checkpoint_eval_uses_recipe_held_out_topologies(monkeypatch, tmp_path):
+    from jaxborg.evaluation import matchup_runner, training_checkpoint
+
+    bank = (tmp_path / "eval-10.npz", tmp_path / "eval-11.npz")
+    captured = {}
+
+    monkeypatch.setattr(
+        training_checkpoint,
+        "project_eval",
+        lambda recipe, **_kwargs: {"TOPOLOGY_BANK": bank, "TOPOLOGY_SAMPLING": "exhaustive"},
+    )
+
+    def fake_evaluate_matchup(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(blue_returns=[1.0], red_returns=[-1.0])
+
+    monkeypatch.setattr(matchup_runner, "evaluate_matchup", fake_evaluate_matchup)
+    evaluate_training_checkpoint(
+        "checkpoint.safetensors",
+        backend="jax",
+        recipe=_recipe(teams="both"),
+        seed=3,
+        episodes=1,
+    )
+
+    assert captured["topology_path"] == bank
+    assert captured["topology_sampling"] == "exhaustive"
 
 
 @pytest.mark.parametrize(

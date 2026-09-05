@@ -435,13 +435,19 @@ class ScenarioEnv(MultiAgentEnv):
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
 
-    def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
+    def _select_const(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array | None = None,
+    ) -> SimulatorConst:
         # Split the input key so each bank's index sample is independent of
         # (and reproducible from) the same input key — same input key →
         # same const + same triples + same boundaries + same crown-jewel.
         key_const, key_mission, key_pb, key_pr = jax.random.split(key, 4)
 
         if self._const_bank is None:
+            if topology_index is not None:
+                raise ValueError("topology_index requires a configured topology snapshot bank")
             const = build_topology(
                 key_const,
                 num_steps=self.num_steps,
@@ -449,7 +455,22 @@ class ScenarioEnv(MultiAgentEnv):
                 op_zone_min_servers=self.op_zone_min_servers,
             )
         else:
-            bank_idx = jax.random.randint(key_const, (), 0, self._const_bank_size)
+            if topology_index is None:
+                bank_idx = jax.random.randint(key_const, (), 0, self._const_bank_size)
+            else:
+                bank_idx = jnp.asarray(topology_index)
+                if bank_idx.ndim != 0 or not jnp.issubdtype(bank_idx.dtype, jnp.integer):
+                    raise TypeError("topology_index must be a scalar integer")
+                # Traced indices come from validated internal enumerations and
+                # cannot be converted to Python here. Concrete Python/JAX
+                # scalar callers receive an immediate range error.
+                if not isinstance(bank_idx, jax.core.Tracer):
+                    concrete_index = int(bank_idx)
+                    if not 0 <= concrete_index < self._const_bank_size:
+                        raise IndexError(
+                            f"topology_index must be in [0, {self._const_bank_size}), got {concrete_index}"
+                        )
+                bank_idx = bank_idx.astype(jnp.int32)
             const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)
             # Snapshots save the ``max_steps`` they were generated against
             # (e.g. 500), but the env's caller may want a different episode
@@ -489,6 +510,18 @@ class ScenarioEnv(MultiAgentEnv):
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         const = self._select_const(key)
+        return self._reset_from_const(const)
+
+    def reset_at_topology(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
+        """Reset on one exact snapshot-bank entry while retaining dynamic RNG."""
+        const = self._select_const(key, topology_index=topology_index)
+        return self._reset_from_const(const)
+
+    def _reset_from_const(self, const: SimulatorConst) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=jnp.array(const.initial_services),

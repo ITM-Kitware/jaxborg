@@ -26,6 +26,7 @@ import os
 import time
 from pathlib import Path
 from statistics import mean, stdev
+from typing import Sequence
 
 # Set persistent XLA compile cache BEFORE importing jax — non-interactive bash
 # (slurm --wrap, bash -c) doesn't source ~/.bashrc so we set this defensively
@@ -40,7 +41,6 @@ import numpy as np
 
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.evaluation.jax_env_factory import make_jax_env
-from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 from jaxborg.scenarios.cc4.game_variants import variant_for_red
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -55,16 +55,35 @@ def _git_commit() -> str:
         return ""
 
 
-def _build_eval_env(variant_name: str, *, resilience_roles: bool):
-    """Build a clean canonical-config eval env for the given red.
+def _resolve_topology_paths(
+    topology_path: str | Path | Sequence[str | Path] | None,
+) -> tuple[Path, ...]:
+    """Normalize an optional topology snapshot bank for evaluation."""
+    if topology_path is None:
+        return ()
+    if isinstance(topology_path, (str, Path)):
+        paths = (topology_path,)
+    else:
+        paths = tuple(topology_path)
+        if not paths:
+            raise ValueError("topology_path must contain at least one snapshot path")
+    return tuple(Path(path).expanduser().resolve() for path in paths)
 
-    Eval intentionally uses NO env-diversity banks — the held-out
-    generalization claim is "policy trained on diverse env handles a held-out
-    red on the canonical env." Topology is the canonical generative one;
-    mission profile is (1, 1, 1); phase boundaries are canonical.
+
+def _build_eval_env(
+    variant_name: str,
+    *,
+    resilience_roles: bool,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+):
+    """Build a clean eval env for the given red and optional topology bank.
+
+    Without ``topology_path``, topology remains generative for backwards
+    compatibility. Supplying one or more snapshots restricts resets to that
+    bank. Mission profile and phase boundaries remain canonical.
     """
     variant = variant_for_red(variant_name, resilience_roles=resilience_roles)
-    return variant, make_jax_env(variant)
+    return variant, make_jax_env(variant, topology_path=topology_path)
 
 
 def run_eval(
@@ -73,21 +92,53 @@ def run_eval(
     eval_red: str,
     episodes: int,
     seed: int,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+    topology_sampling: str | None = None,
 ) -> dict:
+    # jax_runner also contains the CybORG transfer evaluator; import lazily so
+    # this JAX-native script's CLI/help path does not require importing CybORG.
+    from jaxborg.evaluation.jax_runner import load_jax_checkpoint
+
     policy, params, recipe = load_jax_checkpoint(model_path)
+    if episodes < 1:
+        raise ValueError("episodes must be positive")
     train_red = recipe.get("train", {}).get("variant", "cc4_stock")
     # CIA-biased reds need resilience_roles=True for their selectors;
     # cc4_stock and fsm reds don't.
     resilience_roles = eval_red in ("cia_c", "cia_i", "cia_a", "resilience", "c", "i", "a")
-    variant, env = _build_eval_env(eval_red, resilience_roles=resilience_roles)
+    if topology_path is None:
+        from jaxborg.recipe import project_eval
+
+        projected_eval = project_eval(recipe, materialize_topologies=True)
+        topology_paths = tuple(projected_eval["TOPOLOGY_BANK"])
+        selected_sampling = topology_sampling or projected_eval["TOPOLOGY_SAMPLING"]
+    else:
+        topology_paths = _resolve_topology_paths(topology_path)
+        from jaxborg.recipe import REPO_ROOT
+        from jaxborg.topology_banks import validate_eval_topology_override
+
+        validate_eval_topology_override(recipe, topology_paths, repo_root=REPO_ROOT)
+        selected_sampling = topology_sampling or "exhaustive"
+    if selected_sampling not in ("exhaustive", "random"):
+        raise ValueError("topology_sampling must be 'exhaustive' or 'random'")
+    variant, env = _build_eval_env(
+        eval_red,
+        resilience_roles=resilience_roles,
+        topology_path=topology_paths or None,
+    )
 
     blue_agents = tuple(f"blue_{i}" for i in range(NUM_BLUE_AGENTS))
     num_steps = variant.num_steps
 
+    exhaustive = bool(topology_paths) and selected_sampling == "exhaustive"
+
     @jax.jit
-    def _run_one(key):
+    def _run_one(key, topology_index):
         reset_key, scan_key = jax.random.split(key)
-        obs, env_state = env.reset(reset_key)
+        if exhaustive:
+            obs, env_state = env.reset_at_topology(reset_key, topology_index)
+        else:
+            obs, env_state = env.reset(reset_key)
         mask = env.get_avail_actions(env_state)
 
         def step_fn(carry, _):
@@ -111,9 +162,19 @@ def run_eval(
         (_, _, _, _), per_step = jax.lax.scan(step_fn, (env_state, obs, mask, scan_key), None, length=num_steps)
         return per_step.sum()
 
-    keys = jax.random.split(jax.random.PRNGKey(seed), episodes)
+    topology_repetitions = len(topology_paths) if exhaustive else 1
+    total_episodes = episodes * topology_repetitions
+    episode_keys = jax.random.split(jax.random.PRNGKey(seed), episodes)
+    if exhaustive:
+        keys = jnp.tile(episode_keys, (len(topology_paths), 1))
+        topology_indices = jnp.repeat(jnp.arange(len(topology_paths), dtype=jnp.int32), episodes)
+        episode_topology_paths: list[str | None] = [str(path) for path in topology_paths for _ in range(episodes)]
+    else:
+        keys = episode_keys
+        topology_indices = jnp.zeros(total_episodes, dtype=jnp.int32)
+        episode_topology_paths = [None] * total_episodes
     t0 = time.perf_counter()
-    totals = jax.vmap(_run_one)(keys)
+    totals = jax.vmap(_run_one)(keys, topology_indices)
     totals.block_until_ready()
     wall = time.perf_counter() - t0
     rewards_list = [float(x) for x in np.asarray(totals)]
@@ -128,12 +189,17 @@ def run_eval(
         "train_variant": train_red,
         "seed": seed,
         "episodes": episodes,
+        "total_episodes": total_episodes,
+        "episodes_per_topology": episodes if exhaustive else None,
         "deterministic": True,
         "mean_reward": mean(rewards_list),
         "std_reward": stdev(rewards_list) if len(rewards_list) > 1 else 0.0,
         "n_episodes": len(rewards_list),
         "wall_time_s": wall,
         "git_commit": _git_commit(),
+        "topology_paths": [str(path) for path in topology_paths],
+        "topology_sampling": selected_sampling if topology_paths else "generative",
+        "per_episode_topology_paths": episode_topology_paths,
         "per_episode": rewards_list,
     }
 
@@ -143,11 +209,27 @@ def main():
     parser.add_argument("--model", required=True, help=".safetensors checkpoint with sibling recipe sidecar")
     # NOTE: "random" (CybORG's RandomSelectRedAgent) is not in the JAX red-
     # selector REGISTRY; route that through eval_recipe.py (CybORG eval).
+    parser.add_argument("--eval-red", required=True, choices=["fsm", "cia_c", "cia_i", "cia_a", "resilience", "sleep"])
     parser.add_argument(
-        "--eval-red", required=True, choices=["fsm", "cia_c", "cia_i", "cia_a", "resilience", "sleep"]
+        "--episodes",
+        type=int,
+        default=90,
+        help="Episodes per topology for exhaustive banks; otherwise total episodes",
     )
-    parser.add_argument("--episodes", type=int, default=90, help="Episodes (plan default 90 for stat power)")
     parser.add_argument("--seed", type=int, default=1000, help="PRNG seed for the rollout batch")
+    parser.add_argument(
+        "--topology-path",
+        action="extend",
+        nargs="+",
+        default=None,
+        help="Topology snapshot(s) to sample during evaluation; may be repeated for a held-out bank",
+    )
+    parser.add_argument(
+        "--topology-sampling",
+        choices=("exhaustive", "random"),
+        default=None,
+        help="Bank assignment (default: checkpoint recipe value or exhaustive)",
+    )
     parser.add_argument("--output", type=str, default=None, help="Override result jsonl path")
     args = parser.parse_args()
 
@@ -157,12 +239,16 @@ def main():
 
     print(f"=== JAX eval: {model_path.name} vs {args.eval_red} ({args.episodes} eps, seed {args.seed}) ===", flush=True)
     print(f"JAX backend: {jax.default_backend()} ({jax.devices()})", flush=True)
+    if args.topology_path:
+        print(f"Topology bank: {len(args.topology_path)} snapshots", flush=True)
 
     row = run_eval(
         model_path=model_path,
         eval_red=args.eval_red,
         episodes=args.episodes,
         seed=args.seed,
+        topology_path=args.topology_path,
+        topology_sampling=args.topology_sampling,
     )
     eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{args.seed}_{args.eval_red}"
     row["eval_id"] = eval_id

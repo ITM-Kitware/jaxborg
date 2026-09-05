@@ -258,15 +258,19 @@ def make_joint_train(
     base = team_configs[trainable_teams[0]]
     num_envs = int(base["NUM_ENVS"])
     num_steps = int(base["NUM_STEPS"])
+    topology_bank = tuple(base.get("TOPOLOGY_BANK") or ())
     for team, cfg in team_configs.items():
         if int(cfg["NUM_ENVS"]) != num_envs or int(cfg["NUM_STEPS"]) != num_steps:
             raise ValueError(f"{team} must share NUM_ENVS and NUM_STEPS in a joint rollout")
+        if tuple(cfg.get("TOPOLOGY_BANK") or ()) != topology_bank:
+            raise ValueError(f"{team} must share TOPOLOGY_BANK in a joint rollout")
         cfg["NUM_UPDATES"] = int(cfg["TOTAL_TIMESTEPS"]) // (num_envs * num_steps)
 
     env = make_joint_jax_env(
         base["TRAIN_VARIANT"],
         topology_mode=base.get("TOPOLOGY_MODE", "generative"),
         training_mode=bool(base.get("TRAINING_MODE", True)),
+        topology_path=list(topology_bank) if topology_bank else None,
     )
     agents = {
         "blue": tuple(env.blue_agents),
