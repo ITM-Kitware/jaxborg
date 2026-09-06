@@ -18,7 +18,7 @@ algorithm: ippo
 mlflow:
   checkpoint_eval:
     every_steps: 150000  # Evaluate every 5% of this 3M-step run.
-    episodes: 10  # Episodes evaluated from each frozen checkpoint.
+    episodes_per_seed: 10  # Episodes generated from the checkpoint evaluation seed.
     seed: null  # null uses the training seed + 100000 for paired curves.
     deterministic: false  # false samples actions; true takes argmax actions.
 
@@ -87,6 +87,17 @@ eval:
   # exhaustive (default) runs every requested dynamics seed on every topology;
   # random keeps the requested episode count and samples the bank with replacement.
   topology_sampling: exhaustive
+
+  # Optional ordered final-checkpoint evaluation pipeline. Each script runs in
+  # a fresh CPU process and receives --model <exact-final-model> automatically.
+  # Results from the built-in scripts go to $JAXBORG_EXP_DIR/eval/.
+  # after_training:
+  #   - name: stochastic-reds
+  #     script: scripts/eval/eval_scripted_reds.py
+  #     args: [--reds, fsm, cia_c, --seeds, 1000-1099, --workers, 8]
+  #   - name: deterministic-reds
+  #     script: scripts/eval/eval_scripted_reds.py
+  #     args: [--reds, fsm, cia_c, --seeds, 1000-1099, --deterministic, --workers, 8]
 
   # Optional held-out JAX evaluation pool. It never falls back to the training
   # pool. Keep its paths and (generator, source-seed) pairs disjoint from train.

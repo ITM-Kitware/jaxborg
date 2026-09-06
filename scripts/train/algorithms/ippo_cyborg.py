@@ -587,7 +587,7 @@ def train_legacy(args, recipe, cfg):
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {total_steps:,}; "
-                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                        f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
                         flush=True,
                     )
                     try:
@@ -595,12 +595,12 @@ def train_legacy(args, recipe, cfg):
                             checkpoint_path,
                             sidecar_path,
                             env_steps=total_steps,
-                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                            evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
                                 checkpoint_path,
                                 backend="cyborg",
                                 recipe=recipe,
                                 seed=args.seed,
-                                episodes=episodes,
+                                episodes_per_seed=episodes_per_seed,
                             ),
                         )
                     finally:
@@ -677,9 +677,9 @@ def train_legacy(args, recipe, cfg):
     print(f"\nDone in {elapsed:.1f}s ({elapsed / 3600:.1f}h). Final ep reward: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
     if total_steps >= cfg["total_timesteps"]:
-        from jaxborg.evaluation.scripted_red import run_configured_after_training
+        from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
-        run_configured_after_training(model_path, recipe)
+        run_configured_evaluations_after_training(model_path, recipe)
 
 
 @dataclass
@@ -1246,7 +1246,7 @@ def train_joint(args, recipe, cfg):
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {total_steps:,}; "
-                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                        f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
                         flush=True,
                     )
                     try:
@@ -1254,12 +1254,12 @@ def train_joint(args, recipe, cfg):
                             checkpoint_path,
                             sidecar_path,
                             env_steps=total_steps,
-                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                            evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
                                 checkpoint_path,
                                 backend="cyborg",
                                 recipe=recipe,
                                 seed=args.seed,
-                                episodes=episodes,
+                                episodes_per_seed=episodes_per_seed,
                             ),
                         )
                     finally:
@@ -1323,9 +1323,9 @@ def train_joint(args, recipe, cfg):
     metrics_file.close()
     print(f"\nDone in {elapsed:.1f}s. Saved joint bundle to: {model_path}")
     if total_steps >= cfg["total_timesteps"]:
-        from jaxborg.evaluation.scripted_red import run_configured_after_training
+        from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
-        run_configured_after_training(model_path, recipe)
+        run_configured_evaluations_after_training(model_path, recipe)
 
 
 def train(args, recipe, cfg):

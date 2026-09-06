@@ -36,7 +36,7 @@ class CheckpointEvalSettings:
     """Validated periodic checkpoint-evaluation settings from a recipe."""
 
     every_steps: int = 0
-    episodes: int = 10
+    episodes_per_seed: int = 10
     seed: int | None = None
     deterministic: bool = False
 
@@ -45,10 +45,10 @@ class CheckpointEvalSettings:
             raise ValueError("mlflow.checkpoint_eval.every_steps must be an integer")
         if self.every_steps < 0:
             raise ValueError("mlflow.checkpoint_eval.every_steps must be non-negative")
-        if isinstance(self.episodes, bool) or not isinstance(self.episodes, int):
-            raise ValueError("mlflow.checkpoint_eval.episodes must be an integer")
-        if self.episodes < 1:
-            raise ValueError("mlflow.checkpoint_eval.episodes must be positive")
+        if isinstance(self.episodes_per_seed, bool) or not isinstance(self.episodes_per_seed, int):
+            raise ValueError("mlflow.checkpoint_eval.episodes_per_seed must be an integer")
+        if self.episodes_per_seed < 1:
+            raise ValueError("mlflow.checkpoint_eval.episodes_per_seed must be positive")
         if self.seed is not None and (isinstance(self.seed, bool) or not isinstance(self.seed, int)):
             raise ValueError("mlflow.checkpoint_eval.seed must be an integer or null")
         if self.seed is not None and self.seed < 0:
@@ -68,12 +68,20 @@ class CheckpointEvalSettings:
             eval_config = {}
         if not isinstance(eval_config, Mapping):
             raise ValueError("mlflow.checkpoint_eval must be a mapping")
+        if "episodes_per_seed" in eval_config and "episodes" in eval_config:
+            raise ValueError("mlflow.checkpoint_eval may set episodes_per_seed or legacy episodes, not both")
         return cls(
             every_steps=eval_config.get("every_steps", 0),
-            episodes=eval_config.get("episodes", 10),
+            episodes_per_seed=eval_config.get("episodes_per_seed", eval_config.get("episodes", 10)),
             seed=eval_config.get("seed"),
             deterministic=eval_config.get("deterministic", False),
         )
+
+    @property
+    def episodes(self) -> int:
+        """Deprecated compatibility alias for callers using the old field name."""
+
+        return self.episodes_per_seed
 
 
 def checkpoint_eval_due(
@@ -147,7 +155,7 @@ class MlflowCheckpointEvaluator:
         self._mlflow.log_artifact(str(checkpoint_path), artifact_path=artifact_path)
         self._mlflow.log_artifact(str(sidecar_path), artifact_path=artifact_path)
 
-        raw_means = evaluate_fn(self.settings.episodes)
+        raw_means = evaluate_fn(self.settings.episodes_per_seed)
         if not isinstance(raw_means, Mapping):
             raise ValueError("evaluate_fn must return a mapping of team names to mean rewards")
 

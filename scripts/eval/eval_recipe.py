@@ -16,11 +16,11 @@ Single entrypoint for both trained backends:
 Usage:
     uv run python scripts/eval/eval_recipe.py \
         --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
-        --episodes 10 --seeds 42-51
+        --episodes-per-seed 10 --seeds 42-51
 
     uv run python scripts/eval/eval_recipe.py \
         --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-        --episodes 10 --seeds 42-51
+        --episodes-per-seed 10 --seeds 42-51
 """
 
 # ruff: noqa: E402
@@ -28,6 +28,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -42,6 +43,15 @@ from jaxborg.checkpoint import read_sidecar
 from jaxborg.mlflow_setup import attach_eval_metrics
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
+_EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _normalise_eval_name(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    if not _EVAL_NAME_PATTERN.fullmatch(value):
+        raise ValueError("evaluation name may contain only letters, numbers, '.', '_' and '-'")
+    return value
 
 
 def _parse_seeds(spec: str) -> list[int]:
@@ -83,7 +93,14 @@ def main():
         required=True,
         help="Path to model_<tag>.pt (CybORG-trained) or .safetensors (JAX-trained)",
     )
-    parser.add_argument("--episodes", type=int, default=10, help="Episodes per seed")
+    parser.add_argument(
+        "--episodes-per-seed",
+        "--episodes",
+        dest="episodes_per_seed",
+        type=int,
+        default=10,
+        help="Episodes generated from each seed (--episodes is a deprecated alias)",
+    )
     parser.add_argument("--seeds", type=str, default="42-51", help="e.g. '42-51' or '42,43,44'")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument(
@@ -93,6 +110,11 @@ def main():
         help="Parallel rollout workers (1 = single process). Default: cpu_count() - 2.",
     )
     parser.add_argument("--output", type=str, default=None, help="Override result jsonl path")
+    parser.add_argument(
+        "--name",
+        default=os.environ.get("JAXBORG_EVAL_NAME"),
+        help="Optional evaluation name used in the result filename and MLflow keys",
+    )
     parser.add_argument(
         "--eval-red",
         type=str,
@@ -112,6 +134,7 @@ def main():
 
     trained_backend = _detect_trained_backend(model_path)
     seeds = _parse_seeds(args.seeds)
+    eval_name = _normalise_eval_name(args.name)
 
     if trained_backend == "cyborg":
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
@@ -124,7 +147,7 @@ def main():
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
-            f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
+            f"eps/seed={args.episodes_per_seed} variant={variant.name} workers={args.workers}",
             flush=True,
         )
 
@@ -133,7 +156,7 @@ def main():
             model_path,
             variant=variant,
             seeds=seeds,
-            episodes_per_seed=args.episodes,
+            episodes_per_seed=args.episodes_per_seed,
             deterministic=args.deterministic,
             workers=args.workers,
         )
@@ -152,7 +175,7 @@ def main():
             model_path,
             variant=variant,
             seeds=seeds,
-            episodes_per_seed=args.episodes,
+            episodes_per_seed=args.episodes_per_seed,
             deterministic=args.deterministic,
             workers=args.workers,
         )
@@ -160,17 +183,18 @@ def main():
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=jax arch={recipe['arch']['name']} seeds={seeds} "
-            f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
+            f"eps/seed={args.episodes_per_seed} variant={variant.name} workers={args.workers}",
             flush=True,
         )
 
     m = mean(rewards)
     s = stdev(rewards) if len(rewards) > 1 else 0.0
 
-    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{seeds[0]}"
+    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}_{seeds[0]}"
     train_run_id = recipe.get("run", {}).get("train_run_id")
     row = {
         "eval_id": eval_id,
+        "eval_name": eval_name,
         "model": str(model_path),
         "recipe_name": recipe.get("meta", {}).get("name", ""),
         "recipe_path": recipe.get("meta", {}).get("source_path") or recipe.get("__source_path__", ""),
@@ -179,7 +203,7 @@ def main():
         "variant": variant.name,
         "red_agent": variant.red_agent,
         "seeds": seeds,
-        "episodes_per_seed": args.episodes,
+        "episodes_per_seed": args.episodes_per_seed,
         "stochastic": not args.deterministic,
         "mean_reward": m,
         "std_reward": s,
@@ -196,19 +220,21 @@ def main():
     if args.output:
         out_path = Path(args.output)
     else:
-        out_path = out_dir / f"{row['recipe_name']}_{model_path.stem}_{eval_id}.jsonl"
+        name = f"_{eval_name}" if eval_name else ""
+        out_path = out_dir / f"{row['recipe_name']}_{model_path.stem}{name}_{eval_id}.jsonl"
     out_path.write_text(json.dumps(row, indent=2) + "\n")
     print(f"\nmean: {m:.2f} ± {s:.2f} (n={len(rewards)})", flush=True)
     print(f"wrote: {out_path}", flush=True)
 
     if train_run_id:
         try:
+            prefix = f"eval.after_training.{eval_name}.cyborg" if eval_name else "eval.cyborg"
             attach_eval_metrics(
                 train_run_id,
                 {
-                    "eval.cyborg.mean": m,
-                    "eval.cyborg.std": s,
-                    "eval.cyborg.episodes": len(rewards),
+                    f"{prefix}.mean": m,
+                    f"{prefix}.std": s,
+                    f"{prefix}.episodes": len(rewards),
                 },
             )
             print(f"attached eval metrics to MLflow run {train_run_id}", flush=True)

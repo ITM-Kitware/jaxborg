@@ -109,7 +109,7 @@ def test_joint_checkpoint_eval_uses_recipe_held_out_topologies(monkeypatch, tmp_
         backend="jax",
         recipe=_recipe(teams="both"),
         seed=3,
-        episodes=1,
+        episodes_per_seed=1,
     )
 
     assert captured["topology_path"] == bank
@@ -211,16 +211,37 @@ def test_legacy_cyborg_checkpoint_eval_dispatches_to_cyborg_runner(monkeypatch):
     assert kwargs["progress"] is False
 
 
-@pytest.mark.parametrize("episodes", [0, -1])
-def test_checkpoint_eval_rejects_non_positive_episode_count(episodes):
-    with pytest.raises(ValueError, match="episodes must be positive"):
+@pytest.mark.parametrize("episodes_per_seed", [0, -1])
+def test_checkpoint_eval_rejects_non_positive_episode_count(episodes_per_seed):
+    with pytest.raises(ValueError, match="episodes_per_seed must be positive"):
         evaluate_training_checkpoint(
             "checkpoint.safetensors",
             backend="jax",
             recipe=_recipe(),
             seed=1,
-            episodes=episodes,
+            episodes_per_seed=episodes_per_seed,
         )
+
+
+def test_checkpoint_eval_accepts_legacy_episodes_keyword(monkeypatch):
+    from jaxborg.evaluation import matchup_runner
+
+    captured = {}
+
+    def fake_evaluate(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(blue_returns=[1.0], red_returns=[-1.0])
+
+    monkeypatch.setattr(matchup_runner, "evaluate_matchup", fake_evaluate)
+    evaluate_training_checkpoint(
+        "checkpoint.safetensors",
+        backend="jax",
+        recipe=_recipe(teams="both"),
+        seed=1,
+        episodes=2,
+    )
+
+    assert captured["episodes_per_seed"] == 2
 
 
 def test_checkpoint_eval_rejects_unknown_backend():

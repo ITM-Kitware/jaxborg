@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -24,6 +25,15 @@ from typing import Any
 DEFAULT_SCRIPTED_REDS = ("fsm", "cia_c", "cia_i", "cia_a")
 _SUPPORTED_SCRIPTED_REDS = frozenset(DEFAULT_SCRIPTED_REDS)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+_EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _normalise_eval_name(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or not _EVAL_NAME_PATTERN.fullmatch(value):
+        raise ValueError("evaluation name may contain only letters, numbers, '.', '_' and '-'")
+    return value
 
 
 def parse_seeds(value: str | int | Sequence[int]) -> tuple[int, ...]:
@@ -239,6 +249,7 @@ def evaluate_scripted_reds(
     deterministic: bool = False,
     workers: int = 1,
     progress: bool = False,
+    eval_name: str | None = None,
     cell_evaluator: Callable[..., tuple[list[float], list[int]]] | None = None,
 ) -> list[dict[str, Any]]:
     """Evaluate trained Blue against each requested scripted Red in CybORG."""
@@ -250,6 +261,7 @@ def evaluate_scripted_reds(
         raise FileNotFoundError(f"model not found: {model_path}")
     normalised_reds = _normalise_reds(reds)
     parsed_seeds = parse_seeds(seeds)
+    eval_name = _normalise_eval_name(eval_name)
     settings = ScriptedRedEvalSettings(
         reds=normalised_reds,
         seeds=parsed_seeds,
@@ -293,6 +305,7 @@ def evaluate_scripted_reds(
         reward_std = stdev(rewards) if len(rewards) > 1 else 0.0
         row = {
             "eval_id": f"{timestamp}_{nonce}_{red}",
+            "eval_name": eval_name,
             "suite": "scripted_red",
             "model": str(model_path),
             "policy_team": "blue",
@@ -327,8 +340,11 @@ def _default_output_path(rows: Sequence[Mapping[str, Any]]) -> Path:
     exp_dir = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).expanduser().resolve()
     first = rows[0]
     eval_prefix = str(first["eval_id"]).rsplit("_", 1)[0]
+    name = f"_{first['eval_name']}" if first.get("eval_name") else ""
     return (
-        exp_dir / "eval" / (f"{first['recipe_name']}_{Path(str(first['model'])).stem}_scripted_red_{eval_prefix}.jsonl")
+        exp_dir
+        / "eval"
+        / (f"{first['recipe_name']}_{Path(str(first['model'])).stem}_scripted_red{name}_{eval_prefix}.jsonl")
     )
 
 
@@ -351,7 +367,12 @@ def attach_results_to_mlflow(rows: Sequence[Mapping[str, Any]]) -> None:
         return
     metrics: dict[str, float] = {}
     for row in rows:
-        prefix = f"eval.scripted_red.{row['eval_red']}.blue"
+        eval_name = row.get("eval_name")
+        prefix = (
+            f"eval.after_training.{eval_name}.scripted_red.{row['eval_red']}.blue"
+            if eval_name
+            else f"eval.scripted_red.{row['eval_red']}.blue"
+        )
         metrics[f"{prefix}.mean_reward"] = float(row["mean_reward"])
         metrics[f"{prefix}.std_reward"] = float(row["std_reward"])
         metrics[f"{prefix}.episodes"] = float(row["n_episodes"])
@@ -431,6 +452,11 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--deterministic", action="store_true", help="Use argmax Blue actions (debugging)")
     parser.add_argument("--progress", action="store_true", help="Print every episode")
+    parser.add_argument(
+        "--name",
+        default=os.environ.get("JAXBORG_EVAL_NAME"),
+        help="Optional evaluation name used in result files and MLflow metric keys",
+    )
     parser.add_argument("--output", help="Override aggregate JSONL path")
     parser.add_argument("--no-mlflow", action="store_true", help="Do not attach opponent-qualified metrics")
     args = parser.parse_args(argv)
@@ -443,6 +469,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         deterministic=args.deterministic,
         workers=args.workers,
         progress=args.progress,
+        eval_name=args.name,
     )
     output_path = write_results(rows, args.output)
     print(f"Wrote scripted-Red sweep: {output_path}", flush=True)

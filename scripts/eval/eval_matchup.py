@@ -3,6 +3,9 @@
 The existing ``eval_recipe.py --model`` command remains the contract
 evaluation for one learned Blue policy against scripted Red inside CybORG.
 This entry point is specifically for learned-vs-learned matchups.
+
+``--episodes-per-seed`` is the canonical rollout-count option. The older
+``--episodes`` spelling remains as a command-line compatibility alias.
 """
 
 # ruff: noqa: E402
@@ -13,6 +16,7 @@ import argparse
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -29,6 +33,15 @@ from jaxborg.recipe import eval_variant, load, project_eval, resolve_eval_polici
 from jaxborg.topology_banks import validate_eval_topology_override
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
+_EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def _normalise_eval_name(value: str | None) -> str | None:
+    if value in (None, ""):
+        return None
+    if not _EVAL_NAME_PATTERN.fullmatch(value):
+        raise ValueError("evaluation name may contain only letters, numbers, '.', '_' and '-'")
+    return value
 
 
 def _parse_seeds(spec: str) -> list[int]:
@@ -70,7 +83,14 @@ def main() -> None:
     parser.add_argument("--blue-experiment", default=None)
     parser.add_argument("--red-path", "--red-model", dest="red_path", default=None)
     parser.add_argument("--red-experiment", default=None)
-    parser.add_argument("--episodes", type=int, default=10, help="Episodes per seed")
+    parser.add_argument(
+        "--episodes-per-seed",
+        "--episodes",
+        dest="episodes_per_seed",
+        type=int,
+        default=10,
+        help="Episodes generated from each seed (--episodes is a deprecated alias)",
+    )
     parser.add_argument("--seeds", default="42-51")
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument(
@@ -86,6 +106,11 @@ def main() -> None:
         help="Bank assignment (default: recipe value or exhaustive)",
     )
     parser.add_argument("--output", default=None)
+    parser.add_argument(
+        "--name",
+        default=os.environ.get("JAXBORG_EVAL_NAME"),
+        help="Optional evaluation name used in the result filename and MLflow keys",
+    )
     args = parser.parse_args()
 
     recipe = copy.deepcopy(load(args.recipe))
@@ -109,6 +134,7 @@ def main() -> None:
     model_paths = resolve_eval_policies(recipe, exp_dir=EXP_DIR)
     variant = eval_variant(recipe)
     seeds = _parse_seeds(args.seeds)
+    eval_name = _normalise_eval_name(args.name)
     if args.topology_path:
         topology_paths = [Path(path).expanduser().resolve() for path in args.topology_path]
         validate_eval_topology_override(recipe, topology_paths, repo_root=_REPO_ROOT)
@@ -117,7 +143,7 @@ def main() -> None:
     topology_sampling = args.topology_sampling or eval_cfg.get("topology_sampling", "exhaustive")
 
     print(
-        f"JAX matchup: backend={backend} variant={variant.name} seeds={seeds} episodes/seed={args.episodes}",
+        f"JAX matchup: backend={backend} variant={variant.name} seeds={seeds} episodes/seed={args.episodes_per_seed}",
         flush=True,
     )
     print(f"  Blue: {model_paths['blue']}", flush=True)
@@ -134,7 +160,7 @@ def main() -> None:
         backend=backend,
         variant=variant,
         seeds=seeds,
-        episodes_per_seed=args.episodes,
+        episodes_per_seed=args.episodes_per_seed,
         deterministic=args.deterministic,
         topology_path=topology_paths,
         topology_sampling=topology_sampling,
@@ -144,9 +170,10 @@ def main() -> None:
     blue_std = stdev(result.blue_returns) if len(result.blue_returns) > 1 else 0.0
     red_mean = -blue_mean
     red_std = blue_std
-    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{seeds[0]}"
+    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}_{seeds[0]}"
     row = {
         "eval_id": eval_id,
+        "eval_name": eval_name,
         "recipe_name": recipe.get("meta", {}).get("name", ""),
         "recipe_path": recipe.get("__source_path__", ""),
         "eval_env": "jax_joint",
@@ -154,8 +181,10 @@ def main() -> None:
         "policy_backend": backend,
         "policies": result.policies,
         "seeds": seeds,
-        "episodes_per_seed": args.episodes,
-        "episodes_per_topology": (len(seeds) * args.episodes if result.topology_sampling == "exhaustive" else None),
+        "episodes_per_seed": args.episodes_per_seed,
+        "episodes_per_topology": (
+            len(seeds) * args.episodes_per_seed if result.topology_sampling == "exhaustive" else None
+        ),
         "total_episodes": len(result.blue_returns),
         "stochastic": not args.deterministic,
         "blue_mean_return": blue_mean,
@@ -176,10 +205,11 @@ def main() -> None:
         "per_episode_topology_paths": result.episode_topology_paths,
     }
 
+    name = f"_{eval_name}" if eval_name else ""
     output = (
         Path(args.output).expanduser()
         if args.output
-        else EXP_DIR / "eval" / f"{row['recipe_name']}_matchup_{eval_id}.jsonl"
+        else EXP_DIR / "eval" / f"{row['recipe_name']}_matchup{name}_{eval_id}.jsonl"
     )
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(row, indent=2) + "\n")
@@ -192,12 +222,13 @@ def main() -> None:
     run_ids = {source.get("train_run_id") for source in result.policies.values() if source.get("train_run_id")}
     for run_id in run_ids:
         try:
+            prefix = f"eval.after_training.{eval_name}.jax_matchup" if eval_name else "eval.jax_matchup"
             attach_eval_metrics(
                 run_id,
                 {
-                    "eval.jax_matchup.blue_mean": blue_mean,
-                    "eval.jax_matchup.red_mean": red_mean,
-                    "eval.jax_matchup.episodes": len(result.blue_returns),
+                    f"{prefix}.blue_mean": blue_mean,
+                    f"{prefix}.red_mean": red_mean,
+                    f"{prefix}.episodes": len(result.blue_returns),
                 },
             )
         except Exception as exc:

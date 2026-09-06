@@ -147,9 +147,17 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
 
     # Keep post-training evaluation failures discoverable at recipe-load time,
     # before an hours-long training run starts.
+    from jaxborg.evaluation.post_training import PostTrainingEvalSettings
     from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
 
     scripted_red = ScriptedRedEvalSettings.from_recipe(recipe)
+    post_training = PostTrainingEvalSettings.from_recipe(recipe)
+    for evaluation in post_training.evaluations:
+        evaluation.resolve_script()
+    if scripted_red.after_training and post_training.evaluations:
+        raise ValueError(
+            f"{source}: use either eval.after_training or legacy eval.scripted_red.after_training, not both"
+        )
     if scripted_red.after_training and mode == "red":
         raise ValueError(f"{source}: eval.scripted_red.after_training requires Blue to be trainable")
 
@@ -539,7 +547,8 @@ def project_eval(
     Keys returned:
         cia_metric    — only "resilience" today; default if unset
         EVAL_VARIANT  — resolved GameVariant
-        scripted_red  — optional final trained-Blue scripted-opponent sweep
+        scripted_red  — optional legacy trained-Blue scripted-opponent sweep
+        after_training — ordered final-checkpoint evaluation scripts
         TOPOLOGY_BANK — resolved evaluation topology snapshot paths
 
     ``materialize_topologies=True`` creates missing seed-generated snapshots.
@@ -554,6 +563,7 @@ def project_eval(
         "policy_backend": ev.get("policy_backend"),
         "policies": copy.deepcopy(ev.get("policies") or {}),
         "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
+        "after_training": copy.deepcopy(ev.get("after_training") or []),
         "TOPOLOGY_BANK": (
             _resolve_topology_bank(ev, scope="eval")
             if materialize_topologies
