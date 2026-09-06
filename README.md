@@ -97,11 +97,11 @@ uv run pytest -m ""      # everything
 # Legacy contract evaluation: learned Blue vs scripted Red in CybORG
 uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
-    --episodes 1 --seeds 42-141
+    --episodes-per-seed 1 --seeds 42-141
 
 uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-    --episodes 1 --seeds 42-141
+    --episodes-per-seed 1 --seeds 42-141
 
 # Manual/re-run sweep: trained Blue vs FSM and all three CIA Red agents.
 # Works for either final .safetensors or .pt bundle.
@@ -109,11 +109,17 @@ JAX_PLATFORMS=cpu uv run python scripts/eval/eval_scripted_reds.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --seeds 1000-1099 --episodes-per-seed 1 --workers 8
 
+# Plot all standardized JSONL evaluation results (prints a table too).
+JAXBORG_EXP_DIR=./jaxborg-exp uv run python scripts/eval/plot_results.py
+
+# View training and evaluation metrics tracked in MLflow.
+JAXBORG_EXP_DIR=./jaxborg-exp ./scripts/train/view_mlflow.sh
+
 # Learned Blue from one run vs learned Red from another, in JAX CC4
 uv run python scripts/eval/eval_matchup.py \
     --recipe my_matchup --policy-backend jax \
     --blue-experiment blue_seed42 --red-experiment red_seed42 \
-    --episodes 10 --seeds 42-51
+    --episodes-per-seed 10 --seeds 42-51
 
 # Dev parity transfer check: independent rollouts on both engines + TOST
 JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
@@ -121,7 +127,7 @@ JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
     --episodes 100
 ```
 
-Training output goes to `$JAXBORG_EXP_DIR` (defaults to `../jaxborg-exp/`).
+Training output goes to `$JAXBORG_EXP_DIR` (the launcher defaults to `./jaxborg-exp/`).
 
 ## Recipes
 
@@ -133,7 +139,7 @@ algorithm: ippo
 mlflow:
   checkpoint_eval:
     every_steps: 0              # 0 disables checkpoint evaluation
-    episodes: 10
+    episodes_per_seed: 10
     seed: null                  # defaults to the training seed + 100000
     deterministic: false
 core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
@@ -146,7 +152,8 @@ cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
 MLflow checkpoint evaluation works in both trainers. At the first completed
 update that crosses each `every_steps` boundary, and again at the final update,
 the trainer freezes the exact portable checkpoint and recipe sidecar as MLflow
-artifacts, evaluates that checkpoint for `episodes` episodes, and logs
+artifacts, evaluates that checkpoint for `episodes_per_seed` episodes generated
+from its configured evaluation seed, and logs
 `eval.checkpoint.blue.mean_reward` and/or
 `eval.checkpoint.red.mean_reward` at the checkpoint's environment step. MLflow
 plots those scalar histories automatically. Only trained teams are evaluated:
@@ -155,16 +162,54 @@ the corresponding single curve. For co-training this periodic curve is the
 learned Blue-vs-learned Red matchup; it is separate from the final
 Blue-vs-scripted-Red sweep.
 
-`recipes/cotraining.yaml` also enables `eval.scripted_red.after_training`.
-After training succeeds, each trainer passes its exact final model path to a
-fresh CPU evaluator. The evaluator selects trained Blue from the joint bundle,
-ignores bundled learned Red, and evaluates Blue against `fsm`, `cia_c`,
-`cia_i`, and `cia_a` in CybORG. Results go to one JSONL suite under
-`$JAXBORG_EXP_DIR/eval/` and to red-qualified MLflow keys under
-`eval.scripted_red.<opponent>.blue.*`. A failed required sweep makes the
-overall command fail after leaving the final model safely on disk. Set
-`JAXBORG_SKIP_SCRIPTED_RED_EVAL=1` only for an intentional training-only smoke
-run; the sweep can then be run manually with `eval_scripted_reds.py`.
+`recipes/cotraining.yaml` uses `eval.after_training` to run two final checks in
+order: learned Blue versus its co-trained PPO Red in the JAX joint environment,
+then learned Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in CybORG. Both
+jobs use the exact final bundle. Increase their seed ranges to `1000-1099` for
+a 100-episode study. A failed required job makes the overall command fail after
+leaving the model and evaluation manifest safely on disk.
+
+For more than one final-checkpoint evaluation, use the ordered
+`eval.after_training` list. Every item launches a fresh Python process after
+the durable model and sidecar have been saved; the exact model is supplied as
+`--model` automatically. For example, this runs a stochastic comparison and
+then an argmax comparison:
+
+```yaml
+eval:
+  after_training:
+    - name: stochastic-reds
+      script: scripts/eval/eval_scripted_reds.py
+      args: [--reds, fsm, cia_c, --seeds, 1000-1099, --workers, 8]
+    - name: deterministic-reds
+      script: scripts/eval/eval_scripted_reds.py
+      args: [--reds, fsm, cia_c, --seeds, 1000-1099, --deterministic, --workers, 8]
+```
+
+Entries execute in list order and are required by default. Set
+`required: false` to record a failure and continue to the next evaluation, or
+`model_arg: --checkpoint` for a script with a different checkpoint flag.
+Arguments may use `{model}`, `{recipe}`, `{backend}`, `{exp_dir}`, `{eval_dir}`, and
+`{name}` placeholders. The legacy `eval.scripted_red.after_training` form is
+still supported, but cannot be combined with the new list.
+
+Re-run the list for an existing checkpoint (using its sidecar configuration):
+
+```bash
+uv run python scripts/eval/run_after_training.py \
+  --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors
+```
+
+Built-in evaluators write JSONL under `$JAXBORG_EXP_DIR/eval/`. Ordered runs
+also write a command/status manifest under `eval/manifests/`, and named runs
+attach distinct `eval.after_training.<name>.*` metrics to MLflow. Generate a
+PNG comparison with `scripts/eval/plot_results.py`; plots go to `eval/plots/`.
+Start `scripts/train/view_mlflow.sh` and open `http://127.0.0.1:5000` for
+interactive metric curves. See [`docs/evaluation.md`](docs/evaluation.md).
+
+For evaluators that accept a seed list, the rollout-count option is uniformly
+named `--episodes-per-seed`. `eval_recipe.py` and `eval_matchup.py` still accept
+the older `--episodes` spelling as a compatibility alias.
 
 `train.teams` selects `blue`, `red`, or `both` and defaults to `blue`, so
 existing recipes retain Blue-versus-scripted-Red behavior. In `both` mode the

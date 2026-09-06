@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from jaxborg.evaluation import scripted_red
+from jaxborg.evaluation.post_training import PostTrainingEvalSettings
 from jaxborg.evaluation.scripted_red import (
     DEFAULT_SCRIPTED_REDS,
     ScriptedRedEvalSettings,
@@ -47,14 +48,22 @@ def _recipe(*, after_training: bool = True) -> dict:
     }
 
 
-def test_cotraining_recipe_enables_final_fsm_cia_sweep():
-    settings = ScriptedRedEvalSettings.from_recipe(load("cotraining"))
+def test_cotraining_recipe_runs_learned_then_scripted_red_evaluations():
+    recipe = load("cotraining")
+    settings = PostTrainingEvalSettings.from_recipe(recipe)
 
-    assert settings.after_training is True
-    assert settings.reds == ("fsm", "cia_c", "cia_i", "cia_a")
-    assert settings.seeds == tuple(range(1000, 1010))
-    assert settings.episodes_per_seed == 1
-    assert settings.deterministic is False
+    assert [evaluation.name for evaluation in settings.evaluations] == ["learned-red-ppo", "scripted-reds"]
+    learned, scripted = settings.evaluations
+    assert Path(learned.script).name == "eval_matchup.py"
+    assert learned.model_arg is None
+    assert learned.args[learned.args.index("--blue-path") + 1] == "{model}"
+    assert learned.args[learned.args.index("--red-path") + 1] == "{model}"
+    assert learned.args[learned.args.index("--policy-backend") + 1] == "{backend}"
+    assert "--episodes-per-seed" in learned.args
+    assert "--episodes" not in learned.args
+    assert Path(scripted.script).name == "eval_scripted_reds.py"
+    assert scripted.args[scripted.args.index("--reds") + 1 : scripted.args.index("--seeds")] == DEFAULT_SCRIPTED_REDS
+    assert ScriptedRedEvalSettings.from_recipe(recipe).after_training is False
 
 
 @pytest.mark.parametrize(
@@ -195,6 +204,38 @@ def test_write_and_attach_results_use_one_file_and_red_qualified_metrics(monkeyp
         "eval.scripted_red.cia_c.blue.mean_reward": 2.0,
         "eval.scripted_red.cia_c.blue.std_reward": 0.5,
         "eval.scripted_red.cia_c.blue.episodes": 10.0,
+    }
+
+
+def test_named_results_use_distinct_file_and_mlflow_namespaces(monkeypatch, tmp_path):
+    rows = [
+        {
+            "eval_id": "20260827_120000_123456789_fsm",
+            "eval_name": "deterministic-reds",
+            "recipe_name": "cotrain",
+            "model": "/models/model_cotrain.safetensors",
+            "eval_red": "fsm",
+            "mean_reward": 3.0,
+            "std_reward": 0.25,
+            "n_episodes": 10,
+            "train_run_id": "run-123",
+        }
+    ]
+    monkeypatch.setenv("JAXBORG_EXP_DIR", str(tmp_path))
+    output = write_results(rows)
+    captured = {}
+    monkeypatch.setattr(
+        "jaxborg.mlflow_setup.attach_eval_metrics",
+        lambda run_id, metrics: captured.update(run_id=run_id, metrics=metrics),
+    )
+
+    attach_results_to_mlflow(rows)
+
+    assert "deterministic-reds" in output.name
+    assert captured["metrics"] == {
+        "eval.after_training.deterministic-reds.scripted_red.fsm.blue.mean_reward": 3.0,
+        "eval.after_training.deterministic-reds.scripted_red.fsm.blue.std_reward": 0.25,
+        "eval.after_training.deterministic-reds.scripted_red.fsm.blue.episodes": 10.0,
     }
 
 

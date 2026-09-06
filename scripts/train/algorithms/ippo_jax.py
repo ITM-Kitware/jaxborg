@@ -568,7 +568,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {env_steps:,}; "
-                        f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                        f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
                         flush=True,
                     )
                     try:
@@ -576,12 +576,12 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                             checkpoint_path,
                             sidecar_path,
                             env_steps=env_steps,
-                            evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                            evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
                                 checkpoint_path,
                                 backend="jax",
                                 recipe=recipe,
                                 seed=args.seed,
-                                episodes=episodes,
+                                episodes_per_seed=episodes_per_seed,
                             ),
                         )
                     finally:
@@ -606,9 +606,9 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
 
     # Run in a fresh CPU process only after the canonical final bundle and its
     # sidecar exist and the training MLflow run has been closed.
-    from jaxborg.evaluation.scripted_red import run_configured_after_training
+    from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
-    run_configured_after_training(final_model, recipe)
+    run_configured_evaluations_after_training(final_model, recipe)
 
 
 def main():
@@ -788,7 +788,7 @@ def main():
             if eval_due:
                 print(
                     f"  MLflow checkpoint evaluation at step {env_steps:,}; "
-                    f"evaluating {checkpoint_evaluator.settings.episodes} episodes...",
+                    f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
                     flush=True,
                 )
                 try:
@@ -796,12 +796,12 @@ def main():
                         ckpt_path,
                         sidecar_path,
                         env_steps=env_steps,
-                        evaluate_fn=lambda episodes: evaluate_training_checkpoint(
+                        evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
                             ckpt_path,
                             backend="jax",
                             recipe=recipe,
                             seed=args.seed,
-                            episodes=episodes,
+                            episodes_per_seed=episodes_per_seed,
                         ),
                     )
                 finally:
@@ -826,9 +826,9 @@ def main():
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Final reward: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
 
-    from jaxborg.evaluation.scripted_red import run_configured_after_training
+    from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
-    run_configured_after_training(final_model, recipe)
+    run_configured_evaluations_after_training(final_model, recipe)
 
 
 if __name__ == "__main__":

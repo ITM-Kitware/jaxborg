@@ -11,6 +11,7 @@ from typing import TypedDict
 
 class EvalRow(TypedDict, total=False):
     eval_id: str
+    eval_name: str | None
     model: str
     recipe_name: str
     recipe_path: str

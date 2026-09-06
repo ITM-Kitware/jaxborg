@@ -14,7 +14,7 @@ algorithm: ippo
 mlflow:
   checkpoint_eval:
     every_steps: 100000
-    episodes: 10
+    episodes_per_seed: 10
     seed: null  # Defaults to the training seed + 100000.
     deterministic: false
 
@@ -46,17 +46,42 @@ train:
 eval:
   variant: cc4_stock
 
-  # After the durable final bundle and sidecar are written, extract the Blue
-  # policy from that exact two-policy bundle and evaluate it in CybORG against
-  # the stock FSM plus each CIA-biased scripted Red. The same paired seeds are
-  # reused for every opponent. Increase to 1000-1099 for a 100-episode study.
-  scripted_red:
-    after_training: true
-    reds: [fsm, cia_c, cia_i, cia_a]
-    seeds: 1000-1009
-    episodes_per_seed: 1
-    deterministic: false
-    workers: 1
+  # Run two named evaluations, in order, after the durable final bundle and
+  # sidecar are written. The learned matchup selects both policies from the
+  # exact co-trained bundle. The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in CybORG.
+  after_training:
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds.py
+      args:
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 1
 
 jax:
   num_envs: 48

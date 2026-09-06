@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -148,7 +149,7 @@ def test_eval_red_cli_flag_overrides_recipe(monkeypatch, tmp_path):
         "eval_recipe.py",
         "--model",
         str(fake_model),
-        "--episodes",
+        "--episodes-per-seed",
         "1",
         "--seeds",
         "0",
@@ -179,6 +180,7 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
 
     sidecar_recipe = _make_recipe(eval_section={"variant": "cia_resilience", "red": "cia_i"})
     sidecar_recipe["meta"]["name"] = "test_no_cli"
+    sidecar_recipe["run"] = {"train_run_id": "run-123"}
 
     captured: dict = {}
 
@@ -194,7 +196,12 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
 
     monkeypatch.setattr("jaxborg.checkpoint.read_sidecar", lambda p: dict(sidecar_recipe))
     monkeypatch.setitem(sys.modules, "jaxborg.evaluation.cyborg_runner", fake_runner)
-    monkeypatch.setattr("jaxborg.mlflow_setup.attach_eval_metrics", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        "jaxborg.mlflow_setup.attach_eval_metrics",
+        lambda run_id, metrics: captured.update(run_id=run_id, metrics=metrics),
+    )
+    monkeypatch.setenv("JAXBORG_EVAL_NAME", "second-way")
+    output = tmp_path / "out.jsonl"
 
     argv = [
         "eval_recipe.py",
@@ -205,7 +212,7 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
         "--seeds",
         "0",
         "--output",
-        str(tmp_path / "out.jsonl"),
+        str(output),
     ]
     monkeypatch.setattr(sys, "argv", argv)
 
@@ -217,3 +224,10 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
     module.main()
 
     assert captured["variant"].red_agent == "i"
+    assert json.loads(output.read_text())["eval_name"] == "second-way"
+    assert captured["run_id"] == "run-123"
+    assert captured["metrics"] == {
+        "eval.after_training.second-way.cyborg.mean": 0.0,
+        "eval.after_training.second-way.cyborg.std": 0.0,
+        "eval.after_training.second-way.cyborg.episodes": 1.0,
+    }

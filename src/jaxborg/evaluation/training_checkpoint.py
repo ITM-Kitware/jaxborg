@@ -56,7 +56,8 @@ def evaluate_training_checkpoint(
     backend: str,
     recipe: dict,
     seed: int,
-    episodes: int = 10,
+    episodes_per_seed: int | None = None,
+    episodes: int | None = None,
 ) -> dict[str, float]:
     """Return mean checkpoint rewards for each policy team being evaluated.
 
@@ -66,8 +67,14 @@ def evaluate_training_checkpoint(
     is reused at every checkpoint so the sparse evaluation curve is paired.
     """
 
-    if episodes < 1:
-        raise ValueError(f"episodes must be positive, got {episodes}")
+    if episodes_per_seed is not None and episodes is not None:
+        raise ValueError("set episodes_per_seed or legacy episodes, not both")
+    if episodes_per_seed is None:
+        episodes_per_seed = 10 if episodes is None else episodes
+    if isinstance(episodes_per_seed, bool) or not isinstance(episodes_per_seed, int):
+        raise ValueError(f"episodes_per_seed must be an integer, got {episodes_per_seed!r}")
+    if episodes_per_seed < 1:
+        raise ValueError(f"episodes_per_seed must be positive, got {episodes_per_seed}")
     backend_name = "cyborg" if backend in ("cleanrl", "torch") else backend
     if backend_name not in ("jax", "cyborg"):
         raise ValueError(f"backend must be 'jax' or 'cyborg', got {backend!r}")
@@ -92,7 +99,7 @@ def evaluate_training_checkpoint(
                 backend=backend_name,
                 variant=variant,
                 seeds=[eval_seed],
-                episodes_per_seed=episodes,
+                episodes_per_seed=episodes_per_seed,
                 deterministic=deterministic,
                 progress=False,
                 topology_path=topology_bank,
@@ -111,7 +118,7 @@ def evaluate_training_checkpoint(
                 checkpoint_path,
                 variant=variant,
                 seeds=[eval_seed],
-                episodes_per_seed=episodes,
+                episodes_per_seed=episodes_per_seed,
                 deterministic=deterministic,
                 workers=1,
                 progress=False,
@@ -123,7 +130,7 @@ def evaluate_training_checkpoint(
                 checkpoint_path,
                 variant=variant,
                 seeds=[eval_seed],
-                episodes_per_seed=episodes,
+                episodes_per_seed=episodes_per_seed,
                 deterministic=deterministic,
                 workers=1,
                 progress=False,

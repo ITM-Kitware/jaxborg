@@ -12,7 +12,7 @@ from jaxborg.mlflow_setup import (
 def _recipe(*, teams: str = "both", **checkpoint_eval):
     settings = {
         "every_steps": 100,
-        "episodes": 7,
+        "episodes_per_seed": 7,
         "seed": 123,
         "deterministic": True,
     }
@@ -40,7 +40,7 @@ def test_checkpoint_eval_settings_default_to_disabled():
     settings = CheckpointEvalSettings.from_recipe({"meta": {"name": "defaults"}, "train": {"teams": "blue"}})
 
     assert settings.every_steps == 0
-    assert settings.episodes == 10
+    assert settings.episodes_per_seed == 10
     assert settings.seed is None
     assert settings.deterministic is False
 
@@ -49,7 +49,7 @@ def test_checkpoint_eval_settings_read_nested_mlflow_config():
     settings = CheckpointEvalSettings.from_recipe(_recipe())
 
     assert settings.every_steps == 100
-    assert settings.episodes == 7
+    assert settings.episodes_per_seed == 7
     assert settings.seed == 123
     assert settings.deterministic is True
 
@@ -59,8 +59,8 @@ def test_checkpoint_eval_settings_read_nested_mlflow_config():
     [
         ({"every_steps": True}, "every_steps"),
         ({"every_steps": -1}, "every_steps"),
-        ({"episodes": True}, "episodes"),
-        ({"episodes": 0}, "episodes"),
+        ({"episodes_per_seed": True}, "episodes_per_seed"),
+        ({"episodes_per_seed": 0}, "episodes_per_seed"),
         ({"seed": True}, "seed"),
         ({"seed": -1}, "seed"),
         ({"deterministic": 1}, "deterministic"),
@@ -80,6 +80,25 @@ def test_checkpoint_eval_settings_validate_values(override, message):
 )
 def test_checkpoint_eval_settings_reject_non_mapping_sections(recipe):
     with pytest.raises(ValueError, match="must be a mapping"):
+        CheckpointEvalSettings.from_recipe(recipe)
+
+
+def test_checkpoint_eval_settings_accept_legacy_episodes_key():
+    recipe = _recipe()
+    recipe["mlflow"]["checkpoint_eval"].pop("episodes_per_seed")
+    recipe["mlflow"]["checkpoint_eval"]["episodes"] = 4
+
+    settings = CheckpointEvalSettings.from_recipe(recipe)
+
+    assert settings.episodes_per_seed == 4
+    assert settings.episodes == 4
+
+
+def test_checkpoint_eval_settings_reject_both_episode_count_names():
+    recipe = _recipe()
+    recipe["mlflow"]["checkpoint_eval"]["episodes"] = 4
+
+    with pytest.raises(ValueError, match="not both"):
         CheckpointEvalSettings.from_recipe(recipe)
 
 

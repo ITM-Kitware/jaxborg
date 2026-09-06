@@ -253,11 +253,11 @@ For learned Blue-versus-learned Red evaluation, the recipe is enough:
 uv run python scripts/eval/eval_matchup.py \
   --recipe my_recipe \
   --seeds 1000-1009 \
-  --episodes 1
+  --episodes-per-seed 1
 ```
 
 With exhaustive sampling, this example runs each of the ten dynamics seeds on
-each held-out topology. `--episodes` remains episodes per seed per topology.
+each held-out topology. `--episodes-per-seed` remains episodes per seed per topology.
 The periodic co-training checkpoint evaluator uses the same held-out recipe
 pool automatically and reports aggregate team means. The baseline evaluator
 prints aggregate results rather than writing per-episode topology assignments.
