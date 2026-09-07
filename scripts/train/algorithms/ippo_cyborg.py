@@ -604,7 +604,7 @@ def train_legacy(args, recipe, cfg):
                             ),
                         )
                     finally:
-                        if checkpoint_every <= 0:
+                        if not periodic_checkpoint:
                             checkpoint_path.unlink(missing_ok=True)
                             sidecar_path.unlink(missing_ok=True)
 
@@ -1263,7 +1263,7 @@ def train_joint(args, recipe, cfg):
                             ),
                         )
                     finally:
-                        if ckpt_every <= 0:
+                        if not periodic_checkpoint:
                             checkpoint_path.unlink(missing_ok=True)
                             sidecar_path.unlink(missing_ok=True)
     except KeyboardInterrupt:

@@ -187,3 +187,19 @@ def start_run(recipe, *, backend, seed, effective_config=None, extra_tags=None, 
     params.update({k: str(v)[:500] for k, v in (extra_params or {}).items()})
     mlflow.log_params(params)
     return run
+
+
+def attach_eval_metrics(
+    train_run_id: str,
+    metrics: dict[str, float],
+    *,
+    step: int | None = None,
+) -> None:
+    """Append eval metrics to the train run (used by eval_recipe.py)."""
+    configure()
+    with mlflow.start_run(run_id=train_run_id):
+        values = {k: float(v) for k, v in metrics.items()}
+        if step is None:
+            mlflow.log_metrics(values)
+        else:
+            mlflow.log_metrics(values, step=step)

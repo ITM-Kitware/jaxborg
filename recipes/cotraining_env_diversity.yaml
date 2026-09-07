@@ -1,11 +1,12 @@
 meta:
-  name: cotraining
-  source: "Dual-team simultaneous self-play baseline"
-  added: 2026-08-16
+  name: cotraining_env_diversity
+  source: "Dual-team simultaneous self-play with topology diversity"
+  added: 2026-09-06
   notes: |
-    Opt-in Blue/Red co-training recipe. Both parameter-sharing policies start
-    from fresh weights, act on the same pre-step state, and learn from the same
-    game payoff (with the Red objective equal to the negative Blue score).
+    Topology-diversity counterpart to cotraining. Both parameter-sharing
+    policies start from fresh weights and train on a fixed bank of 100
+    generated topologies. Other recipe-controlled environment-diversity axes
+    remain disabled. Evaluation uses the same held-out bank as cotraining.
 
 algorithm: ippo
 
@@ -43,20 +44,20 @@ train:
   total_timesteps: 10000000
   variant: cc4_stock
 
-  # Restrict resets to five immutable samples from the same pure-JAX
-  # generator used by unbanked co-training. jax.num_envs controls rollout
-  # parallelism; this count controls the number of distinct train topologies.
+  # The first five seeds are exactly the baseline cotraining pool; seeds 5
+  # through 99 add topology diversity while every other configured dimension
+  # remains unchanged. The shared cache avoids regenerating the common subset.
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 5
+    count: 100
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
   variant: cc4_stock
 
-  # Evaluate every requested dynamics seed on the same 100 held-out topology
-  # snapshots used by cotraining_env_diversity (seeds 100 through 199).
+  # Keep this declaration identical to cotraining so both experiments are
+  # compared on the exact same 100 held-out snapshots (seeds 100 through 199).
   topology_generation:
     generator: jax
     seed_start: 100
@@ -72,10 +73,7 @@ eval:
     episodes_per_seed: 1
     deterministic: false
 
-  # Run two named evaluations, in order, after the durable final bundle and
-  # sidecar are written. The learned matchup selects both policies from the
-  # exact co-trained bundle. The scripted sweep then selects its trained Blue
-  # policy and evaluates it against FSM and CIA Red agents in CybORG.
+  # Match cotraining's ordered final-checkpoint evaluation pipeline.
   after_training:
     - name: learned-red-ppo
       script: scripts/eval/eval_matchup.py

@@ -184,7 +184,10 @@ def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    learned, scripted = calls
+    priors, learned, scripted = calls
+    assert Path(priors[1]).name == "eval_play_priors.py"
+    assert priors[priors.index("--model") + 1] == str(model.resolve())
+    assert priors[priors.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
     assert Path(learned[1]).name == "eval_matchup.py"
     assert learned[learned.index("--policy-backend") + 1] == "jax"
     assert learned[learned.index("--blue-path") + 1] == str(model.resolve())
