@@ -24,3 +24,5 @@ docs/*
 !docs/topologies.md
 exp/
 logs/
+.codex
+remote/
