@@ -200,9 +200,33 @@ still supported, but cannot be combined with the new list.
 Re-run the list for an existing checkpoint (using its sidecar configuration):
 
 ```bash
-uv run python scripts/eval/run_after_training.py \
+JAX_PLATFORMS=cuda uv run python scripts/eval/run_after_training.py \
   --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors
 ```
+
+### Post-training environment controls
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `JAXBORG_SKIP_POST_TRAINING_EVAL` | unset | Set to exactly `1` on a trainer command to skip `eval.play_priors` and `eval.after_training`. Training metrics, periodic checkpoint saving, the final model/sidecar, and any separately configured in-training checkpoint evaluation are unaffected. |
+| `JAX_PLATFORMS` | `cuda` for a JAX final bundle; `cpu` for a CybORG final bundle | Selects the JAX platform inherited by every configured post-training child. Set `JAX_PLATFORMS=cpu` for a CPU-only run. |
+| `JAXBORG_EVAL_BATCH_SIZE` | `64` | Positive number of episodes per batched JAX learned-policy matchup call, including play-priors. Smaller values reduce peak device memory at the cost of throughput. |
+
+Scope the skip flag to the trainer command instead of exporting it, otherwise a
+later `run_after_training.py` invocation in the same shell will also be skipped:
+
+```bash
+JAXBORG_SKIP_POST_TRAINING_EVAL=1 uv run python scripts/train/algorithms/ippo_jax.py \
+  --recipe cotraining --seed 42 --tag cotraining_seed42
+
+JAX_PLATFORMS=cuda uv run python scripts/eval/run_after_training.py \
+  --model jaxborg-exp/ippo_jax/cotraining_seed42/model_cotraining_seed42.safetensors
+```
+
+Running the two commands separately also ensures the trainer has exited and
+released its GPU allocation before evaluation begins. The skip flag does not
+make evaluation resumable: a later post-training run starts its configured
+evaluation list from the beginning and writes a new manifest.
 
 Built-in evaluators write JSONL under `$JAXBORG_EXP_DIR/eval/`. Ordered runs
 also write a command/status manifest under `eval/manifests/`, and named runs

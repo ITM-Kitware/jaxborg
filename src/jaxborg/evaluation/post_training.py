@@ -174,6 +174,15 @@ def _write_manifest(path: Path, payload: Mapping[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2) + "\n")
 
 
+def _evaluation_jax_platforms(backend: str) -> str:
+    """Select the child JAX platform while preserving an explicit override."""
+
+    configured = os.environ.get("JAX_PLATFORMS", "").strip()
+    if configured:
+        return configured
+    return "cuda" if backend == "jax" else "cpu"
+
+
 def run_configured_evaluations_after_training(
     model_path: str | Path,
     recipe: Mapping[str, Any],
@@ -209,6 +218,7 @@ def run_configured_evaluations_after_training(
         backend = "jax"
     else:
         raise ValueError(f"cannot detect trained backend from model suffix: {resolved_model}")
+    jax_platforms = _evaluation_jax_platforms(backend)
     # Match the canonical $EXP_DIR/<algorithm>_<backend>/<tag>/model layout.
     exp_dir = resolved_model.parents[2]
     eval_dir = exp_dir / "eval"
@@ -220,6 +230,7 @@ def run_configured_evaluations_after_training(
         "model": str(resolved_model),
         "recipe": str(sidecar),
         "backend": backend,
+        "jax_platforms": jax_platforms,
         "eval_dir": str(eval_dir),
         "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "evaluations": [],
@@ -242,7 +253,7 @@ def run_configured_evaluations_after_training(
         child_env = os.environ.copy()
         child_env.update(
             {
-                "JAX_PLATFORMS": "cpu",
+                "JAX_PLATFORMS": jax_platforms,
                 "JAXBORG_EXP_DIR": str(exp_dir),
                 "JAXBORG_EVAL_DIR": str(eval_dir),
                 "JAXBORG_EVAL_NAME": evaluation.name,
@@ -263,6 +274,7 @@ def run_configured_evaluations_after_training(
         _write_manifest(manifest_path, manifest)
         print(
             f"Running post-training evaluation {index}/{len(evaluations)} ({evaluation.name}):\n"
+            f"  JAX_PLATFORMS={jax_platforms}\n"
             f"  {shlex.join(command)}",
             flush=True,
         )
