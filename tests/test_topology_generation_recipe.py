@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from jaxborg.recipe import project_eval, project_jax
+from jaxborg.recipe import REPO_ROOT, load, project_eval, project_jax
 from jaxborg.topology_bank_cli import main as materialize_main
 from jaxborg.topology_banks import (
     MAX_TOPOLOGY_BANK_SIZE,
@@ -125,6 +125,30 @@ def test_project_eval_accepts_random_bank_sampling(tmp_path, monkeypatch):
     recipe["eval"]["topology_sampling"] = "random"
 
     assert project_eval(recipe, materialize_topologies=True)["TOPOLOGY_SAMPLING"] == "random"
+
+
+def test_cotraining_recipes_use_nested_train_pools_and_one_held_out_eval_pool():
+    baseline = load("cotraining")
+    diversity = load("cotraining_env_diversity")
+
+    baseline_train = expand_topology_bank(baseline["train"], scope="train", repo_root=REPO_ROOT)
+    diversity_train = expand_topology_bank(diversity["train"], scope="train", repo_root=REPO_ROOT)
+    baseline_eval = expand_topology_bank(baseline["eval"], scope="eval", repo_root=REPO_ROOT)
+    diversity_eval = expand_topology_bank(diversity["eval"], scope="eval", repo_root=REPO_ROOT)
+
+    assert len(baseline_train) == 5
+    assert len(diversity_train) == 100
+    assert baseline_train == diversity_train[:5]
+    assert len(baseline_eval) == 100
+    assert baseline_eval == diversity_eval
+    assert baseline["eval"] == diversity["eval"]
+    assert set(diversity_train).isdisjoint(baseline_eval)
+    assert baseline["eval"]["topology_sampling"] == "exhaustive"
+    assert diversity["eval"]["topology_sampling"] == "exhaustive"
+
+    other_diversity_axes = {"mission_bank", "phase_boundary_bank", "phase_rewards_bank"}
+    assert other_diversity_axes.isdisjoint(baseline["train"])
+    assert other_diversity_axes.isdisjoint(diversity["train"])
 
 
 def test_materialize_cli_dry_run_prints_both_disjoint_ranges_without_writing(tmp_path, capsys):

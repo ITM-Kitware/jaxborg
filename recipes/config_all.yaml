@@ -88,6 +88,16 @@ eval:
   # random keeps the requested episode count and samples the bank with replacement.
   topology_sampling: exhaustive
 
+  # Adjacent-checkpoint cross-play is valid only with train.teams: both.
+  # true uses seeds 1000-1009 with one stochastic episode per seed; use the
+  # expanded mapping below to override those defaults.
+  play_priors:
+    enabled: false
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+
   # Optional ordered final-checkpoint evaluation pipeline. Each script runs in
   # a fresh CPU process and receives --model <exact-final-model> automatically.
   # Results from the built-in scripts go to $JAXBORG_EXP_DIR/eval/.

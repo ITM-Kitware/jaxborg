@@ -147,14 +147,29 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
 
     # Keep post-training evaluation failures discoverable at recipe-load time,
     # before an hours-long training run starts.
+    from jaxborg.evaluation.play_priors import PlayPriorsSettings
     from jaxborg.evaluation.post_training import PostTrainingEvalSettings
     from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
 
     scripted_red = ScriptedRedEvalSettings.from_recipe(recipe)
     post_training = PostTrainingEvalSettings.from_recipe(recipe)
+    play_priors = PlayPriorsSettings.from_recipe(recipe)
+    if play_priors.enabled and mode != "both":
+        raise ValueError(f"{source}: eval.play_priors is only supported when train.teams is 'both'")
+    if play_priors.enabled:
+        for section_name in ("jax", "cleanrl"):
+            section = recipe.get(section_name, {}) or {}
+            checkpoint_every = section.get("checkpoint_every_updates", 50)
+            if isinstance(checkpoint_every, bool) or not isinstance(checkpoint_every, int) or checkpoint_every <= 0:
+                raise ValueError(
+                    f"{source}: eval.play_priors requires "
+                    f"{section_name}.checkpoint_every_updates to be a positive integer"
+                )
+    if play_priors.enabled and any(evaluation.name == "play_priors" for evaluation in post_training.evaluations):
+        raise ValueError(f"{source}: eval.after_training name 'play_priors' is reserved")
     for evaluation in post_training.evaluations:
         evaluation.resolve_script()
-    if scripted_red.after_training and post_training.evaluations:
+    if scripted_red.after_training and (post_training.evaluations or play_priors.enabled):
         raise ValueError(
             f"{source}: use either eval.after_training or legacy eval.scripted_red.after_training, not both"
         )
@@ -564,6 +579,7 @@ def project_eval(
         "policies": copy.deepcopy(ev.get("policies") or {}),
         "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
         "after_training": copy.deepcopy(ev.get("after_training") or []),
+        "play_priors": copy.deepcopy(ev.get("play_priors", False)),
         "TOPOLOGY_BANK": (
             _resolve_topology_bank(ev, scope="eval")
             if materialize_topologies

@@ -260,8 +260,14 @@ def start_run(
 def attach_eval_metrics(
     train_run_id: str,
     metrics: dict[str, float],
+    *,
+    step: int | None = None,
 ) -> None:
     """Append eval metrics to the train run (used by eval_recipe.py)."""
     configure()
     with mlflow.start_run(run_id=train_run_id):
-        mlflow.log_metrics({k: float(v) for k, v in metrics.items()})
+        values = {k: float(v) for k, v in metrics.items()}
+        if step is None:
+            mlflow.log_metrics(values)
+        else:
+            mlflow.log_metrics(values, step=step)

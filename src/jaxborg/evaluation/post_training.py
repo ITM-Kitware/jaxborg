@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jaxborg.evaluation.play_priors import PlayPriorsSettings
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _PLACEHOLDERS = frozenset({"model", "recipe", "backend", "exp_dir", "eval_dir", "name"})
@@ -137,6 +139,18 @@ class PostTrainingEvalSettings:
         return cls(tuple(evaluations))
 
 
+def _play_priors_evaluation(recipe: Mapping[str, Any]) -> PostTrainingEval | None:
+    settings = PlayPriorsSettings.from_recipe(recipe)
+    if not settings.enabled:
+        return None
+    return PostTrainingEval(
+        name="play_priors",
+        script="scripts/eval/eval_play_priors.py",
+        args=("--recipe", "{recipe}"),
+        required=settings.required,
+    )
+
+
 def _sidecar_path(model_path: Path) -> Path:
     name = model_path.name
     stem = name[len("model_") :] if name.startswith("model_") else model_path.stem
@@ -174,7 +188,9 @@ def run_configured_evaluations_after_training(
     """
 
     settings = PostTrainingEvalSettings.from_recipe(recipe)
-    if not settings.evaluations:
+    play_priors = _play_priors_evaluation(recipe)
+    evaluations = ((play_priors,) if play_priors is not None else ()) + settings.evaluations
+    if not evaluations:
         from jaxborg.evaluation.scripted_red import run_configured_after_training
 
         run_configured_after_training(model_path, recipe, run_subprocess=run_subprocess)
@@ -216,7 +232,7 @@ def run_configured_evaluations_after_training(
         "eval_dir": str(eval_dir),
     }
 
-    for index, evaluation in enumerate(settings.evaluations, 1):
+    for index, evaluation in enumerate(evaluations, 1):
         script = evaluation.resolve_script()
         job_replacements = {**replacements, "name": evaluation.name}
         command = [sys.executable, str(script)]
@@ -246,7 +262,7 @@ def run_configured_evaluations_after_training(
         manifest["evaluations"].append(record)
         _write_manifest(manifest_path, manifest)
         print(
-            f"Running post-training evaluation {index}/{len(settings.evaluations)} ({evaluation.name}):\n"
+            f"Running post-training evaluation {index}/{len(evaluations)} ({evaluation.name}):\n"
             f"  {shlex.join(command)}",
             flush=True,
         )

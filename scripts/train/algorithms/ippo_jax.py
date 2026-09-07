@@ -585,7 +585,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                             ),
                         )
                     finally:
-                        if not is_final and checkpoint_every <= 0:
+                        if not is_final and not periodic_checkpoint:
                             checkpoint_path.unlink(missing_ok=True)
                             sidecar_path.unlink(missing_ok=True)
 
@@ -805,7 +805,7 @@ def main():
                         ),
                     )
                 finally:
-                    if not is_final and ckpt_every <= 0:
+                    if not is_final and not periodic_checkpoint:
                         ckpt_path.unlink(missing_ok=True)
                         sidecar_path.unlink(missing_ok=True)
 

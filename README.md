@@ -86,7 +86,8 @@ uv run pytest -m ""      # everything
 ./scripts/train/run.sh cleanrl default 42
 
 # Opt-in simultaneous Blue/Red self-play (fresh policy for each team).
-# The recipe automatically evaluates final trained Blue vs FSM + CIA-C/I/A.
+# The recipe automatically runs adjacent-checkpoint prior-opponent cross-play,
+# then evaluates final trained Blue vs FSM + CIA-C/I/A.
 ./scripts/train/run.sh jax cotraining 42
 ./scripts/train/run.sh cleanrl cotraining 42
 
@@ -162,11 +163,12 @@ the corresponding single curve. For co-training this periodic curve is the
 learned Blue-vs-learned Red matchup; it is separate from the final
 Blue-vs-scripted-Red sweep.
 
-`recipes/cotraining.yaml` uses `eval.after_training` to run two final checks in
-order: learned Blue versus its co-trained PPO Red in the JAX joint environment,
-then learned Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in CybORG. Both
-jobs use the exact final bundle. Increase their seed ranges to `1000-1099` for
-a 100-episode study. A failed required job makes the overall command fail after
+`recipes/cotraining.yaml` first runs `eval.play_priors` across its ten periodic
+checkpoints, then uses `eval.after_training` for two final checks: learned Blue
+versus its co-trained PPO Red in the JAX joint environment, followed by learned
+Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in CybORG. The two final jobs
+use the exact final bundle. Increase their seed ranges to `1000-1099` for a
+100-episode study. A failed required job makes the overall command fail after
 leaving the model and evaluation manifest safely on disk.
 
 For more than one final-checkpoint evaluation, use the ordered
