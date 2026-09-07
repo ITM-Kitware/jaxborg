@@ -4,11 +4,19 @@ set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 EXP_DIR="${JAXBORG_EXP_DIR:-${ROOT}/jaxborg-exp}"
+
+# --remote serves the mirror pulled by scripts/sync/pull_runs.sh.
+if [[ "${1:-}" == "--remote" ]]; then
+    EXP_DIR="${ROOT}/remote/jaxborg-exp"
+    shift
+fi
+
 DB_PATH="$(realpath -m "${EXP_DIR}/mlflow.db")"
 
 if [[ ! -f "${DB_PATH}" ]]; then
     echo "MLflow database not found: ${DB_PATH}" >&2
-    echo "Set JAXBORG_EXP_DIR to the experiment directory used for training." >&2
+    echo "Set JAXBORG_EXP_DIR to the experiment directory used for training," >&2
+    echo "or pass --remote to serve ./remote/jaxborg-exp (see scripts/sync/pull_runs.sh)." >&2
     exit 1
 fi
 
