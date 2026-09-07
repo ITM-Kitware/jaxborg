@@ -9,12 +9,16 @@ meta:
 
 algorithm: ippo
 
-# Evaluate frozen learned-vs-learned checkpoints every 100k steps and attach
-# both trainable teams' curves to the active local MLflow run.
+# Periodic checkpoint evaluation is OFF (every_steps: 0). CIA/resilience is
+# measured once, at the end of training, by the eval.after_training pipeline
+# below. Each firing runs the full topology x seed x episode cross product
+# (100 topologies x episodes_per_seed), so periodic evaluation cost a large
+# multiple of the reported final numbers while adding nothing to them.
+# episodes_per_seed is retained for when the periodic curve is wanted again.
 mlflow:
   checkpoint_eval:
-    every_steps: 100000
-    episodes_per_seed: 10
+    every_steps: 0
+    episodes_per_seed: 3
     seed: null  # Defaults to the training seed + 100000.
     deterministic: false
 
@@ -40,7 +44,7 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 10000000
+  total_timesteps: 20000000
   variant: cc4_stock
 
   # Restrict resets to five immutable samples from the same pure-JAX
@@ -65,16 +69,19 @@ eval:
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 100
+    count: 50
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
   # At the end of training, compare every adjacent durable checkpoint in both
   # directions: current Blue vs prior Red and current Red vs prior Blue.
+  # Seeds 1000-1002 (not the full 1000-1009 used by the reported final
+  # evaluation): each seed already runs on all 100 held-out topologies, so
+  # 3 seeds is 300 episodes per matchup across 18 adjacent-checkpoint pairs.
   play_priors:
     enabled: true
-    seeds: 1000-1009
+    seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
 

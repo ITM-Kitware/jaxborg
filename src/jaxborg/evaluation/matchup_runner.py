@@ -370,6 +370,105 @@ def _run_jax_matchup_episode_scan(
     return reward_sum, cia_mean
 
 
+DEFAULT_EVAL_BATCH_SIZE = 64
+
+
+def _eval_batch_size() -> int:
+    """Episodes evaluated per vmapped call (``JAXBORG_EVAL_BATCH_SIZE``)."""
+    import os
+
+    raw = os.environ.get("JAXBORG_EVAL_BATCH_SIZE")
+    if raw is None:
+        return DEFAULT_EVAL_BATCH_SIZE
+    value = int(raw)
+    if value < 1:
+        raise ValueError("JAXBORG_EVAL_BATCH_SIZE must be positive")
+    return value
+
+
+def _supports_batched_eval(env: Any) -> bool:
+    """Whether ``env`` exposes the reset/step surface ``vmap`` batching needs.
+
+    Test doubles substitute a stand-in env alongside a patched
+    ``run_matchup_episode``; those fall back to the sequential seam instead of
+    being vmapped.
+    """
+    return all(hasattr(env, name) for name in ("reset", "reset_at_topology", "step_env"))
+
+
+def _run_jax_matchup_episodes_batched(
+    policies: dict[str, LoadedMatchupPolicy],
+    *,
+    variant: GameVariant,
+    env: Any,
+    episode_seeds: Sequence[int],
+    topology_indices: Sequence[int] | None,
+    role_arrays: Sequence[Any] | None,
+    deterministic: bool,
+    batch_size: int | None = None,
+    progress: bool = False,
+    progress_label: str = "",
+) -> tuple[list[float], list[list[float]]]:
+    """Evaluate many episodes per compiled call via ``jax.vmap``.
+
+    One episode is a 500-step scan over a single environment, which leaves an
+    accelerator almost entirely idle — the work per kernel is tiny and the
+    cost is dispatch latency. Mapping the identical per-episode scan over a
+    batch gives the device the same shape of work training already runs at.
+    Results are unchanged: each episode keeps its own key, topology and role
+    map, so this is the sequential computation evaluated in parallel.
+    """
+    count = len(episode_seeds)
+    if count == 0:
+        return [], []
+    score_cia = role_arrays is not None
+    use_topology_index = topology_indices is not None
+    chunk = batch_size or _eval_batch_size()
+
+    scan = partial(
+        _run_jax_matchup_episode_scan,
+        blue_module=policies["blue"].module,
+        red_module=policies["red"].module,
+        env=env,
+        num_steps=variant.num_steps,
+        deterministic=deterministic,
+        use_topology_index=use_topology_index,
+        score_cia=score_cia,
+    )
+    # Weights are shared across the batch; keys, topologies and role maps vary.
+    batched = jax.vmap(scan, in_axes=(None, None, 0, 0, 0))
+
+    keys = jnp.stack([jax.random.PRNGKey(int(seed)) for seed in episode_seeds])
+    if use_topology_index:
+        indices = jnp.asarray(topology_indices, dtype=jnp.int32)
+    else:
+        indices = jnp.zeros(count, dtype=jnp.int32)
+    if score_cia:
+        roles = jnp.stack([jnp.asarray(role, dtype=jnp.int32) for role in role_arrays])
+    else:
+        roles = jnp.zeros((count, 1), dtype=jnp.int32)
+
+    rewards: list[float] = []
+    cia_scores: list[list[float]] = []
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        reward_batch, cia_batch = batched(
+            policies["blue"].weights,
+            policies["red"].weights,
+            keys[start:stop],
+            indices[start:stop],
+            roles[start:stop],
+        )
+        rewards.extend(float(value) for value in np.asarray(jax.device_get(reward_batch)))
+        if score_cia:
+            cia_scores.extend([float(value) for value in row] for row in np.asarray(jax.device_get(cia_batch)))
+        else:
+            cia_scores.extend([] for _ in range(stop - start))
+        if progress:
+            print(f"  {progress_label}episodes {stop}/{count}", flush=True)
+    return rewards, cia_scores
+
+
 def _torch_actions(policy: LoadedMatchupPolicy, obs, mask, seed: int, deterministic: bool):
     import torch
 
@@ -600,29 +699,41 @@ def evaluate_matchup(
             )
 
         total_episodes = len(cases)
-        for idx, case in enumerate(cases, start=1):
-            episode_result = run_matchup_episode(
-                policies,
-                variant=variant,
-                seed=case.episode_seed,
-                deterministic=deterministic,
-                env=env,
-                topology_index=case.topology_index,
-                host_resilience_role=case.role_array,
-            )
-            score, episode_cia = episode_result
-            blue_returns.append(score)
-            cia_episode_scores.append(episode_cia)
+        for case in cases:
             episode_seeds.append(case.episode_seed)
             episode_topology_paths.append(str(case.topology_path))
             episode_role_map_ids.append(case.role_map_id)
             episode_topology_fingerprints.append(case.topology_fingerprint)
-            if progress:
-                print(
-                    f"  ep {idx}/{total_episodes} (seed={case.episode_seed}, "
-                    f"topology={case.topology_path.name}): Blue {score:.1f}",
-                    flush=True,
+        if backend_name == "jax" and _supports_batched_eval(env):
+            blue_returns, cia_episode_scores = _run_jax_matchup_episodes_batched(
+                policies,
+                variant=variant,
+                env=env,
+                episode_seeds=[case.episode_seed for case in cases],
+                topology_indices=[case.topology_index for case in cases],
+                role_arrays=[case.role_array for case in cases],
+                deterministic=deterministic,
+                progress=progress,
+            )
+        else:
+            for idx, case in enumerate(cases, start=1):
+                score, episode_cia = run_matchup_episode(
+                    policies,
+                    variant=variant,
+                    seed=case.episode_seed,
+                    deterministic=deterministic,
+                    env=env,
+                    topology_index=case.topology_index,
+                    host_resilience_role=case.role_array,
                 )
+                blue_returns.append(score)
+                cia_episode_scores.append(episode_cia)
+                if progress:
+                    print(
+                        f"  ep {idx}/{total_episodes} (seed={case.episode_seed}, "
+                        f"topology={case.topology_path.name}): Blue {score:.1f}",
+                        flush=True,
+                    )
         sampling_label = "exhaustive"
     else:
         if topology_paths and topology_sampling == "exhaustive":
@@ -637,29 +748,45 @@ def evaluate_matchup(
             topology_assignments = [(None, None)]
             sampling_label = "generative"
         total_episodes = len(topology_assignments) * len(seeds) * episodes_per_seed
-        idx = 0
-        for topology_index, topology_label in topology_assignments:
-            for base_seed in seeds:
-                for episode_idx in range(episodes_per_seed):
-                    episode_seed = base_seed + episode_idx
-                    score = run_matchup_episode(
-                        policies,
-                        variant=variant,
-                        seed=episode_seed,
-                        deterministic=deterministic,
-                        env=env,
-                        topology_index=topology_index,
+        plan = [
+            (base_seed + episode_idx, topology_index, topology_label)
+            for topology_index, topology_label in topology_assignments
+            for base_seed in seeds
+            for episode_idx in range(episodes_per_seed)
+        ]
+        episode_seeds.extend(entry[0] for entry in plan)
+        episode_topology_paths.extend(entry[2] for entry in plan)
+        if backend_name == "jax" and _supports_batched_eval(env):
+            # ``topology_index`` is None for random/generative sampling, where
+            # each reset draws its own snapshot from its own key.
+            indices = [entry[1] for entry in plan]
+            blue_returns, _ = _run_jax_matchup_episodes_batched(
+                policies,
+                variant=variant,
+                env=env,
+                episode_seeds=[entry[0] for entry in plan],
+                topology_indices=None if any(index is None for index in indices) else indices,
+                role_arrays=None,
+                deterministic=deterministic,
+                progress=progress,
+            )
+        else:
+            for idx, (episode_seed, topology_index, topology_label) in enumerate(plan, start=1):
+                score = run_matchup_episode(
+                    policies,
+                    variant=variant,
+                    seed=episode_seed,
+                    deterministic=deterministic,
+                    env=env,
+                    topology_index=topology_index,
+                )
+                blue_returns.append(score)
+                if progress:
+                    topology_text = f", topology={Path(topology_label).name}" if topology_label else ""
+                    print(
+                        f"  ep {idx}/{total_episodes} (seed={episode_seed}{topology_text}): Blue {score:.1f}",
+                        flush=True,
                     )
-                    blue_returns.append(score)
-                    episode_seeds.append(episode_seed)
-                    episode_topology_paths.append(topology_label)
-                    idx += 1
-                    if progress:
-                        topology_text = f", topology={Path(topology_label).name}" if topology_label else ""
-                        print(
-                            f"  ep {idx}/{total_episodes} (seed={episode_seed}{topology_text}): Blue {score:.1f}",
-                            flush=True,
-                        )
 
     cia_summary = None
     per_episode_cia: list[dict[str, float]] = []
