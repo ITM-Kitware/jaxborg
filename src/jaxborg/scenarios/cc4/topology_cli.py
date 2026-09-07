@@ -15,14 +15,23 @@ def _positive_seed(value: str) -> int:
     return seed
 
 
-def export_generated(seed: int, out: str | Path) -> None:
-    const = build_topology(jax.random.PRNGKey(seed))
+def export_generated(
+    seed: int,
+    out: str | Path,
+    *,
+    op_zone_servers: int | None = None,
+) -> None:
+    const = build_topology(
+        jax.random.PRNGKey(seed),
+        op_zone_min_servers=op_zone_servers,
+    )
     save_topology(
         const,
         out,
         metadata={
             "source": "generated",
             "source_seed": seed,
+            "op_zone_servers": op_zone_servers,
         },
     )
 

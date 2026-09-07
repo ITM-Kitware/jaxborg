@@ -115,6 +115,17 @@ class ResilienceMetric:
         cs, is_, as_, rs = [], [], [], []
 
         for step in steps:
+            # The simulator executes Blue before Red.  Process successful
+            # Restore first so a same-step successful Impact/Degrade leaves
+            # the host impacted at the end of the step.
+            for rec in step["blue"].values():
+                if rec.get("success") != "TRUE":
+                    continue
+                if rec.get("cls") in _BLUE_RESTORE_EVENT:
+                    host = rec.get("host")
+                    if host in impacted:
+                        impacted[host] = False
+
             # --- Red events: Impact/Degrade marks host as impacted ---
             for rec in step["red"].values():
                 if rec.get("success") != "TRUE":
@@ -124,15 +135,6 @@ class ResilienceMetric:
                 if cls in _RED_IMPACT_EVENTS and host in impacted:
                     impacted[host] = True
                     impact_counts[host] = impact_counts.get(host, 0) + 1
-
-            # --- Blue events: Restore clears impact state ---
-            for rec in step["blue"].values():
-                if rec.get("success") != "TRUE":
-                    continue
-                if rec.get("cls") in _BLUE_RESTORE_EVENT:
-                    host = rec.get("host")
-                    if host in impacted:
-                        impacted[host] = False
 
             # --- Per-step CIA scores ---
             C = I = A = 0.0  # noqa: E741 — CIA triad domain notation

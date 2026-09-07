@@ -1,4 +1,5 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -243,4 +244,43 @@ def test_checkpoint_paths_accept_pathlike_values(tmp_path):
     assert fake_mlflow.artifacts == [
         (str(checkpoint), "checkpoints/step-1"),
         (str(sidecar), "checkpoints/step-1"),
+    ]
+
+
+def test_checkpoint_structured_result_logs_global_cia_at_checkpoint_step(tmp_path):
+    fake_mlflow = FakeMlflow()
+    evaluator = MlflowCheckpointEvaluator(_recipe(), mlflow_module=fake_mlflow)
+    checkpoint = tmp_path / "checkpoint.safetensors"
+    sidecar = tmp_path / "recipe.yaml"
+
+    result = evaluator.on_checkpoint(
+        checkpoint,
+        sidecar,
+        env_steps=300,
+        evaluate_fn=lambda _: SimpleNamespace(
+            mean_rewards={"blue": 2.0, "red": -2.0},
+            cia_summary={
+                "n": 3,
+                "c": {"mean": -1.0, "std": 1.5},
+                "i": {"mean": -2.0, "std": 2.5},
+                "a": {"mean": -3.0, "std": 3.5},
+            },
+        ),
+    )
+
+    assert result == {"blue": 2.0, "red": -2.0}
+    assert fake_mlflow.metrics == [
+        (
+            {
+                "eval.checkpoint.blue.mean_reward": 2.0,
+                "eval.checkpoint.red.mean_reward": -2.0,
+                "eval.checkpoint.cia.c.mean": -1.0,
+                "eval.checkpoint.cia.c.std": 1.5,
+                "eval.checkpoint.cia.i.mean": -2.0,
+                "eval.checkpoint.cia.i.std": 2.5,
+                "eval.checkpoint.cia.a.mean": -3.0,
+                "eval.checkpoint.cia.a.std": 3.5,
+            },
+            300,
+        )
     ]

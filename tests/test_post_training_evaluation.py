@@ -192,8 +192,9 @@ def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
     assert learned[learned.index("--policy-backend") + 1] == "jax"
     assert learned[learned.index("--blue-path") + 1] == str(model.resolve())
     assert learned[learned.index("--red-path") + 1] == str(model.resolve())
-    assert Path(scripted[1]).name == "eval_scripted_reds.py"
+    assert Path(scripted[1]).name == "eval_scripted_reds_jax.py"
     assert scripted[scripted.index("--model") + 1] == str(model.resolve())
+    assert scripted[scripted.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
     assert scripted[scripted.index("--reds") + 1 : scripted.index("--seeds")] == [
         "fsm",
         "cia_c",

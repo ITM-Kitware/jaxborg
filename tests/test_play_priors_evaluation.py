@@ -119,10 +119,14 @@ def test_uses_cleanrl_cadence_for_torch_checkpoints(tmp_path):
     assert [checkpoint.steps for checkpoint in checkpoints] == [60, 120]
 
 
-def test_evaluates_each_adjacent_pair_in_both_directions_and_logs_curves(tmp_path):
+def test_evaluates_each_adjacent_pair_in_both_directions_and_logs_curves(tmp_path, monkeypatch):
+    from jaxborg import recipe as recipe_module
+
     model = _run_files(tmp_path)
     recipe = _recipe(play_priors={"seeds": [7, 9], "episodes_per_seed": 1})
     recipe["run"] = {"train_run_id": "train-123"}
+    # Older/custom projection doubles do not expose the additive CIA keys.
+    monkeypatch.setattr(recipe_module, "project_eval", lambda *_args, **_kwargs: {"TOPOLOGY_BANK": ()})
     calls = []
     attached = []
 
@@ -159,6 +163,8 @@ def test_evaluates_each_adjacent_pair_in_both_directions_and_logs_curves(tmp_pat
         (checkpoint_40, checkpoint_80),
     ]
     assert all(call[2]["seeds"] == [7, 9] for call in calls)
+    assert all(call[2]["topology_sampling"] == "exhaustive" for call in calls)
+    assert all("cia" not in call[2] for call in calls)
 
     rows = [json.loads(line) for line in output.read_text().splitlines()]
     assert [row["focal_team"] for row in rows] == ["blue", "red"]
@@ -185,3 +191,77 @@ def test_cotraining_recipe_retains_ten_periodic_checkpoints():
 
     assert len(range(checkpoint_every, num_updates + 1, checkpoint_every)) == 10
     assert PlayPriorsSettings.from_recipe(recipe).enabled
+
+
+def test_play_priors_logs_comparison_qualified_cia_and_writes_audit_fields(tmp_path, monkeypatch):
+    from jaxborg import recipe as recipe_module
+
+    model = _run_files(tmp_path)
+    recipe = _recipe(play_priors={"seeds": [7], "episodes_per_seed": 1})
+    recipe["eval"].update(
+        {
+            "variant": "cia_resilience",
+            "cia": {
+                "enabled": True,
+                "metric": "resilience",
+                "role_assignment": "fixed_per_topology",
+            },
+        }
+    )
+    recipe["run"] = {"train_run_id": "train-cia"}
+    topology = tmp_path / "eval.snapshot.npz"
+    cia_config = recipe["eval"]["cia"]
+    monkeypatch.setattr(
+        recipe_module,
+        "project_eval",
+        lambda *_args, **_kwargs: {
+            "TOPOLOGY_BANK": (topology,),
+            "TOPOLOGY_SAMPLING": "exhaustive",
+            "CIA": cia_config,
+        },
+    )
+    calls = []
+
+    def fake_evaluate(blue_path, red_path, **kwargs):
+        calls.append((blue_path, red_path, kwargs))
+        offset = float(len(calls))
+        summary = {
+            "n": 1,
+            "c": {"mean": -offset, "std": 0.0},
+            "i": {"mean": -2.0 * offset, "std": 0.0},
+            "a": {"mean": -3.0 * offset, "std": 0.0},
+        }
+        return SimpleNamespace(
+            blue_returns=[offset],
+            red_returns=[-offset],
+            episode_seeds=[7],
+            policies={"blue": {"path": str(blue_path)}, "red": {"path": str(red_path)}},
+            topology_paths=[str(topology)],
+            topology_sampling="exhaustive",
+            episode_topology_paths=[str(topology)],
+            cia_metric="resilience",
+            cia_config=cia_config,
+            cia_summary=summary,
+            per_episode_cia=[{"c": -offset, "i": -2.0 * offset, "a": -3.0 * offset}],
+            episode_role_map_ids=["shared-map"],
+            episode_topology_fingerprints=["shared-fingerprint"],
+            topology_role_maps=[{"topology_path": str(topology), "role_map_id": "shared-map"}],
+        )
+
+    attached = []
+    output = tmp_path / "cia-results.jsonl"
+    run_play_priors(
+        model,
+        recipe,
+        output=output,
+        evaluate_fn=fake_evaluate,
+        attach_metrics_fn=lambda run_id, metrics, *, step=None: attached.append((run_id, metrics, step)),
+    )
+
+    assert all(call[2]["cia"] == cia_config for call in calls)
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert all(row["episode_role_map_ids"] == ["shared-map"] for row in rows)
+    metrics = attached[0][1]
+    assert metrics["eval.play_priors.blue_vs_prior_red.cia.c.mean"] == -1.0
+    assert metrics["eval.play_priors.red_vs_prior_blue.cia.c.mean"] == -2.0
+    assert metrics["eval.play_priors.blue_vs_prior_red.cia.a.std"] == 0.0

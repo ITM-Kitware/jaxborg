@@ -27,6 +27,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from jaxborg.evaluation.cia.config import CIAEvalSettings
+from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
 from jaxborg.evaluation.matchup_runner import evaluate_matchup
 from jaxborg.mlflow_setup import attach_eval_metrics
 from jaxborg.recipe import eval_variant, load, project_eval, resolve_eval_policies
@@ -141,6 +143,7 @@ def main() -> None:
     else:
         topology_paths = list(project_eval(recipe, materialize_topologies=True)["TOPOLOGY_BANK"]) or None
     topology_sampling = args.topology_sampling or eval_cfg.get("topology_sampling", "exhaustive")
+    cia_config = CIAEvalSettings.from_recipe(recipe).as_dict()
 
     print(
         f"JAX matchup: backend={backend} variant={variant.name} seeds={seeds} episodes/seed={args.episodes_per_seed}",
@@ -154,9 +157,7 @@ def main() -> None:
             flush=True,
         )
     t0 = time.perf_counter()
-    result = evaluate_matchup(
-        model_paths["blue"],
-        model_paths["red"],
+    matchup_kwargs = dict(
         backend=backend,
         variant=variant,
         seeds=seeds,
@@ -165,6 +166,14 @@ def main() -> None:
         topology_path=topology_paths,
         topology_sampling=topology_sampling,
     )
+    if cia_config["enabled"]:
+        matchup_kwargs["cia"] = cia_config
+    result = evaluate_matchup(
+        model_paths["blue"],
+        model_paths["red"],
+        **matchup_kwargs,
+    )
+    cia_summary = getattr(result, "cia_summary", None)
     wall = time.perf_counter() - t0
     blue_mean = mean(result.blue_returns)
     blue_std = stdev(result.blue_returns) if len(result.blue_returns) > 1 else 0.0
@@ -204,6 +213,22 @@ def main() -> None:
         "topology_sampling": result.topology_sampling,
         "per_episode_topology_paths": result.episode_topology_paths,
     }
+    if cia_summary is not None:
+        row.update(
+            {
+                "cia_metric": getattr(result, "cia_metric", None) or cia_config["metric"],
+                "cia_config": getattr(result, "cia_config", None) or cia_config,
+                "cia_summary": cia_summary,
+                "per_episode_cia": getattr(result, "per_episode_cia", []),
+                "episode_role_map_ids": getattr(result, "episode_role_map_ids", []),
+                "per_episode_topology_fingerprints": getattr(
+                    result,
+                    "episode_topology_fingerprints",
+                    [],
+                ),
+                "topology_role_maps": getattr(result, "topology_role_maps", []),
+            }
+        )
 
     name = f"_{eval_name}" if eval_name else ""
     output = (
@@ -223,14 +248,14 @@ def main() -> None:
     for run_id in run_ids:
         try:
             prefix = f"eval.after_training.{eval_name}.jax_matchup" if eval_name else "eval.jax_matchup"
-            attach_eval_metrics(
-                run_id,
-                {
-                    f"{prefix}.blue_mean": blue_mean,
-                    f"{prefix}.red_mean": red_mean,
-                    f"{prefix}.episodes": len(result.blue_returns),
-                },
-            )
+            metrics = {
+                f"{prefix}.blue_mean": blue_mean,
+                f"{prefix}.red_mean": red_mean,
+                f"{prefix}.episodes": len(result.blue_returns),
+            }
+            if cia_summary is not None:
+                metrics.update(cia_mlflow_metrics(f"{prefix}.cia", cia_summary))
+            attach_eval_metrics(run_id, metrics)
         except Exception as exc:
             print(f"MLflow attach warning for {run_id}: {exc}", flush=True)
 

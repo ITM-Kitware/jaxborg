@@ -142,7 +142,7 @@ class MlflowCheckpointEvaluator:
         sidecar_path: str | Path,
         *,
         env_steps: int,
-        evaluate_fn: Callable[[int], Mapping[str, float]],
+        evaluate_fn: Callable[[int], Any],
     ) -> dict[str, float]:
         """Copy one exact bundle into MLflow, evaluate it, and log its curve point."""
 
@@ -155,9 +155,14 @@ class MlflowCheckpointEvaluator:
         self._mlflow.log_artifact(str(checkpoint_path), artifact_path=artifact_path)
         self._mlflow.log_artifact(str(sidecar_path), artifact_path=artifact_path)
 
-        raw_means = evaluate_fn(self.settings.episodes_per_seed)
+        raw_result = evaluate_fn(self.settings.episodes_per_seed)
+        cia_summary = getattr(raw_result, "cia_summary", None)
+        raw_means = getattr(raw_result, "mean_rewards", raw_result)
         if not isinstance(raw_means, Mapping):
-            raise ValueError("evaluate_fn must return a mapping of team names to mean rewards")
+            raise ValueError(
+                "evaluate_fn must return a mapping of team names to mean rewards "
+                "or a structured result with mean_rewards"
+            )
 
         means: dict[str, float] = {}
         for team, value in raw_means.items():
@@ -171,10 +176,12 @@ class MlflowCheckpointEvaluator:
         if missing:
             raise ValueError(f"evaluation did not return trained teams: {sorted(missing)}")
         trained_means = {team: means[team] for team in self.trainable_teams}
-        self._mlflow.log_metrics(
-            {f"eval.checkpoint.{team}.mean_reward": value for team, value in trained_means.items()},
-            step=env_steps,
-        )
+        metrics = {f"eval.checkpoint.{team}.mean_reward": value for team, value in trained_means.items()}
+        if cia_summary is not None:
+            from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
+
+            metrics.update(cia_mlflow_metrics("eval.checkpoint.cia", cia_summary))
+        self._mlflow.log_metrics(metrics, step=env_steps)
         return trained_means
 
 

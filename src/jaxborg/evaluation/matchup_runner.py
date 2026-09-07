@@ -8,7 +8,9 @@ explicit.  The legacy CybORG Blue-vs-scripted-Red evaluator remains separate.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any, Literal, Sequence
 
@@ -132,6 +134,13 @@ class MatchupEvaluation:
     topology_paths: list[str] = field(default_factory=list)
     episode_topology_paths: list[str | None] = field(default_factory=list)
     topology_sampling: str = "generative"
+    cia_metric: str | None = None
+    cia_config: dict[str, Any] | None = None
+    cia_summary: dict[str, Any] | None = None
+    per_episode_cia: list[dict[str, float]] = field(default_factory=list)
+    episode_role_map_ids: list[str] = field(default_factory=list)
+    episode_topology_fingerprints: list[str] = field(default_factory=list)
+    topology_role_maps: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _normalise_backend(backend: str) -> PolicyBackend:
@@ -234,6 +243,133 @@ def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: boo
     return jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=key)
 
 
+@partial(
+    jax.jit,
+    static_argnames=(
+        "blue_module",
+        "red_module",
+        "env",
+        "num_steps",
+        "deterministic",
+        "use_topology_index",
+        "score_cia",
+    ),
+)
+def _run_jax_matchup_episode_scan(
+    blue_weights: Any,
+    red_weights: Any,
+    key: jax.Array,
+    topology_index: jax.Array,
+    host_resilience_role: jax.Array,
+    *,
+    blue_module: Any,
+    red_module: Any,
+    env: Any,
+    num_steps: int,
+    deterministic: bool,
+    use_topology_index: bool,
+    score_cia: bool,
+) -> tuple[jax.Array, jax.Array]:
+    """Compile policy inference and all simulator steps as one episode."""
+
+    key, reset_key = jax.random.split(key)
+    if use_topology_index:
+        obs, state = env.reset_at_topology(reset_key, topology_index)
+    else:
+        obs, state = env.reset(reset_key)
+
+    blue_agents = tuple(env.blue_agents)
+    red_agents = tuple(env.red_agents)
+    zero_cia = jnp.zeros(3, dtype=jnp.float32)
+
+    def _active_step(rng, current_obs, current_state):
+        masks = env.get_avail_actions(current_state)
+
+        blue_obs = jnp.stack([current_obs[name] for name in blue_agents])
+        blue_masks = jnp.stack([masks[name] for name in blue_agents])
+        rng, blue_key = jax.random.split(rng)
+        blue_pi, _ = blue_module.apply(blue_weights, blue_obs, blue_masks)
+        blue_actions = jnp.argmax(blue_pi.logits, axis=-1) if deterministic else blue_pi.sample(seed=blue_key)
+
+        red_obs = jnp.stack([current_obs[name] for name in red_agents])
+        red_masks = jnp.stack([masks[name] for name in red_agents])
+        rng, red_key = jax.random.split(rng)
+        red_pi, _ = red_module.apply(red_weights, red_obs, red_masks)
+        red_actions = jnp.argmax(red_pi.logits, axis=-1) if deterministic else red_pi.sample(seed=red_key)
+
+        actions = {
+            **{name: jnp.asarray(blue_actions[index], dtype=jnp.int32) for index, name in enumerate(blue_agents)},
+            **{name: jnp.asarray(red_actions[index], dtype=jnp.int32) for index, name in enumerate(red_agents)},
+        }
+        rng, step_key = jax.random.split(rng)
+        # ``JointPolicyCC4Env.step`` splits the caller key once before its
+        # transition. Use that first child here so bypassing auto-reset does
+        # not change the established reward-only rollout RNG stream.
+        transition_key, _ = jax.random.split(step_key)
+        next_obs, next_state, rewards, dones, _ = env.step_env(
+            transition_key,
+            current_state,
+            actions,
+        )
+        if score_cia:
+            from jaxborg.evaluation.cia.jax_resilience import score_resilience_state
+
+            cia = score_resilience_state(next_state.state, host_resilience_role)
+        else:
+            cia = zero_cia
+        reward = jnp.asarray(rewards[blue_agents[0]], dtype=jnp.float32)
+        done = jnp.asarray(dones["__all__"], dtype=jnp.bool_)
+        return rng, next_obs, next_state, reward, cia, done
+
+    def _scan_step(carry, _):
+        rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps = carry
+
+        def run_active(_):
+            next_rng, next_obs, next_state, reward, cia, done = _active_step(
+                rng,
+                current_obs,
+                current_state,
+            )
+            return (
+                next_rng,
+                next_obs,
+                next_state,
+                ~done,
+                reward_sum + reward,
+                cia_sum + cia,
+                valid_steps + jnp.int32(1),
+            )
+
+        def keep_terminal(_):
+            return (
+                rng,
+                current_obs,
+                current_state,
+                active,
+                reward_sum,
+                cia_sum,
+                valid_steps,
+            )
+
+        return jax.lax.cond(active, run_active, keep_terminal, operand=None), None
+
+    initial_carry = (
+        key,
+        obs,
+        state,
+        jnp.bool_(True),
+        jnp.float32(0.0),
+        zero_cia,
+        jnp.int32(0),
+    )
+    final_carry, _ = jax.lax.scan(_scan_step, initial_carry, xs=None, length=num_steps)
+    reward_sum = final_carry[4]
+    cia_sum = final_carry[5]
+    valid_steps = final_carry[6]
+    cia_mean = jnp.where(valid_steps > 0, cia_sum / jnp.maximum(valid_steps, 1), zero_cia)
+    return reward_sum, cia_mean
+
+
 def _torch_actions(policy: LoadedMatchupPolicy, obs, mask, seed: int, deterministic: bool):
     import torch
 
@@ -261,8 +397,9 @@ def run_matchup_episode(
     topology_path: str | Path | Sequence[str | Path] | None = None,
     env: Any | None = None,
     topology_index: int | jax.Array | None = None,
-) -> float:
-    """Run one episode and return the Blue game score."""
+    host_resilience_role: Any | None = None,
+) -> float | tuple[float, list[float]]:
+    """Run one episode and optionally return its temporal C/I/A means."""
     if set(policies) != {"blue", "red"}:
         raise ValueError("a learned matchup requires both Blue and Red policies")
     backends = {policy.backend for policy in policies.values()}
@@ -278,6 +415,29 @@ def run_matchup_episode(
         )
     elif topology_path is not None:
         raise ValueError("topology_path cannot be supplied with a pre-built env")
+
+    if backend == "jax":
+        score_cia = host_resilience_role is not None
+        role_array = jnp.asarray(host_resilience_role, dtype=jnp.int32) if score_cia else jnp.zeros(1, dtype=jnp.int32)
+        reward, episode_cia = _run_jax_matchup_episode_scan(
+            policies["blue"].weights,
+            policies["red"].weights,
+            jax.random.PRNGKey(seed),
+            jnp.asarray(0 if topology_index is None else topology_index, dtype=jnp.int32),
+            role_array,
+            blue_module=policies["blue"].module,
+            red_module=policies["red"].module,
+            env=env,
+            num_steps=variant.num_steps,
+            deterministic=deterministic,
+            use_topology_index=topology_index is not None,
+            score_cia=score_cia,
+        )
+        reward_value = float(jax.device_get(reward))
+        if not score_cia:
+            return reward_value
+        return reward_value, [float(value) for value in np.asarray(jax.device_get(episode_cia))]
+
     rng = jax.random.PRNGKey(seed)
     rng, reset_key = jax.random.split(rng)
     if topology_index is None:
@@ -286,6 +446,7 @@ def run_matchup_episode(
         obs, state = env.reset_at_topology(reset_key, topology_index)
     team_agents = {"blue": tuple(env.blue_agents), "red": tuple(env.red_agents)}
     total = 0.0
+    cia_step_scores = []
 
     for step_idx in range(variant.num_steps):
         masks = env.get_avail_actions(state)
@@ -330,11 +491,32 @@ def run_matchup_episode(
                 all_actions[name] = jnp.asarray(team_actions[idx], dtype=jnp.int32)
 
         rng, step_key = jax.random.split(rng)
-        obs, state, rewards, dones, _ = env.step(step_key, state, all_actions)
+        if host_resilience_role is None:
+            obs, state, rewards, dones, _ = env.step(step_key, state, all_actions)
+        else:
+            # Keep the terminal state available for CIA scoring. ``step``
+            # auto-resets and would otherwise score a healthy reset state on
+            # the final timestep. Preserve ``step``'s transition RNG by using
+            # the first child of its one key split.
+            transition_key, _ = jax.random.split(step_key)
+            obs, state, rewards, dones, _ = env.step_env(
+                transition_key,
+                state,
+                all_actions,
+            )
+            from jaxborg.evaluation.cia.jax_resilience import score_resilience_state
+
+            cia_step_scores.append(score_resilience_state(state.state, host_resilience_role))
         total += float(rewards[team_agents["blue"][0]])
         if bool(dones["__all__"]):
             break
-    return total
+    if host_resilience_role is None:
+        return total
+
+    from jaxborg.evaluation.cia.jax_resilience import mean_resilience_episode
+
+    episode_cia = mean_resilience_episode(jnp.stack(cia_step_scores))
+    return total, [float(value) for value in np.asarray(episode_cia)]
 
 
 def evaluate_matchup(
@@ -349,6 +531,7 @@ def evaluate_matchup(
     progress: bool = True,
     topology_path: str | Path | Sequence[str | Path] | None = None,
     topology_sampling: str = "exhaustive",
+    cia: Mapping[str, Any] | None = None,
 ) -> MatchupEvaluation:
     """Evaluate independently sourced learned policies in the JAX simulator.
 
@@ -373,6 +556,17 @@ def evaluate_matchup(
     if topology_sampling not in ("exhaustive", "random"):
         raise ValueError("topology_sampling must be 'exhaustive' or 'random'")
 
+    from jaxborg.evaluation.cia.config import coerce_cia_settings, validate_cia_evaluation
+
+    cia_settings = coerce_cia_settings(cia)
+    validate_cia_evaluation(
+        cia_settings,
+        variant=variant,
+        topology_sampling=topology_sampling,
+        topology_paths=topology_paths,
+        inspect_snapshots=cia_settings.enabled,
+    )
+
     # Load and stack the bank once. Reconstructing an environment per episode
     # becomes prohibitively expensive for exhaustive held-out evaluations.
     env = make_joint_jax_env(
@@ -384,41 +578,99 @@ def evaluate_matchup(
     blue_returns = []
     episode_seeds = []
     episode_topology_paths: list[str | None] = []
-    if topology_paths and topology_sampling == "exhaustive":
-        topology_assignments: list[tuple[int | None, str | None]] = [
-            (index, str(path)) for index, path in enumerate(topology_paths)
-        ]
-        sampling_label = "exhaustive"
-    elif topology_paths:
-        topology_assignments = [(None, None)]
-        sampling_label = "random"
-    else:
-        topology_assignments = [(None, None)]
-        sampling_label = "generative"
-    total_episodes = len(topology_assignments) * len(seeds) * episodes_per_seed
-    idx = 0
-    for topology_index, topology_label in topology_assignments:
-        for base_seed in seeds:
-            for episode_idx in range(episodes_per_seed):
-                episode_seed = base_seed + episode_idx
-                score = run_matchup_episode(
-                    policies,
-                    variant=variant,
-                    seed=episode_seed,
-                    deterministic=deterministic,
-                    env=env,
-                    topology_index=topology_index,
+    cia_episode_scores: list[list[float]] = []
+    episode_role_map_ids: list[str] = []
+    episode_topology_fingerprints: list[str] = []
+    topology_role_maps: list[dict[str, Any]] = []
+    if cia_settings.enabled:
+        from jaxborg.evaluation.cia.fixed_topology import build_evaluation_cases
+
+        cases = build_evaluation_cases(topology_paths, seeds, episodes_per_seed)
+        seen_topologies: set[int] = set()
+        for case in cases:
+            if case.topology_index in seen_topologies:
+                continue
+            seen_topologies.add(case.topology_index)
+            topology_role_maps.append(
+                {
+                    "topology_index": case.topology_index,
+                    "topology_path": str(case.topology_path),
+                    **case.audit_role_map(),
+                }
+            )
+
+        total_episodes = len(cases)
+        for idx, case in enumerate(cases, start=1):
+            episode_result = run_matchup_episode(
+                policies,
+                variant=variant,
+                seed=case.episode_seed,
+                deterministic=deterministic,
+                env=env,
+                topology_index=case.topology_index,
+                host_resilience_role=case.role_array,
+            )
+            score, episode_cia = episode_result
+            blue_returns.append(score)
+            cia_episode_scores.append(episode_cia)
+            episode_seeds.append(case.episode_seed)
+            episode_topology_paths.append(str(case.topology_path))
+            episode_role_map_ids.append(case.role_map_id)
+            episode_topology_fingerprints.append(case.topology_fingerprint)
+            if progress:
+                print(
+                    f"  ep {idx}/{total_episodes} (seed={case.episode_seed}, "
+                    f"topology={case.topology_path.name}): Blue {score:.1f}",
+                    flush=True,
                 )
-                blue_returns.append(score)
-                episode_seeds.append(episode_seed)
-                episode_topology_paths.append(topology_label)
-                idx += 1
-                if progress:
-                    topology_text = f", topology={Path(topology_label).name}" if topology_label else ""
-                    print(
-                        f"  ep {idx}/{total_episodes} (seed={episode_seed}{topology_text}): Blue {score:.1f}",
-                        flush=True,
+        sampling_label = "exhaustive"
+    else:
+        if topology_paths and topology_sampling == "exhaustive":
+            topology_assignments: list[tuple[int | None, str | None]] = [
+                (index, str(path)) for index, path in enumerate(topology_paths)
+            ]
+            sampling_label = "exhaustive"
+        elif topology_paths:
+            topology_assignments = [(None, None)]
+            sampling_label = "random"
+        else:
+            topology_assignments = [(None, None)]
+            sampling_label = "generative"
+        total_episodes = len(topology_assignments) * len(seeds) * episodes_per_seed
+        idx = 0
+        for topology_index, topology_label in topology_assignments:
+            for base_seed in seeds:
+                for episode_idx in range(episodes_per_seed):
+                    episode_seed = base_seed + episode_idx
+                    score = run_matchup_episode(
+                        policies,
+                        variant=variant,
+                        seed=episode_seed,
+                        deterministic=deterministic,
+                        env=env,
+                        topology_index=topology_index,
                     )
+                    blue_returns.append(score)
+                    episode_seeds.append(episode_seed)
+                    episode_topology_paths.append(topology_label)
+                    idx += 1
+                    if progress:
+                        topology_text = f", topology={Path(topology_label).name}" if topology_label else ""
+                        print(
+                            f"  ep {idx}/{total_episodes} (seed={episode_seed}{topology_text}): Blue {score:.1f}",
+                            flush=True,
+                        )
+
+    cia_summary = None
+    per_episode_cia: list[dict[str, float]] = []
+    if cia_settings.enabled:
+        from jaxborg.evaluation.cia.jax_resilience import (
+            resilience_episode_records,
+            summarize_resilience_episodes,
+        )
+
+        cia_summary = summarize_resilience_episodes(cia_episode_scores).to_dict()
+        per_episode_cia = resilience_episode_records(cia_episode_scores)
     return MatchupEvaluation(
         blue_returns=blue_returns,
         red_returns=[-score for score in blue_returns],
@@ -427,6 +679,13 @@ def evaluate_matchup(
         topology_paths=[str(path) for path in topology_paths],
         episode_topology_paths=episode_topology_paths,
         topology_sampling=sampling_label,
+        cia_metric=cia_settings.metric if cia_settings.enabled else None,
+        cia_config=cia_settings.as_dict() if cia_settings.enabled else None,
+        cia_summary=cia_summary,
+        per_episode_cia=per_episode_cia,
+        episode_role_map_ids=episode_role_map_ids,
+        episode_topology_fingerprints=episode_topology_fingerprints,
+        topology_role_maps=topology_role_maps,
     )
 
 

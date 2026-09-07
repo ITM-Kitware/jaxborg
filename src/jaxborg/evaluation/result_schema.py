@@ -16,7 +16,8 @@ class EvalRow(TypedDict, total=False):
     recipe_name: str
     recipe_path: str
     trained_backend: str  # "cyborg" or "jax" — which trainer produced the model
-    eval_env: str  # always "cyborg" today (CC4 contract eval)
+    eval_env: str  # "cyborg", "jax_joint", or "jax_fsm"
+    base_variant: str
     seeds: list[int]
     episodes_per_seed: int
     stochastic: bool
@@ -28,3 +29,10 @@ class EvalRow(TypedDict, total=False):
     train_run_id: str | None
     per_episode: list[float]
     per_episode_seeds: list[int]
+    cia_metric: str
+    cia_config: dict[str, object]
+    cia_summary: dict[str, object]
+    per_episode_cia: list[dict[str, float]]
+    episode_role_map_ids: list[str]
+    per_episode_topology_fingerprints: list[str]
+    topology_role_maps: list[dict[str, object]]

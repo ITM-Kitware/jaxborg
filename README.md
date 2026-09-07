@@ -104,8 +104,8 @@ uv run python scripts/eval/eval_recipe.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --episodes-per-seed 1 --seeds 42-141
 
-# Manual/re-run sweep: trained Blue vs FSM and all three CIA Red agents.
-# Works for either final .safetensors or .pt bundle.
+# Manual unpaired CybORG contract sweep: trained Blue vs scripted Red.
+# This does not replay JAX topology snapshots or fixed CIA role maps.
 JAX_PLATFORMS=cpu uv run python scripts/eval/eval_scripted_reds.py \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --seeds 1000-1099 --episodes-per-seed 1 --workers 8
@@ -166,10 +166,12 @@ Blue-vs-scripted-Red sweep.
 `recipes/cotraining.yaml` first runs `eval.play_priors` across its ten periodic
 checkpoints, then uses `eval.after_training` for two final checks: learned Blue
 versus its co-trained PPO Red in the JAX joint environment, followed by learned
-Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in CybORG. The two final jobs
-use the exact final bundle. Increase their seed ranges to `1000-1099` for a
-100-episode study. A failed required job makes the overall command fail after
-leaving the model and evaluation manifest safely on disk.
+Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in the JAX FSM environment.
+All four built-in evaluation paths replay the same held-out snapshot bank
+and fixed role assignment. The two final jobs use the exact final bundle.
+Increase their seed ranges to `1000-1099` for a larger study. A failed required
+job makes the overall command fail after leaving the model and evaluation
+manifest safely on disk.
 
 For more than one final-checkpoint evaluation, use the ordered
 `eval.after_training` list. Every item launches a fresh Python process after
@@ -254,7 +256,34 @@ source provenance. Legacy unversioned files remain Blue-only.
 
 ## Resilience Metric and Alignment
 
-The [Resilience metric](https://github.com/xcadet/CyberResilience) is implemented using a separate topology that labels an operational host in each subnet as CIA-tied assets. An example configuration can be found in the `recipe/resilience.yaml` configuration. Resilience metric training and evaluation can be done with the following:
+The [Resilience metric](https://github.com/xcadet/CyberResilience) uses AUTH,
+DB, and WEB roles on operational-zone servers. For paired JAX evaluation,
+enable the metric explicitly and generate a resilience-safe held-out bank:
+
+```yaml
+eval:
+  variant: cia_resilience
+  topology_sampling: exhaustive
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 100
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/my_eval_ops3
+```
+
+The snapshot contents determine a stable role-map ID, so copied or reordered
+topologies keep the same roles across checkpoint, play-priors, learned-matchup,
+and JAX scripted-Red evaluation. MLflow records signed C/I/A mean and sample
+standard deviation alongside reward; zero is healthy and more-negative values
+represent larger drops. The legacy `eval.cia_metric` key only selects the
+metric and does not enable collection.
+
+Offline CybORG trajectory scoring remains available separately:
 
 ```bash
 
