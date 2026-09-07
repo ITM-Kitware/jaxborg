@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from jaxborg.recipe import REPO_ROOT, load
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank
+
+
+def _reporter(scope: str) -> Callable[[int, int, Path, bool], None]:
+    """Report each snapshot as it lands so large banks show progress."""
+
+    def report(index: int, total: int, path: Path, reused: bool) -> None:
+        verb = "reused" if reused else "generated"
+        print(f"  {scope} [{index}/{total}] {verb} {path.name}", flush=True)
+
+    return report
 
 
 def main(argv: Sequence[str] | None = None) -> None:
@@ -34,7 +45,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         if args.dry_run:
             paths = expand_topology_bank(section, scope=scope, repo_root=REPO_ROOT)
         else:
-            paths = materialize_topology_bank(section, scope=scope, repo_root=REPO_ROOT)
+            paths = materialize_topology_bank(
+                section,
+                scope=scope,
+                repo_root=REPO_ROOT,
+                progress=_reporter(scope),
+            )
         print(f"{scope}: {len(paths)} topology snapshot(s)")
         for path in paths:
             print(f"  {path}")

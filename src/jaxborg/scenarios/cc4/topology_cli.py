@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import functools
 from pathlib import Path
 
 import jax
@@ -15,16 +16,28 @@ def _positive_seed(value: str) -> int:
     return seed
 
 
+@functools.lru_cache(maxsize=None)
+def _compiled_builder(op_zone_servers: int | None):
+    """Return an XLA-compiled ``build_topology`` for one topology shape.
+
+    Eager ``build_topology`` dispatches several hundred unfused ops per call
+    (~2s each), so materializing a 100-snapshot bank spends minutes in
+    dispatch overhead. Compiling once per ``op_zone_servers`` value and
+    reusing it across every seed in the bank drops that to ~1ms per seed.
+    """
+    return jax.jit(functools.partial(build_topology, op_zone_min_servers=op_zone_servers))
+
+
 def export_generated(
     seed: int,
     out: str | Path,
     *,
     op_zone_servers: int | None = None,
 ) -> None:
-    const = build_topology(
-        jax.random.PRNGKey(seed),
-        op_zone_min_servers=op_zone_servers,
-    )
+    const = _compiled_builder(op_zone_servers)(jax.random.PRNGKey(seed))
+    # ``jit`` traces the ``max_steps`` field into an int32 array; restore the
+    # Python int so snapshots stay byte-identical to eagerly built ones.
+    const = const.replace(max_steps=int(const.max_steps))
     save_topology(
         const,
         out,

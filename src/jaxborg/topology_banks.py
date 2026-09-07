@@ -6,7 +6,7 @@ import os
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from jaxborg.constants import MAX_SERVER_HOSTS
 
@@ -349,15 +349,22 @@ def materialize_topology_bank(
     *,
     scope: str,
     repo_root: Path,
+    progress: Callable[[int, int, Path, bool], None] | None = None,
 ) -> tuple[Path, ...]:
-    """Resolve an explicit bank or deterministically materialize a generated one."""
+    """Resolve an explicit bank or deterministically materialize a generated one.
+
+    ``progress`` is called once per seed as ``(index, total, path, reused)``
+    so long-running banks can report incrementally instead of appearing to
+    hang until every snapshot is written.
+    """
     generated = parse_topology_generation(section, scope=scope, repo_root=repo_root)
     if generated is None:
         return explicit_topology_bank(section, repo_root=repo_root)
 
     generated.cache_dir.mkdir(parents=True, exist_ok=True)
     source = generated.source
-    for seed, path in zip(generated.seeds, generated.paths, strict=True):
+    total = len(generated.seeds)
+    for index, (seed, path) in enumerate(zip(generated.seeds, generated.paths, strict=True), start=1):
         if path.exists():
             _validate_cached_snapshot(
                 path,
@@ -365,6 +372,8 @@ def materialize_topology_bank(
                 seed=seed,
                 op_zone_servers=generated.op_zone_servers,
             )
+            if progress is not None:
+                progress(index, total, path, True)
             continue
         handle = tempfile.NamedTemporaryFile(
             dir=generated.cache_dir,
@@ -407,6 +416,8 @@ def materialize_topology_bank(
                 )
         finally:
             temporary.unlink(missing_ok=True)
+        if progress is not None:
+            progress(index, total, path, False)
     return generated.paths
 
 
