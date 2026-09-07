@@ -8,10 +8,22 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
+from jaxborg.constants import MAX_SERVER_HOSTS
+
 MAX_TOPOLOGY_SEED = 2**32 - 1
 MAX_TOPOLOGY_BANK_SIZE = 10_000
 _GENERATOR_SOURCES = {"jax": "generated", "cyborg": "cyborg"}
-_GENERATION_KEYS = frozenset({"generator", "seed_start", "seed_end", "count", "cache_dir", "output_dir"})
+_GENERATION_KEYS = frozenset(
+    {
+        "generator",
+        "seed_start",
+        "seed_end",
+        "count",
+        "cache_dir",
+        "output_dir",
+        "op_zone_servers",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -19,6 +31,7 @@ class TopologyGenerationSpec:
     generator: str
     seeds: tuple[int, ...]
     cache_dir: Path
+    op_zone_servers: int | None = None
 
     @property
     def source(self) -> str:
@@ -26,7 +39,10 @@ class TopologyGenerationSpec:
 
     @property
     def paths(self) -> tuple[Path, ...]:
-        return tuple(self.cache_dir / f"{self.generator}_seed_{seed:010d}.snapshot.npz" for seed in self.seeds)
+        server_label = "" if self.op_zone_servers is None else f"_ops{self.op_zone_servers}"
+        return tuple(
+            self.cache_dir / f"{self.generator}{server_label}_seed_{seed:010d}.snapshot.npz" for seed in self.seeds
+        )
 
 
 def _absolute_path(value: str | Path, *, repo_root: Path) -> Path:
@@ -133,6 +149,20 @@ def parse_topology_generation(
             f"the maximum supported bank size is {MAX_TOPOLOGY_BANK_SIZE}"
         )
 
+    op_zone_servers = raw.get("op_zone_servers")
+    if op_zone_servers is not None:
+        op_zone_servers = _integer(
+            op_zone_servers,
+            field=f"{scope}.topology_generation.op_zone_servers",
+        )
+        if generator != "jax":
+            raise ValueError(f"{scope}.topology_generation.op_zone_servers is only supported by the jax generator")
+        # CC4 reserves at most six server slots per subnet. ``build_topology``
+        # uses this value as an exact operational-subnet count, despite its
+        # older ``op_zone_min_servers`` parameter name.
+        if not 1 <= op_zone_servers <= MAX_SERVER_HOSTS:
+            raise ValueError(f"{scope}.topology_generation.op_zone_servers must be in [1, {MAX_SERVER_HOSTS}]")
+
     cache_dir = raw.get("cache_dir")
     output_dir = raw.get("output_dir")
     if cache_dir is not None and output_dir is not None:
@@ -146,6 +176,7 @@ def parse_topology_generation(
         generator=str(generator),
         seeds=tuple(range(seed_start, seed_end + 1)),
         cache_dir=_absolute_path(directory, repo_root=repo_root),
+        op_zone_servers=op_zone_servers,
     )
 
 
@@ -222,7 +253,13 @@ def validate_eval_topology_override(
     validate_topology_split(candidate, repo_root=repo_root)
 
 
-def _validate_cached_snapshot(path: Path, *, source: str, seed: int) -> None:
+def _validate_cached_snapshot(
+    path: Path,
+    *,
+    source: str,
+    seed: int,
+    op_zone_servers: int | None = None,
+) -> None:
     from jaxborg.scenarios.cc4.topology import (
         TOPOLOGY_SNAPSHOT_FORMAT,
         TOPOLOGY_SNAPSHOT_VERSION,
@@ -241,6 +278,20 @@ def _validate_cached_snapshot(path: Path, *, source: str, seed: int) -> None:
     ):
         actual = (actual_source, actual_seed)
         raise ValueError(f"cached topology {path} has provenance {actual!r}; expected {(source, seed)!r}")
+    actual_op_zone_servers = metadata.get("op_zone_servers")
+    valid_server_provenance = (
+        actual_op_zone_servers is None
+        if op_zone_servers is None
+        else (
+            isinstance(actual_op_zone_servers, int)
+            and not isinstance(actual_op_zone_servers, bool)
+            and actual_op_zone_servers == op_zone_servers
+        )
+    )
+    if not valid_server_provenance:
+        raise ValueError(
+            f"cached topology {path} has op_zone_servers={actual_op_zone_servers!r}; expected {op_zone_servers!r}"
+        )
     actual_format_name = metadata.get("format")
     actual_format_version = metadata.get("format_version")
     actual_format = (actual_format_name, actual_format_version)
@@ -255,15 +306,38 @@ def _validate_cached_snapshot(path: Path, *, source: str, seed: int) -> None:
     # Validate required arrays and the scenario-configuration digest before a
     # generated file is published or reused. Generator revision metadata is
     # audit-only: the immutable snapshot defines the cached environment.
-    load_topology(path)
+    const = load_topology(path)
+    if op_zone_servers is not None:
+        import numpy as np
+
+        from jaxborg.constants import SUBNET_IDS
+
+        active_servers = np.asarray(const.host_active) & np.asarray(const.host_is_server)
+        host_subnets = np.asarray(const.host_subnet)
+        counts = tuple(
+            int(np.sum(active_servers & (host_subnets == SUBNET_IDS[subnet_name])))
+            for subnet_name in ("OPERATIONAL_ZONE_A", "OPERATIONAL_ZONE_B")
+        )
+        expected_counts = (op_zone_servers, op_zone_servers)
+        if counts != expected_counts:
+            raise ValueError(
+                f"cached topology {path} has operational server counts {counts}; "
+                f"expected {expected_counts} for op_zone_servers={op_zone_servers}"
+            )
 
 
-def _export_snapshot(generator: str, seed: int, path: Path) -> None:
+def _export_snapshot(
+    generator: str,
+    seed: int,
+    path: Path,
+    *,
+    op_zone_servers: int | None = None,
+) -> None:
     """Import only the selected generator's implementation."""
     if generator == "jax":
         from jaxborg.scenarios.cc4.topology_cli import export_generated
 
-        export_generated(seed, path)
+        export_generated(seed, path, op_zone_servers=op_zone_servers)
         return
     from jaxborg.scenarios.cc4.topology_cli import export_cyborg
 
@@ -285,7 +359,12 @@ def materialize_topology_bank(
     source = generated.source
     for seed, path in zip(generated.seeds, generated.paths, strict=True):
         if path.exists():
-            _validate_cached_snapshot(path, source=source, seed=seed)
+            _validate_cached_snapshot(
+                path,
+                source=source,
+                seed=seed,
+                op_zone_servers=generated.op_zone_servers,
+            )
             continue
         handle = tempfile.NamedTemporaryFile(
             dir=generated.cache_dir,
@@ -296,11 +375,22 @@ def materialize_topology_bank(
         temporary = Path(handle.name)
         handle.close()
         try:
-            _export_snapshot(generated.generator, seed, temporary)
+            if generated.op_zone_servers is None:
+                # Preserve the legacy private call shape for downstream test
+                # doubles and custom wrappers that only accept three args.
+                _export_snapshot(generated.generator, seed, temporary)
+            else:
+                _export_snapshot(
+                    generated.generator,
+                    seed,
+                    temporary,
+                    op_zone_servers=generated.op_zone_servers,
+                )
             _validate_cached_snapshot(
                 temporary,
                 source=source,
                 seed=seed,
+                op_zone_servers=generated.op_zone_servers,
             )
             temporary.chmod(0o644)
             # Hard-link publication is atomic and never replaces a winner
@@ -313,6 +403,7 @@ def materialize_topology_bank(
                     path,
                     source=source,
                     seed=seed,
+                    op_zone_servers=generated.op_zone_servers,
                 )
         finally:
             temporary.unlink(missing_ok=True)

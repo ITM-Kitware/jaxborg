@@ -15,12 +15,10 @@ from jaxborg.scenarios.cc4.topology_roles import (
     count_resilience_candidates,
 )
 
-# build_topology server count per op-zone-B subnet is uniform in [1, 7) → min 1.
-# Both alpha-zone subnets are forced to op_zone_min_servers when set; otherwise
-# they share the same [1, 6] random range. The candidate pool spans both zones,
-# so worst-case = 2 * min(alpha-server-floor) + 2.
-_OP_ZONE_B_MIN_PER_SUBNET = 1
-_GENERATIVE_ALPHA_RANDOM_FLOOR = 1
+# Both operational-zone subnets are forced to op_zone_min_servers when set;
+# otherwise they share the same [1, 6] random range. The candidate pool spans
+# exactly those two zones, so its worst case is twice the per-zone floor.
+_GENERATIVE_OP_ZONE_RANDOM_FLOOR = 1
 _MIN_RESILIENCE_CANDIDATES = 3
 
 
@@ -29,8 +27,8 @@ def _resilience_extras_factory(key, const):
 
 
 def _generative_min_candidates(op_zone_servers: int | None) -> int:
-    alpha_floor = _GENERATIVE_ALPHA_RANDOM_FLOOR if op_zone_servers is None else op_zone_servers
-    return 2 * alpha_floor + 2 * _OP_ZONE_B_MIN_PER_SUBNET
+    per_zone_floor = _GENERATIVE_OP_ZONE_RANDOM_FLOOR if op_zone_servers is None else op_zone_servers
+    return 2 * per_zone_floor
 
 
 def _validate_resilience_topology(

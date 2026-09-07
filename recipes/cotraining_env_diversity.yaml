@@ -54,7 +54,12 @@ train:
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
-  variant: cc4_stock
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
 
   # Keep this declaration identical to cotraining so both experiments are
   # compared on the exact same 100 held-out snapshots (seeds 100 through 199).
@@ -62,7 +67,8 @@ eval:
     generator: jax
     seed_start: 100
     count: 100
-    cache_dir: .bank_cache/topologies/cotraining/eval
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
   # At the end of training, compare every adjacent durable checkpoint in both
@@ -93,8 +99,10 @@ eval:
         - 1000-1009
 
     - name: scripted-reds
-      script: scripts/eval/eval_scripted_reds.py
+      script: scripts/eval/eval_scripted_reds_jax.py
       args:
+        - --recipe
+        - "{recipe}"
         - --reds
         - fsm
         - cia_c
@@ -104,19 +112,9 @@ eval:
         - 1000-1009
         - --episodes-per-seed
         - 1
-        - --workers
-        - 1
 
 jax:
   num_envs: 48
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 40  # 10 durable checkpoints over this 10M-step run.
-
-cleanrl:
-  num_envs: 48
-  rollout_length: 500
-  num_rollouts_per_update: 1
-  num_minibatches: 16
-  num_epochs: 4
   checkpoint_every_updates: 40  # 10 durable checkpoints over this 10M-step run.

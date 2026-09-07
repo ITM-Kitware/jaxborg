@@ -127,6 +127,15 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
             f"{source}: eval.topology_sampling must be 'exhaustive' or 'random', got {topology_sampling!r}"
         )
     validate_topology_split(recipe, repo_root=REPO_ROOT)
+    from jaxborg.evaluation.cia.config import CIAEvalSettings, validate_cia_evaluation
+
+    cia_settings = CIAEvalSettings.from_recipe(recipe)
+    validate_cia_evaluation(
+        cia_settings,
+        variant=eval_variant(recipe),
+        topology_sampling=topology_sampling,
+        topology_paths=expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT),
+    )
     backend = ev.get("policy_backend")
     if backend is not None and backend not in POLICY_BACKENDS:
         raise ValueError(f"{source}: eval.policy_backend must be one of {POLICY_BACKENDS}, got {backend!r}")
@@ -572,20 +581,33 @@ def project_eval(
     """
     validate_topology_split(recipe, repo_root=REPO_ROOT)
     ev = recipe.get("eval") or {}
+    from jaxborg.evaluation.cia.config import CIAEvalSettings, validate_cia_evaluation
+
+    cia_settings = CIAEvalSettings.from_recipe(recipe)
+    topology_bank = (
+        _resolve_topology_bank(ev, scope="eval")
+        if materialize_topologies
+        else expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT)
+    )
+    topology_sampling = ev.get("topology_sampling", "exhaustive")
+    validate_cia_evaluation(
+        cia_settings,
+        variant=eval_variant(recipe),
+        topology_sampling=topology_sampling,
+        topology_paths=topology_bank,
+        inspect_snapshots=materialize_topologies,
+    )
     return {
-        "cia_metric": ev.get("cia_metric", "resilience"),
+        "cia_metric": cia_settings.metric,
+        "CIA": cia_settings.as_dict(),
         "EVAL_VARIANT": eval_variant(recipe),
         "policy_backend": ev.get("policy_backend"),
         "policies": copy.deepcopy(ev.get("policies") or {}),
         "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
         "after_training": copy.deepcopy(ev.get("after_training") or []),
         "play_priors": copy.deepcopy(ev.get("play_priors", False)),
-        "TOPOLOGY_BANK": (
-            _resolve_topology_bank(ev, scope="eval")
-            if materialize_topologies
-            else expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT)
-        ),
-        "TOPOLOGY_SAMPLING": ev.get("topology_sampling", "exhaustive"),
+        "TOPOLOGY_BANK": topology_bank,
+        "TOPOLOGY_SAMPLING": topology_sampling,
     }
 
 

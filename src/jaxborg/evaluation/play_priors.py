@@ -199,6 +199,25 @@ def _result_row(
     focal_std = stdev(focal_returns) if len(focal_returns) > 1 else 0.0
     blue_mean = mean(evaluation.blue_returns)
     blue_std = stdev(evaluation.blue_returns) if len(evaluation.blue_returns) > 1 else 0.0
+    cia_fields: dict[str, Any] = {}
+    cia_summary = getattr(evaluation, "cia_summary", None)
+    if cia_summary is not None:
+        from jaxborg.evaluation.cia.config import CIAEvalSettings
+
+        settings = CIAEvalSettings.from_recipe(recipe)
+        cia_fields = {
+            "cia_metric": getattr(evaluation, "cia_metric", None) or settings.metric,
+            "cia_config": getattr(evaluation, "cia_config", None) or settings.as_dict(),
+            "cia_summary": cia_summary,
+            "per_episode_cia": getattr(evaluation, "per_episode_cia", []),
+            "episode_role_map_ids": getattr(evaluation, "episode_role_map_ids", []),
+            "per_episode_topology_fingerprints": getattr(
+                evaluation,
+                "episode_topology_fingerprints",
+                [],
+            ),
+            "topology_role_maps": getattr(evaluation, "topology_role_maps", []),
+        }
     return {
         "eval_id": f"{eval_id}_{current.steps}_{focal_team}",
         "eval_name": "play_priors",
@@ -241,6 +260,7 @@ def _result_row(
         "topology_paths": evaluation.topology_paths,
         "topology_sampling": evaluation.topology_sampling,
         "per_episode_topology_paths": evaluation.episode_topology_paths,
+        **cia_fields,
     }
 
 
@@ -283,8 +303,15 @@ def run_play_priors(
         attach = attach_eval_metrics
     else:
         attach = attach_metrics_fn
-    topology_paths = list(project_eval(dict(recipe), materialize_topologies=True)["TOPOLOGY_BANK"]) or None
-    topology_sampling = recipe.get("eval", {}).get("topology_sampling", "exhaustive")
+    projected_eval = project_eval(dict(recipe), materialize_topologies=True)
+    topology_paths = list(projected_eval["TOPOLOGY_BANK"]) or None
+    topology_sampling = projected_eval.get(
+        "TOPOLOGY_SAMPLING",
+        (recipe.get("eval") or {}).get("topology_sampling", "exhaustive"),
+    )
+    from jaxborg.evaluation.cia.config import CIAEvalSettings
+
+    cia_config = projected_eval.get("CIA", CIAEvalSettings.from_recipe(recipe).as_dict())
     variant = eval_variant(dict(recipe))
     eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}"
     rows: list[dict[str, Any]] = []
@@ -298,17 +325,18 @@ def run_play_priors(
         }
         for focal_team, (blue_path, red_path) in matchups.items():
             started = time.perf_counter()
-            evaluation = evaluate(
-                blue_path,
-                red_path,
-                backend=backend,
-                variant=variant,
-                seeds=list(settings.seeds),
-                episodes_per_seed=settings.episodes_per_seed,
-                deterministic=settings.deterministic,
-                topology_path=topology_paths,
-                topology_sampling=topology_sampling,
-            )
+            evaluation_kwargs = {
+                "backend": backend,
+                "variant": variant,
+                "seeds": list(settings.seeds),
+                "episodes_per_seed": settings.episodes_per_seed,
+                "deterministic": settings.deterministic,
+                "topology_path": topology_paths,
+                "topology_sampling": topology_sampling,
+            }
+            if cia_config["enabled"]:
+                evaluation_kwargs["cia"] = cia_config
+            evaluation = evaluate(blue_path, red_path, **evaluation_kwargs)
             row = _result_row(
                 evaluation=evaluation,
                 recipe=recipe,
@@ -334,15 +362,27 @@ def run_play_priors(
         train_run_id = recipe.get("run", {}).get("train_run_id")
         if train_run_id:
             try:
-                attach(
-                    train_run_id,
-                    {
-                        "eval.play_priors.blue_vs_prior_red.mean_reward": pair_rows["blue"]["mean_reward"],
-                        "eval.play_priors.red_vs_prior_blue.mean_reward": pair_rows["red"]["mean_reward"],
-                        "eval.play_priors.prior_step": float(prior.steps),
-                    },
-                    step=current.steps,
-                )
+                metrics = {
+                    "eval.play_priors.blue_vs_prior_red.mean_reward": pair_rows["blue"]["mean_reward"],
+                    "eval.play_priors.red_vs_prior_blue.mean_reward": pair_rows["red"]["mean_reward"],
+                    "eval.play_priors.prior_step": float(prior.steps),
+                }
+                if cia_config["enabled"]:
+                    from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
+
+                    metrics.update(
+                        cia_mlflow_metrics(
+                            "eval.play_priors.blue_vs_prior_red.cia",
+                            pair_rows["blue"]["cia_summary"],
+                        )
+                    )
+                    metrics.update(
+                        cia_mlflow_metrics(
+                            "eval.play_priors.red_vs_prior_blue.cia",
+                            pair_rows["red"]["cia_summary"],
+                        )
+                    )
+                attach(train_run_id, metrics, step=current.steps)
             except Exception as exc:
                 print(f"MLflow attach warning for {train_run_id}: {exc}", flush=True)
 

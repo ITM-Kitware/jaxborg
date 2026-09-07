@@ -9,13 +9,25 @@ from __future__ import annotations
 
 import random
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import numpy as np
 
 from jaxborg.mlflow_setup import CheckpointEvalSettings
 from jaxborg.recipe import eval_variant, project_eval, training_teams
+
+
+@dataclass(frozen=True)
+class TrainingCheckpointEvaluation:
+    """Structured reward and CIA result returned by an enabled checkpoint eval."""
+
+    mean_rewards: dict[str, float]
+    cia_summary: dict[str, Any]
+    per_episode_cia: list[dict[str, float]]
+    episode_role_map_ids: list[str]
+    topology_role_maps: list[dict[str, Any]]
 
 
 def _uses_learned_red(recipe: dict) -> bool:
@@ -58,7 +70,7 @@ def evaluate_training_checkpoint(
     seed: int,
     episodes_per_seed: int | None = None,
     episodes: int | None = None,
-) -> dict[str, float]:
+) -> dict[str, float] | TrainingCheckpointEvaluation:
     """Return mean checkpoint rewards for each policy team being evaluated.
 
     Learned Blue/Red matchups use the existing JAX-native matchup evaluator
@@ -93,23 +105,36 @@ def evaluate_training_checkpoint(
 
             eval_config = project_eval(recipe, materialize_topologies=True)
             topology_bank = eval_config["TOPOLOGY_BANK"] or None
-            result = evaluate_matchup(
-                checkpoint_path,
-                checkpoint_path,
-                backend=backend_name,
-                variant=variant,
-                seeds=[eval_seed],
-                episodes_per_seed=episodes_per_seed,
-                deterministic=deterministic,
-                progress=False,
-                topology_path=topology_bank,
-                topology_sampling=eval_config["TOPOLOGY_SAMPLING"],
-            )
+            from jaxborg.evaluation.cia.config import CIAEvalSettings
+
+            cia_config = eval_config.get("CIA", CIAEvalSettings.from_recipe(recipe).as_dict())
+            matchup_kwargs = {
+                "backend": backend_name,
+                "variant": variant,
+                "seeds": [eval_seed],
+                "episodes_per_seed": episodes_per_seed,
+                "deterministic": deterministic,
+                "progress": False,
+                "topology_path": topology_bank,
+                "topology_sampling": eval_config["TOPOLOGY_SAMPLING"],
+            }
+            if cia_config["enabled"]:
+                matchup_kwargs["cia"] = cia_config
+            result = evaluate_matchup(checkpoint_path, checkpoint_path, **matchup_kwargs)
             means = {
                 "blue": float(np.mean(result.blue_returns)),
                 "red": float(np.mean(result.red_returns)),
             }
-            return {team: means[team] for team in trainable_teams}
+            trained_means = {team: means[team] for team in trainable_teams}
+            if not cia_config["enabled"]:
+                return trained_means
+            return TrainingCheckpointEvaluation(
+                mean_rewards=trained_means,
+                cia_summary=result.cia_summary,
+                per_episode_cia=result.per_episode_cia,
+                episode_role_map_ids=result.episode_role_map_ids,
+                topology_role_maps=result.topology_role_maps,
+            )
 
         if backend_name == "jax":
             from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
@@ -138,4 +163,4 @@ def evaluate_training_checkpoint(
         return {"blue": float(np.mean(rewards))}
 
 
-__all__ = ["evaluate_training_checkpoint"]
+__all__ = ["TrainingCheckpointEvaluation", "evaluate_training_checkpoint"]

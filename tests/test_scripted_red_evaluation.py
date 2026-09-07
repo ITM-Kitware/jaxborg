@@ -61,8 +61,10 @@ def test_cotraining_recipe_runs_learned_then_scripted_red_evaluations():
     assert learned.args[learned.args.index("--policy-backend") + 1] == "{backend}"
     assert "--episodes-per-seed" in learned.args
     assert "--episodes" not in learned.args
-    assert Path(scripted.script).name == "eval_scripted_reds.py"
+    assert Path(scripted.script).name == "eval_scripted_reds_jax.py"
+    assert scripted.args[scripted.args.index("--recipe") + 1] == "{recipe}"
     assert scripted.args[scripted.args.index("--reds") + 1 : scripted.args.index("--seeds")] == DEFAULT_SCRIPTED_REDS
+    assert "--workers" not in scripted.args
     assert ScriptedRedEvalSettings.from_recipe(recipe).after_training is False
 
 

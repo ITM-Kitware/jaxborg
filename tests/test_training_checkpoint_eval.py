@@ -7,7 +7,10 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
-from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
+from jaxborg.evaluation.training_checkpoint import (
+    TrainingCheckpointEvaluation,
+    evaluate_training_checkpoint,
+)
 
 
 def _recipe(*, teams: str = "blue", eval_name: str = "cia_c") -> dict:
@@ -114,6 +117,56 @@ def test_joint_checkpoint_eval_uses_recipe_held_out_topologies(monkeypatch, tmp_
 
     assert captured["topology_path"] == bank
     assert captured["topology_sampling"] == "exhaustive"
+
+
+def test_joint_checkpoint_eval_returns_structured_cia_when_enabled(monkeypatch, tmp_path):
+    from jaxborg.evaluation import matchup_runner, training_checkpoint
+
+    bank = (tmp_path / "eval.snapshot.npz",)
+    cia = {"enabled": True, "metric": "resilience", "role_assignment": "fixed_per_topology"}
+    captured = {}
+    monkeypatch.setattr(
+        training_checkpoint,
+        "project_eval",
+        lambda recipe, **_kwargs: {
+            "TOPOLOGY_BANK": bank,
+            "TOPOLOGY_SAMPLING": "exhaustive",
+            "CIA": cia,
+        },
+    )
+
+    def fake_evaluate_matchup(*args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(
+            blue_returns=[3.0, 5.0],
+            red_returns=[-3.0, -5.0],
+            cia_summary={
+                "n": 2,
+                "c": {"mean": -1.0, "std": 0.0},
+                "i": {"mean": 0.0, "std": 0.0},
+                "a": {"mean": -1.0, "std": 0.0},
+            },
+            per_episode_cia=[{"c": -1.0, "i": 0.0, "a": -1.0}] * 2,
+            episode_role_map_ids=["fixed"] * 2,
+            topology_role_maps=[{"topology_path": str(bank[0]), "role_map_id": "fixed"}],
+        )
+
+    monkeypatch.setattr(matchup_runner, "evaluate_matchup", fake_evaluate_matchup)
+    recipe = _recipe(teams="both", eval_name="cia_resilience")
+    recipe["eval"]["cia"] = cia
+
+    result = evaluate_training_checkpoint(
+        "checkpoint.safetensors",
+        backend="jax",
+        recipe=recipe,
+        seed=3,
+        episodes_per_seed=2,
+    )
+
+    assert isinstance(result, TrainingCheckpointEvaluation)
+    assert result.mean_rewards == {"blue": 4.0, "red": -4.0}
+    assert result.episode_role_map_ids == ["fixed", "fixed"]
+    assert captured["cia"] == cia
 
 
 @pytest.mark.parametrize(
