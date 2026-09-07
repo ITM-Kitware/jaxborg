@@ -103,7 +103,8 @@ eval:
     required: true
 
   # Optional ordered final-checkpoint evaluation pipeline. Each script runs in
-  # a fresh CPU process and receives --model <exact-final-model> automatically.
+  # a fresh process and receives --model <exact-final-model> automatically.
+  # JAX-trained models default to CUDA; set JAX_PLATFORMS=cpu to override this.
   # Results from the built-in scripts go to $JAXBORG_EXP_DIR/eval/.
   # after_training:
   #   - name: stochastic-reds

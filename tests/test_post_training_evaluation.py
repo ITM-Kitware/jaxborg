@@ -103,6 +103,7 @@ def test_recipe_load_fails_before_training_when_evaluation_script_is_missing(tmp
 
 
 def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, monkeypatch):
+    monkeypatch.delenv("JAX_PLATFORMS", raising=False)
     model = _final_model(tmp_path)
     first = tmp_path / "first.py"
     second = tmp_path / "second.py"
@@ -134,7 +135,7 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
     assert calls[1][0][2:4] == ["--checkpoint", str(model.resolve())]
     assert calls[1][0][-2:] == ["--recipe", str(model.with_name("recipe_run.yaml").resolve())]
     assert calls[0][1]["check"] is True
-    assert calls[0][1]["env"]["JAX_PLATFORMS"] == "cpu"
+    assert calls[0][1]["env"]["JAX_PLATFORMS"] == "cuda"
     assert calls[0][1]["env"]["JAXBORG_EVAL_NAME"] == "first-way"
     assert calls[1][1]["env"]["JAXBORG_EVAL_NAME"] == "second-way"
     assert calls[0][1]["env"]["JAXBORG_TRAINED_BACKEND"] == "jax"
@@ -142,8 +143,30 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
     manifest = json.loads(manifest_path.read_text())
     assert manifest["model"] == str(model.resolve())
     assert manifest["backend"] == "jax"
+    assert manifest["jax_platforms"] == "cuda"
     assert [entry["name"] for entry in manifest["evaluations"]] == ["first-way", "second-way"]
     assert [entry["status"] for entry in manifest["evaluations"]] == ["succeeded", "succeeded"]
+
+
+def test_explicit_jax_platform_is_preserved(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0)
+
+    manifest_path = run_configured_evaluations_after_training(
+        model,
+        _recipe([{"name": "one", "script": str(script)}]),
+        run_subprocess=fake_run,
+    )
+
+    assert calls[0][1]["env"]["JAX_PLATFORMS"] == "cpu"
+    assert json.loads(manifest_path.read_text())["jax_platforms"] == "cpu"
 
 
 def test_optional_failure_is_recorded_and_does_not_stop_later_scripts(tmp_path):
