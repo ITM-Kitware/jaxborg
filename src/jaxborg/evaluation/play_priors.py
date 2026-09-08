@@ -27,6 +27,7 @@ _ALLOWED_SETTINGS = {
     "episodes_per_seed",
     "deterministic",
     "required",
+    "max_checkpoints",
 }
 
 
@@ -67,6 +68,7 @@ class PlayPriorsSettings:
     episodes_per_seed: int = 1
     deterministic: bool = False
     required: bool = True
+    max_checkpoints: int = 6
 
     @classmethod
     def from_recipe(cls, recipe: Mapping[str, Any]) -> PlayPriorsSettings:
@@ -90,16 +92,21 @@ class PlayPriorsSettings:
         deterministic = raw.get("deterministic", False)
         required = raw.get("required", True)
         episodes_per_seed = raw.get("episodes_per_seed", 1)
+        max_checkpoints = raw.get("max_checkpoints", 6)
         if not isinstance(enabled, bool):
             raise ValueError("eval.play_priors.enabled must be a boolean")
         if not isinstance(deterministic, bool):
             raise ValueError("eval.play_priors.deterministic must be a boolean")
         if not isinstance(required, bool):
             raise ValueError("eval.play_priors.required must be a boolean")
-        if isinstance(episodes_per_seed, bool) or not isinstance(episodes_per_seed, int):
-            raise ValueError("eval.play_priors.episodes_per_seed must be an integer")
+        for name, value in (("episodes_per_seed", episodes_per_seed), ("max_checkpoints", max_checkpoints)):
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"eval.play_priors.{name} must be an integer")
         if episodes_per_seed < 1:
             raise ValueError("eval.play_priors.episodes_per_seed must be positive")
+        # Two checkpoints is the smallest subsample with an adjacent pair.
+        if max_checkpoints < 2:
+            raise ValueError("eval.play_priors.max_checkpoints must be at least 2")
         seeds = _parse_seeds(raw.get("seeds", "1000-1009"))
         return cls(
             enabled=enabled,
@@ -107,6 +114,7 @@ class PlayPriorsSettings:
             episodes_per_seed=episodes_per_seed,
             deterministic=deterministic,
             required=required,
+            max_checkpoints=max_checkpoints,
         )
 
 
@@ -170,6 +178,25 @@ def find_periodic_checkpoints(
             checkpoints.append(PeriodicCheckpoint(path.resolve(), steps))
     checkpoints.sort(key=lambda checkpoint: checkpoint.steps)
     return checkpoints
+
+
+def select_checkpoints(
+    checkpoints: list[PeriodicCheckpoint],
+    max_checkpoints: int,
+) -> list[PeriodicCheckpoint]:
+    """Stride to an evenly spaced subsample keeping the first and last.
+
+    Every checkpoint evaluation scales in the number of checkpoints -- play
+    priors linearly, cross-play quadratically -- so each of them caps the count
+    under its own ``max_checkpoints`` key rather than sharing one global.
+    """
+    if max_checkpoints < 2:
+        raise ValueError("max_checkpoints must be at least 2")
+    total = len(checkpoints)
+    if total <= max_checkpoints:
+        return list(checkpoints)
+    picked = sorted({round(i * (total - 1) / (max_checkpoints - 1)) for i in range(max_checkpoints)})
+    return [checkpoints[index] for index in picked]
 
 
 def _git_commit() -> str:
@@ -288,6 +315,10 @@ def run_play_priors(
             "eval.play_priors requires at least two saved periodic checkpoints; "
             f"found {len(checkpoints)} in {resolved_model.parent}"
         )
+    # Pairs are adjacent within the subsample, not on disk: a 960k-step stride
+    # puts neighbours close enough that the two policies barely differ, and the
+    # untrimmed pair count is what makes this the longest eval in the chain.
+    checkpoints = select_checkpoints(checkpoints, settings.max_checkpoints)
 
     from jaxborg.recipe import eval_variant, project_eval
 
@@ -404,4 +435,5 @@ __all__ = [
     "PlayPriorsSettings",
     "find_periodic_checkpoints",
     "run_play_priors",
+    "select_checkpoints",
 ]

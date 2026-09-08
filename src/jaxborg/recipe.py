@@ -156,6 +156,8 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
 
     # Keep post-training evaluation failures discoverable at recipe-load time,
     # before an hours-long training run starts.
+    from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
+    from jaxborg.evaluation.cross_play import CrossPlaySettings
     from jaxborg.evaluation.play_priors import PlayPriorsSettings
     from jaxborg.evaluation.post_training import PostTrainingEvalSettings
     from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
@@ -163,22 +165,42 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     scripted_red = ScriptedRedEvalSettings.from_recipe(recipe)
     post_training = PostTrainingEvalSettings.from_recipe(recipe)
     play_priors = PlayPriorsSettings.from_recipe(recipe)
-    if play_priors.enabled and mode != "both":
-        raise ValueError(f"{source}: eval.play_priors is only supported when train.teams is 'both'")
-    if play_priors.enabled:
+    cross_play = CrossPlaySettings.from_recipe(recipe)
+    checkpoint_scripted_reds = CheckpointScriptedRedsSettings.from_recipe(recipe)
+    # Every checkpoint-history suite replays durable checkpoints, so they all
+    # need a positive checkpoint stride and a reserved pipeline name.
+    checkpoint_suites = (
+        ("play_priors", play_priors.enabled),
+        ("cross_play", cross_play.enabled),
+        ("checkpoint_scripted_reds", checkpoint_scripted_reds.enabled),
+    )
+    for name, enabled in checkpoint_suites:
+        if not enabled:
+            continue
         for section_name in ("jax", "cleanrl"):
             section = recipe.get(section_name, {}) or {}
             checkpoint_every = section.get("checkpoint_every_updates", 50)
             if isinstance(checkpoint_every, bool) or not isinstance(checkpoint_every, int) or checkpoint_every <= 0:
                 raise ValueError(
-                    f"{source}: eval.play_priors requires "
-                    f"{section_name}.checkpoint_every_updates to be a positive integer"
+                    f"{source}: eval.{name} requires {section_name}.checkpoint_every_updates to be a positive integer"
                 )
-    if play_priors.enabled and any(evaluation.name == "play_priors" for evaluation in post_training.evaluations):
-        raise ValueError(f"{source}: eval.after_training name 'play_priors' is reserved")
+        if any(evaluation.name == name for evaluation in post_training.evaluations):
+            raise ValueError(f"{source}: eval.after_training name {name!r} is reserved")
+    # Replaying a co-trained pair needs both policies in every bundle.
+    for name, enabled in checkpoint_suites[:2]:
+        if enabled and mode != "both":
+            raise ValueError(f"{source}: eval.{name} is only supported when train.teams is 'both'")
+    if checkpoint_scripted_reds.enabled:
+        # The suite scores Blue against fixed Reds and reports CIA per checkpoint.
+        if mode == "red":
+            raise ValueError(f"{source}: eval.checkpoint_scripted_reds requires Blue to be trainable")
+        if not cia_settings.enabled:
+            raise ValueError(f"{source}: eval.checkpoint_scripted_reds requires eval.cia.enabled: true")
     for evaluation in post_training.evaluations:
         evaluation.resolve_script()
-    if scripted_red.after_training and (post_training.evaluations or play_priors.enabled):
+    if scripted_red.after_training and (
+        post_training.evaluations or play_priors.enabled or cross_play.enabled or checkpoint_scripted_reds.enabled
+    ):
         raise ValueError(
             f"{source}: use either eval.after_training or legacy eval.scripted_red.after_training, not both"
         )
@@ -606,6 +628,8 @@ def project_eval(
         "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
         "after_training": copy.deepcopy(ev.get("after_training") or []),
         "play_priors": copy.deepcopy(ev.get("play_priors", False)),
+        "cross_play": copy.deepcopy(ev.get("cross_play", False)),
+        "checkpoint_scripted_reds": copy.deepcopy(ev.get("checkpoint_scripted_reds", False)),
         "TOPOLOGY_BANK": topology_bank,
         "TOPOLOGY_SAMPLING": topology_sampling,
     }
