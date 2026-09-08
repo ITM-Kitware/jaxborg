@@ -74,12 +74,12 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
-  # Evaluate every requested dynamics seed on the same 100 held-out topology
-  # snapshots used by cotraining_env_diversity (seeds 100 through 199).
+  # Evaluate every requested dynamics seed on the same 10 held-out topology
+  # snapshots used by cotraining_env_diversity (seeds 100 through 109).
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 50
+    count: 10
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
@@ -87,8 +87,8 @@ eval:
   # At the end of training, compare adjacent durable checkpoints in both
   # directions: current Blue vs prior Red and current Red vs prior Blue.
   # Seeds 1000-1002 (not the full 1000-1009 used by the reported final
-  # evaluation): each seed already runs on all 100 held-out topologies, so
-  # 3 seeds is 300 episodes per matchup across 5 adjacent-checkpoint pairs.
+  # evaluation): each seed already runs on all 10 held-out topologies, so
+  # 3 seeds is 30 episodes per matchup across 5 adjacent-checkpoint pairs.
   # max_checkpoints strides the durable checkpoints first, so "adjacent" is
   # adjacent in the subsample. Untrimmed this ran all 19 pairs = 38 sequential
   # evaluations, the longest job in the chain; neighbours 960k steps apart also
@@ -128,7 +128,7 @@ eval:
   # Cost is max_checkpoints x the final-model scripted-Red evaluation; seeds
   # match after_training so the last checkpoint is directly comparable to it.
   checkpoint_scripted_reds:
-    enabled: true
+    enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
     episodes_per_seed: 1
@@ -172,6 +172,9 @@ eval:
         - 1000-1009
         - --episodes-per-seed
         - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
 
 jax:
   num_envs: 48

@@ -191,7 +191,7 @@ def run_checkpoint_scripted_reds(
             seeds=list(settings.seeds),
             episodes_per_seed=settings.episodes_per_seed,
             deterministic=settings.deterministic,
-            progress=False,
+            progress=True,
             eval_name="checkpoint_scripted_reds",
             recipe=recipe,
         )

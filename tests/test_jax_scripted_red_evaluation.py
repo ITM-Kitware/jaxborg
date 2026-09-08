@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+import jax
 import jax.numpy as jnp
 import numpy as np
 import pytest
@@ -17,6 +18,7 @@ from jaxborg.evaluation.jax_scripted_red import (
 )
 from jaxborg.evaluation.matchup_runner import LoadedMatchupPolicy
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK, CIA_RESILIENCE
+from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_NONE, ROLE_WEB
 
 _CIA_CONFIG = {
     "enabled": True,
@@ -287,3 +289,166 @@ def test_mlflow_metrics_preserve_rewards_and_add_cia(monkeypatch):
 def test_legacy_metric_alias_does_not_enable_jax_scripted_cia():
     with pytest.raises(ValueError, match="eval.cia.enabled"):
         jax_scripted_red._cia_recipe_configuration({"eval": {"cia_metric": "resilience"}})
+
+
+class _BatchedEnv:
+    """Env exposing the reset/step surface ``_supports_batched_eval`` requires."""
+
+    agents = ("blue_0",)
+
+    def reset(self, key):  # pragma: no cover - surface probe only
+        raise AssertionError("batched sweep resets inside the vmapped scan")
+
+    def reset_at_topology(self, key, topology_index):  # pragma: no cover
+        raise AssertionError("batched sweep resets inside the vmapped scan")
+
+    def step_env(self, key, state, actions):  # pragma: no cover
+        raise AssertionError("batched sweep steps inside the vmapped scan")
+
+
+# Each case carries a valid AUTH/DB/WEB map; only the topology index varies.
+_BANK_ROLES = (ROLE_NONE, ROLE_AUTH, ROLE_DB, ROLE_WEB)
+
+
+def _fake_batched_scan(weights, key, topology_index, role_map, **kwargs):
+    """Derive reward/CIA from the traced case inputs so ``vmap`` can map it.
+
+    The reward mixes the topology index with a draw from the episode key, so a
+    chunk that mismatched either would not reproduce the sequential values.
+    """
+    del weights, role_map, kwargs
+    index = jnp.asarray(topology_index, dtype=jnp.float32)
+    reward = index * 10.0 + jax.random.uniform(key)
+    return reward, jnp.stack([-index, -2.0 * index, -3.0 * index])
+
+
+def _expected_reward(case: EvaluationCase) -> float:
+    return 10.0 * case.topology_index + float(jax.random.uniform(jax.random.PRNGKey(case.episode_seed)))
+
+
+def _bank_cases(count: int, seeds: tuple[int, ...]) -> tuple[EvaluationCase, ...]:
+    return tuple(
+        EvaluationCase(
+            topology_index=topology_index,
+            topology_path=Path(f"t{topology_index}.snapshot.npz"),
+            topology_fingerprint=f"fp-{topology_index}",
+            base_seed=seed,
+            replicate_index=0,
+            episode_seed=seed,
+            host_roles=_BANK_ROLES,
+            role_map_id=f"map-{topology_index}",
+        )
+        for topology_index in range(count)
+        for seed in seeds
+    )
+
+
+def test_jax_sweep_vmaps_cases_and_preserves_per_case_order(monkeypatch, tmp_path):
+    """Batched chunks must reproduce the sequential per-case results in order."""
+    model = tmp_path / "model.safetensors"
+    model.touch()
+    topology = tmp_path / "topology.snapshot.npz"
+    topology.touch()
+    cases = _bank_cases(5, (1000, 1001))
+
+    monkeypatch.setenv("JAXBORG_EVAL_BATCH_SIZE", "4")  # 10 cases -> 4 + 4 + 2
+    monkeypatch.setattr(jax_scripted_red, "build_evaluation_cases", lambda *args: cases)
+    monkeypatch.setattr(jax_scripted_red, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(jax_scripted_red, "_run_jax_scripted_red_episode_scan", _fake_batched_scan)
+
+    def unreachable(*args, **kwargs):  # pragma: no cover - failure sentinel
+        raise AssertionError("a JAX Blue policy must not use the per-case seam")
+
+    monkeypatch.setattr(jax_scripted_red, "run_jax_scripted_red_episode", unreachable)
+
+    rows = evaluate_jax_scripted_reds(
+        model,
+        base_variant=CIA_RESILIENCE,
+        topology_paths=[topology],
+        reds=("cia_a",),
+        seeds=(1000, 1001),
+        recipe={"meta": {"name": "co-train"}, "eval": {"cia": _CIA_CONFIG}},
+        policy_loader=lambda path, *, team, backend: LoadedMatchupPolicy(
+            team, backend, object(), object(), {"bundle_trainable": True}
+        ),
+        env_factory=lambda variant, **kwargs: _BatchedEnv(),
+    )
+
+    (row,) = rows
+    expected = [_expected_reward(case) for case in cases]
+    assert row["per_episode"] == pytest.approx(expected)
+    assert row["n_episodes"] == len(cases)
+    assert [record["c"] for record in row["per_episode_cia"]] == pytest.approx(
+        [-float(case.topology_index) for case in cases]
+    )
+    assert row["episode_role_map_ids"] == [case.role_map_id for case in cases]
+
+
+def test_jax_sweep_batches_report_progress_per_chunk(monkeypatch, tmp_path, capsys):
+    model = tmp_path / "model.safetensors"
+    model.touch()
+    topology = tmp_path / "topology.snapshot.npz"
+    topology.touch()
+    cases = _bank_cases(5, (1000,))
+
+    monkeypatch.setenv("JAXBORG_EVAL_BATCH_SIZE", "2")
+    monkeypatch.setattr(jax_scripted_red, "build_evaluation_cases", lambda *args: cases)
+    monkeypatch.setattr(jax_scripted_red, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(jax_scripted_red, "_run_jax_scripted_red_episode_scan", _fake_batched_scan)
+
+    evaluate_jax_scripted_reds(
+        model,
+        base_variant=CIA_RESILIENCE,
+        topology_paths=[topology],
+        reds=("cia_a",),
+        seeds=(1000,),
+        progress=True,
+        recipe={"meta": {"name": "co-train"}, "eval": {"cia": _CIA_CONFIG}},
+        policy_loader=lambda path, *, team, backend: LoadedMatchupPolicy(
+            team, backend, object(), object(), {"bundle_trainable": True}
+        ),
+        env_factory=lambda variant, **kwargs: _BatchedEnv(),
+    )
+
+    printed = capsys.readouterr().out
+    assert "  cia_a episodes 2/5" in printed
+    assert "  cia_a episodes 5/5" in printed
+
+
+def test_torch_blue_sweep_keeps_the_per_case_seam(monkeypatch, tmp_path):
+    """Only a JAX policy vmaps; Torch Blue inference stays on the host."""
+    model = tmp_path / "model.pt"
+    model.touch()
+    topology = tmp_path / "topology.snapshot.npz"
+    topology.touch()
+    cases = _bank_cases(2, (1000,))
+
+    monkeypatch.setattr(jax_scripted_red, "build_evaluation_cases", lambda *args: cases)
+    monkeypatch.setattr(jax_scripted_red, "_git_commit", lambda: "abc123")
+
+    def unreachable(*args, **kwargs):  # pragma: no cover - failure sentinel
+        raise AssertionError("Torch Blue must not be vmapped")
+
+    monkeypatch.setattr(jax_scripted_red, "_run_jax_scripted_red_episodes_batched", unreachable)
+    seen = []
+
+    def fake_episode(policy, *, env, variant, case, deterministic):
+        seen.append(case.role_map_id)
+        return JaxScriptedRedEpisode(1.0, (-1.0, -2.0, -3.0))
+
+    monkeypatch.setattr(jax_scripted_red, "run_jax_scripted_red_episode", fake_episode)
+
+    evaluate_jax_scripted_reds(
+        model,
+        base_variant=CIA_RESILIENCE,
+        topology_paths=[topology],
+        reds=("cia_a",),
+        seeds=(1000,),
+        recipe={"meta": {"name": "co-train"}, "eval": {"cia": _CIA_CONFIG}},
+        policy_loader=lambda path, *, team, backend: LoadedMatchupPolicy(
+            team, backend, object(), object(), {"bundle_trainable": True}
+        ),
+        env_factory=lambda variant, **kwargs: _BatchedEnv(),
+    )
+
+    assert seen == [case.role_map_id for case in cases]

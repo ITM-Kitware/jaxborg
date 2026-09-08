@@ -36,6 +36,8 @@ from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics, cia_summary_dic
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.evaluation.matchup_runner import (
     LoadedMatchupPolicy,
+    _eval_batch_size,
+    _supports_batched_eval,
     _torch_actions,
     cyborg_blue_flat_to_jax_lookup,
     jax_mask_to_cyborg_blue,
@@ -248,6 +250,65 @@ def _run_jax_scripted_red_episode_scan(
     return reward_sum, cia_mean
 
 
+def _run_jax_scripted_red_episodes_batched(
+    policy: LoadedMatchupPolicy,
+    *,
+    env: Any,
+    variant: GameVariant,
+    cases: Sequence[EvaluationCase],
+    deterministic: bool,
+    batch_size: int | None = None,
+    progress: bool = False,
+    progress_label: str = "",
+) -> list[JaxScriptedRedEpisode]:
+    """Evaluate many fixed-topology episodes per compiled call via ``jax.vmap``.
+
+    One episode is a 500-step scan over a single environment, which leaves an
+    accelerator almost entirely idle -- the work per kernel is tiny and the
+    cost is dispatch latency. Mapping the identical per-episode scan over a
+    batch gives the device the same shape of work training already runs at.
+    Results are unchanged: each case keeps its own key, topology index and
+    fixed role map, so this is the sequential sweep evaluated in parallel.
+    """
+    count = len(cases)
+    if count == 0:
+        return []
+    chunk = batch_size or _eval_batch_size()
+
+    scan = partial(
+        _run_jax_scripted_red_episode_scan,
+        policy_module=policy.module,
+        env=env,
+        num_steps=variant.num_steps,
+        deterministic=deterministic,
+    )
+    # Weights are shared across the batch; keys, topologies and roles vary.
+    batched = jax.vmap(scan, in_axes=(None, 0, 0, 0))
+
+    keys = jnp.stack([jax.random.PRNGKey(case.episode_seed) for case in cases])
+    indices = jnp.asarray([case.topology_index for case in cases], dtype=jnp.int32)
+    roles = jnp.stack([case.role_array for case in cases])
+
+    episodes: list[JaxScriptedRedEpisode] = []
+    for start in range(0, count, chunk):
+        stop = min(start + chunk, count)
+        reward_batch, cia_batch = batched(
+            policy.weights,
+            keys[start:stop],
+            indices[start:stop],
+            roles[start:stop],
+        )
+        rewards = np.asarray(jax.device_get(reward_batch))
+        cia_rows = np.asarray(jax.device_get(cia_batch))
+        episodes.extend(
+            JaxScriptedRedEpisode(reward=float(reward), cia=(float(c), float(i), float(a)))
+            for reward, (c, i, a) in zip(rewards, cia_rows, strict=True)
+        )
+        if progress:
+            print(f"  {progress_label}episodes {stop}/{count}", flush=True)
+    return episodes
+
+
 def _torch_blue_actions(
     policy: LoadedMatchupPolicy,
     obs_batch: jax.Array,
@@ -449,21 +510,34 @@ def evaluate_jax_scripted_reds(
         )
         started = time.perf_counter()
         episodes: list[JaxScriptedRedEpisode] = []
-        for index, case in enumerate(cases, 1):
-            result = run_episode(
+        # A JAX Blue policy vmaps the whole per-episode scan; Torch Blue and an
+        # injected ``episode_runner`` keep the one-case-at-a-time seam.
+        if episode_runner is None and policy.backend == "jax" and _supports_batched_eval(env):
+            episodes = _run_jax_scripted_red_episodes_batched(
                 policy,
                 env=env,
                 variant=variant,
-                case=case,
+                cases=cases,
                 deterministic=deterministic,
+                progress=progress,
+                progress_label=f"{red} ",
             )
-            episodes.append(result)
-            if progress:
-                print(
-                    f"  {red} ep {index}/{len(cases)} "
-                    f"(topology={case.topology_path.name}, seed={case.episode_seed}): {result.reward:.1f}",
-                    flush=True,
+        else:
+            for index, case in enumerate(cases, 1):
+                result = run_episode(
+                    policy,
+                    env=env,
+                    variant=variant,
+                    case=case,
+                    deterministic=deterministic,
                 )
+                episodes.append(result)
+                if progress:
+                    print(
+                        f"  {red} ep {index}/{len(cases)} "
+                        f"(topology={case.topology_path.name}, seed={case.episode_seed}): {result.reward:.1f}",
+                        flush=True,
+                    )
 
         rewards = [episode.reward for episode in episodes]
         episode_cia = np.asarray([episode.cia for episode in episodes], dtype=np.float64)
