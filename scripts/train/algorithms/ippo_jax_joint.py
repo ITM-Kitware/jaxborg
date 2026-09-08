@@ -19,6 +19,11 @@ from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 
 TEAMS = ("blue", "red")
 
+# Signed payoff terms; these four sum to a team's rollout return.
+REWARD_COMPONENTS = ("reward_ria", "reward_lwf", "reward_asf", "action_cost")
+# Unsigned game outcomes shared by both teams.
+GAME_COUNTERS = ("impact_count", "green_lwf_count", "green_asf_count")
+
 
 class TeamTransition(NamedTuple):
     done: jax.Array
@@ -114,6 +119,57 @@ def _make_optimizer(config: Mapping[str, Any]):
     return optax.adam(float(config["LR"]), eps=1e-5)
 
 
+def compute_gae(
+    traj: TeamTransition,
+    last_value: jax.Array,
+    *,
+    gamma: float,
+    gae_lambda: float,
+) -> tuple[jax.Array, jax.Array]:
+    """Semi-MDP GAE for teams whose agents go dormant mid-episode.
+
+    ``critic_mask`` marks the rows where the agent is live and its value head
+    is a trained sample.  A Red agent that loses every session goes dormant and
+    is later revived by session reassignment, so dormancy is a gap inside one
+    episode, not a terminal state.  Rows in a gap therefore:
+
+    * contribute no advantage of their own (they are not decision points),
+    * accumulate the team payoff into the bootstrap so the preceding live row
+      sees what the gap earned, and
+    * never leak their own value head into the bootstrap, because that head is
+      excluded from the value loss and so is never trained.
+
+    ``done`` must mark real episode termination only. Folding dormancy into it
+    asserts a zero continuation value and hides every reward that lands after a
+    Red eviction, which trains Red to be myopic.
+
+    Teams whose ``critic_mask`` is all ones (Blue) reduce exactly to textbook
+    GAE. Returns ``(advantages, targets)``.
+    """
+
+    def gae_step(carry, transition):
+        gae, bootstrap = carry
+        alive = 1.0 - transition.done
+        live = transition.critic_mask
+        carried = gamma * gae_lambda * alive * gae
+        delta = transition.reward + gamma * bootstrap * alive - transition.value
+        # Live rows emit a TD error; gap rows only decay what follows them, so
+        # credit still crosses the gap discounted by its true length.
+        gae = jnp.where(live > 0, delta + carried, carried)
+        # A gap row hands back the payoff it collected instead of its own value.
+        bootstrap = jnp.where(live > 0, transition.value, transition.reward + gamma * bootstrap * alive)
+        return (gae, bootstrap), gae * live
+
+    _, advantages = jax.lax.scan(
+        gae_step,
+        (jnp.zeros_like(last_value), last_value),
+        traj,
+        reverse=True,
+        unroll=8,
+    )
+    return advantages, advantages + traj.value
+
+
 def _make_team_updater(network, config: Mapping[str, Any]):
     """Create one PPO update function for one homogeneous team batch."""
 
@@ -128,22 +184,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
     update_epochs = int(config["UPDATE_EPOCHS"])
 
     def update(train_state, traj, last_value, rng):
-        def gae_step(carry, transition):
-            gae, next_value = carry
-            delta = transition.reward + gamma * next_value * (1.0 - transition.done) - transition.value
-            gae = delta + gamma * gae_lambda * (1.0 - transition.done) * gae
-            # Inactive rows are not critic samples and may span many ticks.
-            gae = gae * transition.critic_mask
-            return (gae, transition.value), gae
-
-        _, advantages = jax.lax.scan(
-            gae_step,
-            (jnp.zeros_like(last_value), last_value),
-            traj,
-            reverse=True,
-            unroll=8,
-        )
-        targets = advantages + traj.value
+        advantages, targets = compute_gae(traj, last_value, gamma=gamma, gae_lambda=gae_lambda)
         advantages = _masked_normalize(advantages, traj.actor_mask)
 
         # T x E x A -> one independent-IPPO sample axis.
@@ -300,15 +341,7 @@ def make_joint_train(
         return states
 
     updaters = {team: _make_team_updater(networks[team], team_configs[team]) for team in trainable_teams}
-    info_keys = (
-        "reward_ria",
-        "reward_lwf",
-        "reward_asf",
-        "action_cost",
-        "impact_count",
-        "green_lwf_count",
-        "green_asf_count",
-    )
+    info_keys = REWARD_COMPONENTS + GAME_COUNTERS
 
     # Do not donate the nested team state here. Small scalar leaves in the two
     # reward-normalizer pytrees may alias after construction, and XLA rejects
@@ -374,9 +407,13 @@ def make_joint_train(
                     active_before = before.red_agent_active
                     idle_before = before.red_pending_ticks == 0
                     actor_mask = (active_before & idle_before).astype(jnp.float32)
+                    # Dormancy is a gap, not a terminal state: an evicted Red
+                    # agent is revived by session reassignment later in the same
+                    # episode. `critic_mask` keeps those rows out of the losses;
+                    # `done` stays real termination so compute_gae can bootstrap
+                    # across the gap instead of zeroing Red's future.
                     critic_mask = active_before.astype(jnp.float32)
-                    active_after = new_env_state.state.red_agent_active
-                    transition_done = jnp.maximum(done_env[:, None], (~active_after).astype(jnp.float32))
+                    transition_done = jnp.repeat(done_env[:, None], num_agents[team], axis=1)
                 transitions[team] = TeamTransition(
                     done=transition_done,
                     action=team_actions,
@@ -425,6 +462,11 @@ def make_joint_train(
                     "grad_norm": zero,
                 }
             sign = 1.0 if team == "blue" else -1.0
+            # Signed so the four components still sum to raw_rollout_return.
+            # Logging them apart separates "Red landed impacts" from "Blue
+            # burned budget", which the zero-sum total cannot distinguish.
+            for component in REWARD_COMPONENTS:
+                team_metrics[component] = sign * info_sums[component].mean()
             raw_return = (
                 sign
                 * (
@@ -443,6 +485,10 @@ def make_joint_train(
         metrics["game"] = {
             "blue_return": metrics["blue"]["raw_rollout_return"],
             "red_return": metrics["red"]["raw_rollout_return"],
+            # Unsigned game outcomes. Unlike the returns these are not
+            # zero-sum, so they show absolute progress for one team without
+            # the other team's decline confounding it.
+            **{counter: info_sums[counter].mean() for counter in GAME_COUNTERS},
         }
         return train_states, env_state, obs, rng, reward_norm_states, metrics
 
@@ -450,8 +496,11 @@ def make_joint_train(
 
 
 __all__ = [
+    "GAME_COUNTERS",
+    "REWARD_COMPONENTS",
     "RewardNormState",
     "TeamTransition",
+    "compute_gae",
     "initial_reward_norm_state",
     "make_joint_train",
 ]

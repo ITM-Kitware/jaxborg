@@ -8,9 +8,12 @@ import pytest
 import yaml
 
 from jaxborg.evaluation.play_priors import (
+    PeriodicCheckpoint,
     PlayPriorsSettings,
+    _periodic_step_stride,
     find_periodic_checkpoints,
     run_play_priors,
+    select_checkpoints,
 )
 from jaxborg.recipe import load
 
@@ -47,6 +50,33 @@ def _run_files(tmp_path: Path, suffix: str = ".safetensors") -> Path:
     for steps in (40, 60, 80):
         (run_dir / f"checkpoint_{steps}{suffix}").touch()
     return model
+
+
+def _checkpoints(count: int) -> list[PeriodicCheckpoint]:
+    return [PeriodicCheckpoint(Path(f"/tmp/checkpoint_{i * 40}.safetensors"), i * 40) for i in range(1, count + 1)]
+
+
+def test_select_checkpoints_strides_evenly_and_keeps_the_endpoints():
+    checkpoints = _checkpoints(20)
+
+    picked = select_checkpoints(checkpoints, 6)
+
+    assert len(picked) == 6
+    assert picked[0] is checkpoints[0]
+    assert picked[-1] is checkpoints[-1]
+    assert [c.steps for c in picked] == sorted(c.steps for c in picked)
+    # Fewer checkpoints than the cap are all kept.
+    assert select_checkpoints(checkpoints[:4], 6) == checkpoints[:4]
+
+
+def test_settings_cap_checkpoints_independently_of_the_other_evaluations():
+    # The cap is scoped to this evaluation; nothing reads a global fallback.
+    assert PlayPriorsSettings.from_recipe(_recipe()).max_checkpoints == 6
+    assert PlayPriorsSettings.from_recipe(_recipe(play_priors={"max_checkpoints": 11})).max_checkpoints == 11
+    with pytest.raises(ValueError, match="max_checkpoints must be at least 2"):
+        PlayPriorsSettings.from_recipe(_recipe(play_priors={"max_checkpoints": 1}))
+    with pytest.raises(ValueError, match="max_checkpoints must be an integer"):
+        PlayPriorsSettings.from_recipe(_recipe(play_priors={"max_checkpoints": 2.5}))
 
 
 def test_settings_accept_boolean_and_expanded_mapping():
@@ -183,13 +213,23 @@ def test_evaluates_each_adjacent_pair_in_both_directions_and_logs_curves(tmp_pat
     ]
 
 
-def test_cotraining_recipe_retains_ten_periodic_checkpoints():
-    recipe = load("cotraining")
+@pytest.mark.parametrize("recipe_name", ["cotraining", "cotraining_env_diversity"])
+def test_cotraining_recipes_retain_enough_periodic_checkpoints_for_play_priors(recipe_name):
+    """Pin the recipe/eval contract, not a checkpoint count.
+
+    The count moves whenever the training budget changes; what must hold is
+    that play-priors still has pairs to compare and that the recipe's stride
+    agrees with the one ``find_periodic_checkpoints`` filters on.
+    """
+    recipe = load(recipe_name)
     steps_per_update = recipe["jax"]["num_envs"] * recipe["train"]["episode_length"]
     num_updates = recipe["train"]["total_timesteps"] // steps_per_update
     checkpoint_every = recipe["jax"]["checkpoint_every_updates"]
+    checkpoints = range(checkpoint_every, num_updates + 1, checkpoint_every)
 
-    assert len(range(checkpoint_every, num_updates + 1, checkpoint_every)) == 10
+    # run_play_priors raises below two checkpoints (no adjacent pair to compare).
+    assert len(checkpoints) >= 2
+    assert _periodic_step_stride(recipe, "jax") == checkpoint_every * steps_per_update
     assert PlayPriorsSettings.from_recipe(recipe).enabled
 
 

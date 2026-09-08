@@ -72,6 +72,12 @@ from jaxborg.recipe import (
     training_teams,
 )
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from scripts.train.algorithms.ippo_jax_joint import (
+    GAME_COUNTERS as joint_game_counters,
+)
+from scripts.train.algorithms.ippo_jax_joint import (
+    REWARD_COMPONENTS as joint_reward_components,
+)
 from scripts.train.algorithms.ippo_jax_joint import initial_reward_norm_state, make_joint_train
 
 
@@ -499,7 +505,10 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 train_episode_reward_mean=float(blue["raw_rollout_return"]),
                 ppo_grad_norm=float(primary["grad_norm"]),
                 ppo_pre_clip_grad_norm=float(primary["pre_clip_grad_norm"]),
-                backend_extras={"jax.game.red_return": float(metrics["game"]["red_return"])},
+                backend_extras={
+                    "jax.game.red_return": float(metrics["game"]["red_return"]),
+                    **{f"jax.game.{counter}": float(metrics["game"][counter]) for counter in joint_game_counters},
+                },
             )
             metric_names = {
                 "actor_loss": "loss_policy",
@@ -515,6 +524,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 "mean_rollout_return": "normalized_return",
                 "actor_fraction": "actor_fraction",
                 "critic_fraction": "critic_fraction",
+                **{component: component for component in joint_reward_components},
             }
             for team in ("blue", "red"):
                 add_team_metrics(

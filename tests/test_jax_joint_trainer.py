@@ -281,3 +281,127 @@ def test_actor_and_critic_masks_update_only_their_separate_heads():
     assert _tree_changed(params["params"]["critic_head"], critic_only["params"]["critic_head"])
     assert _tree_changed(params["params"]["actor_head"], actor_only["params"]["actor_head"])
     _assert_tree_exact(params["params"]["critic_head"], actor_only["params"]["critic_head"])
+
+
+def test_joint_metrics_expose_reward_components_and_absolute_game_counters(tiny_joint):
+    """Absolute counters and per-component payoffs must survive to the metrics.
+
+    The zero-sum total cannot separate "Red improved" from "Blue regressed";
+    these fields are the only unconfounded progress signal in a co-training run.
+    """
+    _, _, metrics = _one_joint_update(tiny_joint, ("blue", "red"))
+
+    for counter in joint.GAME_COUNTERS:
+        assert counter in metrics["game"]
+        assert float(metrics["game"][counter]) >= 0.0
+
+    for team in joint.TEAMS:
+        components = [float(metrics[team][name]) for name in joint.REWARD_COMPONENTS]
+        np.testing.assert_allclose(
+            sum(components),
+            float(metrics[team]["raw_rollout_return"]),
+            rtol=1e-5,
+            atol=1e-5,
+        )
+
+    for name in joint.REWARD_COMPONENTS:
+        np.testing.assert_allclose(metrics["red"][name], -metrics["blue"][name])
+
+
+GAMMA = 0.99
+LAMBDA = 0.95
+
+
+def _traj(rewards, values, done, critic_mask):
+    """Build a single-env, single-agent TeamTransition of shape (T, 1, 1)."""
+
+    def col(x):
+        return jnp.asarray(x, dtype=jnp.float32).reshape(len(x), 1, 1)
+
+    n = len(rewards)
+    return joint.TeamTransition(
+        done=col(done),
+        action=jnp.zeros((n, 1, 1), dtype=jnp.int32),
+        value=col(values),
+        reward=col(rewards),
+        log_prob=jnp.zeros((n, 1, 1), dtype=jnp.float32),
+        obs=jnp.zeros((n, 1, 1, 1), dtype=jnp.float32),
+        avail_actions=jnp.ones((n, 1, 1, 1), dtype=jnp.float32),
+        actor_mask=col(critic_mask),
+        critic_mask=col(critic_mask),
+    )
+
+
+def _gae(rewards, values, done, critic_mask, last_value=0.0):
+    adv, targets = joint.compute_gae(
+        _traj(rewards, values, done, critic_mask),
+        jnp.full((1, 1), last_value, dtype=jnp.float32),
+        gamma=GAMMA,
+        gae_lambda=LAMBDA,
+    )
+    return np.asarray(adv).reshape(-1), np.asarray(targets).reshape(-1)
+
+
+def _textbook_gae(rewards, values, done, last_value=0.0):
+    """Reference GAE with every row a decision point."""
+    adv = np.zeros(len(rewards))
+    running, next_value = 0.0, last_value
+    for t in reversed(range(len(rewards))):
+        alive = 1.0 - done[t]
+        delta = rewards[t] + GAMMA * next_value * alive - values[t]
+        running = delta + GAMMA * LAMBDA * alive * running
+        adv[t] = running
+        next_value = values[t]
+    return adv
+
+
+def test_compute_gae_matches_textbook_when_every_row_is_live():
+    """Blue's critic_mask is all ones, so its credit assignment must not move."""
+    rng = np.random.default_rng(0)
+    rewards = rng.normal(size=12)
+    values = rng.normal(size=12)
+    done = np.zeros(12)
+    done[7] = 1.0
+
+    adv, targets = _gae(rewards, values, done, np.ones(12), last_value=0.5)
+
+    np.testing.assert_allclose(adv, _textbook_gae(rewards, values, done, 0.5), rtol=1e-5, atol=1e-5)
+    np.testing.assert_allclose(targets, adv + values, rtol=1e-5, atol=1e-5)
+
+
+def test_credit_crosses_a_dormancy_gap_instead_of_being_zeroed():
+    """A payoff after Red is revived must reach the action taken before eviction.
+
+    Conflating dormancy with termination made this advantage exactly 0, which
+    is what trained Red to be myopic.
+    """
+    rewards = [0.0, 0.0, 0.0, 0.0, 10.0]
+    live = [1.0, 0.0, 0.0, 0.0, 1.0]
+    adv, _ = _gae(rewards, np.zeros(5), np.zeros(5), live)
+
+    # Four steps of gamma*lambda decay between the two live rows.
+    np.testing.assert_allclose(adv[0], 10.0 * (GAMMA * LAMBDA) ** 4, rtol=1e-5)
+    assert adv[0] > 7.0
+
+
+def test_payoff_earned_during_dormancy_reaches_the_preceding_live_row():
+    """Gap rows fold their team payoff into the bootstrap rather than dropping it."""
+    adv, _ = _gae([0.0, 5.0, 0.0], np.zeros(3), np.zeros(3), [1.0, 0.0, 1.0])
+
+    np.testing.assert_allclose(adv[0], GAMMA * 5.0, rtol=1e-5)
+
+
+def test_dormant_rows_emit_no_advantage_of_their_own():
+    adv, _ = _gae([1.0, 2.0, 3.0, 4.0], np.zeros(4), np.zeros(4), [1.0, 0.0, 0.0, 1.0])
+
+    assert adv[1] == 0.0
+    assert adv[2] == 0.0
+
+
+def test_real_termination_still_cuts_the_bootstrap():
+    """done must remain a hard barrier; only dormancy became permeable."""
+    done = [0.0, 0.0, 0.0, 1.0, 0.0]
+    adv, _ = _gae([0.0, 0.0, 0.0, 0.0, 10.0], np.zeros(5), done, np.ones(5))
+
+    assert adv[0] == 0.0
+    np.testing.assert_allclose(adv[4], 10.0, rtol=1e-5)

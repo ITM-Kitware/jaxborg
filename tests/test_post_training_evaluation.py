@@ -207,10 +207,16 @@ def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    priors, learned, scripted = calls
+    # Every checkpoint-history suite runs before the recipe's own list.
+    priors, cross_play, checkpoint_scripted, learned, scripted = calls
+    assert Path(checkpoint_scripted[1]).name == "eval_checkpoint_scripted_reds.py"
+    assert checkpoint_scripted[checkpoint_scripted.index("--model") + 1] == str(model.resolve())
     assert Path(priors[1]).name == "eval_play_priors.py"
     assert priors[priors.index("--model") + 1] == str(model.resolve())
     assert priors[priors.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
+    assert Path(cross_play[1]).name == "eval_cross_play.py"
+    assert cross_play[cross_play.index("--model") + 1] == str(model.resolve())
+    assert cross_play[cross_play.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
     assert Path(learned[1]).name == "eval_matchup.py"
     assert learned[learned.index("--policy-backend") + 1] == "jax"
     assert learned[learned.index("--blue-path") + 1] == str(model.resolve())

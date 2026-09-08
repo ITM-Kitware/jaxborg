@@ -24,6 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
+from jaxborg.evaluation.cross_play import CrossPlaySettings
 from jaxborg.evaluation.play_priors import PlayPriorsSettings
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -151,6 +153,30 @@ def _play_priors_evaluation(recipe: Mapping[str, Any]) -> PostTrainingEval | Non
     )
 
 
+def _cross_play_evaluation(recipe: Mapping[str, Any]) -> PostTrainingEval | None:
+    settings = CrossPlaySettings.from_recipe(recipe)
+    if not settings.enabled:
+        return None
+    return PostTrainingEval(
+        name="cross_play",
+        script="scripts/eval/eval_cross_play.py",
+        args=("--recipe", "{recipe}"),
+        required=settings.required,
+    )
+
+
+def _checkpoint_scripted_reds_evaluation(recipe: Mapping[str, Any]) -> PostTrainingEval | None:
+    settings = CheckpointScriptedRedsSettings.from_recipe(recipe)
+    if not settings.enabled:
+        return None
+    return PostTrainingEval(
+        name="checkpoint_scripted_reds",
+        script="scripts/eval/eval_checkpoint_scripted_reds.py",
+        args=("--recipe", "{recipe}"),
+        required=settings.required,
+    )
+
+
 def _sidecar_path(model_path: Path) -> Path:
     name = model_path.name
     stem = name[len("model_") :] if name.startswith("model_") else model_path.stem
@@ -197,8 +223,18 @@ def run_configured_evaluations_after_training(
     """
 
     settings = PostTrainingEvalSettings.from_recipe(recipe)
-    play_priors = _play_priors_evaluation(recipe)
-    evaluations = ((play_priors,) if play_priors is not None else ()) + settings.evaluations
+    # Checkpoint-history suites run before the recipe's own list so they are not
+    # skipped when a later optional evaluation fails.
+    built_in = tuple(
+        evaluation
+        for evaluation in (
+            _play_priors_evaluation(recipe),
+            _cross_play_evaluation(recipe),
+            _checkpoint_scripted_reds_evaluation(recipe),
+        )
+        if evaluation is not None
+    )
+    evaluations = built_in + settings.evaluations
     if not evaluations:
         from jaxborg.evaluation.scripted_red import run_configured_after_training
 
