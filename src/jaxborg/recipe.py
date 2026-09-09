@@ -23,6 +23,7 @@ from __future__ import annotations
 import copy
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -352,9 +353,32 @@ def resolve_eval_policies(
     }
 
 
+_VARIANT_OVERRIDE_KEYS = ("red_reward", "blue_block_policy")
+
+
+def _apply_variant_overrides(base: GameVariant, recipe: dict[str, Any]) -> GameVariant:
+    """Overlay ``train.variant_overrides`` onto a registered variant.
+
+    Only the co-training rule knobs are overridable; everything else stays a
+    property of the named variant so recipes cannot quietly fork the scenario.
+    The overrides live under ``train`` and apply to evaluation too — a Blue
+    trained under a narrower action mask has to be scored under the same one,
+    and the resolved recipe sidecar carries them to every evaluator.
+    """
+    overrides = (recipe.get("train") or {}).get("variant_overrides") or {}
+    unknown = set(overrides) - set(_VARIANT_OVERRIDE_KEYS)
+    if unknown:
+        raise ValueError(
+            f"unknown train.variant_overrides keys {sorted(unknown)}; allowed: {list(_VARIANT_OVERRIDE_KEYS)}"
+        )
+    if not overrides:
+        return base
+    return replace(base, **{k: overrides[k] for k in _VARIANT_OVERRIDE_KEYS if k in overrides})
+
+
 def train_variant(recipe: dict[str, Any]) -> GameVariant:
     name = recipe.get("train", {}).get("variant", "cc4_stock")
-    return VARIANTS[name]
+    return _apply_variant_overrides(VARIANTS[name], recipe)
 
 
 def eval_variant(recipe: dict[str, Any]) -> GameVariant:
@@ -373,11 +397,16 @@ def eval_variant(recipe: dict[str, Any]) -> GameVariant:
     """
     eval_cfg = recipe.get("eval") or {}
     base_name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
-    base = VARIANTS[base_name]
+    base = _apply_variant_overrides(VARIANTS[base_name], recipe)
     red = eval_cfg.get("red")
     if red is None:
         return base
-    return variant_for_red(red, resilience_roles=base.resilience_roles)
+    return variant_for_red(
+        red,
+        resilience_roles=base.resilience_roles,
+        red_reward=base.red_reward,
+        blue_block_policy=base.blue_block_policy,
+    )
 
 
 def resolve_eval_variant(

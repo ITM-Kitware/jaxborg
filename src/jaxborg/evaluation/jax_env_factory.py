@@ -86,6 +86,8 @@ def make_jax_env(
         mission_bank_amplify=mission_bank_amplify,
         phase_boundary_bank=phase_boundary_bank,
         phase_rewards_bank=phase_rewards_bank,
+        red_reward=variant.red_reward,
+        blue_block_policy=variant.blue_block_policy,
         name=name,
     )
 
@@ -108,5 +110,7 @@ def make_joint_jax_env(
         training_mode=training_mode,
         topology_path=topology_path,
         op_zone_min_servers=variant.op_zone_servers,
+        red_reward=variant.red_reward,
+        blue_block_policy=variant.blue_block_policy,
         name=name,
     )

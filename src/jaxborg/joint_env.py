@@ -73,6 +73,8 @@ class JointPolicyCC4Env(MultiAgentEnv):
         topology_path: str | Path | Sequence[str | Path] | None = None,
         scenario_config: ScenarioConfig = CC4_CONFIG,
         op_zone_min_servers: int | None = None,
+        red_reward: str = "zero_sum",
+        blue_block_policy: str = "cc4",
         name: str | None = None,
     ):
         self._env = ScenarioEnv(
@@ -82,7 +84,10 @@ class JointPolicyCC4Env(MultiAgentEnv):
             topology_path=topology_path,
             scenario_config=scenario_config,
             op_zone_min_servers=op_zone_min_servers,
+            red_reward=red_reward,
+            blue_block_policy=blue_block_policy,
         )
+        self.blue_block_policy = blue_block_policy
         self.cfg = scenario_config
         self.num_steps = self._env.num_steps
         self.training_mode = training_mode
@@ -209,7 +214,9 @@ class JointPolicyCC4Env(MultiAgentEnv):
         masks: Dict[str, chex.Array] = {}
         blue_sleep_only = jnp.zeros(BLUE_ALLOW_TRAFFIC_END, dtype=jnp.bool_).at[BLUE_SLEEP].set(True)
         for b, agent in enumerate(self.blue_agents):
-            base = compute_blue_action_mask(env_state.const, b, env_state.state)
+            base = compute_blue_action_mask(
+                env_state.const, b, env_state.state, blue_block_policy=self.blue_block_policy
+            )
             masks[agent] = jnp.where(env_state.state.blue_pending_ticks[b] <= 0, base, blue_sleep_only)
         for r, agent in enumerate(self.red_agents):
             masks[agent] = compute_red_policy_action_mask(env_state.state, env_state.const, r)
