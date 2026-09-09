@@ -338,7 +338,17 @@ class ScenarioEnv(MultiAgentEnv):
         mission_bank_amplify: float = 1.0,
         phase_boundary_bank: Sequence[Sequence[int]] | None = None,
         phase_rewards_bank: Sequence | None = None,
+        red_reward: str = "zero_sum",
+        blue_block_policy: str = "cc4",
     ):
+        if red_reward not in ("zero_sum", "damage"):
+            raise ValueError(f"unknown red_reward {red_reward!r}")
+        if blue_block_policy not in ("cc4", "mission_safe"):
+            raise ValueError(f"unknown blue_block_policy {blue_block_policy!r}")
+        # Both default to the stock CC4 contract; see GameVariant for what the
+        # alternatives change and why they are opt-in.
+        self.red_reward = red_reward
+        self.blue_block_policy = blue_block_policy
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.training_mode = training_mode
@@ -640,9 +650,17 @@ class ScenarioEnv(MultiAgentEnv):
         rewards = {}
         for agent in self.blue_agents:
             rewards[agent] = reward
-        neg_reward = -reward
+        # Blue's payoff is the CC4 contract and never varies. Red's does:
+        # under `zero_sum` it is the exact negation, which pays Red for
+        # `asf_reward` (only Blue's BlockTraffic can trigger ASF) and for
+        # Blue's Restore `action_cost`. `damage` pays Red only for harm Red
+        # can actually cause. See docs/cotraining_collapse.md.
+        if self.red_reward == "damage":
+            red_reward = -(reward_breakdown.ria_reward + reward_breakdown.lwf_reward)
+        else:
+            red_reward = -reward
         for agent in self.red_agents:
-            rewards[agent] = neg_reward
+            rewards[agent] = red_reward
 
         dones = {agent: done for agent in self.agents}
         dones["__all__"] = done
@@ -674,7 +692,9 @@ class ScenarioEnv(MultiAgentEnv):
     def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         masks = {}
         for i in range(self.cfg.num_blue_agents):
-            masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i, env_state.state)
+            masks[f"blue_{i}"] = compute_blue_action_mask(
+                env_state.const, i, env_state.state, blue_block_policy=self.blue_block_policy
+            )
         for agent in self.red_agents:
             masks[agent] = jnp.ones(RED_WITHDRAW_END, dtype=jnp.bool_)
         return masks

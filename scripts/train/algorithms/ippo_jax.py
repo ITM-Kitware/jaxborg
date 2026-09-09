@@ -151,7 +151,9 @@ def make_train(config, network):
     @partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
     def _collect_and_update(train_state, env_state, obs, rng, reward_norm_state):
         _agent_ids = jnp.arange(num_agents)
-        _mask_over_envs = jax.vmap(compute_blue_action_mask, in_axes=(0, None, 0))
+        # `blue_block_policy` is a static string, so bind it before vmapping.
+        _masker = partial(compute_blue_action_mask, blue_block_policy=variant.blue_block_policy)
+        _mask_over_envs = jax.vmap(_masker, in_axes=(0, None, 0))
         _mask_over_agents = jax.vmap(_mask_over_envs, in_axes=(None, 0, None))
 
         _info_acc_init = {

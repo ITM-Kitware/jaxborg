@@ -99,8 +99,11 @@ class FsmRedCC4Env(MultiAgentEnv):
         mission_bank_amplify: float = 1.0,
         phase_boundary_bank: Sequence[Sequence[int]] | None = None,
         phase_rewards_bank: Sequence | None = None,
+        red_reward: str = "zero_sum",
+        blue_block_policy: str = "cc4",
         name: Optional[str] = None,
     ):
+        self.blue_block_policy = blue_block_policy
         self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
@@ -111,6 +114,8 @@ class FsmRedCC4Env(MultiAgentEnv):
             mission_bank_amplify=mission_bank_amplify,
             phase_boundary_bank=phase_boundary_bank,
             phase_rewards_bank=phase_rewards_bank,
+            red_reward=red_reward,
+            blue_block_policy=blue_block_policy,
         )
         self._red_selector = red_selector
         self._extras_factory = extras_factory
@@ -321,7 +326,10 @@ class FsmRedCC4Env(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def get_avail_actions(self, env_state: FsmRedEnvState) -> Dict[str, chex.Array]:
         return {
-            f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state) for i in range(NUM_BLUE_AGENTS)
+            f"blue_{i}": compute_blue_action_mask(
+                env_state.const, i, env_state.state, blue_block_policy=self.blue_block_policy
+            )
+            for i in range(NUM_BLUE_AGENTS)
         }
 
     @property
