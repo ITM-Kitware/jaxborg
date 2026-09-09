@@ -1,0 +1,189 @@
+meta:
+  name: br_blue_vs_cotraining
+  source: "Best-response oracle: Blue vs the frozen co-trained Red"
+  added: 2026-09-08
+  notes: |
+    Half of the exploitability measurement for the cotraining pair. Blue trains
+    from fresh weights against a FROZEN co-trained Red; the value it reaches is
+    how much Blue can gain by deviating, which is one of the two terms in
+    NashConv. Its twin is br_red_vs_cotraining, which carries the full
+    arithmetic; the short form, with u the Blue return and (b*, r*) the
+    co-trained pair:
+
+        NashConv = u(BR_blue, r*) - u(b*, BR_red)
+
+    both terms measured by the two recipes' learned-matchup evaluations on the
+    same bank and seeds. NashConv is 0 exactly at a Nash equilibrium.
+
+    A caveat specific to THIS side. The cotraining post-mortem found Blue's
+    decentralized critic cannot predict a team return from a 3-of-9-subnet view
+    (explained variance 0.70 against Red's 0.97), which left Blue's actor term
+    at about a twentieth of its loss. A Blue oracle built the same way inherits
+    that handicap, so it would understate how exploitable r* actually is. The
+    arch and vf_coef below are therefore deliberately NOT copied from
+    cotraining -- they are the cheap fixes that target that mechanism, so this
+    oracle searches harder than the Blue it is measuring.
+
+    That is the right call for an exploitability bound, which is a maximum over
+    the deviator's strategy space: a stronger oracle gives a tighter, more
+    honest number. It does mean the oracle is not drawn from the same policy
+    class as b*. If you specifically want the same-class reading, set arch.name
+    back to `shared` and vf_coef back to 0.5 -- and expect a looser bound.
+
+    As with the twin: read `team.blue.return` directly. The opponent is frozen,
+    so unlike co-training's zero-sum curve this is a stationary learning curve.
+    If it has not flattened by the end, the oracle has not converged and
+    NashConv is an underestimate. Report the oracle budget with the number.
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  # Halved from cotraining's 0.5. Blue's value term ran ~9.8x its actor term at
+  # the end of the co-training runs, so the update was dominated by fitting a
+  # target Blue structurally cannot see. See meta.notes.
+  vf_coef: 0.25
+  max_grad_norm: 0.5
+  # Left at cotraining's value on purpose. Blue's entropy sat ABOVE Red's at all
+  # 833 updates of both 20M runs, which reads as a symptom of the weak actor
+  # gradient rather than a cause -- cutting the counterweight without fixing the
+  # signal risks committing faster to a worse policy. Change it as its own
+  # ablation, not silently inside the oracle.
+  ent_coef: 0.01
+  norm_rewards: true
+
+# Applies to the trainable team (Blue) only; the frozen Red's architecture comes
+# from its own bundle. `separate` gives the actor and critic independent trunks
+# so Blue's value loss -- roughly 8x Red's in the co-training runs -- stops
+# backpropagating into the features the policy reads.
+arch:
+  name: separate
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  # Blue trains, Red is frozen. Blue-only training does not require an opponent
+  # (the default is scripted Red), so opponents.red must be set explicitly or
+  # this silently measures the wrong thing.
+  teams: blue
+  opponents:
+    # The Red being measured. Resolves to
+    # $JAXBORG_EXP_DIR/ippo_jax/cotraining_seed42/model_cotraining_seed42.safetensors.
+    # Keep this pointed at the same bundle as the twin recipe -- the two terms
+    # of NashConv must describe one pair.
+    red:
+      experiment: cotraining_seed42
+
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Must match br_red_vs_cotraining, or the two NashConv terms are measured on
+  # unequal footing.
+  total_timesteps: 10000000
+  variant: cc4_stock
+
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Meaningless with one side frozen -- see the twin recipe.
+  play_priors:
+    enabled: false
+  cross_play:
+    enabled: false
+
+  # Off: the final-model scripted sweep in after_training answers the same
+  # question for this run at a sixth of the cost. Turn it on only if you want
+  # the curve -- e.g. to check whether the oracle Blue's general skill peaks
+  # early and then narrows onto r*, the way the co-trained Blue did.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 6
+    required: false
+
+  # The headline number is u(BR_blue, r*) from the first evaluation: the Blue
+  # return when the best Blue found against r* faces it. The final bundle holds
+  # both policies -- trained Blue and the frozen Red it trained against -- so
+  # one bundle serves both flags. Seeds and bank match cotraining's
+  # learned-red-ppo evaluation so the results subtract cleanly.
+  after_training:
+    - name: br-blue-vs-frozen-red
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    # An absolute-scale check on the oracle itself. Scripted opponents are
+    # fixed, so this answers "did best-responding to r* produce a Blue that is
+    # good in general, or one that is merely good against r*?" A large
+    # deviation gain paired with a poor scripted-Red score means r* is
+    # exploitable by a narrow counter-strategy rather than by better defense --
+    # which is worth knowing before treating NashConv as a distance to a
+    # meaningful equilibrium. Same seeds as cotraining's own scripted sweep, so
+    # the oracle Blue compares directly with the co-trained Blue's
+    # -2914 / -2675 / -2726 / -2633.
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 40
