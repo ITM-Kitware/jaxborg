@@ -46,7 +46,7 @@ from jaxborg.constants import (
 )
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
-from jaxborg.policies import make_jax_policy, make_torch_policy
+from jaxborg.policies import initial_carry, is_recurrent, policy_from_arch, policy_step
 from jaxborg.recipe import team_recipe
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
@@ -199,21 +199,9 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
     arch, sidecar = _entry_arch(model_path, entry, team)
     obs_dim, action_dim = TEAM_DIMS[team]
     if backend_name == "jax":
-        module = make_jax_policy(
-            arch["name"],
-            action_dim=action_dim,
-            hidden_dim=int(arch.get("hidden_dim", 256)),
-            hidden_layers=int(arch.get("hidden_layers", 2)),
-            activation=arch.get("activation", "tanh"),
-        )
+        module = policy_from_arch(arch, action_dim=action_dim)
     else:
-        module = make_torch_policy(
-            arch["name"],
-            obs_dim=obs_dim,
-            action_dim=action_dim,
-            hidden_dim=int(arch.get("hidden_dim", 256)),
-            hidden_layers=int(arch.get("hidden_layers", 2)),
-        )
+        module = policy_from_arch(arch, action_dim=action_dim, backend=backend_name, obs_dim=obs_dim)
         module.load_state_dict(entry.weights)
         module.eval()
 
@@ -238,9 +226,15 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
     return LoadedMatchupPolicy(team, backend_name, module, entry.weights, source)
 
 
-def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: bool):
-    pi, _ = policy.module.apply(policy.weights, obs, mask)
-    return jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=key)
+def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: bool, carry=None, reset=None):
+    """Sample one joint action. Returns ``(actions, next_carry)``.
+
+    ``carry`` is ``None`` for a feedforward policy and threads back unchanged,
+    so the caller does not branch on the architecture.
+    """
+    pi, _, carry = policy_step(policy.module, policy.weights, obs, mask, carry=carry, reset=reset)
+    actions = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=key)
+    return actions, carry
 
 
 @partial(
@@ -281,20 +275,31 @@ def _run_jax_matchup_episode_scan(
     blue_agents = tuple(env.blue_agents)
     red_agents = tuple(env.red_agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
+    # Only a recurrent Red has a sequence to restart, and only it needs the
+    # simulator's activity mask read out on every step.
+    red_recurrent = is_recurrent(red_module)
 
-    def _active_step(rng, current_obs, current_state):
+    def _active_step(rng, current_obs, current_state, carries, red_reset):
         masks = env.get_avail_actions(current_state)
 
         blue_obs = jnp.stack([current_obs[name] for name in blue_agents])
         blue_masks = jnp.stack([masks[name] for name in blue_agents])
         rng, blue_key = jax.random.split(rng)
-        blue_pi, _ = blue_module.apply(blue_weights, blue_obs, blue_masks)
+        # Blue never goes dormant and the scan stops at termination, so within
+        # one episode its sequence never restarts.
+        blue_pi, _, carries["blue"] = policy_step(
+            blue_module, blue_weights, blue_obs, blue_masks, carry=carries["blue"]
+        )
         blue_actions = jnp.argmax(blue_pi.logits, axis=-1) if deterministic else blue_pi.sample(seed=blue_key)
 
         red_obs = jnp.stack([current_obs[name] for name in red_agents])
         red_masks = jnp.stack([masks[name] for name in red_agents])
         rng, red_key = jax.random.split(rng)
-        red_pi, _ = red_module.apply(red_weights, red_obs, red_masks)
+        # Red's sequence restarts whenever session reassignment revives a
+        # dormant agent, matching the reset rule the joint trainer applies.
+        red_pi, _, carries["red"] = policy_step(
+            red_module, red_weights, red_obs, red_masks, carry=carries["red"], reset=red_reset
+        )
         red_actions = jnp.argmax(red_pi.logits, axis=-1) if deterministic else red_pi.sample(seed=red_key)
 
         actions = {
@@ -319,16 +324,21 @@ def _run_jax_matchup_episode_scan(
             cia = zero_cia
         reward = jnp.asarray(rewards[blue_agents[0]], dtype=jnp.float32)
         done = jnp.asarray(dones["__all__"], dtype=jnp.bool_)
-        return rng, next_obs, next_state, reward, cia, done
+        # Keyed on the pre-step activity, so the first live row after a gap is
+        # the one that starts from a blank hidden state.
+        next_red_reset = ~current_state.state.red_agent_active if red_recurrent else red_reset
+        return rng, next_obs, next_state, reward, cia, done, carries, next_red_reset
 
     def _scan_step(carry, _):
-        rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps = carry
+        rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps, carries, red_reset = carry
 
         def run_active(_):
-            next_rng, next_obs, next_state, reward, cia, done = _active_step(
+            next_rng, next_obs, next_state, reward, cia, done, next_carries, next_red_reset = _active_step(
                 rng,
                 current_obs,
                 current_state,
+                dict(carries),
+                red_reset,
             )
             return (
                 next_rng,
@@ -338,6 +348,8 @@ def _run_jax_matchup_episode_scan(
                 reward_sum + reward,
                 cia_sum + cia,
                 valid_steps + jnp.int32(1),
+                next_carries,
+                next_red_reset,
             )
 
         def keep_terminal(_):
@@ -349,11 +361,13 @@ def _run_jax_matchup_episode_scan(
                 reward_sum,
                 cia_sum,
                 valid_steps,
+                carries,
+                red_reset,
             )
 
         return jax.lax.cond(active, run_active, keep_terminal, operand=None), None
 
-    initial_carry = (
+    scan_carry = (
         key,
         obs,
         state,
@@ -361,8 +375,13 @@ def _run_jax_matchup_episode_scan(
         jnp.float32(0.0),
         zero_cia,
         jnp.int32(0),
+        {
+            "blue": initial_carry(blue_module, len(blue_agents)),
+            "red": initial_carry(red_module, len(red_agents)),
+        },
+        jnp.ones((len(red_agents),), dtype=jnp.bool_),
     )
-    final_carry, _ = jax.lax.scan(_scan_step, initial_carry, xs=None, length=num_steps)
+    final_carry, _ = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
     reward_sum = final_carry[4]
     cia_sum = final_carry[5]
     valid_steps = final_carry[6]
@@ -544,6 +563,11 @@ def run_matchup_episode(
     else:
         obs, state = env.reset_at_topology(reset_key, topology_index)
     team_agents = {"blue": tuple(env.blue_agents), "red": tuple(env.red_agents)}
+    # Recurrent policies only; `initial_carry` is None for the feedforward
+    # archs and threads through the loop untouched.
+    carries = {team: initial_carry(policies[team].module, len(names)) for team, names in team_agents.items()}
+    red_recurrent = backend == "jax" and is_recurrent(policies["red"].module)
+    red_reset = jnp.ones((len(team_agents["red"]),), dtype=jnp.bool_)
     total = 0.0
     cia_step_scores = []
 
@@ -557,7 +581,15 @@ def run_matchup_episode(
             mask_batch = jnp.stack([masks[name] for name in names])
             if backend == "jax":
                 rng, policy_key = jax.random.split(rng)
-                team_actions = _jax_actions(policies[team], obs_batch, mask_batch, policy_key, deterministic)
+                team_actions, carries[team] = _jax_actions(
+                    policies[team],
+                    obs_batch,
+                    mask_batch,
+                    policy_key,
+                    deterministic,
+                    carry=carries[team],
+                    reset=red_reset if team == "red" else None,
+                )
             else:
                 torch_seed = seed * 1_000_003 + step_idx * 17 + (0 if team == "blue" else 1)
                 policy_mask = mask_batch
@@ -589,6 +621,10 @@ def run_matchup_episode(
             for idx, name in enumerate(names):
                 all_actions[name] = jnp.asarray(team_actions[idx], dtype=jnp.int32)
 
+        if red_recurrent:
+            # Keyed on the pre-step activity, so the first live row after a
+            # dormancy gap is the one that starts from a blank hidden state.
+            red_reset = ~state.state.red_agent_active
         rng, step_key = jax.random.split(rng)
         if host_resilience_role is None:
             obs, state, rewards, dones, _ = env.step(step_key, state, all_actions)

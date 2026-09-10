@@ -43,6 +43,7 @@ from jaxborg.evaluation.matchup_runner import (
     jax_mask_to_cyborg_blue,
     load_matchup_policy,
 )
+from jaxborg.policies import initial_carry, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import variant_for_red
 
@@ -175,12 +176,14 @@ def _run_jax_scripted_red_episode_scan(
     blue_agents = tuple(env.agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
 
-    def _active_step(rng, current_obs, current_state):
+    def _active_step(rng, current_obs, current_state, policy_carry):
         masks = env.get_avail_actions(current_state)
         obs_batch = jnp.stack([current_obs[agent] for agent in blue_agents])
         mask_batch = jnp.stack([masks[agent] for agent in blue_agents])
         rng, policy_key = jax.random.split(rng)
-        pi, _ = policy_module.apply(policy_weights, obs_batch, mask_batch)
+        # Blue never goes dormant and the scan stops at termination, so its
+        # sequence runs unbroken from the reset for the whole episode.
+        pi, _, policy_carry = policy_step(policy_module, policy_weights, obs_batch, mask_batch, carry=policy_carry)
         selected = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=policy_key)
         actions = {agent: jnp.asarray(selected[index], dtype=jnp.int32) for index, agent in enumerate(blue_agents)}
         rng, step_key = jax.random.split(rng)
@@ -199,16 +202,17 @@ def _run_jax_scripted_red_episode_scan(
             next_state.extras["host_resilience_role"],
         )
         done = jnp.asarray(dones["__all__"], dtype=jnp.bool_)
-        return rng, next_obs, next_state, reward, cia, done
+        return rng, next_obs, next_state, reward, cia, done, policy_carry
 
     def _scan_step(carry, _):
-        rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps = carry
+        rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps, policy_carry = carry
 
         def run_active(_):
-            next_rng, next_obs, next_state, reward, cia, done = _active_step(
+            next_rng, next_obs, next_state, reward, cia, done, next_policy_carry = _active_step(
                 rng,
                 current_obs,
                 current_state,
+                policy_carry,
             )
             return (
                 next_rng,
@@ -218,6 +222,7 @@ def _run_jax_scripted_red_episode_scan(
                 reward_sum + reward,
                 cia_sum + cia,
                 valid_steps + jnp.int32(1),
+                next_policy_carry,
             )
 
         def keep_terminal(_):
@@ -229,11 +234,12 @@ def _run_jax_scripted_red_episode_scan(
                 reward_sum,
                 cia_sum,
                 valid_steps,
+                policy_carry,
             )
 
         return jax.lax.cond(active, run_active, keep_terminal, operand=None), None
 
-    initial_carry = (
+    scan_carry = (
         key,
         obs,
         state,
@@ -241,8 +247,9 @@ def _run_jax_scripted_red_episode_scan(
         jnp.float32(0.0),
         zero_cia,
         jnp.int32(0),
+        initial_carry(policy_module, len(blue_agents)),
     )
-    final_carry, _ = jax.lax.scan(_scan_step, initial_carry, xs=None, length=num_steps)
+    final_carry, _ = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
     reward_sum = final_carry[4]
     cia_sum = final_carry[5]
     valid_steps = final_carry[6]

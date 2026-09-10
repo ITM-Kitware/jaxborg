@@ -239,13 +239,27 @@ def training_teams(recipe: dict[str, Any]) -> tuple[str, ...]:
 
 
 def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
-    """Return a copy with ``team_overrides.<team>`` deep-merged into core/arch."""
+    """Return a copy with ``team_overrides.<team>`` deep-merged into core/arch.
+
+    ``arch`` is the exception to the merge: an override that changes
+    ``arch.name`` *replaces* the block rather than merging into it, because a
+    different architecture is a different schema and fields do not carry across
+    it. Merging would leave the global architecture's keys behind — `cell` and
+    `trunk` on a feedforward team (which is rejected outright), or a recurrent
+    `hidden_layers: 1` silently thinning a `shared` trunk. Giving one team a
+    recurrent policy and the other an MLP is a supported arm, so it must not
+    require restating every field the two archs happen to share.
+    """
     if team not in TEAMS:
         raise ValueError(f"team must be one of {TEAMS}, got {team!r}")
     projected = copy.deepcopy(recipe)
     override = projected.get("train", {}).get("team_overrides", {}).get(team, {})
-    for section in ("core", "arch"):
-        _deep_merge(projected[section], override.get(section, {}))
+    _deep_merge(projected["core"], override.get("core", {}))
+    arch_override = override.get("arch", {})
+    if arch_override.get("name", projected["arch"]["name"]) != projected["arch"]["name"]:
+        projected["arch"] = copy.deepcopy(arch_override)
+    else:
+        _deep_merge(projected["arch"], arch_override)
     return projected
 
 
