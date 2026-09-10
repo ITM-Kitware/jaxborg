@@ -200,3 +200,57 @@ def test_eval_policy_config_validation(tmp_path, eval_cfg, message):
     raw["eval"] = eval_cfg
     with pytest.raises(ValueError, match=message):
         load(str(_write_recipe(tmp_path, raw)))
+
+
+def test_arch_override_that_changes_name_replaces_instead_of_merging(tmp_path):
+    """Giving one team a recurrent policy and the other an MLP is a real arm.
+
+    A deep merge would leave the global architecture's keys on the team that
+    opted out — `cell`/`trunk` on a feedforward arch, which the policy factory
+    rejects outright, and a recurrent `hidden_layers: 1` quietly thinning a
+    `shared` trunk. A different `arch.name` is a different schema, so the block
+    is replaced.
+    """
+    raw = _recipe(teams="both")
+    raw["arch"] = {
+        "name": "recurrent",
+        "hidden_dim": 256,
+        "hidden_layers": 1,
+        "activation": "tanh",
+        "cell": "gru",
+        "trunk": "shared",
+    }
+    raw["train"]["team_overrides"] = {
+        "red": {"arch": {"name": "shared", "hidden_dim": 128, "hidden_layers": 2, "activation": "tanh"}},
+    }
+    recipe = load(str(_write_recipe(tmp_path, raw)))
+
+    red_arch = team_recipe(recipe, "red")["arch"]
+    assert red_arch == {"name": "shared", "hidden_dim": 128, "hidden_layers": 2, "activation": "tanh"}
+    assert "cell" not in red_arch and "trunk" not in red_arch
+
+    # The team that keeps the global architecture still merges normally.
+    blue_arch = team_recipe(recipe, "blue")["arch"]
+    assert blue_arch["name"] == "recurrent"
+    assert blue_arch["cell"] == "gru"
+    assert blue_arch["hidden_layers"] == 1
+
+
+def test_arch_override_keeping_the_same_name_still_merges(tmp_path):
+    """Tuning a shared architecture per team must not force restating it."""
+    raw = _recipe(teams="both")
+    raw["arch"] = {
+        "name": "recurrent",
+        "hidden_dim": 256,
+        "hidden_layers": 1,
+        "activation": "tanh",
+        "cell": "gru",
+        "trunk": "shared",
+    }
+    raw["train"]["team_overrides"] = {"red": {"arch": {"cell": "lstm"}}}
+    recipe = load(str(_write_recipe(tmp_path, raw)))
+
+    red_arch = team_recipe(recipe, "red")["arch"]
+    assert red_arch["cell"] == "lstm"
+    assert red_arch["hidden_dim"] == 256  # inherited, not restated
+    assert team_recipe(recipe, "blue")["arch"]["cell"] == "gru"

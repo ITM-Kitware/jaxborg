@@ -27,7 +27,7 @@ from jaxborg.checkpoint import load_jax_policy
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
-from jaxborg.policies import make_jax_policy
+from jaxborg.policies import initial_carry, policy_from_arch, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
@@ -54,20 +54,19 @@ def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
     if entry.arch.get("name"):
         recipe = dict(recipe)
         recipe["arch"] = dict(entry.arch)
-    policy = make_jax_policy(
-        arch["name"],
-        action_dim=action_dim,
-        hidden_dim=int(arch.get("hidden_dim", 256)),
-        hidden_layers=int(arch.get("hidden_layers", 2)),
-        activation=arch.get("activation", "tanh"),
-    )
+    policy = policy_from_arch(arch, action_dim=action_dim)
     return policy, params, recipe
 
 
-def _policy_dist(policy: Any, params: dict, obs_jax, mask):
-    """Run actor head on a recipe-driven Flax policy module."""
-    pi, _ = policy.apply(params, obs_jax, mask)
-    return pi
+def _policy_dist(policy: Any, params: dict, obs_jax, mask, carry=None):
+    """Run actor head on a recipe-driven Flax policy module.
+
+    Returns ``(pi, next_carry)``; ``carry`` is ``None`` for feedforward archs
+    and threads back unchanged. Each Blue agent is stepped on its own here, so
+    a recurrent policy keeps one length-1 sequence per agent.
+    """
+    pi, _, carry = policy_step(policy, params, obs_jax[None], mask[None], carry=carry)
+    return type(pi)(logits=pi.logits[0]), carry
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const):
@@ -143,6 +142,7 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
     mappings = build_mappings_from_cyborg(inner)
 
     lookups = {a: _build_action_lookup(env, a, mappings, const) for a in env.agents}
+    carries = {a: initial_carry(policy, 1) for a in env.agents}
 
     total = 0.0
     for _ in range(EPISODE_LENGTH):
@@ -150,7 +150,7 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
         for agent_idx, agent_name in enumerate(env.agents):
             obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
             mask = _live_cyborg_mask_in_jax_space(env, agent_name, lookups[agent_name])
-            pi = _policy_dist(policy, params, obs_jax, mask)
+            pi, carries[agent_name] = _policy_dist(policy, params, obs_jax, mask, carries[agent_name])
             if deterministic:
                 action_idx = int(jnp.argmax(pi.logits))
             else:
