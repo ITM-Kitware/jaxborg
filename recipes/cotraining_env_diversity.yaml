@@ -55,7 +55,7 @@ train:
   # 20M left Blue's policy entropy ~19% short of its fitted asymptote, so the
   # 20M runs were cut off rather than settled. That fit came from unannealed
   # runs, so it stands on its own: 40M is the budget it implies.
-  total_timesteps: 40000000
+  total_timesteps: 70000000
   variant: cc4_stock
 
   # The first five seeds are exactly the baseline cotraining pool; seeds 5

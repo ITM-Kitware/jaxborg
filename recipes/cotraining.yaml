@@ -54,7 +54,7 @@ train:
   # 20M left Blue's policy entropy ~19% short of its fitted asymptote, so the
   # 20M runs were cut off rather than settled. That fit came from unannealed
   # runs, so it stands on its own: 40M is the budget it implies.
-  total_timesteps: 40000000
+  total_timesteps: 70000000
   variant: cc4_stock
 
   # Restrict resets to five immutable samples from the same pure-JAX
@@ -63,7 +63,7 @@ train:
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 5
+    count: 1
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
