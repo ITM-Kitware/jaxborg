@@ -1,6 +1,6 @@
 meta:
-  name: cotraining_ablate
-  source: "5M co-training ablation harness for the BlockTraffic/ASF collapse"
+  name: cotraining_test_rule_change
+  source: "5M co-training harness for the BlockTraffic/ASF rule knobs"
   added: 2026-09-09
   notes: |
     Short-budget rig for the two rule knobs added alongside
@@ -13,15 +13,6 @@ meta:
       red-damage   {red_reward: damage}
       mission-safe {blue_block_policy: mission_safe}
       both         {red_reward: damage, blue_block_policy: mission_safe}
-
-    Read the result off two curves, not the training return (which is the
-    zero-sum sum of two moving parts):
-      * team.blue.reward_asf        -- the collapse channel, per update
-      * eval.checkpoint_scripted_reds.*.blue.worst_reward -- a fixed opponent,
-        so it moves only when Blue moves
-
-    mission_safe narrows Blue's action space, so its scripted-Red numbers are
-    NOT comparable to stock-CC4 benchmark results. Only the control arm is.
 
 algorithm: ippo
 
