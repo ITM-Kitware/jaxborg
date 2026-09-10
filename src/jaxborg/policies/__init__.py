@@ -23,8 +23,8 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
-from . import per_agent, recurrent_actor_critic, separate_actor_critic, shared_actor_critic
-from .base import RecurrentPolicy
+from . import mappo_actor_critic, per_agent, recurrent_actor_critic, separate_actor_critic, shared_actor_critic
+from .base import CentralizedCriticPolicy, RecurrentPolicy
 from .categorical import Categorical
 
 POLICY_REGISTRY: dict[str, ModuleType] = {
@@ -32,6 +32,7 @@ POLICY_REGISTRY: dict[str, ModuleType] = {
     "separate": separate_actor_critic,
     "per_agent": per_agent,
     "recurrent": recurrent_actor_critic,
+    "mappo": mappo_actor_critic,
 }
 
 # `arch` keys every architecture understands; anything else is forwarded to the
@@ -124,6 +125,10 @@ def is_recurrent(module: Any) -> bool:
     return isinstance(module, RecurrentPolicy)
 
 
+def has_centralized_critic(module: Any) -> bool:
+    return isinstance(module, CentralizedCriticPolicy)
+
+
 def initial_carry(module: Any, batch_size: int):
     """Zeroed hidden state for `batch_size` sequences, or None if memoryless."""
     return module.initialize_carry(batch_size) if is_recurrent(module) else None
@@ -131,14 +136,19 @@ def initial_carry(module: Any, batch_size: int):
 
 def init_policy_params(module: Any, rng: jax.Array, obs_dim: int):
     """Initialize parameters for either policy family from the observation width."""
+    kwargs = {}
+    if has_centralized_critic(module):
+        shape = (1, 1, module.critic_obs_dim) if is_recurrent(module) else (module.critic_obs_dim,)
+        kwargs["critic_obs"] = jnp.zeros(shape, dtype=jnp.float32)
     if not is_recurrent(module):
-        return module.init(rng, jnp.zeros((obs_dim,), dtype=jnp.float32))
+        return module.init(rng, jnp.zeros((obs_dim,), dtype=jnp.float32), **kwargs)
     return module.init(
         rng,
         module.initialize_carry(1),
         jnp.zeros((1, 1, obs_dim), dtype=jnp.float32),
         None,
         jnp.zeros((1, 1), dtype=jnp.bool_),
+        **kwargs,
     )
 
 
@@ -150,6 +160,7 @@ def policy_step(
     *,
     carry: Any = None,
     reset: jax.Array | None = None,
+    critic_obs: jax.Array | None = None,
 ) -> tuple[Categorical, jax.Array, Any]:
     """One timestep for a batch of rows. Returns `(pi, value, next_carry)`.
 
@@ -157,18 +168,24 @@ def policy_step(
     carry is returned unchanged (it is `None`), so callers can thread it
     unconditionally.
     """
+    kwargs = {"critic_obs": critic_obs} if has_centralized_critic(module) else {}
+    if critic_obs is not None and not has_centralized_critic(module):
+        raise ValueError("critic_obs was supplied to a policy with a local critic")
     if not is_recurrent(module):
-        pi, value = module.apply(params, obs, avail_actions)
+        pi, value = module.apply(params, obs, avail_actions, **kwargs)
         return pi, value, carry
     if carry is None:
         raise ValueError("a recurrent policy needs a carry; build one with policies.initial_carry(module, batch)")
     resets = jnp.zeros(obs.shape[:1], dtype=jnp.bool_) if reset is None else jnp.asarray(reset, dtype=jnp.bool_)
+    if critic_obs is not None:
+        kwargs["critic_obs"] = critic_obs[None]
     next_carry, pi, value = module.apply(
         params,
         carry,
         obs[None],
         None if avail_actions is None else avail_actions[None],
         resets[None],
+        **kwargs,
     )
     return Categorical(logits=pi.logits[0]), value[0], next_carry
 
@@ -181,19 +198,23 @@ def policy_sequence(
     *,
     carry: Any = None,
     reset: jax.Array | None = None,
+    critic_obs: jax.Array | None = None,
 ) -> tuple[Categorical, jax.Array, Any]:
     """Whole trajectories at once. `obs` is time-major `(T, B, obs_dim)`.
 
     This is the update-time counterpart of `policy_step`: it replays a stored
     rollout window from the hidden state that window began with.
     """
+    kwargs = {"critic_obs": critic_obs} if has_centralized_critic(module) else {}
+    if critic_obs is not None and not has_centralized_critic(module):
+        raise ValueError("critic_obs was supplied to a policy with a local critic")
     if not is_recurrent(module):
-        pi, value = module.apply(params, obs, avail_actions)
+        pi, value = module.apply(params, obs, avail_actions, **kwargs)
         return pi, value, carry
     if carry is None:
         raise ValueError("a recurrent policy needs a carry; build one with policies.initial_carry(module, batch)")
     resets = jnp.zeros(obs.shape[:2], dtype=jnp.bool_) if reset is None else jnp.asarray(reset, dtype=jnp.bool_)
-    next_carry, pi, value = module.apply(params, carry, obs, avail_actions, resets)
+    next_carry, pi, value = module.apply(params, carry, obs, avail_actions, resets, **kwargs)
     return pi, value, next_carry
 
 
@@ -201,6 +222,7 @@ __all__ = [
     "ARCH_COMMON_KEYS",
     "POLICY_REGISTRY",
     "buffer_layout",
+    "has_centralized_critic",
     "init_policy_params",
     "initial_carry",
     "is_recurrent",

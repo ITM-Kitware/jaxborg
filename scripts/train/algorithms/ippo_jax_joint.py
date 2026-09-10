@@ -1,4 +1,4 @@
-"""Dual-team IPPO helpers for the JAX CC4 environment.
+"""Dual-team PPO helpers for IPPO and Blue MAPPO in the JAX CC4 environment.
 
 This module deliberately sits beside :mod:`ippo_jax` instead of replacing its
 legacy Blue-vs-FSM rollout.  A joint rollout is selected only when a learned
@@ -16,7 +16,14 @@ import optax
 from flax.training.train_state import TrainState
 
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
-from jaxborg.policies import init_policy_params, initial_carry, is_recurrent, policy_sequence, policy_step
+from jaxborg.policies import (
+    has_centralized_critic,
+    init_policy_params,
+    initial_carry,
+    is_recurrent,
+    policy_sequence,
+    policy_step,
+)
 
 TEAMS = ("blue", "red")
 
@@ -42,6 +49,8 @@ class TeamTransition(NamedTuple):
     # restarts when a dormant Red agent is revived by session reassignment.
     # ``None`` for feedforward archs, which have no hidden state to reset.
     reset: jax.Array | None = None
+    # MAPPO only: world state from the same pre-step state as obs/value.
+    critic_obs: jax.Array | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -212,6 +221,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
     num_minibatches = int(config["NUM_MINIBATCHES"])
     update_epochs = int(config["UPDATE_EPOCHS"])
     recurrent = is_recurrent(network)
+    centralized = has_centralized_critic(network)
 
     def ppo_objective(pi, value, transitions, gae, targets):
         """Shared loss body. Every reduction is a mask-weighted mean, so it is
@@ -260,8 +270,19 @@ def _make_team_updater(network, config: Mapping[str, Any]):
         (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
         del loss
         pre_clip = optax.global_norm(grads)
-        scale = jnp.minimum(1.0, max_grad_norm / (pre_clip + 1e-8))
-        grads = jax.tree.map(lambda x: x * scale, grads)
+        if centralized:
+            # JaxMARL MAPPO clips actor and critic independently. Adam's
+            # elementwise moments stay separate in our combined parameter tree;
+            # retaining one TrainState keeps the existing bundle ABI intact.
+            norms = {
+                role: optax.global_norm({k: v for k, v in grads["params"].items() if k.startswith(role + "_")})
+                for role in ("actor", "critic")
+            }
+            scales = {role: jnp.minimum(1.0, max_grad_norm / (norm + 1e-8)) for role, norm in norms.items()}
+            grads = jax.tree.map_with_path(lambda path, g: g * scales[path[1].key.split("_", 1)[0]], grads)
+        else:
+            scale = jnp.minimum(1.0, max_grad_norm / (pre_clip + 1e-8))
+            grads = jax.tree.map(lambda x: x * scale, grads)
         metrics["pre_clip_grad_norm"] = pre_clip
         metrics["grad_norm"] = optax.global_norm(grads)
         return train_state.apply_gradients(grads=grads), metrics
@@ -286,7 +307,9 @@ def _make_team_updater(network, config: Mapping[str, Any]):
             transitions, gae, batch_targets = minibatch
 
             def loss_fn(params):
-                pi, value = network.apply(params, transitions.obs, transitions.avail_actions)
+                pi, value, _ = policy_step(
+                    network, params, transitions.obs, transitions.avail_actions, critic_obs=transitions.critic_obs
+                )
                 return ppo_objective(pi, value, transitions, gae, batch_targets)
 
             return apply_gradients(train_state, loss_fn, train_state.params)
@@ -328,6 +351,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
                     transitions.avail_actions,
                     carry=init_carry,
                     reset=transitions.reset,
+                    critic_obs=transitions.critic_obs,
                 )
                 return ppo_objective(pi, value, transitions, gae, batch_targets)
 
@@ -337,6 +361,8 @@ def _make_team_updater(network, config: Mapping[str, Any]):
         return (train_state, rng), metrics
 
     def update(train_state, traj, last_value, rng, init_carry=None):
+        if centralized and traj.critic_obs is None:
+            raise ValueError("MAPPO updates require stored critic_obs; actor-only inference is for evaluation")
         if recurrent and init_carry is None:
             raise ValueError("a recurrent team updater needs the hidden state the rollout window started from")
         advantages, targets = compute_gae(traj, last_value, gamma=gamma, gae_lambda=gae_lambda)
@@ -401,6 +427,8 @@ def make_joint_train(
         raise ValueError("joint training requires Blue and Red policy runtimes")
     if not trainable_teams or not set(trainable_teams) <= set(TEAMS):
         raise ValueError(f"invalid trainable teams: {trainable_teams}")
+    if has_centralized_critic(networks["red"]):
+        raise ValueError("CC4 centralized critic inputs are currently defined for Blue only; use IPPO for Red")
 
     base = team_configs[trainable_teams[0]]
     num_envs = int(base["NUM_ENVS"])
@@ -449,6 +477,13 @@ def make_joint_train(
     updaters = {team: _make_team_updater(networks[team], team_configs[team]) for team in trainable_teams}
     info_keys = REWARD_COMPONENTS + GAME_COUNTERS
     recurrent = {team: is_recurrent(networks[team]) for team in TEAMS}
+    centralized = {team: has_centralized_critic(networks[team]) and team in trainable_teams for team in TEAMS}
+
+    def critic_observations(team, env_state):
+        if not centralized[team]:
+            return None
+        return jax.vmap(lambda s: env.get_critic_obs(s, networks[team].critic_input))(env_state)
+
     # One sequence per (env, agent), ordered env-major to match the flatten in
     # the rollout and the reshape in the updater.
     sequence_counts = {team: num_envs * num_agents[team] for team in TEAMS}
@@ -483,6 +518,7 @@ def make_joint_train(
                 mask_batch = jnp.stack([masks[name] for name in names], axis=1)
                 flat_obs = obs_batch.reshape((-1, obs_batch.shape[-1]))
                 flat_mask = mask_batch.reshape((-1, mask_batch.shape[-1]))
+                critic_obs = critic_observations(team, env_state)
                 pi, value, carries[team] = policy_step(
                     networks[team],
                     train_states[team].params,
@@ -490,6 +526,7 @@ def make_joint_train(
                     flat_mask,
                     carry=carries[team],
                     reset=resets[team].reshape(-1),
+                    critic_obs=None if critic_obs is None else critic_obs.reshape((-1, critic_obs.shape[-1])),
                 )
                 flat_action = pi.sample(seed=action_key)
                 flat_log_prob = pi.log_prob(flat_action)
@@ -503,6 +540,7 @@ def make_joint_train(
                     team_actions,
                     value.reshape(shape),
                     flat_log_prob.reshape(shape),
+                    critic_obs,
                 )
 
             before = env_state.state
@@ -514,7 +552,7 @@ def make_joint_train(
             next_resets = {}
             for team in TEAMS:
                 names = agents[team]
-                obs_batch, mask_batch, team_actions, value, log_prob = transition_parts[team]
+                obs_batch, mask_batch, team_actions, value, log_prob, critic_obs = transition_parts[team]
                 raw_reward = rewards[names[0]]
                 scaled_reward, next_norm = _normalize_reward(
                     raw_reward,
@@ -554,6 +592,7 @@ def make_joint_train(
                     actor_mask=actor_mask,
                     critic_mask=critic_mask,
                     reset=resets[team] if recurrent[team] else None,
+                    critic_obs=critic_obs,
                 )
             return (new_env_state, new_obs, rng, norm_states, info_sums, carries, next_resets), transitions
 
@@ -569,12 +608,14 @@ def make_joint_train(
             names = agents[team]
             obs_batch = jnp.stack([obs[name] for name in names], axis=1)
             flat_obs = obs_batch.reshape((-1, obs_batch.shape[-1]))
+            critic_obs = critic_observations(team, env_state)
             _, last_value, _ = policy_step(
                 networks[team],
                 train_states[team].params,
                 flat_obs,
                 carry=carries[team],
                 reset=resets[team].reshape(-1),
+                critic_obs=None if critic_obs is None else critic_obs.reshape((-1, critic_obs.shape[-1])),
             )
             last_value = last_value.reshape((num_envs, num_agents[team]))
             if team == "red":

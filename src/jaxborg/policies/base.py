@@ -32,6 +32,15 @@ BUFFER_LAYOUT_PER_AGENT = "per_agent"
 BUFFER_LAYOUT_SEQUENCE = "sequence"
 
 
+class CentralizedCriticPolicy(nn.Module):
+    """A local actor with a separate, training-only ``critic_obs`` input.
+
+    Implementations expose ``critic_input`` and ``critic_obs_dim``; the joint
+    trainer supplies these observations on rollout, bootstrap, and PPO replay.
+    Evaluation omits them and runs only the actor.
+    """
+
+
 class RecurrentPolicy(nn.Module):
     """Marker base for policies that carry hidden state between timesteps.
 

@@ -120,3 +120,61 @@ def test_minibatch_divides_batch(recipe):
     assert batch % c["num_minibatches"] == 0, (
         "CleanRL: num_envs * rollout_length * num_rollouts_per_update not divisible by num_minibatches"
     )
+
+
+def test_stock_cotraining_recipes_stay_feedforward():
+    """The MLP co-training recipes are the control arm and the published runs.
+
+    Every number in docs/cotraining_collapse.md was measured with
+    `arch.name: shared`. A recurrent architecture belongs in its own recipe,
+    never as an edit to these.
+    """
+    for name in ("cotraining", "cotraining_env_diversity", "cotraining_test_rule_change"):
+        arch = load(name)["arch"]
+        assert arch["name"] == "shared", f"{name} must stay feedforward"
+        assert arch["hidden_layers"] == 2
+        assert "cell" not in arch and "trunk" not in arch
+
+
+def test_recurrent_cotraining_arms_differ_only_in_the_cell():
+    """`cotraining_rnn` and `cotraining_lstm` are a controlled A/B on the cell.
+
+    If they drift apart on anything else — budget, minibatches, topologies —
+    a gap between the two runs stops being attributable to GRU vs LSTM.
+    """
+    gru = load("cotraining_rnn")
+    lstm = load("cotraining_lstm")
+    for recipe in (gru, lstm):
+        # Prose and file path are expected to differ; nothing else is.
+        del recipe["meta"], recipe["__source_path__"]
+
+    assert gru["arch"].pop("cell") == "gru"
+    assert lstm["arch"].pop("cell") == "lstm"
+    assert gru == lstm
+
+
+# The only recipe allowed to run non-stock CC4 rules. It exists to test the
+# knobs, and it ships in the `both` arm rather than the control.
+RULE_KNOB_HARNESS = "cotraining_test_rule_change"
+
+
+def test_rule_knobs_are_off_everywhere_except_the_harness(recipe):
+    """`red_reward` and `blue_block_policy` default to stock CC4.
+
+    Both change the game, not just the optimizer: `damage` alters Red's payoff
+    and `mission_safe` removes Blue actions outright, so a recipe that picks
+    one up by accident produces numbers that cannot be compared to any
+    published CC4 result. They also propagate to evaluation through the
+    resolved sidecar, so the mistake would follow the policy out of training.
+    """
+    expected = ("damage", "mission_safe") if recipe["meta"]["name"] == RULE_KNOB_HARNESS else ("zero_sum", "cc4")
+    for resolved, where in ((train_variant(recipe), "train"), (eval_variant(recipe), "eval")):
+        assert (resolved.red_reward, resolved.blue_block_policy) == expected, (
+            f"{recipe['meta']['name']} {where} variant is not {expected}"
+        )
+
+
+def test_the_rule_knob_harness_is_the_only_recipe_declaring_overrides():
+    """Names the one file to look at when a run's rules are in question."""
+    declared = sorted(name for name in RECIPE_NAMES if (load(name).get("train") or {}).get("variant_overrides"))
+    assert declared == [RULE_KNOB_HARNESS]
