@@ -11,7 +11,7 @@ import pytest
 from flax import struct
 from flax.training.train_state import TrainState
 
-from jaxborg.policies import make_jax_policy
+from jaxborg.policies import make_jax_policy, policy_from_arch
 from scripts.train.algorithms import ippo_jax_joint as joint
 
 
@@ -405,3 +405,131 @@ def test_real_termination_still_cuts_the_bootstrap():
 
     assert adv[0] == 0.0
     np.testing.assert_allclose(adv[4], 10.0, rtol=1e-5)
+
+
+# --- recurrent architectures ------------------------------------------------
+#
+# A sequence policy changes two things in this trainer: the rollout threads a
+# hidden state through `env_step`, and the PPO update minibatches whole
+# trajectories instead of shuffled rows. Everything else — GAE, the masks, the
+# metrics — is shared with the feedforward path and covered above.
+
+
+def _recurrent_networks(blue_action_dim: int, red_action_dim: int, **arch):
+    spec = {"name": "recurrent", "hidden_dim": 8, "hidden_layers": 1, "activation": "tanh"}
+    spec.update(arch)
+    return {
+        "blue": policy_from_arch(spec, action_dim=blue_action_dim),
+        "red": policy_from_arch(spec, action_dim=red_action_dim),
+    }
+
+
+@pytest.fixture
+def tiny_joint_recurrent(monkeypatch):
+    blue_obs_dim, red_obs_dim = 4, 6
+    blue_action_dim, red_action_dim = 3, 5
+    env = _TinyJointEnv(
+        blue_obs_dim=blue_obs_dim,
+        red_obs_dim=red_obs_dim,
+        blue_actions=blue_action_dim,
+        red_actions=red_action_dim,
+    )
+    monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_args, **_kwargs: env)
+    return _recurrent_networks(blue_action_dim, red_action_dim), {"blue": _config(), "red": _config()}
+
+
+@pytest.mark.parametrize("cell", ["gru", "lstm"])
+def test_recurrent_joint_update_trains_both_teams_including_the_cell(cell, monkeypatch):
+    """End to end: rollout, sequence minibatching, and gradients into the RNN."""
+    env = _TinyJointEnv(blue_obs_dim=4, red_obs_dim=6, blue_actions=3, red_actions=5)
+    monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_args, **_kwargs: env)
+    networks = _recurrent_networks(3, 5, cell=cell)
+
+    before, after, metrics = _one_joint_update((networks, {"blue": _config(), "red": _config()}), ("blue", "red"))
+
+    for team in joint.TEAMS:
+        assert _tree_changed(before[team], after[team].params)
+        cell_params = after[team].params["params"]["trunk"]["ScannedRNN_0"]
+        assert _tree_changed(before[team]["params"]["trunk"]["ScannedRNN_0"], cell_params)
+        assert np.isfinite(float(metrics[team]["total_loss"]))
+
+
+def test_recurrent_rollout_is_not_memoryless(tiny_joint_recurrent):
+    """The hidden state must reach the stored log-probs.
+
+    `_TinyJointEnv` emits an observation that is a function of the timestep, so
+    a memoryless policy would produce identical logits for identical
+    observations. Two rollout steps see different observations here; what this
+    pins down is that the trained parameters include the recurrent cell, i.e.
+    the value the update backpropagates through is the sequence model's.
+    """
+    networks, configs = tiny_joint_recurrent
+    module = networks["blue"]
+    params = joint.init_policy_params(module, jax.random.PRNGKey(0), 4)
+    obs = jnp.ones((1, 4), dtype=jnp.float32)
+
+    carry = joint.initial_carry(module, 1)
+    first, _, carry = joint.policy_step(module, params, obs, carry=carry)
+    second, _, _ = joint.policy_step(module, params, obs, carry=carry)
+
+    assert not np.allclose(np.asarray(first.logits), np.asarray(second.logits), atol=1e-6)
+
+
+def test_recurrent_updater_rejects_a_minibatch_count_that_splits_a_sequence(tiny_joint_recurrent):
+    """Sequences are the atom of a recurrent minibatch, so env x agent divides."""
+    networks, configs = tiny_joint_recurrent
+    configs["blue"]["NUM_MINIBATCHES"] = 2  # env x agent is 1 here
+    updater = joint._make_team_updater(networks["blue"], configs["blue"])
+    module = networks["blue"]
+    params = joint.init_policy_params(module, jax.random.PRNGKey(0), 4)
+    state = TrainState.create(apply_fn=module.apply, params=params, tx=optax.adam(1e-2))
+    trajectory = joint.TeamTransition(
+        done=jnp.zeros((2, 1, 1), dtype=jnp.float32),
+        action=jnp.zeros((2, 1, 1), dtype=jnp.int32),
+        value=jnp.zeros((2, 1, 1), dtype=jnp.float32),
+        reward=jnp.zeros((2, 1, 1), dtype=jnp.float32),
+        log_prob=jnp.zeros((2, 1, 1), dtype=jnp.float32),
+        obs=jnp.zeros((2, 1, 1, 4), dtype=jnp.float32),
+        avail_actions=jnp.ones((2, 1, 1, 3), dtype=jnp.bool_),
+        actor_mask=jnp.ones((2, 1, 1), dtype=jnp.float32),
+        critic_mask=jnp.ones((2, 1, 1), dtype=jnp.float32),
+        reset=jnp.zeros((2, 1, 1), dtype=jnp.bool_),
+    )
+    with pytest.raises(ValueError, match="env x agent"):
+        updater(state, trajectory, jnp.zeros((1, 1)), jax.random.PRNGKey(1), init_carry=joint.initial_carry(module, 1))
+
+
+def test_recurrent_updater_refuses_to_guess_the_window_start_state(tiny_joint_recurrent):
+    networks, configs = tiny_joint_recurrent
+    updater = joint._make_team_updater(networks["blue"], configs["blue"])
+    with pytest.raises(ValueError, match="hidden state the rollout window started from"):
+        updater(None, None, None, None)
+
+
+def test_blue_sequences_restart_only_on_termination():
+    done = jnp.array([[0.0, 1.0]], dtype=jnp.float32)
+    np.testing.assert_array_equal(
+        np.asarray(joint.next_sequence_reset("blue", done, None)),
+        np.array([[False, True]]),
+    )
+
+
+def test_red_sequences_restart_when_a_dormant_agent_is_revived():
+    """Dormancy is a gap for GAE but a boundary for memory.
+
+    `compute_gae` deliberately lets credit cross a dormancy gap, so `done`
+    stays clear there. The hidden state must not: a revived Red agent holds a
+    session somewhere else, and its predecessor's belief is misinformation.
+    """
+    done = jnp.zeros((1, 3), dtype=jnp.float32)
+    active_before = jnp.array([[True, False, True]])
+
+    np.testing.assert_array_equal(
+        np.asarray(joint.next_sequence_reset("red", done, active_before)),
+        np.array([[False, True, False]]),
+    )
+    # Termination still resets regardless of activity.
+    np.testing.assert_array_equal(
+        np.asarray(joint.next_sequence_reset("red", jnp.ones((1, 3), dtype=jnp.float32), active_before)),
+        np.array([[True, True, True]]),
+    )

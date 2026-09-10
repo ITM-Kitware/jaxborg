@@ -16,6 +16,7 @@ import optax
 from flax.training.train_state import TrainState
 
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
+from jaxborg.policies import init_policy_params, initial_carry, is_recurrent, policy_sequence, policy_step
 
 TEAMS = ("blue", "red")
 
@@ -35,6 +36,12 @@ class TeamTransition(NamedTuple):
     avail_actions: jax.Array
     actor_mask: jax.Array
     critic_mask: jax.Array
+    # Recurrent policies only: the hidden state was zeroed before this row was
+    # acted on. Kept beside ``done`` rather than derived from it because the
+    # two differ for Red -- ``done`` is real termination, while a sequence also
+    # restarts when a dormant Red agent is revived by session reassignment.
+    # ``None`` for feedforward archs, which have no hidden state to reset.
+    reset: jax.Array | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -51,6 +58,28 @@ def initial_reward_norm_state(num_envs: int) -> RewardNormState:
         var=jnp.ones((), dtype=jnp.float32),
         count=jnp.array(1e-4, dtype=jnp.float32),
     )
+
+
+def next_sequence_reset(team: str, episode_done: jax.Array, active_before: jax.Array | None) -> jax.Array:
+    """Whether the *next* row opens a new sequence for a recurrent policy.
+
+    Blue never goes dormant, so only termination restarts its sequence. A Red
+    agent that loses every session is revived later by session reassignment on
+    a different foothold: the hidden state its predecessor built describes a
+    part of the network it no longer has access to, so that is misinformation
+    rather than context. Keyed on the *previous* step's activity so the first
+    live row after a gap is the one that starts blank -- keying it on the
+    current step would carry the pre-eviction state across the gap.
+
+    Kept out of ``done``: ``done`` is real termination and must stay that way
+    for ``compute_gae`` to bootstrap Red's credit across a dormancy gap.
+    """
+    done = episode_done > 0
+    if team == "blue":
+        return done
+    if active_before is None:
+        raise ValueError("red's sequence reset needs the pre-step activity mask")
+    return done | ~active_before
 
 
 def _masked_mean(value: jax.Array, mask: jax.Array) -> jax.Array:
@@ -182,92 +211,169 @@ def _make_team_updater(network, config: Mapping[str, Any]):
     clip_value_loss = bool(config.get("CLIP_VALUE_LOSS", False))
     num_minibatches = int(config["NUM_MINIBATCHES"])
     update_epochs = int(config["UPDATE_EPOCHS"])
+    recurrent = is_recurrent(network)
 
-    def update(train_state, traj, last_value, rng):
+    def ppo_objective(pi, value, transitions, gae, targets):
+        """Shared loss body. Every reduction is a mask-weighted mean, so it is
+        indifferent to whether the batch is flat rows or (time, sequence)."""
+        log_prob = pi.log_prob(transitions.action)
+        ratio = jnp.exp(log_prob - transitions.log_prob)
+        log_ratio = log_prob - transitions.log_prob
+        actor_mask = transitions.actor_mask
+        actor_loss = -_masked_mean(
+            jnp.minimum(
+                ratio * gae,
+                jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * gae,
+            ),
+            actor_mask,
+        )
+        entropy = _masked_mean(pi.entropy(), actor_mask)
+        value_loss = _masked_value_loss(
+            value,
+            transitions.value,
+            targets,
+            transitions.critic_mask,
+            clip_eps,
+            clip_value_loss,
+        )
+        approx_kl = _masked_mean((ratio - 1.0) - log_ratio, actor_mask)
+        clip_frac = _masked_mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32), actor_mask)
+        target_mean = _masked_mean(targets, transitions.critic_mask)
+        target_var = _masked_mean(jnp.square(targets - target_mean), transitions.critic_mask)
+        residual = targets - value
+        residual_mean = _masked_mean(residual, transitions.critic_mask)
+        residual_var = _masked_mean(jnp.square(residual - residual_mean), transitions.critic_mask)
+        explained_var = jnp.where(target_var > 0, 1.0 - residual_var / target_var, 0.0)
+        total = actor_loss + vf_coef * value_loss - ent_coef * entropy
+        aux = {
+            "total_loss": total,
+            "actor_loss": actor_loss,
+            "critic_loss": value_loss,
+            "entropy": entropy,
+            "approx_kl": approx_kl,
+            "clip_frac": clip_frac,
+            "explained_var": explained_var,
+        }
+        return total, aux
+
+    def apply_gradients(train_state, loss_fn, params):
+        (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
+        del loss
+        pre_clip = optax.global_norm(grads)
+        scale = jnp.minimum(1.0, max_grad_norm / (pre_clip + 1e-8))
+        grads = jax.tree.map(lambda x: x * scale, grads)
+        metrics["pre_clip_grad_norm"] = pre_clip
+        metrics["grad_norm"] = optax.global_norm(grads)
+        return train_state.apply_gradients(grads=grads), metrics
+
+    def flat_epoch(carry, batch):
+        """Feedforward layout: every (t, env, agent) row is an independent sample."""
+        flat_batch, flat_advantages, flat_targets, batch_size = batch
+        train_state, rng = carry
+        rng, perm_key = jax.random.split(rng)
+        permutation = jax.random.permutation(perm_key, batch_size)
+        shuffled = (
+            jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), flat_batch),
+            jnp.take(flat_advantages, permutation, axis=0),
+            jnp.take(flat_targets, permutation, axis=0),
+        )
+        minibatches = jax.tree.map(
+            lambda x: x.reshape((num_minibatches, -1) + x.shape[1:]),
+            shuffled,
+        )
+
+        def minibatch_step(train_state, minibatch):
+            transitions, gae, batch_targets = minibatch
+
+            def loss_fn(params):
+                pi, value = network.apply(params, transitions.obs, transitions.avail_actions)
+                return ppo_objective(pi, value, transitions, gae, batch_targets)
+
+            return apply_gradients(train_state, loss_fn, train_state.params)
+
+        train_state, metrics = jax.lax.scan(minibatch_step, train_state, minibatches)
+        return (train_state, rng), metrics
+
+    def sequence_epoch(carry, batch):
+        """Recurrent layout: a minibatch is whole trajectories, time axis intact.
+
+        Shuffling rows would destroy the order the hidden state is defined by,
+        so the permutation is over sequences (env x agent) and each minibatch is
+        replayed from the hidden state its window began with.
+        """
+        seq_batch, seq_advantages, seq_targets, carry_batch, num_sequences = batch
+        train_state, rng = carry
+        rng, perm_key = jax.random.split(rng)
+        permutation = jax.random.permutation(perm_key, num_sequences)
+        shuffled = jax.tree.map(
+            lambda x: jnp.take(x, permutation, axis=1),
+            (seq_batch, seq_advantages, seq_targets, carry_batch),
+        )
+        minibatches = jax.tree.map(
+            lambda x: jnp.swapaxes(x.reshape((x.shape[0], num_minibatches, -1) + x.shape[2:]), 0, 1),
+            shuffled,
+        )
+
+        def minibatch_step(train_state, minibatch):
+            transitions, gae, batch_targets, init_carry = minibatch
+            # The leading axis of 1 exists only so the carry rides the same
+            # take/reshape as the time-major arrays; drop it before the replay.
+            init_carry = jax.tree.map(lambda leaf: leaf[0], init_carry)
+
+            def loss_fn(params):
+                pi, value, _ = policy_sequence(
+                    network,
+                    params,
+                    transitions.obs,
+                    transitions.avail_actions,
+                    carry=init_carry,
+                    reset=transitions.reset,
+                )
+                return ppo_objective(pi, value, transitions, gae, batch_targets)
+
+            return apply_gradients(train_state, loss_fn, train_state.params)
+
+        train_state, metrics = jax.lax.scan(minibatch_step, train_state, minibatches)
+        return (train_state, rng), metrics
+
+    def update(train_state, traj, last_value, rng, init_carry=None):
+        if recurrent and init_carry is None:
+            raise ValueError("a recurrent team updater needs the hidden state the rollout window started from")
         advantages, targets = compute_gae(traj, last_value, gamma=gamma, gae_lambda=gae_lambda)
         advantages = _masked_normalize(advantages, traj.actor_mask)
 
-        # T x E x A -> one independent-IPPO sample axis.
-        batch_size = traj.action.size
-        if batch_size % num_minibatches != 0:
-            raise ValueError(f"team batch ({batch_size}) must be divisible by NUM_MINIBATCHES ({num_minibatches})")
-        flat_batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), traj)
-        flat_advantages = advantages.reshape(batch_size)
-        flat_targets = targets.reshape(batch_size)
-
-        def epoch_step(carry, _):
-            train_state, rng = carry
-            rng, perm_key = jax.random.split(rng)
-            permutation = jax.random.permutation(perm_key, batch_size)
-            shuffled = (
-                jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), flat_batch),
-                jnp.take(flat_advantages, permutation, axis=0),
-                jnp.take(flat_targets, permutation, axis=0),
+        if recurrent:
+            # T x E x A -> T x (E*A): one sequence per (env, agent), time intact.
+            num_sequences = int(traj.action.shape[1] * traj.action.shape[2])
+            if num_sequences % num_minibatches != 0:
+                raise ValueError(
+                    f"recurrent minibatching splits sequences, not rows: env x agent ({num_sequences}) "
+                    f"must be divisible by NUM_MINIBATCHES ({num_minibatches})"
+                )
+            to_sequences = lambda x: x.reshape((x.shape[0], num_sequences) + x.shape[3:])  # noqa: E731
+            batch = (
+                jax.tree.map(to_sequences, traj),
+                to_sequences(advantages),
+                to_sequences(targets),
+                jax.tree.map(lambda leaf: leaf[None], init_carry),
+                num_sequences,
             )
-            minibatches = jax.tree.map(
-                lambda x: x.reshape((num_minibatches, -1) + x.shape[1:]),
-                shuffled,
+            epoch_step = sequence_epoch
+        else:
+            # T x E x A -> one independent-IPPO sample axis.
+            batch_size = traj.action.size
+            if batch_size % num_minibatches != 0:
+                raise ValueError(f"team batch ({batch_size}) must be divisible by NUM_MINIBATCHES ({num_minibatches})")
+            batch = (
+                jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), traj),
+                advantages.reshape(batch_size),
+                targets.reshape(batch_size),
+                batch_size,
             )
-
-            def minibatch_step(train_state, batch):
-                transitions, gae, batch_targets = batch
-
-                def loss_fn(params):
-                    pi, value = network.apply(params, transitions.obs, transitions.avail_actions)
-                    log_prob = pi.log_prob(transitions.action)
-                    ratio = jnp.exp(log_prob - transitions.log_prob)
-                    log_ratio = log_prob - transitions.log_prob
-                    actor_mask = transitions.actor_mask
-                    actor_loss = -_masked_mean(
-                        jnp.minimum(
-                            ratio * gae,
-                            jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * gae,
-                        ),
-                        actor_mask,
-                    )
-                    entropy = _masked_mean(pi.entropy(), actor_mask)
-                    value_loss = _masked_value_loss(
-                        value,
-                        transitions.value,
-                        batch_targets,
-                        transitions.critic_mask,
-                        clip_eps,
-                        clip_value_loss,
-                    )
-                    approx_kl = _masked_mean((ratio - 1.0) - log_ratio, actor_mask)
-                    clip_frac = _masked_mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32), actor_mask)
-                    target_mean = _masked_mean(batch_targets, transitions.critic_mask)
-                    target_var = _masked_mean(jnp.square(batch_targets - target_mean), transitions.critic_mask)
-                    residual = batch_targets - value
-                    residual_mean = _masked_mean(residual, transitions.critic_mask)
-                    residual_var = _masked_mean(jnp.square(residual - residual_mean), transitions.critic_mask)
-                    explained_var = jnp.where(target_var > 0, 1.0 - residual_var / target_var, 0.0)
-                    total = actor_loss + vf_coef * value_loss - ent_coef * entropy
-                    aux = {
-                        "total_loss": total,
-                        "actor_loss": actor_loss,
-                        "critic_loss": value_loss,
-                        "entropy": entropy,
-                        "approx_kl": approx_kl,
-                        "clip_frac": clip_frac,
-                        "explained_var": explained_var,
-                    }
-                    return total, aux
-
-                (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(train_state.params)
-                del loss
-                pre_clip = optax.global_norm(grads)
-                scale = jnp.minimum(1.0, max_grad_norm / (pre_clip + 1e-8))
-                grads = jax.tree.map(lambda x: x * scale, grads)
-                metrics["pre_clip_grad_norm"] = pre_clip
-                metrics["grad_norm"] = optax.global_norm(grads)
-                return train_state.apply_gradients(grads=grads), metrics
-
-            train_state, metrics = jax.lax.scan(minibatch_step, train_state, minibatches)
-            return (train_state, rng), metrics
+            epoch_step = flat_epoch
 
         (train_state, rng), metrics = jax.lax.scan(
-            epoch_step,
+            lambda carry, _: epoch_step(carry, batch),
             (train_state, rng),
             None,
             update_epochs,
@@ -332,7 +438,7 @@ def make_joint_train(
             obs_shape = env.observation_space(agents[team][0]).shape
             params = supplied_params.get(team)
             if params is None:
-                params = networks[team].init(keys[team], jnp.zeros(obs_shape, dtype=jnp.float32))
+                params = init_policy_params(networks[team], keys[team], int(obs_shape[-1]))
             states[team] = TrainState.create(
                 apply_fn=networks[team].apply,
                 params=params,
@@ -342,6 +448,10 @@ def make_joint_train(
 
     updaters = {team: _make_team_updater(networks[team], team_configs[team]) for team in trainable_teams}
     info_keys = REWARD_COMPONENTS + GAME_COUNTERS
+    recurrent = {team: is_recurrent(networks[team]) for team in TEAMS}
+    # One sequence per (env, agent), ordered env-major to match the flatten in
+    # the rollout and the reshape in the updater.
+    sequence_counts = {team: num_envs * num_agents[team] for team in TEAMS}
 
     # Do not donate the nested team state here. Small scalar leaves in the two
     # reward-normalizer pytrees may alias after construction, and XLA rejects
@@ -349,9 +459,17 @@ def make_joint_train(
     @jax.jit
     def collect_and_update(train_states, env_state, obs, rng, reward_norm_states):
         info_init = {key: jnp.zeros(num_envs, dtype=jnp.float32) for key in info_keys}
+        # Truncated BPTT with the window set to the rollout. NUM_STEPS is the
+        # recipe's episode_length and every env resets on the same tick, so a
+        # window boundary is an episode boundary and starting from a blank
+        # hidden state loses nothing. Mid-window resets, if a future recipe
+        # ever produces them, are still handled by the per-row reset flags.
+        window_carries = {team: initial_carry(networks[team], sequence_counts[team]) for team in TEAMS}
+        # Row 0 of a window opens a sequence, so it resets by definition.
+        reset_init = {team: jnp.ones((num_envs, num_agents[team]), dtype=jnp.bool_) for team in TEAMS}
 
         def env_step(carry, _):
-            env_state, obs, rng, norm_states, info_sums = carry
+            env_state, obs, rng, norm_states, info_sums, carries, resets = carry
             masks = jax.vmap(env.get_avail_actions)(env_state)
             rng, blue_key, red_key, step_key = jax.random.split(rng, 4)
             actions = {}
@@ -365,7 +483,14 @@ def make_joint_train(
                 mask_batch = jnp.stack([masks[name] for name in names], axis=1)
                 flat_obs = obs_batch.reshape((-1, obs_batch.shape[-1]))
                 flat_mask = mask_batch.reshape((-1, mask_batch.shape[-1]))
-                pi, value = networks[team].apply(train_states[team].params, flat_obs, flat_mask)
+                pi, value, carries[team] = policy_step(
+                    networks[team],
+                    train_states[team].params,
+                    flat_obs,
+                    flat_mask,
+                    carry=carries[team],
+                    reset=resets[team].reshape(-1),
+                )
                 flat_action = pi.sample(seed=action_key)
                 flat_log_prob = pi.log_prob(flat_action)
                 shape = (num_envs, num_agents[team])
@@ -386,6 +511,7 @@ def make_joint_train(
             info_sums = {key: info_sums[key] + jnp.asarray(infos[key], dtype=jnp.float32) for key in info_keys}
             done_env = dones["__all__"].astype(jnp.float32)
             transitions = {}
+            next_resets = {}
             for team in TEAMS:
                 names = agents[team]
                 obs_batch, mask_batch, team_actions, value, log_prob = transition_parts[team]
@@ -398,11 +524,13 @@ def make_joint_train(
                 )
                 norm_states[team] = next_norm
                 reward_batch = jnp.repeat(scaled_reward[:, None], num_agents[team], axis=1)
+                episode_done = jnp.repeat(done_env[:, None], num_agents[team], axis=1)
                 if team == "blue":
                     idle_before = before.blue_pending_ticks == 0
                     actor_mask = idle_before.astype(jnp.float32)
                     critic_mask = jnp.ones_like(actor_mask)
-                    transition_done = jnp.repeat(done_env[:, None], num_agents[team], axis=1)
+                    transition_done = episode_done
+                    next_resets[team] = next_sequence_reset(team, episode_done, None)
                 else:
                     active_before = before.red_agent_active
                     idle_before = before.red_pending_ticks == 0
@@ -413,7 +541,8 @@ def make_joint_train(
                     # `done` stays real termination so compute_gae can bootstrap
                     # across the gap instead of zeroing Red's future.
                     critic_mask = active_before.astype(jnp.float32)
-                    transition_done = jnp.repeat(done_env[:, None], num_agents[team], axis=1)
+                    transition_done = episode_done
+                    next_resets[team] = next_sequence_reset(team, episode_done, active_before)
                 transitions[team] = TeamTransition(
                     done=transition_done,
                     action=team_actions,
@@ -424,12 +553,13 @@ def make_joint_train(
                     avail_actions=mask_batch,
                     actor_mask=actor_mask,
                     critic_mask=critic_mask,
+                    reset=resets[team] if recurrent[team] else None,
                 )
-            return (new_env_state, new_obs, rng, norm_states, info_sums), transitions
+            return (new_env_state, new_obs, rng, norm_states, info_sums, carries, next_resets), transitions
 
-        (env_state, obs, rng, reward_norm_states, info_sums), trajectories = jax.lax.scan(
+        (env_state, obs, rng, reward_norm_states, info_sums, carries, resets), trajectories = jax.lax.scan(
             env_step,
-            (env_state, obs, rng, reward_norm_states, info_init),
+            (env_state, obs, rng, reward_norm_states, info_init, window_carries, reset_init),
             None,
             num_steps,
         )
@@ -439,14 +569,26 @@ def make_joint_train(
             names = agents[team]
             obs_batch = jnp.stack([obs[name] for name in names], axis=1)
             flat_obs = obs_batch.reshape((-1, obs_batch.shape[-1]))
-            _, last_value = networks[team].apply(train_states[team].params, flat_obs)
+            _, last_value, _ = policy_step(
+                networks[team],
+                train_states[team].params,
+                flat_obs,
+                carry=carries[team],
+                reset=resets[team].reshape(-1),
+            )
             last_value = last_value.reshape((num_envs, num_agents[team]))
             if team == "red":
                 last_value = last_value * env_state.state.red_agent_active.astype(jnp.float32)
 
             if team in trainable_teams:
                 rng, update_key = jax.random.split(rng)
-                state, _, team_metrics = updaters[team](train_states[team], trajectories[team], last_value, update_key)
+                state, _, team_metrics = updaters[team](
+                    train_states[team],
+                    trajectories[team],
+                    last_value,
+                    update_key,
+                    init_carry=window_carries[team],
+                )
                 train_states[team] = state
             else:
                 zero = jnp.zeros((), dtype=jnp.float32)
@@ -503,4 +645,5 @@ __all__ = [
     "compute_gae",
     "initial_reward_norm_state",
     "make_joint_train",
+    "next_sequence_reset",
 ]

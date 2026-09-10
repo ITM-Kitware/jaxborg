@@ -63,7 +63,14 @@ from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.metrics_schema import add_team_metrics, make_row
 from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
-from jaxborg.policies import make_jax_policy
+from jaxborg.policies import (
+    init_policy_params,
+    initial_carry,
+    is_recurrent,
+    policy_from_arch,
+    policy_sequence,
+    policy_step,
+)
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import (
     project_jax,
@@ -90,6 +97,9 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     avail_actions: jnp.ndarray
     blue_busy: jnp.ndarray
+    # Recurrent archs only: the hidden state was zeroed before this row acted,
+    # i.e. the previous step ended the episode. ``None`` for feedforward archs.
+    reset: jnp.ndarray | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -139,18 +149,29 @@ def make_train(config, network):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
 
+    recurrent = is_recurrent(network)
+
     def _init_train_state(rng):
-        init_x = jnp.zeros(inner_env.observation_space(agents[0]).shape)
-        params = network.init(rng, init_x)
+        obs_dim = int(inner_env.observation_space(agents[0]).shape[-1])
+        params = init_policy_params(network, rng, obs_dim)
         if config["ANNEAL_LR"]:
             tx = optax.adam(learning_rate=linear_schedule, eps=1e-5)
         else:
             tx = optax.adam(config["LR"], eps=1e-5)
         return TrainState.create(apply_fn=network.apply, params=params, tx=tx)
 
+    num_sequences = num_agents * num_envs
+
     @partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
     def _collect_and_update(train_state, env_state, obs, rng, reward_norm_state):
         _agent_ids = jnp.arange(num_agents)
+        # Truncated BPTT with the window set to the rollout: NUM_STEPS is the
+        # recipe's episode_length and every env resets on the same tick, so a
+        # window boundary is an episode boundary. Mid-window resets are still
+        # handled by the per-row reset flags carried in the transition.
+        window_carry = initial_carry(network, num_sequences)
+        # Row 0 of a window opens a sequence, so it resets by definition.
+        reset_init = jnp.ones((num_envs, num_agents), dtype=jnp.bool_)
         # `blue_block_policy` is a static string, so bind it before vmapping.
         _masker = partial(compute_blue_action_mask, blue_block_policy=variant.blue_block_policy)
         _mask_over_envs = jax.vmap(_masker, in_axes=(0, None, 0))
@@ -170,7 +191,7 @@ def make_train(config, network):
         }
 
         def _env_step(carry, _):
-            env_state, obs, rng, info_acc, rn_state = carry
+            env_state, obs, rng, info_acc, rn_state, policy_carry, reset = carry
             obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
             busy_batch = env_state.env_state.state.blue_pending_ticks > 0
             avail_batch = _mask_over_agents(env_state.env_state.const, _agent_ids, env_state.env_state.state).transpose(
@@ -181,7 +202,14 @@ def make_train(config, network):
             rng, _rng = jax.random.split(rng)
             flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
             flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
-            pi, value = network.apply(train_state.params, flat_obs, flat_avail)
+            pi, value, policy_carry = policy_step(
+                network,
+                train_state.params,
+                flat_obs,
+                flat_avail,
+                carry=policy_carry,
+                reset=reset.reshape(-1),
+            )
             action_flat = pi.sample(seed=_rng)
             log_prob_flat = pi.log_prob(action_flat)
             action = action_flat.reshape(num_envs, num_agents)
@@ -214,8 +242,9 @@ def make_train(config, network):
             else:
                 reward_out = jnp.stack([rewards[a] for a in agents], axis=-1) * config.get("REWARD_SCALE", 1.0)
 
+            agent_done = jnp.stack([dones[a] for a in agents], axis=-1)
             transition = Transition(
-                done=jnp.stack([dones[a] for a in agents], axis=-1),
+                done=agent_done,
                 action=action,
                 value=value,
                 reward=reward_out,
@@ -223,16 +252,26 @@ def make_train(config, network):
                 obs=obs_batch,
                 avail_actions=avail_batch,
                 blue_busy=busy_batch.astype(jnp.float32),
+                reset=reset if recurrent else None,
             )
-            return (new_env_state, new_obs, rng, info_acc, rn_state), transition
+            return (new_env_state, new_obs, rng, info_acc, rn_state, policy_carry, agent_done > 0), transition
 
-        (env_state, obs, rng, info_sums, reward_norm_state), traj_batch = jax.lax.scan(
-            _env_step, (env_state, obs, rng, _info_acc_init, reward_norm_state), None, config["NUM_STEPS"]
+        (env_state, obs, rng, info_sums, reward_norm_state, policy_carry, reset), traj_batch = jax.lax.scan(
+            _env_step,
+            (env_state, obs, rng, _info_acc_init, reward_norm_state, window_carry, reset_init),
+            None,
+            config["NUM_STEPS"],
         )
 
         last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
         flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
-        _, last_val = network.apply(train_state.params, flat_last_obs)
+        _, last_val, _ = policy_step(
+            network,
+            train_state.params,
+            flat_last_obs,
+            carry=policy_carry,
+            reset=reset.reshape(-1),
+        )
         last_val = last_val.reshape(num_envs, num_agents)
 
         def _get_advantages(gae_and_next_value, gae_inputs):
@@ -258,15 +297,25 @@ def make_train(config, network):
 
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
-                traj_batch, advantages, targets, policy_mask = batch_info
+                traj_batch, advantages, targets, policy_mask, init_carry = batch_info
+                # The leading axis of 1 exists only so the carry rides the same
+                # take/reshape as the time-major arrays; drop it before replay.
+                init_carry = jax.tree.map(lambda leaf: leaf[0], init_carry)
 
-                def _loss_fn(params, traj_batch, gae, targets, policy_mask):
+                def _loss_fn(params, traj_batch, gae, targets, policy_mask, init_carry):
                     policy_weight = policy_mask.astype(jnp.float32)
                     policy_count = jnp.maximum(policy_weight.sum(), 1.0)
                     gae_mean = jnp.sum(policy_weight * gae) / policy_count
                     gae_var = jnp.sum(policy_weight * jnp.square(gae - gae_mean)) / policy_count
                     gae = (gae - gae_mean) / (jnp.sqrt(gae_var) + 1e-8)
-                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
+                    pi, value, _ = policy_sequence(
+                        network,
+                        params,
+                        traj_batch.obs,
+                        traj_batch.avail_actions,
+                        carry=init_carry,
+                        reset=traj_batch.reset,
+                    )
                     log_prob = pi.log_prob(traj_batch.action)
                     value_loss = compute_value_loss(
                         value,
@@ -289,7 +338,9 @@ def make_train(config, network):
                     return total_loss, (value_loss, loss_actor, entropy, approx_kl, clip_frac, explained_var)
 
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                total_loss, grads = grad_fn(train_state.params, traj_batch, advantages, targets, policy_mask)
+                total_loss, grads = grad_fn(
+                    train_state.params, traj_batch, advantages, targets, policy_mask, init_carry
+                )
                 pre_clip = optax.global_norm(grads)
                 max_norm = jnp.asarray(config["MAX_GRAD_NORM"], dtype=jnp.float32)
                 scale = jnp.minimum(1.0, max_norm / (pre_clip + 1e-8))
@@ -311,15 +362,35 @@ def make_train(config, network):
 
             train_state, traj_batch, advantages, targets, policy_mask, rng = update_state
             rng, _rng = jax.random.split(rng)
-            batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-            permutation = jax.random.permutation(_rng, batch_size)
-            batch = (traj_batch, advantages, targets, policy_mask)
-            batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
-            shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
-            minibatches = jax.tree.map(
-                lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
-                shuffled,
-            )
+            if recurrent:
+                # A recurrent policy's hidden state is defined by trajectory
+                # order, so the permutation runs over sequences (env x agent)
+                # and the time axis inside a minibatch stays intact. Each
+                # minibatch is replayed from the state its window began with.
+                if num_sequences % config["NUM_MINIBATCHES"] != 0:
+                    raise ValueError(
+                        f"recurrent minibatching splits sequences, not rows: env x agent ({num_sequences}) "
+                        f"must be divisible by NUM_MINIBATCHES ({config['NUM_MINIBATCHES']})"
+                    )
+                permutation = jax.random.permutation(_rng, num_sequences)
+                batch = (traj_batch, advantages, targets, policy_mask)
+                batch = jax.tree.map(lambda x: x.reshape((x.shape[0], num_sequences) + x.shape[3:]), batch)
+                batch = batch + (jax.tree.map(lambda leaf: leaf[None], window_carry),)
+                shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=1), batch)
+                minibatches = jax.tree.map(
+                    lambda x: jnp.swapaxes(x.reshape((x.shape[0], config["NUM_MINIBATCHES"], -1) + x.shape[2:]), 0, 1),
+                    shuffled,
+                )
+            else:
+                batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
+                permutation = jax.random.permutation(_rng, batch_size)
+                batch = (traj_batch, advantages, targets, policy_mask, None)
+                batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
+                shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
+                minibatches = jax.tree.map(
+                    lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
+                    shuffled,
+                )
             train_state, loss_info = jax.lax.scan(_update_minibatch, train_state, minibatches)
             update_state = (train_state, traj_batch, advantages, targets, policy_mask, rng)
             return update_state, loss_info
@@ -348,13 +419,7 @@ EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
 def _network_from_arch(arch: dict, action_dim: int):
-    return make_jax_policy(
-        arch["name"],
-        action_dim=action_dim,
-        hidden_dim=int(arch.get("hidden_dim", 256)),
-        hidden_layers=int(arch.get("hidden_layers", 2)),
-        activation=arch.get("activation", "tanh"),
-    )
+    return policy_from_arch(arch, action_dim=action_dim)
 
 
 def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
@@ -670,13 +735,7 @@ def main():
         phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
-    network = make_jax_policy(
-        recipe["arch"]["name"],
-        action_dim=action_dim,
-        hidden_dim=config["HIDDEN_DIM"],
-        hidden_layers=config["HIDDEN_LAYERS"],
-        activation=config["ACTIVATION"],
-    )
+    network = _network_from_arch(recipe["arch"], action_dim)
 
     print("=" * 60, flush=True)
     print(f"IPPO-JAX [{recipe['meta']['name']}] seed={args.seed}")
