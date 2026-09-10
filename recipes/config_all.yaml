@@ -37,11 +37,30 @@ core:
 
 # Policy network used independently by Blue and Red; weights are not shared
 # between teams, while agents within one team do share that team's weights.
+# Registry: src/jaxborg/policies/__init__.py.
 arch:
-  name: shared  # shared = common actor/critic trunk; separate = two trunks.
-  hidden_dim: 256  # Neurons in every hidden layer.
-  hidden_layers: 2  # Number of hidden layers in each trunk.
+  name: shared  # shared = common actor/critic trunk; separate = two trunks; recurrent = sequence model.
+  hidden_dim: 256  # Neurons in every hidden layer; for recurrent, also the hidden-state width.
+  hidden_layers: 2  # Hidden layers per trunk; for recurrent, the dense layers *before* the cell (use 1).
   activation: tanh  # JAX supports tanh/relu; the Torch implementation uses tanh.
+
+  # The two fields below apply to name: recurrent only. The feedforward archs
+  # reject them rather than ignoring them, so leave them commented out unless
+  # name is recurrent. See docs/training.md#recurrent-architectures.
+  #
+  # A recurrent policy carries hidden state between timesteps instead of
+  # reacting to one frame. It changes how PPO batches: minibatches become whole
+  # trajectories, so jax.num_minibatches must divide num_envs * agents rather
+  # than the row count (see the jax block below), and the CybORG/CleanRL
+  # backend cannot train it at all.
+  #
+  # cell: gru  # gru = JaxMARL's recurrent IPPO baseline cell; lstm = a (c, h) pair,
+  #            # ~20% more parameters, but measurably FASTER per PPO update:
+  #            # flax's OptimizedLSTMCell fuses its gate matmuls, and GRUCell
+  #            # has no optimized variant.
+  # trunk: shared  # shared = one encoder and one hidden state feeding both heads;
+  #                # separate = an encoder and hidden state each, the recurrent
+  #                # analogue of name: separate.
 
 train:
   teams: both  # blue, red, or both; both enables fresh simultaneous self-play.
@@ -56,6 +75,25 @@ train:
   episode_length: 500  # PPO rollout horizon; it does not change environment termination.
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
   variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
+
+  # The only two rule knobs a recipe may change; everything else is a property
+  # of the named variant, so recipes cannot quietly fork the scenario. Both
+  # default to stock CC4, and both apply to evaluation as well as training --
+  # the resolved sidecar carries them to every evaluator, because a Blue
+  # trained under a narrower action mask has to be scored under the same one.
+  # See docs/cotraining_collapse.md for what each one is for.
+  variant_overrides: {}  # Empty (or absent) reproduces stock CC4 exactly.
+  # variant_overrides:
+  #   red_reward: zero_sum  # zero_sum = Red is paid -(total Blue score);
+  #                         # damage = Red is paid -(reward_ria + reward_lwf) only,
+  #                         # so it is not paid for reward_asf (which only Blue can
+  #                         # trigger) or for Blue's Restore action_cost. Blue's own
+  #                         # payoff is byte-identical under both.
+  #   blue_block_policy: cc4  # cc4 = stock action mask; mission_safe = BlockTraffic is
+  #                           # masked out on subnet pairs the current phase's comms
+  #                           # policy permits. mission_safe REMOVES Blue actions, so
+  #                           # its results are not comparable to stock-CC4 benchmarks
+  #                           # and a policy trained under it must be evaluated under it.
 
   # Optional JAX topology pool. Omit both declarations to generate a fresh
   # topology on every reset. topology_bank and topology_generation are
@@ -81,6 +119,9 @@ train:
 
 eval:
   variant: cc4_stock  # Game variant used for checkpoint/evaluation rollouts.
+  # red: fsm  # Optional Red-selector override, applied on top of eval.variant:
+  #           # fsm, cia_c, cia_i, cia_a, or resilience. The CIA-biased selectors
+  #           # require role tags, so setting one forces resilience_roles=True.
   cia_metric: resilience  # Compatibility metric selector; does not enable CIA collection.
   cia:
     enabled: false
@@ -92,27 +133,74 @@ eval:
   # random keeps the requested episode count and samples the bank with replacement.
   topology_sampling: exhaustive
 
-  # Adjacent-checkpoint cross-play is valid only with train.teams: both.
-  # true uses seeds 1000-1009 with one stochastic episode per seed; use the
-  # expanded mapping below to override those defaults.
+  # The three periodic/checkpoint evaluators below all run after training, all
+  # stride the durable checkpoints, and all accept the same seeds /
+  # episodes_per_seed / deterministic / required / max_checkpoints fields.
+  # `required: false` means a failure here cannot fail the training job.
+  # `max_checkpoints` subsamples the durable checkpoints first, so "adjacent"
+  # and "every pair" below are relative to the subsample.
+
+  # Each checkpoint against the one before it. Valid only with train.teams:
+  # both. Cost is 2 * (max_checkpoints - 1) evaluations. Note this advances
+  # both endpoints, so under a rock-paper-scissors cycle it reports an
+  # improvement at every step while the policies walk in a circle.
   play_priors:
     enabled: false
     seeds: 1000-1009
     episodes_per_seed: 1
     deterministic: false
     required: true
+    max_checkpoints: 6  # Durable checkpoints sampled; the cycle is only visible off-diagonal.
 
-  # Optional ordered final-checkpoint evaluation pipeline. Each script runs in
-  # a fresh process and receives --model <exact-final-model> automatically.
-  # JAX-trained models default to CUDA; set JAX_PLATFORMS=cpu to override this.
-  # Results from the built-in scripts go to $JAXBORG_EXP_DIR/eval/.
+  # Full n-by-n matrix: Blue from every sampled checkpoint against Red from
+  # every sampled checkpoint. Valid only with train.teams: both. Cost is
+  # max_checkpoints ** 2 matchups. Headline readouts are
+  # blue/red.worst_vs_history (should climb if progress is real) and
+  # forgetting_rate (a later policy losing to an opponent an earlier one beat).
+  cross_play:
+    enabled: false
+    seeds: 1000-1002  # Note the narrower default than play_priors: this pays n**2.
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+    max_checkpoints: 6
+
+  # Each sampled checkpoint's Blue against fixed scripted Reds, plus CIA.
+  # Scripted opponents never change, so this is an absolute scale: it moves
+  # only when Blue moves, which is what makes it readable next to a zero-sum
+  # self-play return. Watch blue.worst_reward -- Blue chasing a learned Red can
+  # regress against the FSMs it is ultimately judged on, and a mean across Reds
+  # hides that. Cost is max_checkpoints x the final-model scripted-Red sweep.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]  # Scripted opponents to sweep.
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+    max_checkpoints: 6
+
+  # Optional ordered final-checkpoint evaluation pipeline, run after the
+  # durable final bundle and its sidecar are written. Each entry runs in a
+  # fresh process, in order. JAX-trained models default to CUDA; set
+  # JAX_PLATFORMS=cpu to override. Results from the built-in scripts go to
+  # $JAXBORG_EXP_DIR/eval/.
+  #
+  # Per-entry settings: name and script are required; args, model_arg and
+  # required are optional. model_arg defaults to --model and is appended with
+  # the exact final model path; set it to null for scripts that take separate
+  # Blue/Red model flags instead (eval_matchup.py). Placeholders usable inside
+  # args: {model} {recipe} {backend} {exp_dir} {eval_dir} {name}.
   # after_training:
   #   - name: stochastic-reds
   #     script: scripts/eval/eval_scripted_reds.py
   #     args: [--reds, fsm, cia_c, --seeds, 1000-1099, --workers, 8]
-  #   - name: deterministic-reds
-  #     script: scripts/eval/eval_scripted_reds.py
-  #     args: [--reds, fsm, cia_c, --seeds, 1000-1099, --deterministic, --workers, 8]
+  #     required: true  # false lets this entry fail without failing the job.
+  #   - name: learned-red-ppo  # Both policies from one co-trained bundle.
+  #     script: scripts/eval/eval_matchup.py
+  #     model_arg: null  # eval_matchup takes --blue-path/--red-path instead.
+  #     args: [--recipe, "{recipe}", --policy-backend, "{backend}",
+  #            --blue-path, "{model}", --red-path, "{model}", --seeds, 1000-1009]
 
   # Optional held-out JAX evaluation pool. It never falls back to the training
   # pool. Keep its paths and (generator, source-seed) pairs disjoint from train.
@@ -129,13 +217,20 @@ eval:
 # Active controls for the JAX/Flax trainer.
 jax:
   num_envs: 48  # Parallel environments; 48 * 500 = 24,000 env steps per update.
+  # Feedforward archs split the flat rollout rows, so this must divide
+  # num_envs * agents * episode_length. arch.name: recurrent splits whole
+  # sequences instead, so it must divide num_envs * agents (48 * 5 = 240 Blue,
+  # 48 * 6 = 288 Red) -- a stricter constraint that is checked at trace time,
+  # not by the recipe smoke tests.
   num_minibatches: 16  # Split each team's rollout samples into this many minibatches.
   update_epochs: 4  # PPO passes over every rollout; 16 * 4 = 64 optimizer steps/update.
   checkpoint_every_updates: 50  # Save periodically, plus MLflow evaluation checkpoints.
   busy_masking: false  # Compatibility field; current trainer applies fixed busy masking.
   grad_clip_mode: global  # Compatibility field; global clipping is the current behavior.
 
-# Active controls for the CPU CybORG/Torch trainer.
+# Active controls for the CPU CybORG/Torch trainer. This backend shuffles
+# transitions across the time axis and therefore cannot train
+# arch.name: recurrent; that arch is JAX-only.
 cleanrl:
   num_envs: 48  # Parallel reference CybORG environments.
   rollout_length: 500  # Steps collected per environment in one rollout.

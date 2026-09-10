@@ -1,0 +1,124 @@
+meta:
+  name: blue_rnn
+  source: "Blue-only recurrent IPPO control for the co-training collapse ablation"
+  added: 2026-09-09
+  notes: |
+    Blue-only IPPO (scripted FSM Red, no learned opponent) with
+    `arch.name: recurrent`. This is the control that separates the two
+    questions `cotraining_rnn` confounds:
+
+      does memory make Blue a better defender at all?   <- this recipe
+      does memory stop Blue's regression under co-training?  <- cotraining_rnn
+
+    Topologies, episode length and eval bank match `cotraining_rnn` exactly,
+    so the scripted-Red numbers land on the same scale as the co-training
+    arms' `eval.checkpoint_scripted_reds` curves and as the Blue-only
+    baseline table in docs/cotraining_collapse.md (Part I, "Blue's actual
+    defence improves under co-training").
+
+    Run the feedforward twin by flipping `arch` back to
+    `{name: shared, hidden_dim: 256, hidden_layers: 2}` -- with a fixed
+    opponent the comparison is clean, which is the whole point of running
+    this arm before reading anything into `cotraining_rnn`.
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+# See recipes/cotraining_rnn.yaml for what each field selects.
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: gru          # gru | lstm
+  trunk: shared      # shared | separate
+
+train:
+  teams: blue
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Blue against a fixed opponent plateaus far earlier than a co-training run
+  # resolves; 3M matches the `default` baseline this is read against.
+  total_timesteps: 3000000
+  variant: cc4_stock
+
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  checkpoint_scripted_reds:
+    enabled: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 6
+    required: false
+
+  after_training:
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+# The CybORG/CleanRL backend cannot train `arch.name: recurrent`; this block
+# only keeps the projection well-formed for the recipe smoke tests.
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
+
+jax:
+  num_envs: 48
+  # env x agent = 48*5 = 240 sequences; 8 minibatches -> 30 sequences per
+  # gradient step. See cotraining_rnn.yaml for the variance trade-off.
+  num_minibatches: 8
+  update_epochs: 4
+  checkpoint_every_updates: 20  # 480k-step stride -> 6 durable checkpoints over 3M.
