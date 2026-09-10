@@ -76,7 +76,7 @@ train:
   sgd_iterations: 64
   # Match the original IPPO control's budget. MAPPO convergence has not yet
   # been measured; compare held-out performance across checkpoints.
-  total_timesteps: 40000000
+  total_timesteps: 70000000
   variant: cc4_stock
 
   # The first five seeds are exactly the baseline cotraining pool; seeds 5

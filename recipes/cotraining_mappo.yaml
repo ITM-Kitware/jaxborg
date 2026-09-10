@@ -76,7 +76,7 @@ train:
   sgd_iterations: 64
   # Match the original IPPO control's budget. MAPPO convergence has not yet
   # been measured; compare held-out performance across checkpoints.
-  total_timesteps: 40000000
+  total_timesteps: 70000000
   variant: cc4_stock
 
   # Restrict resets to five immutable samples from the same pure-JAX
@@ -85,7 +85,7 @@ train:
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 5
+    count: 1
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
