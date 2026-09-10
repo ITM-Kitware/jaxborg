@@ -12,6 +12,7 @@ dependencies = [
     "mlflow>=3.10.0",
     "optax",
     "pyyaml",
+    "seaborn>=0.13",
     "torch>=2.0",
 ]
 

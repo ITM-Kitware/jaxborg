@@ -113,6 +113,18 @@ JAX_PLATFORMS=cpu uv run python scripts/eval/eval_scripted_reds.py \
 # Plot all standardized JSONL evaluation results (prints a table too).
 JAXBORG_EXP_DIR=./jaxborg-exp uv run python scripts/eval/plot_results.py
 
+# Compare every run of an MLflow experiment (default: ippo-cc4) as paper-style
+# figures: blue/red = agent, line style or hatch = recipe, seeds aggregated
+# into a mean with a band, mean/std pairs merged, CIA in its own figures.
+# Writes PNG and PDF under jaxborg-exp/plots/ippo-cc4/.
+JAXBORG_EXP_DIR=./jaxborg-exp uv run python plots/plot_mlflow.py ippo-cc4
+
+# Same for the mirror pulled by scripts/sync/pull_runs.sh, selecting exactly
+# the histories needed for one figure (metric globs are supported).
+uv run python plots/plot_mlflow.py ippo-cc4 --remote --name returns \
+    --metric 'team.*.return' \
+    --metric 'eval.after_training.*.scripted_red.*.blue.mean_reward'
+
 # View training and evaluation metrics tracked in MLflow.
 JAXBORG_EXP_DIR=./jaxborg-exp ./scripts/train/view_mlflow.sh
 
@@ -162,6 +174,38 @@ a joint run records both curves, while Blue-only or Red-only training records
 the corresponding single curve. For co-training this periodic curve is the
 learned Blue-vs-learned Red matchup; it is separate from the final
 Blue-vs-scripted-Red sweep.
+
+`plots/plot_mlflow.py` turns one MLflow experiment (`<algorithm>-cc4`, so
+`ippo-cc4` by default) into clean Seaborn paper-style figures that compare
+every recipe trained under it. Color encodes the agent (blue for Blue, red for
+Red, gray for team-less diagnostics) and recipes are told apart by line style
+on curves and hatching on bars. Runs are grouped by their `recipe.name` tag,
+repeated seeds are aggregated into a mean with a 95% confidence band plus faint
+per-seed traces, `<key>.mean`/`<key>.std` pairs (CIA scores, scripted-Red
+rewards) are drawn as one series with the recorded std as the band or error
+bar, single-value metrics become bar panels, and only the newest run per
+recipe/seed is kept. With no options it writes the `training`,
+`checkpoint_eval`, `play_priors`, `cross_play`, `after_training`, `cia`
+(C/I/A over training), and `cia_after_training` figures, skipping any the
+experiment has no metrics for. Pass `--figures` with a YAML file to define
+your own figures (a recipe carrying this optional `plots:` block works too):
+
+```yaml
+plots:
+  title: Co-training diagnostics
+  metrics:
+    - {key: team.*.return, panel: Team returns}
+    - {key: loss_policy, panel: Policy loss, team: blue}
+    - {key: eval.checkpoint_scripted_reds.blue.*reward, panel: Fixed-opponent reward}
+  smoothing: 5
+  confidence: 95
+  formats: [png, pdf]
+```
+
+Command-line `--metric` globs build a single ad-hoc figure instead. Use
+`--list-metrics` to discover keys and `--recipe`, `--backend`, `--seed`, or
+`--run-id` to narrow the runs. See [`docs/plotting.md`](docs/plotting.md) for
+grouping, band semantics, output, and remote tracking examples.
 
 `recipes/cotraining.yaml` first runs `eval.play_priors` across its ten periodic
 checkpoints, then uses `eval.after_training` for two final checks: learned Blue
@@ -232,6 +276,9 @@ Built-in evaluators write JSONL under `$JAXBORG_EXP_DIR/eval/`. Ordered runs
 also write a command/status manifest under `eval/manifests/`, and named runs
 attach distinct `eval.after_training.<name>.*` metrics to MLflow. Generate a
 PNG comparison with `scripts/eval/plot_results.py`; plots go to `eval/plots/`.
+For training curves and any evaluation histories attached to MLflow, use the
+experiment-level `plots/plot_mlflow.py` command described in
+[`docs/plotting.md`](docs/plotting.md).
 Start `scripts/train/view_mlflow.sh` and open `http://127.0.0.1:5000` for
 interactive metric curves. See [`docs/evaluation.md`](docs/evaluation.md).
 

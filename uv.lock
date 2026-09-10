@@ -1663,6 +1663,7 @@ dependencies = [
     { name = "mlflow" },
     { name = "optax" },
     { name = "pyyaml" },
+    { name = "seaborn" },
     { name = "torch" },
 ]
 
@@ -1694,6 +1695,7 @@ requires-dist = [
     { name = "mlflow", specifier = ">=3.10.0" },
     { name = "optax" },
     { name = "pyyaml" },
+    { name = "seaborn", specifier = ">=0.13" },
     { name = "torch", specifier = ">=2.0" },
 ]
 provides-extras = ["cpu", "cuda"]
