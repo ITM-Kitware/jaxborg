@@ -1,0 +1,205 @@
+meta:
+  name: cotraining_mappo
+  source: "Blue MAPPO / Red IPPO cotraining, adapted from JaxMARL"
+  added: 2026-09-10
+  notes: |
+    cotraining counterpart with a local Blue actor and a centralized
+    Blue critic. Red keeps the baseline feedforward IPPO policy. Action rules,
+    observations available to actors, and the zero-sum payoff remain stock CC4.
+    JaxMARL's MAPPO actor/critic and world-state data flow are adapted to the
+    existing joint trainer. See docs/mappo.md for provenance and input layout.
+    Start with --total-timesteps 5000000 for an ablation; the default budget,
+    topology bank and evaluation protocol match cotraining.
+
+algorithm: mappo
+
+# Periodic checkpoint evaluation is OFF (every_steps: 0). CIA/resilience is
+# measured once, at the end of training, by the eval.after_training pipeline
+# below. Each firing runs the full topology x seed x episode cross product
+# (10 topologies x episodes_per_seed), so periodic evaluation cost a large
+# multiple of the reported final numbers while adding nothing to them.
+# episodes_per_seed is retained for when the periodic curve is wanted again.
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null  # Defaults to the training seed + 100000.
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  # anneal_lr is deliberately left at the recipe default (off). Decaying the
+  # LR to zero does buy a reproducible stopping point, but it also flattens
+  # the entropy tail by construction, so a settled-looking endpoint would be
+  # a schedule artifact rather than evidence the self-play pair converged --
+  # and under a rock-paper-scissors cycle it just freezes the policies at an
+  # arbitrary point on the cycle. Judge the endpoint with cross_play's
+  # worst_vs_history / forgetting_rate and the scripted-Red curve instead.
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  teams: both
+  team_overrides:
+    blue:
+      arch:
+        name: mappo
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+        # 4114 training-only features; the actor still receives 210.
+        # joint_observations (1055) pools Blue views without hidden host health.
+        critic_input: global_state
+      core:
+        # JaxMARL MAPPO uses a clipped value objective.
+        clip_value_loss: true
+    red:
+      arch:
+        name: shared
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Match the original IPPO control's budget. MAPPO convergence has not yet
+  # been measured; compare held-out performance across checkpoints.
+  total_timesteps: 40000000
+  variant: cc4_stock
+
+  # Restrict resets to five immutable samples from the same pure-JAX
+  # generator used by unbanked co-training. jax.num_envs controls rollout
+  # parallelism; this count controls the number of distinct train topologies.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Evaluate every requested dynamics seed on the same 10 held-out topology
+  # snapshots used by cotraining_env_diversity (seeds 100 through 109).
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # At the end of training, compare adjacent durable checkpoints in both
+  # directions: current Blue vs prior Red and current Red vs prior Blue.
+  # Seeds 1000-1002 (not the full 1000-1009 used by the reported final
+  # evaluation): each seed already runs on all 10 held-out topologies, so
+  # 3 seeds is 30 episodes per matchup across 5 adjacent-checkpoint pairs.
+  # max_checkpoints strides the durable checkpoints first, so "adjacent" is
+  # adjacent in the subsample. Untrimmed this ran all 19 pairs = 38 sequential
+  # evaluations, the longest job in the chain; neighbours 960k steps apart also
+  # differ too little for the comparison to say much. Scoped here rather than
+  # shared: cross_play below pays n**2 for the same n, so they trade off
+  # differently and each evaluation caps itself.
+  play_priors:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 6
+
+  # Full cross-play matrix over strided durable checkpoints: Blue from every
+  # sampled checkpoint against Red from every sampled checkpoint. play_priors
+  # only compares neighbours, so under a rock-paper-scissors cycle it reports
+  # an improvement at every step while the policies walk in a circle; the
+  # cycle is only visible off the diagonal. Headline readouts are
+  # blue/red.worst_vs_history (should climb if progress is real) and
+  # forgetting_rate (a later policy losing to an opponent an earlier one beat).
+  # Cost is max_checkpoints**2 matchups, so 6 -> 36, cheaper than play_priors.
+  # On trial: required=false so a failure here cannot fail the training job.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 6
+    required: false
+
+  # Scripted-Red + CIA curves across the same strided checkpoints, instead of
+  # the single final-model point in after_training below. Scripted opponents
+  # are fixed, so these are an absolute scale: they move only when Blue does,
+  # which is what makes them readable next to the zero-sum self-play return.
+  # Watch blue.worst_reward -- Blue chasing the learned Red can regress against
+  # the FSMs it is ultimately judged on, and a mean across Reds hides that.
+  # Cost is max_checkpoints x the final-model scripted-Red evaluation; seeds
+  # match after_training so the last checkpoint is directly comparable to it.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 6
+    required: false
+
+  # Run two named evaluations, in order, after the durable final bundle and
+  # sidecar are written. The learned matchup selects both policies from the
+  # exact co-trained bundle. The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
+  after_training:
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 40  # 960k-step stride -> 41 durable checkpoints over 40M.

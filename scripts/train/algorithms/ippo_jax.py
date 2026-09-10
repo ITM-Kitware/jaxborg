@@ -64,6 +64,7 @@ from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.metrics_schema import add_team_metrics, make_row
 from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
 from jaxborg.policies import (
+    has_centralized_critic,
     init_policy_params,
     initial_carry,
     is_recurrent,
@@ -471,7 +472,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         networks[team] = _network_from_arch(arch, action_dim)
 
     print("=" * 60, flush=True)
-    print(f"IPPO-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
+    print(f"{recipe['algorithm'].upper()}-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
     print(
         f"  trainable={','.join(trainable_teams)} num_envs={configs['blue']['NUM_ENVS']} "
         f"num_steps={configs['blue']['NUM_STEPS']} total_timesteps={configs['blue']['TOTAL_TIMESTEPS']:,}",
@@ -480,6 +481,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     for team in ("blue", "red"):
         print(
             f"  {team}: arch={arches[team]['name']} hidden_dim={arches[team].get('hidden_dim', 256)} "
+            f"critic={getattr(networks[team], 'critic_input', 'local')} "
             f"status={'trainable' if team in trainable_teams else 'frozen'}",
             flush=True,
         )
@@ -688,8 +690,8 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     run_configured_evaluations_after_training(final_model, recipe)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="IPPO-FF on JAX, recipe-driven")
+def main(*, expected_algorithm: str | None = None):
+    parser = argparse.ArgumentParser(description="IPPO / Blue MAPPO on JAX, recipe-driven")
     parser.add_argument("--recipe", required=True, help="Recipe name (e.g. 'singh') or path to YAML")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
@@ -698,6 +700,18 @@ def main():
     args = parser.parse_args()
 
     recipe = copy.deepcopy(load_recipe(args.recipe))
+    if expected_algorithm is not None and recipe["algorithm"] != expected_algorithm:
+        parser.error(f"this launcher requires algorithm: {expected_algorithm}")
+    teams = training_teams(recipe)
+    learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
+    blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
+    red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
+    if has_centralized_critic(red_module) and "red" in teams:
+        parser.error("CC4 MAPPO critic inputs are currently supported for Blue only; configure Red as IPPO")
+    if has_centralized_critic(blue_module) and "blue" in teams and not learned_red:
+        parser.error("MAPPO requires joint training: use train.teams: both or a frozen learned Red opponent")
+    if recipe["algorithm"] == "mappo" and ("blue" not in teams or not has_centralized_critic(blue_module)):
+        parser.error("algorithm: mappo requires a trainable Blue policy with arch.name: mappo")
     # Apply CLI overrides to the resolved recipe itself so the exported
     # sidecar describes the run that actually happened.
     if args.total_timesteps is not None:
@@ -708,7 +722,7 @@ def main():
     config["SEED"] = args.seed
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_jax" / tag
+    save_dir = EXP_DIR / f"{recipe['algorithm']}_jax" / tag
     save_dir.mkdir(parents=True, exist_ok=True)
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "")
@@ -716,8 +730,6 @@ def main():
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
-    teams = training_teams(recipe)
-    learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
     if learned_red:
         _run_joint_training(args, recipe, tag, save_dir)
         return
