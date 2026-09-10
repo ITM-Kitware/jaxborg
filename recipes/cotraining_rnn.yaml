@@ -1,0 +1,201 @@
+meta:
+  name: cotraining_rnn
+  source: "Recurrent (GRU) architecture arm of the co-training collapse ablation"
+  added: 2026-09-09
+  notes: |
+    `cotraining_test_rule_change` with one edit: `arch.name` is `recurrent` instead of
+    `shared`, so both Blue and Red carry hidden state between timesteps rather
+    than reacting to a single frame. The cell is a GRU -- `cotraining_lstm` is
+    the identical arm with `cell: lstm`, the only difference between the two
+    files. `cotraining` and `cotraining_test_rule_change` stay feedforward.
+
+    This is the representation-level attack on cause 2 in
+    docs/cotraining_collapse.md ("actor is memoryless over transient
+    evidence"). Blue's per-host evidence -- `malicious_processes` and
+    `network_connections` -- ages out after ~2 steps, and there is no
+    persistent "known compromised" flag anywhere in its 210-dim observation.
+    A feedforward Blue that Analyses a host and does not act inside that
+    window loses the finding entirely, which is what the 20M post-mortem
+    measured as Analyse +2.8pp against Remove -2.6pp: gathering information
+    it cannot retain. The same argument covers the Part I channel --
+    `comms_policy` and `blocked_zones` are both visible, but which pairs are
+    safe to block is a fact about a phase, not about a frame.
+
+    Rule knobs are deliberately left at stock CC4 so this arm is comparable
+    to `cotraining_test_rule_change`'s control arm and to the 40M `cotraining` runs.
+    To stack the architecture change on top of a rule change, copy
+    `train.variant_overrides` across from `cotraining_test_rule_change`.
+
+    Both teams are recurrent here. Red has the 706-dim view of all 137 hosts
+    and 0.97 explained variance, so it stands to gain at least as much from
+    memory as Blue does -- and under a zero-sum payoff a symmetric capacity
+    increase can leave Blue flat. To isolate Blue, hold Red feedforward:
+
+      train:
+        team_overrides:
+          red: {arch: {name: shared, hidden_dim: 256, hidden_layers: 2, activation: tanh}}
+
+    An override that changes `arch.name` *replaces* the arch block rather than
+    merging into it, so Red does not inherit `cell`/`trunk` (which the
+    feedforward archs reject) or the recurrent `hidden_layers: 1`. An override
+    that keeps the same name still merges, so `red: {arch: {cell: lstm}}` is
+    enough to give the two teams different cells.
+
+    Read the result off the same two curves the ablation harness uses, not
+    the zero-sum training return, which is the sum of two moving parts:
+      * team.blue.reward_asf        -- the collapse channel, per update
+      * eval.checkpoint_scripted_reds.*.blue.worst_reward -- fixed opponents,
+        so it moves only when Blue moves
+
+    Costs relative to a feedforward arm: 642k Blue parameters against
+    `shared`'s 182k and 991k Red against 531k, a longer first compile (the
+    PPO update backpropagates through a 500-step scan), and higher gradient
+    variance per minibatch -- see the `jax` block.
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+# obs -> [Dense(256) + tanh] -> GRU(256) -> {actor, critic} x [Dense(256) +
+# tanh -> head]. This is JaxMARL's recurrent IPPO baseline
+# (baselines/IPPO/ippo_rnn_smax.py at the pinned revision 545d8f9), copied
+# rather than imported because that tree is not part of the installed jaxmarl
+# distribution. JaxMARL's recurrent baselines are GRU-only; `cell: lstm` is
+# this repo's addition. `hidden_layers` counts the dense layers *before* the
+# recurrent cell, so 1 here is a comparable depth to `shared`'s 2-layer trunk.
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: gru          # gru | lstm
+  # `separate` gives actor and critic their own encoder and hidden state --
+  # the recurrent analogue of `arch.name: separate`, and worth an arm on its
+  # own: Blue's value term runs ~8x its actor term, and a shared trunk lets
+  # that gradient rewrite the features the policy reads.
+  trunk: shared      # shared | separate
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Both effects in the post-mortem are finished by ~5M steps, so arms run at
+  # 5M rather than 40M. Matches `cotraining_test_rule_change`.
+  total_timesteps: 5000000
+  variant: cc4_stock
+
+  # Same five training topologies as `cotraining`, so an arm is comparable to
+  # that run's first 5M steps.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # The instrument the post-mortem says would have caught the regression.
+  # Fixed opponents, so the curve moves only when Blue does. Headline readout.
+  checkpoint_scripted_reds:
+    enabled: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 6
+    required: false
+
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 6
+    required: false
+
+  after_training:
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+# The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
+# shuffles transitions across the time axis. This block only keeps the
+# projection well-formed for the recipe smoke tests; do not launch it.
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
+
+jax:
+  num_envs: 48
+  # A recurrent minibatch is whole trajectories, not shuffled rows: the
+  # divisor applies to env x agent (48*5=240 Blue, 48*6=288 Red), not to the
+  # 24,000-row rollout. At 16 that is 15 Blue sequences per gradient step --
+  # the same 7,500 transitions the feedforward recipes see, but correlated
+  # within 15 episodes instead of drawn i.i.d. from 240. 8 halves that
+  # variance (30 sequences, 15,000 transitions) at the cost of 32 gradient
+  # steps per update instead of 64. Raise it back to 16 for a strictly
+  # matched-update comparison against `cotraining_test_rule_change`.
+  num_minibatches: 8
+  update_epochs: 4
+  checkpoint_every_updates: 20  # 480k-step stride -> 11 durable checkpoints over 5M.
