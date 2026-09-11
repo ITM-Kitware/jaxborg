@@ -35,15 +35,15 @@ if [ "$#" -gt 1 ]; then
   exit 2
 fi
 
-echo "Preparing cotraining's 5-train/100-eval topology pools..."
+echo "Preparing cotraining's 1-train/50-eval topology pools..."
 JAX_PLATFORMS=cpu uv run materialize-topologies \
   --recipe cotraining \
   --scope all \
   "${MATERIALIZE_ARGS[@]}"
 
 echo "Preparing cotraining_env_diversity's 100-entry train pool..."
-# Seeds 0-4 and the held-out evaluation bank are shared with cotraining, so
-# this second command only needs to add/check training seeds 5-99.
+# Seed 0 and the held-out evaluation bank are shared with cotraining, so
+# this second command only needs to add/check training seeds 1-99.
 JAX_PLATFORMS=cpu uv run materialize-topologies \
   --recipe cotraining_env_diversity \
   --scope train \

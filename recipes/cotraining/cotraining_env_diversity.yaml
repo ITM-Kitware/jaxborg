@@ -1,11 +1,12 @@
 meta:
-  name: cotraining
-  source: "Dual-team simultaneous self-play baseline"
-  added: 2026-08-16
+  name: cotraining_env_diversity
+  source: "Dual-team simultaneous self-play with topology diversity"
+  added: 2026-09-06
   notes: |
-    Opt-in Blue/Red co-training recipe. Both parameter-sharing policies start
-    from fresh weights, act on the same pre-step state, and learn from the same
-    game payoff (with the Red objective equal to the negative Blue score).
+    Topology-diversity counterpart to cotraining. Both parameter-sharing
+    policies start from fresh weights and train on a fixed bank of 100
+    generated topologies. Other recipe-controlled environment-diversity axes
+    remain disabled. Evaluation uses the same held-out bank as cotraining.
 
 algorithm: ippo
 
@@ -27,13 +28,7 @@ core:
   max_grad_norm: 0.5
   ent_coef: 0.01
   norm_rewards: true
-  # anneal_lr is deliberately left at the recipe default (off). Decaying the
-  # LR to zero does buy a reproducible stopping point, but it also flattens
-  # the entropy tail by construction, so a settled-looking endpoint would be
-  # a schedule artifact rather than evidence the self-play pair converged --
-  # and under a rock-paper-scissors cycle it just freezes the policies at an
-  # arbitrary point on the cycle. Judge the endpoint with cross_play's
-  # worst_vs_history / forgetting_rate and the scripted-Red curve instead.
+  # Constant learning rate; assess progress against fixed scripted Reds.
 
 arch:
   name: shared
@@ -47,19 +42,14 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  # 20M left Blue's policy entropy ~19% short of its fitted asymptote, so the
-  # 20M runs were cut off rather than settled. That fit came from unannealed
-  # runs, so it stands on its own: 40M is the budget it implies.
   total_timesteps: 70000000
   variant: cc4_stock
 
-  # Restrict resets to five immutable samples from the same pure-JAX
-  # generator used by unbanked co-training. jax.num_envs controls rollout
-  # parallelism; this count controls the number of distinct train topologies.
+  # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 1
+    count: 100
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
@@ -70,12 +60,11 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
-  # Evaluate every requested dynamics seed on the same 10 held-out topology
-  # snapshots used by cotraining_env_diversity (seeds 100 through 109).
+  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 10
+    count: 50
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
@@ -92,7 +81,7 @@ eval:
     max_checkpoints: 6
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Six checkpoints -> 36 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Six checkpoints -> 36 matchups x 150 episodes (3 seeds x 50 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
@@ -103,23 +92,17 @@ eval:
     max_checkpoints: 6
     required: false
 
-  # Optional post-training history curve against fixed scripted Reds, with CIA.
-  # Disabled here; the final scripted-reds sweep below remains enabled.
-  # History scans periodic checkpoint files, which may stop before the exact
-  # final model. Enabling it does not replace the final-model evaluation.
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
   checkpoint_scripted_reds:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
     episodes_per_seed: 1
-    max_checkpoints: 6
+    max_checkpoints: 20
     required: false
 
   # Explicit final-model scripts, run after the enabled built-in suites above.
-  # The learned matchup selects both policies from the exact final bundle.
-  # The scripted sweep then selects its trained Blue
-  # policy and evaluates it against FSM and CIA Red agents in the same JAX
-  # topology bank with fixed per-topology role assignments.
   after_training:
     - name: learned-red-ppo
       script: scripts/eval/eval_matchup.py
@@ -160,4 +143,4 @@ jax:
   num_envs: 48
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 40  # 960k-step stride -> 41 durable checkpoints over 40M.
+  checkpoint_every_updates: 40  # Save every 960,000 environment steps.

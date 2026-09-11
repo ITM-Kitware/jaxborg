@@ -19,6 +19,8 @@ fi
 
 BACKEND="$1"
 RECIPE="$2"
+RECIPE_LABEL="${RECIPE##*/}"
+RECIPE_LABEL="${RECIPE_LABEL%.yaml}"
 SEED="${3:-42}"
 shift 3 || shift 2 || true
 
@@ -27,14 +29,13 @@ cd "$ROOT"
 
 EXP_DIR="${JAXBORG_EXP_DIR:-$(pwd)/jaxborg-exp}"
 mkdir -p "$EXP_DIR/logs"
-LOG="$EXP_DIR/logs/${RECIPE}_${BACKEND}_seed${SEED}_$(date +%Y%m%d_%H%M%S).log"
+LOG="$EXP_DIR/logs/${RECIPE_LABEL}_${BACKEND}_seed${SEED}_$(date +%Y%m%d_%H%M%S).log"
 
 # Resolve algorithm from recipe (the recipe is the source of truth for which
 # trainer to invoke).
-ALGORITHM=$(uv run python -c "
-from jaxborg.recipe import load
-print(load('$RECIPE')['algorithm'])
-")
+ALGORITHM=$(uv run python -c \
+    'import sys; from jaxborg.recipe import load; print(load(sys.argv[1])["algorithm"])' \
+    "$RECIPE")
 
 
 # cleanrl is an alias for the cyborg backend script

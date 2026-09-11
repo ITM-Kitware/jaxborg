@@ -1,0 +1,148 @@
+meta:
+  name: cotraining_test_rule_change
+  source: "5M co-training harness for the BlockTraffic/ASF rule knobs"
+  added: 2026-09-09
+  notes: |
+    Short-budget rig for the two rule knobs added alongside
+    docs/cotraining_collapse.md. The 5M budget probes early behavior; it is
+    shorter than the 70M architecture comparisons and does not establish convergence.
+
+    Arms are one edit to train.variant_overrides:
+
+      control      {}                                         (stock CC4)
+      red-damage   {red_reward: damage}
+      mission-safe {blue_block_policy: mission_safe}
+      both         {red_reward: damage, blue_block_policy: mission_safe}
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 5000000
+  variant: cc4_stock
+
+  # Opt-in co-training rule knobs. Empty (or absent) reproduces stock CC4
+  # exactly; see GameVariant for what each value changes.
+  variant_overrides:
+    red_reward: damage
+    blue_block_policy: mission_safe
+
+  # Retain the original five-topology bank for this short rule ablation.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 50
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 20
+    required: false
+
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 6
+    required: false
+
+  # Exact final-model checks, following the built-in history suites above.
+  after_training:
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+# Without this, the CleanRL projection derives num_rollouts_per_update from
+# train.buffer_size (214 rollouts), which at a 5M budget is fewer than one
+# update. The JAX backend is the one this recipe is for; this keeps the
+# CybORG-backed projection well-formed at the short budget.
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20  # Save every 480,000 environment steps.

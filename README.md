@@ -79,7 +79,7 @@ uv run pytest            # default: -n auto -m 'not slow'
 uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
 uv run pytest -m ""      # everything
 
-# Train jaxborg IPPO (recipe-driven; see `recipes/<name>.yaml`)
+# Train jaxborg IPPO (recipe-driven; see `recipes/`)
 ./scripts/train/run.sh jax default 42
 
 # Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
@@ -207,15 +207,27 @@ Command-line `--metric` globs build a single ad-hoc figure instead. Use
 `--run-id` to narrow the runs. See [`docs/plotting.md`](docs/plotting.md) for
 grouping, band semantics, output, and remote tracking examples.
 
-`recipes/cotraining.yaml` first runs `eval.play_priors` across its ten periodic
-checkpoints, then uses `eval.after_training` for two final checks: learned Blue
+Co-training recipes, including the best-response recipes, live in
+[`recipes/cotraining/`](recipes/cotraining/). Short names such as
+`--recipe cotraining_mappo` continue to work. The loader also accepts
+`--recipe cotraining/cotraining_mappo` or an explicit YAML file path.
+
+`recipes/cotraining/cotraining.yaml` runs `eval.cross_play` over six saved
+Blue and six saved Red checkpoints from the same training seed (36 matchups).
+Fixed scripted-Red checkpoint curves are configured but disabled to save time.
+It then uses `eval.after_training` for two final checks: learned Blue
 versus its co-trained PPO Red in the JAX joint environment, followed by learned
 Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in the JAX FSM environment.
-All four built-in evaluation paths replay the same held-out snapshot bank
+These evaluations replay the same 50-topology held-out snapshot bank
 and fixed role assignment. The two final jobs use the exact final bundle.
 Increase their seed ranges to `1000-1099` for a larger study. A failed required
 job makes the overall command fail after leaving the model and evaluation
 manifest safely on disk.
+
+MAPPO recipes also enable `eval.cross_seed_play` when the multi-seed launcher
+supplies an opponent: each final Blue faces the next seed's final Red in a
+cycle. With three seeds this is three matchups; it is separate from the
+historical checkpoint matrix and does not cover every ordered seed pair.
 
 For more than one final-checkpoint evaluation, use the ordered
 `eval.after_training` list. Every item launches a fresh Python process after
@@ -298,7 +310,7 @@ Model references accept either `path` or `experiment`. A relative path is
 resolved from the recipe directory and takes precedence; an experiment is
 resolved below `$JAXBORG_EXP_DIR/<algorithm>_<backend>/<experiment>/`, using
 the enclosing recipe's `algorithm`. See
-[`recipes/cotraining.yaml`](recipes/cotraining.yaml) and
+[`recipes/cotraining/cotraining.yaml`](recipes/cotraining/cotraining.yaml) and
 [`docs/training.md`](docs/training.md) for complete examples.
 For reproducible CAGE/JAX topology pools, disjoint train/test seed ranges, and
 held-out evaluation, see [`docs/topologies.md`](docs/topologies.md).
