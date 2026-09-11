@@ -10,11 +10,10 @@ meta:
       does memory make Blue a better defender at all?   <- this recipe
       does memory stop Blue's regression under co-training?  <- cotraining_rnn
 
-    Topologies, episode length and eval bank match `cotraining_rnn` exactly,
-    so the scripted-Red numbers land on the same scale as the co-training
-    arms' `eval.checkpoint_scripted_reds` curves and as the Blue-only
-    baseline table in docs/cotraining_collapse.md (Part I, "Blue's actual
-    defence improves under co-training").
+    Retains the original five training and ten evaluation topologies used
+    for the Blue-only baseline in docs/cotraining_collapse.md. The current
+    cotraining recipes use larger budgets and evaluation banks; align those
+    settings before using this recipe in a matched architecture comparison.
 
     Run the feedforward twin by flipping `arch` back to
     `{name: shared, hidden_dim: 256, hidden_layers: 2}` -- with a fixed
@@ -40,7 +39,7 @@ core:
   ent_coef: 0.01
   norm_rewards: true
 
-# See recipes/cotraining_rnn.yaml for what each field selects.
+# See recipes/cotraining/cotraining_rnn.yaml for what each field selects.
 arch:
   name: recurrent
   hidden_dim: 256

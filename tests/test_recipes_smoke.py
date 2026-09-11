@@ -18,7 +18,7 @@ from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, tra
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
-RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.glob("*.yaml"))
+RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.rglob("*.yaml"))
 
 assert RECIPE_NAMES, f"No recipes found in {RECIPES_DIR}"
 
@@ -136,14 +136,15 @@ def test_stock_cotraining_recipes_stay_feedforward():
         assert "cell" not in arch and "trunk" not in arch
 
 
-def test_recurrent_cotraining_arms_differ_only_in_the_cell():
+@pytest.mark.parametrize("suffix", ["", "_env_diversity"])
+def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
     """`cotraining_rnn` and `cotraining_lstm` are a controlled A/B on the cell.
 
     If they drift apart on anything else — budget, minibatches, topologies —
     a gap between the two runs stops being attributable to GRU vs LSTM.
     """
-    gru = load("cotraining_rnn")
-    lstm = load("cotraining_lstm")
+    gru = load(f"cotraining_rnn{suffix}")
+    lstm = load(f"cotraining_lstm{suffix}")
     for recipe in (gru, lstm):
         # Prose and file path are expected to differ; nothing else is.
         del recipe["meta"], recipe["__source_path__"]

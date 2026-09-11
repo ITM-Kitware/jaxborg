@@ -51,7 +51,7 @@ def test_jax_bundle_round_trip_multiple_teams(tmp_path):
             "blue": _entry(_jax_params(1.0), "blue"),
             "red": _entry(_jax_params(2.0), "red", trainable=False, source={"experiment": "red_base"}),
         },
-        provenance={"run_id": "run-123", "recipe": Path("recipes/cotraining.yaml")},
+        provenance={"run_id": "run-123", "recipe": Path("recipes/cotraining/cotraining.yaml")},
     )
 
     bundle = load_jax_bundle(path)
@@ -62,7 +62,7 @@ def test_jax_bundle_round_trip_multiple_teams(tmp_path):
     assert bundle.policies["blue"].trainable
     assert not bundle.policies["red"].trainable
     assert bundle.policies["red"].source == {"experiment": "red_base"}
-    assert bundle.provenance["recipe"] == "recipes/cotraining.yaml"
+    assert bundle.provenance["recipe"] == "recipes/cotraining/cotraining.yaml"
     np.testing.assert_array_equal(bundle.policies["blue"].weights["params"]["Dense_0"]["kernel"], 1.0)
     np.testing.assert_array_equal(bundle.policies["red"].weights["params"]["Dense_0"]["kernel"], 2.0)
 

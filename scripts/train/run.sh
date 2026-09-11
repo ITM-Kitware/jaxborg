@@ -8,6 +8,8 @@ if [[ $# -lt 2 ]]; then
 fi
 BACKEND="$1"
 RECIPE="$2"
+RECIPE_LABEL="${RECIPE##*/}"
+RECIPE_LABEL="${RECIPE_LABEL%.yaml}"
 SEED="${3:-42}"
 if [[ $# -ge 3 ]]; then shift 3; else shift 2; fi
 ROOT="$(git rev-parse --show-toplevel)"

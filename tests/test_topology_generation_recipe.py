@@ -127,21 +127,26 @@ def test_project_eval_accepts_random_bank_sampling(tmp_path, monkeypatch):
     assert project_eval(recipe, materialize_topologies=True)["TOPOLOGY_SAMPLING"] == "random"
 
 
-def test_cotraining_recipes_use_nested_train_pools_and_one_held_out_eval_pool():
-    baseline = load("cotraining")
-    diversity = load("cotraining_env_diversity")
+@pytest.mark.parametrize(
+    "name", ["cotraining", "cotraining_rnn", "cotraining_lstm", "cotraining_mappo", "cotraining_mappo_joint_obs"]
+)
+def test_cotraining_recipes_use_nested_train_pools_and_one_held_out_eval_pool(name):
+    baseline = load(name)
+    diversity = load(f"{name}_env_diversity")
 
     baseline_train = expand_topology_bank(baseline["train"], scope="train", repo_root=REPO_ROOT)
     diversity_train = expand_topology_bank(diversity["train"], scope="train", repo_root=REPO_ROOT)
     baseline_eval = expand_topology_bank(baseline["eval"], scope="eval", repo_root=REPO_ROOT)
     diversity_eval = expand_topology_bank(diversity["eval"], scope="eval", repo_root=REPO_ROOT)
 
-    assert len(baseline_train) == 5
+    assert len(baseline_train) == 1
     assert len(diversity_train) == 100
-    assert baseline_train == diversity_train[:5]
-    assert len(baseline_eval) == 100
+    assert baseline_train == diversity_train[:1]
+    assert len(baseline_eval) == 50
     assert baseline_eval == diversity_eval
     assert baseline["eval"] == diversity["eval"]
+    assert baseline["eval"]["topology_generation"] == load("cotraining")["eval"]["topology_generation"]
+    assert baseline["train"]["total_timesteps"] == diversity["train"]["total_timesteps"] == 70_000_000
     assert set(diversity_train).isdisjoint(baseline_eval)
     assert baseline["eval"]["topology_sampling"] == "exhaustive"
     assert diversity["eval"]["topology_sampling"] == "exhaustive"

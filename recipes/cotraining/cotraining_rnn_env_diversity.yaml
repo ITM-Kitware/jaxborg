@@ -1,0 +1,143 @@
+meta:
+  name: cotraining_rnn_env_diversity
+  source: "Dual-team recurrent (GRU) IPPO with topology diversity"
+  added: 2026-09-11
+  notes: |
+    Both Blue and Red use a GRU policy with memory across timesteps.
+    The training budget, stock CC4 rules and 100 training topologies match
+    cotraining_env_diversity. cotraining_lstm_env_diversity differs only in the
+    recurrent cell and metadata.
+    Recurrent updates use eight minibatches of whole sequences; the
+    feedforward control uses sixteen minibatches of shuffled transitions.
+    See docs/training.md for architecture provenance and hidden-state handling.
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+# Recurrent IPPO adapted from JaxMARL; hidden_layers counts pre-cell layers.
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: gru          # gru | lstm
+  trunk: shared      # shared | separate
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 70000000
+  variant: cc4_stock
+
+  # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 100
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 50
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 20
+    required: false
+
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 6
+    required: false
+
+  # Exact final-model checks, following the built-in history suites above.
+  after_training:
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+# The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
+# shuffles transitions across the time axis. This block only keeps the
+# projection well-formed for the recipe smoke tests; do not launch it.
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
+
+jax:
+  num_envs: 48
+  # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.
+  # Four epochs give 32 optimizer steps per rollout for each team.
+  num_minibatches: 8
+  update_epochs: 4
+  checkpoint_every_updates: 40  # Save every 960,000 environment steps.

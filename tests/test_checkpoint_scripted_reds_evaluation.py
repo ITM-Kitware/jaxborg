@@ -79,6 +79,7 @@ def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch
 
     attached: list[tuple[int, dict]] = []
     recipe = load("cotraining")
+    recipe["eval"]["checkpoint_scripted_reds"]["enabled"] = True
     recipe["run"] = {"train_run_id": "run-1", "seed": 42}
     output = tmp_path / "rows.jsonl"
 
@@ -108,12 +109,13 @@ def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch
     assert all(row["suite"] == "checkpoint_scripted_reds" for row in rows)
 
 
-def test_cotraining_recipes_enable_per_checkpoint_scripted_reds():
-    for name in ("cotraining", "cotraining_env_diversity"):
-        recipe = load(name)
+def test_cotraining_recipes_disable_checkpoint_curves_but_keep_final_scripted_reds():
+    for path in sorted((Path(__file__).resolve().parents[1] / "recipes" / "cotraining").glob("cotraining*.yaml")):
+        recipe = load(str(path))
         settings = CheckpointScriptedRedsSettings.from_recipe(recipe)
-        assert settings.enabled
+        assert not settings.enabled
         assert settings.required is False
+        assert settings.max_checkpoints == 20
         # Seeds match eval.after_training so the last checkpoint is directly
         # comparable with the final-model scripted-Red numbers.
         scripted = next(e for e in recipe["eval"]["after_training"] if e["name"] == "scripted-reds")
@@ -142,6 +144,7 @@ def test_malformed_cia_summary_does_not_lose_the_reward_metrics(tmp_path, monkey
 
     attached: list[dict] = []
     recipe = load("cotraining")
+    recipe["eval"]["checkpoint_scripted_reds"]["enabled"] = True
     recipe["run"] = {"train_run_id": "run-1", "seed": 42}
     run_checkpoint_scripted_reds(
         tmp_path / "model_x.safetensors",

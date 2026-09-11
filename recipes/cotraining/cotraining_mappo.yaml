@@ -1,18 +1,13 @@
 meta:
-  name: cotraining_mappo_joint_obs
-  source: "Blue MAPPO (joint-observation critic) / Red IPPO cotraining, adapted from JaxMARL"
-  added: 2026-09-11
+  name: cotraining_mappo
+  source: "Blue MAPPO / Red IPPO cotraining, adapted from JaxMARL"
+  added: 2026-09-10
   notes: |
-    cotraining_mappo counterpart whose centralized Blue critic reads only the
-    five pooled Blue observations (joint_observations, 1055 features) instead
-    of the privileged simulator fields in global_state (4114 features). The
-    critic therefore sees exactly what the Blue team collectively observes,
-    so a gain over the IPPO control is attributable to centralized credit
-    assignment rather than to ground-truth compromise state. The smaller
-    critic tensor (0.47 GiB per rollout vs 1.84 GiB) also cuts update cost.
-    Red keeps the baseline feedforward IPPO policy. Action rules, observations
-    available to actors, and the zero-sum payoff remain stock CC4. See
-    docs/mappo.md for provenance and input layout.
+    cotraining counterpart with a local Blue actor and a centralized
+    Blue critic. Red keeps the baseline feedforward IPPO policy. Action rules,
+    observations available to actors, and the zero-sum payoff remain stock CC4.
+    JaxMARL's MAPPO actor/critic and world-state data flow are adapted to the
+    existing joint trainer. See docs/mappo.md for provenance and input layout.
     Start with --total-timesteps 5000000 for an ablation; the default budget,
     topology bank and evaluation protocol match cotraining.
 
@@ -36,13 +31,7 @@ core:
   max_grad_norm: 0.5
   ent_coef: 0.01
   norm_rewards: true
-  # anneal_lr is deliberately left at the recipe default (off). Decaying the
-  # LR to zero does buy a reproducible stopping point, but it also flattens
-  # the entropy tail by construction, so a settled-looking endpoint would be
-  # a schedule artifact rather than evidence the self-play pair converged --
-  # and under a rock-paper-scissors cycle it just freezes the policies at an
-  # arbitrary point on the cycle. Judge the endpoint with cross_play's
-  # worst_vs_history / forgetting_rate and the scripted-Red curve instead.
+  # Constant learning rate; assess progress against fixed scripted Reds.
 
 arch:
   name: shared
@@ -59,10 +48,9 @@ train:
         hidden_dim: 256
         hidden_layers: 2
         activation: tanh
-        # 1055 training-only features: five concatenated 210-element Blue
-        # observations plus a five-element agent identity. No simulator
-        # fields hidden from Blue enter the critic; the actor still receives 210.
-        critic_input: joint_observations
+        # 4114 training-only features; the actor still receives 210.
+        # joint_observations (1055) pools Blue views without hidden host health.
+        critic_input: global_state
       core:
         # JaxMARL MAPPO uses a clipped value objective.
         clip_value_loss: true
@@ -81,9 +69,7 @@ train:
   total_timesteps: 70000000
   variant: cc4_stock
 
-  # Restrict resets to five immutable samples from the same pure-JAX
-  # generator used by unbanked co-training. jax.num_envs controls rollout
-  # parallelism; this count controls the number of distinct train topologies.
+  # One fixed training topology; num_envs controls rollout parallelism.
   topology_generation:
     generator: jax
     seed_start: 0
@@ -98,12 +84,11 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
-  # Evaluate every requested dynamics seed on the same 10 held-out topology
-  # snapshots used by cotraining_env_diversity (seeds 100 through 109).
+  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 10
+    count: 50
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
@@ -129,7 +114,7 @@ eval:
     max_checkpoints: 6
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Six checkpoints -> 36 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Six checkpoints -> 36 matchups x 150 episodes (3 seeds x 50 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
@@ -140,16 +125,14 @@ eval:
     max_checkpoints: 6
     required: false
 
-  # Optional post-training history curve against fixed scripted Reds, with CIA.
-  # Disabled here; the final scripted-reds sweep below remains enabled.
-  # History scans periodic checkpoint files, which may stop before the exact
-  # final model. Enabling it does not replace the final-model evaluation.
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
   checkpoint_scripted_reds:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
     episodes_per_seed: 1
-    max_checkpoints: 6
+    max_checkpoints: 20
     required: false
 
   # Explicit final-model scripts, run after the enabled built-in suites above.
@@ -197,4 +180,4 @@ jax:
   num_envs: 48
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 40  # 960k-step stride -> 41 durable checkpoints over 40M.
+  checkpoint_every_updates: 40  # Save every 960,000 environment steps.

@@ -13,7 +13,7 @@ from jaxborg.evaluation.post_training import (
     PostTrainingEvalSettings,
     run_configured_evaluations_after_training,
 )
-from jaxborg.recipe import load
+from jaxborg.recipe import RECIPES_DIR, load
 
 
 def _recipe(evaluations=None) -> dict:
@@ -197,7 +197,8 @@ def test_optional_failure_is_recorded_and_does_not_stop_later_scripts(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "recipe_name", ["cotraining", "cotraining_env_diversity", "cotraining_mappo", "cotraining_mappo_env_diversity"]
+    "recipe_name",
+    sorted(path.stem for path in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")),
 )
 def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate_priors(tmp_path, recipe_name):
     model = _final_model(tmp_path)
@@ -210,7 +211,7 @@ def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    # History runs first; duplicate priors and the optional scripted history are off.
+    # Historical cross-play runs first; priors and scripted checkpoint curves are off.
     # MAPPO's cross-seed suite needs an explicit opponent, so it is skipped here.
     cross_play, learned, scripted = calls
     assert Path(cross_play[1]).name == "eval_cross_play.py"
@@ -234,6 +235,7 @@ def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate
 def test_builtin_history_order_is_independent_of_yaml_key_order(tmp_path):
     model = _final_model(tmp_path)
     recipe = load("cotraining_rnn")
+    recipe["eval"]["checkpoint_scripted_reds"]["enabled"] = True
     assert list(recipe["eval"]).index("checkpoint_scripted_reds") < list(recipe["eval"]).index("cross_play")
     calls = []
     run_configured_evaluations_after_training(model, recipe, run_subprocess=lambda cmd, **kwargs: calls.append(cmd))

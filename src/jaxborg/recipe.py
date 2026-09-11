@@ -1,6 +1,6 @@
 """Recipe loader — single YAML, two backends.
 
-A recipe lives at `recipes/<name>.yaml` (repo root) and declares both the
+A recipe lives under `recipes/` (including experiment subfolders) and declares both the
 backend-agnostic training contract (algorithm, arch, core hyperparameters,
 buffer/minibatch targets) and the backend-specific knobs needed to realize
 that contract on JAX vs CybORG-CleanRL.
@@ -8,6 +8,8 @@ that contract on JAX vs CybORG-CleanRL.
 Use:
     >>> from jaxborg.recipe import load, project_jax, project_cleanrl
     >>> recipe = load("singh")              # by name
+    >>> recipe = load("cotraining_mappo")   # unique name in a subfolder
+    >>> recipe = load("cotraining/cotraining_mappo")  # qualified name
     >>> recipe = load("/abs/path/to.yaml")    # or absolute path
     >>> jax_cfg = project_jax(recipe)         # flat dict for ippo_jax.py
     >>> cr_cfg = project_cleanrl(recipe)      # flat dict for ippo_cyborg.py
@@ -43,15 +45,24 @@ POLICY_BACKENDS = ("jax", "cyborg")
 
 
 def load(name_or_path: str) -> dict[str, Any]:
-    """Resolve a recipe name (e.g. 'singh') or absolute path; return parsed dict.
+    """Resolve a recipe name, qualified name or file path; return parsed dict.
 
     Raises FileNotFoundError if the recipe doesn't exist, ValueError if a
-    required section is missing.
+    required section is missing or a short name matches multiple subfolders.
+    Existing file paths and top-level recipes take precedence over name lookup.
     """
     p = Path(name_or_path)
-    if not p.is_absolute() and not p.exists():
-        p = RECIPES_DIR / f"{name_or_path}.yaml"
-    if not p.exists():
+    if not p.is_absolute() and not p.is_file():
+        recipe_name = p if p.suffix == ".yaml" else Path(f"{name_or_path}.yaml")
+        p = RECIPES_DIR / recipe_name
+        if not p.is_file() and len(recipe_name.parts) == 1:
+            matches = sorted(path for path in RECIPES_DIR.rglob(recipe_name.name) if path.is_file())
+            if len(matches) > 1:
+                choices = ", ".join(str(path.relative_to(RECIPES_DIR)) for path in matches)
+                raise ValueError(f"Ambiguous recipe name {name_or_path!r}; use a qualified name: {choices}")
+            if matches:
+                p = matches[0]
+    if not p.is_file():
         raise FileNotFoundError(f"Recipe not found: {name_or_path} (looked at {p})")
     raw = yaml.safe_load(p.read_text())
     _validate(raw, source=str(p))

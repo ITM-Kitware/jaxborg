@@ -1,18 +1,14 @@
 meta:
-  name: cotraining_test_rule_change
-  source: "5M co-training harness for the BlockTraffic/ASF rule knobs"
+  name: cotraining_lstm
+  source: "LSTM twin of cotraining_rnn"
   added: 2026-09-09
   notes: |
-    Short-budget rig for the two rule knobs added alongside
-    docs/cotraining_collapse.md. Both effects in that post-mortem are finished
-    by ~5M steps, so this runs at 5M instead of 40M -- an 8x faster loop.
-
-    Arms are one edit to train.variant_overrides:
-
-      control      {}                                         (stock CC4)
-      red-damage   {red_reward: damage}
-      mission-safe {blue_block_policy: mission_safe}
-      both         {red_reward: damage, blue_block_policy: mission_safe}
+    Both Blue and Red use a LSTM policy with memory across timesteps.
+    The training budget, stock CC4 rules and single training topology match
+    cotraining. cotraining_rnn differs only in the recurrent cell and metadata.
+    Recurrent updates use eight minibatches of whole sequences; the
+    feedforward control uses sixteen minibatches of shuffled transitions.
+    See docs/training.md for architecture provenance and hidden-state handling.
 
 algorithm: ippo
 
@@ -33,11 +29,14 @@ core:
   ent_coef: 0.01
   norm_rewards: true
 
+# Recurrent IPPO adapted from JaxMARL; hidden_layers counts pre-cell layers.
 arch:
-  name: shared
+  name: recurrent
   hidden_dim: 256
-  hidden_layers: 2
+  hidden_layers: 1
   activation: tanh
+  cell: lstm         # gru | lstm
+  trunk: shared      # shared | separate
 
 train:
   teams: both
@@ -45,21 +44,14 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 5000000
+  total_timesteps: 70000000
   variant: cc4_stock
 
-  # Opt-in co-training rule knobs. Empty (or absent) reproduces stock CC4
-  # exactly; see GameVariant for what each value changes.
-  variant_overrides:
-    red_reward: damage
-    blue_block_policy: mission_safe
-
-  # Same five training topologies as `cotraining`, so an arm is comparable to
-  # that run's first 5M steps.
+  # One fixed training topology, shared with the feedforward control.
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 5
+    count: 1
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
@@ -70,25 +62,23 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
+  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 10
+    count: 50
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
-  # Built-in history suites also run AFTER training, before after_training.
-  # They scan periodic checkpoints, which may precede the exported final model.
-  # The instrument the post-mortem says would have caught the regression, and
-  # which the 20M/40M runs had switched off. Fixed opponents, so the curve
-  # moves only when Blue does. This is the headline readout for an arm.
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
   checkpoint_scripted_reds:
-    enabled: true
+    enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
     episodes_per_seed: 1
-    max_checkpoints: 6
+    max_checkpoints: 20
     required: false
 
   cross_play:
@@ -134,10 +124,9 @@ eval:
         - 1
         - --progress
 
-# Without this, the CleanRL projection derives num_rollouts_per_update from
-# train.buffer_size (214 rollouts), which at a 5M budget is fewer than one
-# update. The JAX backend is the one this recipe is for; this keeps the
-# CybORG-backed projection well-formed at the short budget.
+# The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
+# shuffles transitions across the time axis. This block only keeps the
+# projection well-formed for the recipe smoke tests; do not launch it.
 cleanrl:
   num_envs: 48
   rollout_length: 500
@@ -146,6 +135,8 @@ cleanrl:
 
 jax:
   num_envs: 48
-  num_minibatches: 16
+  # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.
+  # Four epochs give 32 optimizer steps per rollout for each team.
+  num_minibatches: 8
   update_epochs: 4
-  checkpoint_every_updates: 20  # 480k-step stride -> 11 durable checkpoints over 5M.
+  checkpoint_every_updates: 40  # Save every 960,000 environment steps.
