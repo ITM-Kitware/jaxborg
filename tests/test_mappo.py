@@ -100,10 +100,15 @@ def test_bundle_reloads_for_existing_local_actor_evaluator(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "baseline,name,count",
-    [("cotraining", "cotraining_mappo", 5), ("cotraining_env_diversity", "cotraining_mappo_env_diversity", 100)],
+    "baseline,name,count,critic_input",
+    [
+        ("cotraining", "cotraining_mappo", 1, "global_state"),
+        ("cotraining_env_diversity", "cotraining_mappo_env_diversity", 100, "global_state"),
+        ("cotraining", "cotraining_mappo_joint_obs", 1, "joint_observations"),
+        ("cotraining_env_diversity", "cotraining_mappo_joint_obs_env_diversity", 100, "joint_observations"),
+    ],
 )
-def test_mappo_recipes_preserve_red_ippo_and_game_controls(baseline, name, count, monkeypatch):
+def test_mappo_recipes_preserve_red_ippo_and_game_controls(baseline, name, count, critic_input, monkeypatch):
     recipe, control = load(name), load(baseline)
     assert recipe["algorithm"] == "mappo"
     assert recipe["train"]["teams"] == "both"
@@ -111,7 +116,7 @@ def test_mappo_recipes_preserve_red_ippo_and_game_controls(baseline, name, count
     blue = team_recipe(recipe, "blue")
     red = team_recipe(recipe, "red")
     assert blue["arch"]["name"] == "mappo"
-    assert blue["arch"]["critic_input"] == "global_state"
+    assert blue["arch"]["critic_input"] == critic_input
     assert red["arch"] == control["arch"]
     assert red["core"] == control["core"]
 
