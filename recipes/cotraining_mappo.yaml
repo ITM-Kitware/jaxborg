@@ -13,12 +13,8 @@ meta:
 
 algorithm: mappo
 
-# Periodic checkpoint evaluation is OFF (every_steps: 0). CIA/resilience is
-# measured once, at the end of training, by the eval.after_training pipeline
-# below. Each firing runs the full topology x seed x episode cross product
-# (10 topologies x episodes_per_seed), so periodic evaluation cost a large
-# multiple of the reported final numbers while adding nothing to them.
-# episodes_per_seed is retained for when the periodic curve is wanted again.
+# During-training evaluation is disabled. Reward and CIA are measured after
+# training by the enabled built-in suites and explicit eval.after_training list.
 mlflow:
   checkpoint_eval:
     every_steps: 0
@@ -106,33 +102,30 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
-  # At the end of training, compare adjacent durable checkpoints in both
-  # directions: current Blue vs prior Red and current Red vs prior Blue.
-  # Seeds 1000-1002 (not the full 1000-1009 used by the reported final
-  # evaluation): each seed already runs on all 10 held-out topologies, so
-  # 3 seeds is 30 episodes per matchup across 5 adjacent-checkpoint pairs.
-  # max_checkpoints strides the durable checkpoints first, so "adjacent" is
-  # adjacent in the subsample. Untrimmed this ran all 19 pairs = 38 sequential
-  # evaluations, the longest job in the chain; neighbours 960k steps apart also
-  # differ too little for the comparison to say much. Scoped here rather than
-  # shared: cross_play below pays n**2 for the same n, so they trade off
-  # differently and each evaluation caps itself.
-  play_priors:
+  # One final Blue vs the next training seed's final Red (cyclic seed order).
+  # The multi-seed launcher supplies the opponent after all training finishes.
+  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  cross_seed_play:
     enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # play_priors is a cheaper alternative to cross_play. With the identical
+  # settings below, its 10 adjacent matchups are already in the 36-cell matrix.
+  # Leave it disabled to avoid replaying those same games in a second suite.
+  play_priors:
+    enabled: false
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
     max_checkpoints: 6
 
-  # Full cross-play matrix over strided durable checkpoints: Blue from every
-  # sampled checkpoint against Red from every sampled checkpoint. play_priors
-  # only compares neighbours, so under a rock-paper-scissors cycle it reports
-  # an improvement at every step while the policies walk in a circle; the
-  # cycle is only visible off the diagonal. Headline readouts are
-  # blue/red.worst_vs_history (should climb if progress is real) and
-  # forgetting_rate (a later policy losing to an opponent an earlier one beat).
-  # Cost is max_checkpoints**2 matchups, so 6 -> 36, cheaper than play_priors.
-  # On trial: required=false so a failure here cannot fail the training job.
+  # Every sampled historical Blue vs every sampled historical Red in this run.
+  # Six checkpoints -> 36 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
     enabled: true
     seeds: 1000-1002
@@ -141,14 +134,10 @@ eval:
     max_checkpoints: 6
     required: false
 
-  # Scripted-Red + CIA curves across the same strided checkpoints, instead of
-  # the single final-model point in after_training below. Scripted opponents
-  # are fixed, so these are an absolute scale: they move only when Blue does,
-  # which is what makes them readable next to the zero-sum self-play return.
-  # Watch blue.worst_reward -- Blue chasing the learned Red can regress against
-  # the FSMs it is ultimately judged on, and a mean across Reds hides that.
-  # Cost is max_checkpoints x the final-model scripted-Red evaluation; seeds
-  # match after_training so the last checkpoint is directly comparable to it.
+  # Optional post-training history curve against fixed scripted Reds, with CIA.
+  # Disabled here; the final scripted-reds sweep below remains enabled.
+  # History scans periodic checkpoint files, which may stop before the exact
+  # final model. Enabling it does not replace the final-model evaluation.
   checkpoint_scripted_reds:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
@@ -157,9 +146,9 @@ eval:
     max_checkpoints: 6
     required: false
 
-  # Run two named evaluations, in order, after the durable final bundle and
-  # sidecar are written. The learned matchup selects both policies from the
-  # exact co-trained bundle. The scripted sweep then selects its trained Blue
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
   # policy and evaluates it against FSM and CIA Red agents in the same JAX
   # topology bank with fixed per-topology role assignments.
   after_training:

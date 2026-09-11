@@ -133,7 +133,31 @@ eval:
   # random keeps the requested episode count and samples the bank with replacement.
   topology_sampling: exhaustive
 
-  # The three periodic/checkpoint evaluators below all run after training, all
+  # Scheduling: these named blocks configure built-in POST-TRAINING suites;
+  # their position outside after_training does not make them run during training.
+  # The runner executes enabled suites in this fixed order:
+  # cross_seed_play -> play_priors -> cross_play -> checkpoint_scripted_reds,
+  # followed by the explicit after_training script list in list order.
+  # YAML key order does not change the built-in order. Only
+  # mlflow.checkpoint_eval above runs evaluations DURING training.
+
+  # Final Blue vs one other training seed's final Red; requires train.teams: both.
+  # run_cotraining.sh assigns the next seed cyclically after all training jobs:
+  # 42 -> 100, 100 -> 200, 200 -> 42 (three matchups, not a nine-cell matrix).
+  # Manual: run_after_training.py --model BLUE_FINAL --cross-seed-red RED_FINAL.
+  # Both final bundles need sidecars with distinct run.seed values. Without an
+  # explicit opponent this suite prints a skip message. No history is loaded.
+  # Records reward and, when eval.cia.enabled is true, C/I/A in result JSON and
+  # on the Blue run in MLflow: eval.after_training.cross-seed-play.jax_matchup.
+  # Uses the shared eval.variant/topology/CIA settings; no max_checkpoints field.
+  cross_seed_play:
+    enabled: false
+    seeds: 1000-1009  # Environment dynamics seeds, not training seeds.
+    episodes_per_seed: 1  # With 10 exhaustive topologies: 100 episodes per matchup.
+    deterministic: false
+    required: true  # Once scheduled, an evaluator failure fails the pipeline.
+
+  # The three history evaluators below all run after training, all
   # stride the durable checkpoints, and all accept the same seeds /
   # episodes_per_seed / deterministic / required / max_checkpoints fields.
   # `required: false` means a failure here cannot fail the training job.
@@ -144,6 +168,9 @@ eval:
   # both. Cost is 2 * (max_checkpoints - 1) evaluations. Note this advances
   # both endpoints, so under a rock-paper-scissors cycle it reports an
   # improvement at every step while the policies walk in a circle.
+  # These matchups are a subset of cross_play when checkpoint selection and
+  # evaluation settings match. Enable one or the other to avoid repeat rollouts;
+  # play_priors supplies its own metric namespace, not additional opponents.
   play_priors:
     enabled: false
     seeds: 1000-1009
@@ -171,6 +198,8 @@ eval:
   # self-play return. Watch blue.worst_reward -- Blue chasing a learned Red can
   # regress against the FSMs it is ultimately judged on, and a mean across Reds
   # hides that. Cost is max_checkpoints x the final-model scripted-Red sweep.
+  # This uses periodic checkpoint files; it does not automatically include the
+  # exported final model. Keep a final scripted-reds entry for the exact endpoint.
   checkpoint_scripted_reds:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]  # Scripted opponents to sweep.
@@ -180,9 +209,9 @@ eval:
     required: true
     max_checkpoints: 6
 
-  # Optional ordered final-checkpoint evaluation pipeline, run after the
-  # durable final bundle and its sidecar are written. Each entry runs in a
-  # fresh process, in order. JAX-trained models default to CUDA; set
+  # Optional explicit script list, appended AFTER the enabled built-in suites
+  # above. All run after the durable final bundle and its sidecar are written.
+  # Each entry runs in a fresh process, in order. JAX-trained models default to CUDA; set
   # JAX_PLATFORMS=cpu to override. Results from the built-in scripts go to
   # $JAXBORG_EXP_DIR/eval/.
   #

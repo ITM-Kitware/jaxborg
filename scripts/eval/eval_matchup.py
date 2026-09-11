@@ -109,6 +109,12 @@ def main() -> None:
     )
     parser.add_argument("--output", default=None)
     parser.add_argument(
+        "--mlflow-source-team",
+        choices=("blue", "red"),
+        default=None,
+        help="Attach metrics only to this team's source run (default: both source runs)",
+    )
+    parser.add_argument(
         "--name",
         default=os.environ.get("JAXBORG_EVAL_NAME"),
         help="Optional evaluation name used in the result filename and MLflow keys",
@@ -242,15 +248,21 @@ def main() -> None:
     print(f"Red:  {red_mean:.2f} ± {red_std:.2f}", flush=True)
     print(f"wrote: {output}", flush=True)
 
-    # Attach team-qualified results to every distinct source run when IDs are
-    # available. Evaluation still succeeds if the tracking server is absent.
-    run_ids = {source.get("train_run_id") for source in result.policies.values() if source.get("train_run_id")}
+    # Cross-seed play attaches only to Blue's run: each run also supplies Red
+    # to another game, whose result must not overwrite its own Blue metrics.
+    run_ids = {
+        source["train_run_id"]
+        for team, source in result.policies.items()
+        if source.get("train_run_id") and (args.mlflow_source_team is None or team == args.mlflow_source_team)
+    }
     for run_id in run_ids:
         try:
             prefix = f"eval.after_training.{eval_name}.jax_matchup" if eval_name else "eval.jax_matchup"
             metrics = {
                 f"{prefix}.blue_mean": blue_mean,
+                f"{prefix}.blue_std": blue_std,
                 f"{prefix}.red_mean": red_mean,
+                f"{prefix}.red_std": red_std,
                 f"{prefix}.episodes": len(result.blue_returns),
             }
             if cia_summary is not None:

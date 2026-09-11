@@ -78,6 +78,8 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
+  # Built-in history suites also run AFTER training, before after_training.
+  # They scan periodic checkpoints, which may precede the exported final model.
   # The instrument the post-mortem says would have caught the regression, and
   # which the 20M/40M runs had switched off. Fixed opponents, so the curve
   # moves only when Blue does. This is the headline readout for an arm.
@@ -97,6 +99,7 @@ eval:
     max_checkpoints: 6
     required: false
 
+  # Exact final-model checks, following the built-in history suites above.
   after_training:
     - name: learned-red-ppo
       script: scripts/eval/eval_matchup.py

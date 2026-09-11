@@ -213,12 +213,14 @@ def test_evaluates_each_adjacent_pair_in_both_directions_and_logs_curves(tmp_pat
     ]
 
 
-@pytest.mark.parametrize("recipe_name", ["cotraining", "cotraining_env_diversity"])
-def test_cotraining_recipes_retain_enough_periodic_checkpoints_for_play_priors(recipe_name):
+@pytest.mark.parametrize(
+    "recipe_name", ["cotraining", "cotraining_env_diversity", "cotraining_mappo", "cotraining_mappo_env_diversity"]
+)
+def test_cotraining_recipes_disable_redundant_priors_but_retain_history(recipe_name):
     """Pin the recipe/eval contract, not a checkpoint count.
 
     The count moves whenever the training budget changes; what must hold is
-    that play-priors still has pairs to compare and that the recipe's stride
+    that history still has pairs to compare and that the recipe's stride
     agrees with the one ``find_periodic_checkpoints`` filters on.
     """
     recipe = load(recipe_name)
@@ -230,7 +232,15 @@ def test_cotraining_recipes_retain_enough_periodic_checkpoints_for_play_priors(r
     # run_play_priors raises below two checkpoints (no adjacent pair to compare).
     assert len(checkpoints) >= 2
     assert _periodic_step_stride(recipe, "jax") == checkpoint_every * steps_per_update
-    assert PlayPriorsSettings.from_recipe(recipe).enabled
+    from jaxborg.evaluation.cross_play import CrossPlaySettings
+
+    priors = PlayPriorsSettings.from_recipe(recipe)
+    cross_play = CrossPlaySettings.from_recipe(recipe)
+    assert not priors.enabled
+    assert cross_play.enabled
+    # The disabled suite would repeat exactly the matrix's adjacent cells.
+    for field in ("seeds", "episodes_per_seed", "deterministic", "max_checkpoints"):
+        assert getattr(priors, field) == getattr(cross_play, field)
 
 
 def test_play_priors_logs_comparison_qualified_cia_and_writes_audit_fields(tmp_path, monkeypatch):
