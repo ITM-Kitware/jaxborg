@@ -13,12 +13,14 @@ from jaxborg.evaluation.cia import (
     ROLE_DB,
     ROLE_WEB,
     ResilienceMetric,
+    cia_mlflow_metrics,
     mean_resilience_episode,
     resilience_episode_records,
     score_resilience_state,
     summarize_resilience_episodes,
 )
 from jaxborg.state import create_initial_state
+from plots.plot_mlflow import std_companion
 
 
 def _role_array() -> jax.Array:
@@ -166,3 +168,39 @@ def test_offline_same_step_restore_then_attack_leaves_host_impacted() -> None:
 
     assert (score.C_mean, score.I_mean, score.A_mean) == (-10.0, -10.0, -10.0)
     assert score.impact_counts == {"auth": 1}
+
+
+def test_mlflow_metrics_add_envelope_series_around_each_mean() -> None:
+    summary = summarize_resilience_episodes(jnp.asarray([[0.0, -10.0, -20.0], [-10.0, -20.0, -30.0]]))
+    metrics = cia_mlflow_metrics("eval.checkpoint.cia", summary)
+
+    spread = math.sqrt(50)
+    assert metrics == pytest.approx(
+        {
+            "eval.checkpoint.cia.c.mean": -5.0,
+            "eval.checkpoint.cia.c.std": spread,
+            "eval.checkpoint.cia.c.mean_minus_std": -5.0 - spread,
+            "eval.checkpoint.cia.c.mean_plus_std": -5.0 + spread,
+            "eval.checkpoint.cia.i.mean": -15.0,
+            "eval.checkpoint.cia.i.std": spread,
+            "eval.checkpoint.cia.i.mean_minus_std": -15.0 - spread,
+            "eval.checkpoint.cia.i.mean_plus_std": -15.0 + spread,
+            "eval.checkpoint.cia.a.mean": -25.0,
+            "eval.checkpoint.cia.a.std": spread,
+            "eval.checkpoint.cia.a.mean_minus_std": -25.0 - spread,
+            "eval.checkpoint.cia.a.mean_plus_std": -25.0 + spread,
+        }
+    )
+
+
+def test_mlflow_envelope_keys_are_not_mistaken_for_std_companions() -> None:
+    """The exported figures pair ``<key>.mean`` with ``<key>.std``; the new
+    envelope keys must not shadow that pairing or become their own panels."""
+
+    metrics = cia_mlflow_metrics("eval.checkpoint.cia", {"n": 1, **dict.fromkeys("cia", {"mean": 1.0, "std": 0.0})})
+    keys = set(metrics)
+
+    assert std_companion("eval.checkpoint.cia.c.mean") == "eval.checkpoint.cia.c.std"
+    for key in keys:
+        if key.endswith(("mean_minus_std", "mean_plus_std")):
+            assert std_companion(key) not in keys

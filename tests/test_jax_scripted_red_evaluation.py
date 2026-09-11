@@ -278,10 +278,16 @@ def test_mlflow_metrics_preserve_rewards_and_add_cia(monkeypatch):
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.episodes": 8.0,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.c.mean": -1.0,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.c.std": 1.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.c.mean_minus_std": -2.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.c.mean_plus_std": 0.5,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.i.mean": -2.0,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.i.std": 2.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.i.mean_minus_std": -4.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.i.mean_plus_std": 0.5,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.a.mean": -3.0,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.a.std": 3.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.a.mean_minus_std": -6.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.a.mean_plus_std": 0.5,
         },
     }
 
