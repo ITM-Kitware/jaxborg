@@ -26,6 +26,7 @@ from typing import Any
 
 from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
 from jaxborg.evaluation.cross_play import CrossPlaySettings
+from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, validate_cross_seed_models
 from jaxborg.evaluation.play_priors import PlayPriorsSettings
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -177,6 +178,41 @@ def _checkpoint_scripted_reds_evaluation(recipe: Mapping[str, Any]) -> PostTrain
     )
 
 
+def _cross_seed_play_evaluation(
+    model_path: str | Path, recipe: Mapping[str, Any], red_model: str | Path | None
+) -> PostTrainingEval | None:
+    settings = CrossSeedPlaySettings.from_recipe(recipe)
+    if not settings.enabled:
+        return None
+    if red_model is None:
+        print("Skipping cross-seed-play: supply --cross-seed-red after the other seed finishes training.", flush=True)
+        return None
+    red = validate_cross_seed_models(model_path, red_model)
+    return PostTrainingEval(
+        name="cross-seed-play",
+        script="scripts/eval/eval_matchup.py",
+        model_arg="--blue-path",
+        args=(
+            "--recipe",
+            "{recipe}",
+            "--policy-backend",
+            "{backend}",
+            "--red-path",
+            str(red),
+            "--name",
+            "{name}",
+            "--seeds",
+            ",".join(map(str, settings.seeds)),
+            "--episodes-per-seed",
+            str(settings.episodes_per_seed),
+            "--mlflow-source-team",
+            "blue",
+        )
+        + (("--deterministic",) if settings.deterministic else ()),
+        required=settings.required,
+    )
+
+
 def _sidecar_path(model_path: Path) -> Path:
     name = model_path.name
     stem = name[len("model_") :] if name.startswith("model_") else model_path.stem
@@ -213,6 +249,7 @@ def run_configured_evaluations_after_training(
     model_path: str | Path,
     recipe: Mapping[str, Any],
     *,
+    cross_seed_red: str | Path | None = None,
     run_subprocess: Callable[..., Any] = subprocess.run,
 ) -> Path | None:
     """Run configured evaluation scripts sequentially and return the manifest.
@@ -223,11 +260,15 @@ def run_configured_evaluations_after_training(
     """
 
     settings = PostTrainingEvalSettings.from_recipe(recipe)
-    # Checkpoint-history suites run before the recipe's own list so they are not
-    # skipped when a later optional evaluation fails.
+    if os.environ.get("JAXBORG_SKIP_POST_TRAINING_EVAL") == "1":
+        print("Skipping configured post-training evaluations (JAXBORG_SKIP_POST_TRAINING_EVAL=1).", flush=True)
+        return None
+    # Named built-in suites are also post-training evaluations. Their order is
+    # fixed here (independent of YAML key order), before the explicit script list.
     built_in = tuple(
         evaluation
         for evaluation in (
+            _cross_seed_play_evaluation(model_path, recipe, cross_seed_red),
             _play_priors_evaluation(recipe),
             _cross_play_evaluation(recipe),
             _checkpoint_scripted_reds_evaluation(recipe),
@@ -240,10 +281,6 @@ def run_configured_evaluations_after_training(
 
         run_configured_after_training(model_path, recipe, run_subprocess=run_subprocess)
         return None
-    if os.environ.get("JAXBORG_SKIP_POST_TRAINING_EVAL") == "1":
-        print("Skipping configured post-training evaluations (JAXBORG_SKIP_POST_TRAINING_EVAL=1).", flush=True)
-        return None
-
     resolved_model = Path(model_path).expanduser().resolve()
     if not resolved_model.is_file():
         raise FileNotFoundError(f"final model is missing before post-training evaluation: {resolved_model}")
@@ -342,6 +379,7 @@ def run_configured_evaluations_after_training(
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run a recipe's ordered post-training evaluation scripts")
     parser.add_argument("--model", required=True, help="Final model bundle to pass to every evaluation")
+    parser.add_argument("--cross-seed-red", help="Final Red bundle from another training seed for eval.cross_seed_play")
     parser.add_argument(
         "--recipe",
         help="Recipe name/path containing eval.after_training (default: model's recipe sidecar)",
@@ -356,7 +394,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         from jaxborg.checkpoint import read_sidecar
 
         recipe = read_sidecar(args.model)
-    manifest = run_configured_evaluations_after_training(args.model, recipe)
+    manifest = run_configured_evaluations_after_training(args.model, recipe, cross_seed_red=args.cross_seed_red)
     if manifest is None:
         from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
 

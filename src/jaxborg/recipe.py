@@ -159,6 +159,7 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     # before an hours-long training run starts.
     from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
     from jaxborg.evaluation.cross_play import CrossPlaySettings
+    from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings
     from jaxborg.evaluation.play_priors import PlayPriorsSettings
     from jaxborg.evaluation.post_training import PostTrainingEvalSettings
     from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
@@ -167,6 +168,7 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     post_training = PostTrainingEvalSettings.from_recipe(recipe)
     play_priors = PlayPriorsSettings.from_recipe(recipe)
     cross_play = CrossPlaySettings.from_recipe(recipe)
+    cross_seed_play = CrossSeedPlaySettings.from_recipe(recipe)
     checkpoint_scripted_reds = CheckpointScriptedRedsSettings.from_recipe(recipe)
     # Every checkpoint-history suite replays durable checkpoints, so they all
     # need a positive checkpoint stride and a reserved pipeline name.
@@ -188,9 +190,13 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         if any(evaluation.name == name for evaluation in post_training.evaluations):
             raise ValueError(f"{source}: eval.after_training name {name!r} is reserved")
     # Replaying a co-trained pair needs both policies in every bundle.
-    for name, enabled in checkpoint_suites[:2]:
+    for name, enabled in (*checkpoint_suites[:2], ("cross_seed_play", cross_seed_play.enabled)):
         if enabled and mode != "both":
             raise ValueError(f"{source}: eval.{name} is only supported when train.teams is 'both'")
+    if cross_seed_play.enabled and any(
+        evaluation.name == "cross-seed-play" for evaluation in post_training.evaluations
+    ):
+        raise ValueError(f"{source}: eval.after_training name 'cross-seed-play' is reserved")
     if checkpoint_scripted_reds.enabled:
         # The suite scores Blue against fixed Reds and reports CIA per checkpoint.
         if mode == "red":
@@ -200,7 +206,11 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     for evaluation in post_training.evaluations:
         evaluation.resolve_script()
     if scripted_red.after_training and (
-        post_training.evaluations or play_priors.enabled or cross_play.enabled or checkpoint_scripted_reds.enabled
+        post_training.evaluations
+        or play_priors.enabled
+        or cross_play.enabled
+        or cross_seed_play.enabled
+        or checkpoint_scripted_reds.enabled
     ):
         raise ValueError(
             f"{source}: use either eval.after_training or legacy eval.scripted_red.after_training, not both"
@@ -673,6 +683,7 @@ def project_eval(
         "after_training": copy.deepcopy(ev.get("after_training") or []),
         "play_priors": copy.deepcopy(ev.get("play_priors", False)),
         "cross_play": copy.deepcopy(ev.get("cross_play", False)),
+        "cross_seed_play": copy.deepcopy(ev.get("cross_seed_play", False)),
         "checkpoint_scripted_reds": copy.deepcopy(ev.get("checkpoint_scripted_reds", False)),
         "TOPOLOGY_BANK": topology_bank,
         "TOPOLOGY_SAMPLING": topology_sampling,

@@ -196,9 +196,12 @@ def test_optional_failure_is_recorded_and_does_not_stop_later_scripts(tmp_path):
     assert manifest["evaluations"][1]["status"] == "succeeded"
 
 
-def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
+@pytest.mark.parametrize(
+    "recipe_name", ["cotraining", "cotraining_env_diversity", "cotraining_mappo", "cotraining_mappo_env_diversity"]
+)
+def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate_priors(tmp_path, recipe_name):
     model = _final_model(tmp_path)
-    recipe = load("cotraining")
+    recipe = load(recipe_name)
     calls = []
 
     def fake_run(command, **kwargs):
@@ -207,13 +210,9 @@ def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    # Every checkpoint-history suite runs before the recipe's own list.
-    priors, cross_play, checkpoint_scripted, learned, scripted = calls
-    assert Path(checkpoint_scripted[1]).name == "eval_checkpoint_scripted_reds.py"
-    assert checkpoint_scripted[checkpoint_scripted.index("--model") + 1] == str(model.resolve())
-    assert Path(priors[1]).name == "eval_play_priors.py"
-    assert priors[priors.index("--model") + 1] == str(model.resolve())
-    assert priors[priors.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
+    # History runs first; duplicate priors and the optional scripted history are off.
+    # MAPPO's cross-seed suite needs an explicit opponent, so it is skipped here.
+    cross_play, learned, scripted = calls
     assert Path(cross_play[1]).name == "eval_cross_play.py"
     assert cross_play[cross_play.index("--model") + 1] == str(model.resolve())
     assert cross_play[cross_play.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
@@ -229,6 +228,20 @@ def test_cotraining_pipeline_uses_joint_bundle_then_scripted_reds(tmp_path):
         "cia_c",
         "cia_i",
         "cia_a",
+    ]
+
+
+def test_builtin_history_order_is_independent_of_yaml_key_order(tmp_path):
+    model = _final_model(tmp_path)
+    recipe = load("cotraining_rnn")
+    assert list(recipe["eval"]).index("checkpoint_scripted_reds") < list(recipe["eval"]).index("cross_play")
+    calls = []
+    run_configured_evaluations_after_training(model, recipe, run_subprocess=lambda cmd, **kwargs: calls.append(cmd))
+    assert [Path(cmd[1]).name for cmd in calls] == [
+        "eval_cross_play.py",
+        "eval_checkpoint_scripted_reds.py",
+        "eval_matchup.py",
+        "eval_scripted_reds_jax.py",
     ]
 
 
