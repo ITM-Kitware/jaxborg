@@ -18,6 +18,7 @@ metrics that MLflow renders as time-series curves.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 from collections.abc import Callable, Mapping
