@@ -18,6 +18,7 @@ metrics that MLflow renders as time-series curves.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import subprocess
 from collections.abc import Callable, Mapping
@@ -197,13 +198,22 @@ def _git(arg: str) -> str:
 
 
 def configure(experiment: str | None = None) -> Path:
-    """Point MLflow at $JAXBORG_EXP_DIR/mlflow.db. Return the db path."""
+    """Initialize the shared SQLite store under a process lock; return its path."""
     exp_dir = _exp_dir()
     exp_dir.mkdir(parents=True, exist_ok=True)
     db_path = exp_dir / "mlflow.db"
-    mlflow.set_tracking_uri(f"sqlite:///{db_path}")
-    if experiment:
-        mlflow.set_experiment(experiment)
+    # Parallel seeds can otherwise run the same schema migration at once.
+    # Keep the lock file in place: unlinking it could let waiters lock different
+    # inodes. Closing the handle releases the lock, including on exceptions.
+    with db_path.with_suffix(".db.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        tracking_uri = f"sqlite:///{db_path}"
+        mlflow.set_tracking_uri(tracking_uri)
+        # set_tracking_uri is lazy. Force store initialization while locked,
+        # including for evaluation callers that do not select an experiment.
+        mlflow.MlflowClient(tracking_uri=tracking_uri)
+        if experiment:
+            mlflow.set_experiment(experiment)
     return db_path
 
 
