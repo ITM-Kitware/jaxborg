@@ -69,6 +69,15 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
+  # One final Blue vs the next training seed's final Red (cyclic seed order).
+  # The multi-seed launcher supplies the opponent after all training finishes.
+  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  cross_seed_play:
+    enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
   # Built-in post-training history suites, scheduled before after_training.
   # play_priors is a cheaper alternative to cross_play. With the identical
   # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
