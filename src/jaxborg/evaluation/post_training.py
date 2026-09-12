@@ -12,6 +12,7 @@ The older ``eval.scripted_red.after_training`` setting remains supported when
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -250,6 +251,7 @@ def run_configured_evaluations_after_training(
     recipe: Mapping[str, Any],
     *,
     cross_seed_red: str | Path | None = None,
+    save_evaluation_recipe: bool = False,
     run_subprocess: Callable[..., Any] = subprocess.run,
 ) -> Path | None:
     """Run configured evaluation scripts sequentially and return the manifest.
@@ -299,6 +301,16 @@ def run_configured_evaluations_after_training(
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     nonce = f"{time.time_ns() % 1_000_000_000:09d}"
     manifest_path = eval_dir / "manifests" / f"{resolved_model.stem}_{timestamp}_{nonce}.json"
+    if save_evaluation_recipe:
+        # A CLI evaluation override must reach child processes, too. Preserve
+        # the original training sidecar; archive the effective recipe beside
+        # this evaluation's manifest so the smaller/larger protocol is auditable.
+        import yaml
+
+        sidecar = manifest_path.with_suffix(".yaml")
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        payload = {key: value for key, value in recipe.items() if not str(key).startswith("__")}
+        sidecar.write_text(yaml.safe_dump(payload, sort_keys=False))
     manifest: dict[str, Any] = {
         "model": str(resolved_model),
         "recipe": str(sidecar),
@@ -382,19 +394,21 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--cross-seed-red", help="Final Red bundle from another training seed for eval.cross_seed_play")
     parser.add_argument(
         "--recipe",
-        help="Recipe name/path containing eval.after_training (default: model's recipe sidecar)",
+        help="Override the eval section using this recipe; keep the model's training settings and provenance",
     )
     args = parser.parse_args(argv)
 
+    from jaxborg.checkpoint import read_sidecar
+
+    recipe = read_sidecar(args.model)
     if args.recipe:
         from jaxborg.recipe import load
 
-        recipe = load(args.recipe)
-    else:
-        from jaxborg.checkpoint import read_sidecar
-
-        recipe = read_sidecar(args.model)
-    manifest = run_configured_evaluations_after_training(args.model, recipe, cross_seed_red=args.cross_seed_red)
+        recipe = copy.deepcopy(recipe)
+        recipe["eval"] = copy.deepcopy(load(args.recipe).get("eval", {}))
+    manifest = run_configured_evaluations_after_training(
+        args.model, recipe, cross_seed_red=args.cross_seed_red, save_evaluation_recipe=bool(args.recipe)
+    )
     if manifest is None:
         from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
 

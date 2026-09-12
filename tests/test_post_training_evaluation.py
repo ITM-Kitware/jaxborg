@@ -169,6 +169,52 @@ def test_explicit_jax_platform_is_preserved(tmp_path, monkeypatch):
     assert json.loads(manifest_path.read_text())["jax_platforms"] == "cpu"
 
 
+def test_evaluation_override_is_archived_and_forwarded_to_children(tmp_path):
+    model = _final_model(tmp_path)
+    original_sidecar = model.with_name("recipe_run.yaml")
+    before = original_sidecar.read_bytes()
+    recipe = load("cotraining")
+    recipe["run"] = {"seed": 42, "train_run_id": "original-run"}
+    calls = []
+    manifest_path = run_configured_evaluations_after_training(
+        model,
+        recipe,
+        save_evaluation_recipe=True,
+        run_subprocess=lambda command, **kwargs: calls.append((command, kwargs)),
+    )
+    effective = manifest_path.with_suffix(".yaml")
+    saved = yaml.safe_load(effective.read_text())
+    assert saved["eval"]["topology_generation"]["count"] == 10
+    assert saved["eval"]["cross_play"]["max_checkpoints"] == 3
+    assert saved["run"]["train_run_id"] == "original-run"
+    assert json.loads(manifest_path.read_text())["recipe"] == str(effective)
+    for command, kwargs in calls:
+        assert command[command.index("--recipe") + 1] == str(effective)
+        assert kwargs["env"]["JAXBORG_RECIPE_PATH"] == str(effective)
+    assert original_sidecar.read_bytes() == before
+
+
+def test_cli_eval_override_preserves_original_training_stride_and_run_metadata(monkeypatch):
+    from jaxborg import checkpoint
+
+    original = load("cotraining")
+    original["jax"].update(num_envs=48, checkpoint_every_updates=40)
+    original["run"] = {"seed": 100, "train_run_id": "old-run"}
+    monkeypatch.setattr(checkpoint, "read_sidecar", lambda _: original)
+    captured = {}
+
+    def run(model, recipe, **kwargs):
+        captured.update(model=model, recipe=recipe, **kwargs)
+        return Path("manifest.json")
+
+    monkeypatch.setattr(post_training, "run_configured_evaluations_after_training", run)
+    post_training.main(["--model", "model_old.safetensors", "--recipe", "cotraining"])
+    assert captured["recipe"]["jax"] == original["jax"]
+    assert captured["recipe"]["run"] == original["run"]
+    assert captured["recipe"]["eval"]["topology_generation"]["count"] == 10
+    assert captured["save_evaluation_recipe"] is True
+
+
 def test_optional_failure_is_recorded_and_does_not_stop_later_scripts(tmp_path):
     model = _final_model(tmp_path)
     script = tmp_path / "eval.py"

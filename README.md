@@ -212,15 +212,17 @@ Co-training recipes, including the best-response recipes, live in
 `--recipe cotraining_mappo` continue to work. The loader also accepts
 `--recipe cotraining/cotraining_mappo` or an explicit YAML file path.
 
-`recipes/cotraining/cotraining.yaml` runs `eval.cross_play` over six saved
-Blue and six saved Red checkpoints from the same training seed (36 matchups).
+`recipes/cotraining/cotraining.yaml` runs `eval.cross_play` over three saved
+Blue and three saved Red checkpoints from the same training seed (9 matchups).
 Fixed scripted-Red checkpoint curves are configured but disabled to save time.
 It then uses `eval.after_training` for two final checks: learned Blue
 versus its co-trained PPO Red in the JAX joint environment, followed by learned
 Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in the JAX FSM environment.
-These evaluations replay the same 50-topology held-out snapshot bank
+These evaluations replay the same 10-topology held-out snapshot bank
 and fixed role assignment. The two final jobs use the exact final bundle.
-Increase their seed ranges to `1000-1099` for a larger study. A failed required
+For full comparisons, use 50 topologies and six checkpoints per team.
+See [cotraining performance](docs/cotraining_performance.md) for the 96-environment
+training default, GPU memory estimates, cache setup, and the joint benchmark. A failed required
 job makes the overall command fail after leaving the model and evaluation
 manifest safely on disk.
 

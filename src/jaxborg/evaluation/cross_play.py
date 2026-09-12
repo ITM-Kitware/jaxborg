@@ -248,9 +248,11 @@ def run_cross_play(
     from jaxborg.recipe import eval_variant, project_eval
 
     if evaluate_fn is None:
-        from jaxborg.evaluation.matchup_runner import evaluate_matchup
+        from functools import partial
 
-        evaluate = evaluate_matchup
+        from jaxborg.evaluation.matchup_runner import MatchupEvaluationContext, evaluate_matchup
+
+        evaluate = partial(evaluate_matchup, context=MatchupEvaluationContext())
     else:
         evaluate = evaluate_fn
     if attach_metrics_fn is None:

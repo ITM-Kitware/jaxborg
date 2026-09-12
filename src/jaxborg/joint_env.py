@@ -179,6 +179,33 @@ class JointPolicyCC4Env(MultiAgentEnv):
         return obs, next_state, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
+    def step_batch(self, keys, states, actions):
+        """Batched ``step`` with reset work behind one scalar conditional.
+
+        Training episodes normally end together, so reset state/observations
+        are constructed only once per episode. A conditional inside a vmap
+        becomes a select and would still execute reset work on every tick.
+        Mixed terminal/nonterminal batches retain the ordinary step contract.
+        The key split matches ``vmap(step)`` exactly.
+        """
+        split_keys = jax.vmap(jax.random.split)(keys)
+        obs, next_states, rewards, dones, info = jax.vmap(self.step_env)(split_keys[:, 0], states, actions)
+        done = dones["__all__"]
+
+        def reset_finished(_):
+            reset_states = jax.vmap(self._env._reset_state)(next_states, split_keys[:, 1])
+            reset_obs = jax.vmap(self.get_obs)(reset_states)
+
+            def select(reset_value, step_value):
+                mask = done.reshape(done.shape + (1,) * (step_value.ndim - done.ndim))
+                return jnp.where(mask, reset_value, step_value)
+
+            return jax.tree.map(select, (reset_obs, reset_states), (obs, next_states))
+
+        obs, next_states = jax.lax.cond(jnp.any(done), reset_finished, lambda _: (obs, next_states), None)
+        return obs, next_states, rewards, dones, info
+
+    @partial(jax.jit, static_argnums=[0])
     def step_env(
         self,
         key: chex.PRNGKey,

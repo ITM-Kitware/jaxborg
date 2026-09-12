@@ -51,6 +51,7 @@ echo "Log: $LOG"
 
 case "$BACKEND" in
     jax)
+        source scripts/jax_env.sh
         # Preflight: refuse to launch if the venv has no GPU jaxlib. JAX will
         # silently fall back to CPU on a GPU-allocated slurm job otherwise —
         # 14 hours of wasted compute before anyone notices. Override with

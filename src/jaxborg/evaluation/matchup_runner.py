@@ -125,6 +125,43 @@ class LoadedMatchupPolicy:
     source: dict[str, Any]
 
 
+@dataclass
+class MatchupEvaluationContext:
+    """Resources shared by one sweep of immutable checkpoint/topology files.
+
+    In particular, keep the same environment object: it is a static JIT
+    argument. New weights can then use the already compiled episode runner.
+    Create a fresh context when starting another sweep or replacing files.
+    """
+
+    policies: dict = field(default_factory=dict)
+    environments: dict = field(default_factory=dict)
+    cases: dict = field(default_factory=dict)
+    validated_cia: set = field(default_factory=set)
+
+    def load_policy(self, path, *, team, backend):
+        key = (Path(path).expanduser().resolve(), team, backend)
+        if key not in self.policies:
+            self.policies[key] = load_matchup_policy(path, team=team, backend=backend)
+        return self.policies[key]
+
+    def environment(self, variant, topology_paths):
+        key = (variant, tuple(topology_paths))
+        if key not in self.environments:
+            self.environments[key] = make_joint_jax_env(
+                variant, training_mode=False, topology_path=topology_paths or None
+            )
+        return self.environments[key]
+
+    def evaluation_cases(self, topology_paths, seeds, episodes_per_seed):
+        from jaxborg.evaluation.cia.fixed_topology import build_evaluation_cases
+
+        key = (tuple(topology_paths), tuple(seeds), episodes_per_seed)
+        if key not in self.cases:
+            self.cases[key] = build_evaluation_cases(topology_paths, seeds, episodes_per_seed)
+        return self.cases[key]
+
+
 @dataclass(frozen=True)
 class MatchupEvaluation:
     blue_returns: list[float]
@@ -405,6 +442,19 @@ def _eval_batch_size() -> int:
     return value
 
 
+def _padded_batch(array, start: int, stop: int, size: int):
+    """Repeat the last case to keep the compiled batch shape constant.
+
+    Padding has independent per-episode state and its results are discarded;
+    the original cases retain their exact keys, topology indices and roles.
+    """
+    batch = array[start:stop]
+    padding = size - (stop - start)
+    if padding:
+        batch = jnp.concatenate((batch, jnp.repeat(batch[-1:], padding, axis=0)), axis=0)
+    return batch
+
+
 def _supports_batched_eval(env: Any) -> bool:
     """Whether ``env`` exposes the reset/step surface ``vmap`` batching needs.
 
@@ -474,13 +524,15 @@ def _run_jax_matchup_episodes_batched(
         reward_batch, cia_batch = batched(
             policies["blue"].weights,
             policies["red"].weights,
-            keys[start:stop],
-            indices[start:stop],
-            roles[start:stop],
+            _padded_batch(keys, start, stop, chunk),
+            _padded_batch(indices, start, stop, chunk),
+            _padded_batch(roles, start, stop, chunk),
         )
-        rewards.extend(float(value) for value in np.asarray(jax.device_get(reward_batch)))
+        reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
+        valid = stop - start
+        rewards.extend(float(value) for value in np.asarray(reward_batch)[:valid])
         if score_cia:
-            cia_scores.extend([float(value) for value in row] for row in np.asarray(jax.device_get(cia_batch)))
+            cia_scores.extend([float(value) for value in row] for row in np.asarray(cia_batch)[:valid])
         else:
             cia_scores.extend([] for _ in range(stop - start))
         if progress:
@@ -667,6 +719,7 @@ def evaluate_matchup(
     topology_path: str | Path | Sequence[str | Path] | None = None,
     topology_sampling: str = "exhaustive",
     cia: Mapping[str, Any] | None = None,
+    context: MatchupEvaluationContext | None = None,
 ) -> MatchupEvaluation:
     """Evaluate independently sourced learned policies in the JAX simulator.
 
@@ -676,9 +729,10 @@ def evaluate_matchup(
     replacement.
     """
     backend_name = _normalise_backend(backend)
+    context = context if context is not None else MatchupEvaluationContext()
     policies = {
-        "blue": load_matchup_policy(blue_model, team="blue", backend=backend_name),
-        "red": load_matchup_policy(red_model, team="red", backend=backend_name),
+        "blue": context.load_policy(blue_model, team="blue", backend=backend_name),
+        "red": context.load_policy(red_model, team="red", backend=backend_name),
     }
     if topology_path is None:
         topology_paths: list[Path] = []
@@ -694,21 +748,19 @@ def evaluate_matchup(
     from jaxborg.evaluation.cia.config import coerce_cia_settings, validate_cia_evaluation
 
     cia_settings = coerce_cia_settings(cia)
+    validation_key = (cia_settings, variant, topology_sampling, tuple(topology_paths))
     validate_cia_evaluation(
         cia_settings,
         variant=variant,
         topology_sampling=topology_sampling,
         topology_paths=topology_paths,
-        inspect_snapshots=cia_settings.enabled,
+        inspect_snapshots=cia_settings.enabled and validation_key not in context.validated_cia,
     )
+    context.validated_cia.add(validation_key)
 
     # Load and stack the bank once. Reconstructing an environment per episode
     # becomes prohibitively expensive for exhaustive held-out evaluations.
-    env = make_joint_jax_env(
-        variant,
-        training_mode=False,
-        topology_path=topology_paths or None,
-    )
+    env = context.environment(variant, topology_paths)
 
     blue_returns = []
     episode_seeds = []
@@ -718,9 +770,7 @@ def evaluate_matchup(
     episode_topology_fingerprints: list[str] = []
     topology_role_maps: list[dict[str, Any]] = []
     if cia_settings.enabled:
-        from jaxborg.evaluation.cia.fixed_topology import build_evaluation_cases
-
-        cases = build_evaluation_cases(topology_paths, seeds, episodes_per_seed)
+        cases = context.evaluation_cases(topology_paths, seeds, episodes_per_seed)
         seen_topologies: set[int] = set()
         for case in cases:
             if case.topology_index in seen_topologies:

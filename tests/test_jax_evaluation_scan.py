@@ -5,6 +5,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import numpy as np
 import pytest
 from flax import struct
 
@@ -291,3 +292,152 @@ def test_scan_paths_preserve_environment_step_transition_key_conventions():
         deterministic=True,
     )
     assert scripted.reward == pytest.approx(float(jax.random.uniform(expected_scripted_key, ())))
+
+
+@pytest.mark.parametrize("count", [1, 4, 7])
+def test_matchup_padded_batches_preserve_episode_results_and_compile_one_shape(count):
+    from jaxborg.evaluation.matchup_runner import _run_jax_matchup_episodes_batched
+
+    env = _JointScanEnv()
+    module = _PolicyModule()
+    policies = {team: _jax_policy(team, module) for team in ("blue", "red")}
+    variant = replace(CIA_RESILIENCE, num_steps=5)
+    seeds = list(range(31, 31 + count))
+    # Distinct role maps ensure padding cannot silently shift CIA rows.
+    roles = [jnp.asarray([1, 0, 0] if i % 2 else [0, 1, 0]) for i in range(count)]
+    returns, cia = _run_jax_matchup_episodes_batched(
+        policies,
+        variant=variant,
+        env=env,
+        episode_seeds=seeds,
+        topology_indices=[0] * count,
+        role_arrays=roles,
+        deterministic=False,
+        batch_size=4,
+    )
+    assert env.trace_count == 1  # Includes the short final batch.
+    expected = [
+        run_matchup_episode(
+            policies,
+            variant=variant,
+            seed=seed,
+            deterministic=False,
+            env=env,
+            topology_index=0,
+            host_resilience_role=role,
+        )
+        for seed, role in zip(seeds, roles, strict=True)
+    ]
+    np.testing.assert_array_equal(returns, [row[0] for row in expected])
+    np.testing.assert_array_equal(cia, [row[1] for row in expected])
+
+
+def test_padded_matchup_preserves_distinct_random_keys():
+    from jaxborg.evaluation.matchup_runner import _run_jax_matchup_episodes_batched
+
+    env = _JointKeyEnv()
+    module = _PolicyModule()
+    policies = {team: _jax_policy(team, module) for team in ("blue", "red")}
+    variant = replace(CIA_RESILIENCE, num_steps=1)
+    seeds = [2, 7, 101, 33, 29]
+    returns, _ = _run_jax_matchup_episodes_batched(
+        policies,
+        variant=variant,
+        env=env,
+        episode_seeds=seeds,
+        topology_indices=None,
+        role_arrays=None,
+        deterministic=False,
+        batch_size=4,
+    )
+    expected = [
+        run_matchup_episode(policies, variant=variant, seed=seed, deterministic=False, env=env) for seed in seeds
+    ]
+    np.testing.assert_array_equal(returns, expected)
+    assert len(set(returns)) == len(seeds)
+
+
+@pytest.mark.parametrize("count", [1, 4, 7])
+def test_scripted_padded_batches_preserve_cia_and_compile_one_shape(count):
+    from jaxborg.evaluation.jax_scripted_red import _run_jax_scripted_red_episodes_batched
+
+    env = _FsmScanEnv()
+    policy = _jax_policy("blue", _PolicyModule())
+    variant = replace(CIA_RESILIENCE, num_steps=5)
+    cases = [
+        EvaluationCase(
+            topology_index=i % 2,
+            topology_path=Path(f"topology-{i % 2}.npz"),
+            topology_fingerprint=str(i % 2),
+            base_seed=100 + i,
+            replicate_index=0,
+            episode_seed=100 + i,
+            host_roles=(1, 0, 0) if i % 2 else (0, 1, 0),
+            role_map_id=str(i % 2),
+        )
+        for i in range(count)
+    ]
+    actual = _run_jax_scripted_red_episodes_batched(
+        policy,
+        env=env,
+        variant=variant,
+        cases=cases,
+        deterministic=False,
+        batch_size=4,
+    )
+    assert env.trace_count == 1
+    expected = [
+        run_jax_scripted_red_episode(policy, env=env, variant=variant, case=case, deterministic=False) for case in cases
+    ]
+    assert actual == expected
+
+
+class _WeightedPolicyModule:
+    def apply(self, weights, obs, mask):
+        logits = jnp.broadcast_to(weights, mask.shape)
+        return _Distribution(logits), jnp.zeros(obs.shape[0])
+
+
+class _ActionRewardEnv(_JointScanEnv):
+    def step_env(self, key, state, actions):
+        obs, state, _, dones, info = super().step_env(key, state, actions)
+        reward = (actions["blue_0"] - actions["red_0"]).astype(jnp.float32)
+        return obs, state, {"blue_0": reward, "red_0": -reward}, dones, info
+
+
+def test_matchup_context_reuses_compilation_but_uses_each_checkpoints_weights(monkeypatch, tmp_path):
+    from jaxborg.evaluation import matchup_runner as runner
+
+    monkeypatch.setenv("JAXBORG_EVAL_BATCH_SIZE", "4")
+    env = _ActionRewardEnv()
+    module = _WeightedPolicyModule()
+    loaded, constructed = [], []
+
+    def load(path, *, team, backend):
+        loaded.append((str(path), team))
+        weights = jnp.asarray([0.0, 1.0] if "new" in str(path) else [1.0, 0.0])
+        return LoadedMatchupPolicy(team, backend, module, weights, {"path": str(path)})
+
+    def make_env(*args, **kwargs):
+        constructed.append(kwargs)
+        return env
+
+    monkeypatch.setattr(runner, "load_matchup_policy", load)
+    monkeypatch.setattr(runner, "make_joint_jax_env", make_env)
+    context = runner.MatchupEvaluationContext()
+    kwargs = dict(
+        backend="jax",
+        variant=replace(CIA_RESILIENCE, num_steps=5),
+        seeds=[11, 12, 13, 14, 15],
+        context=context,
+        progress=False,
+    )
+    old = runner.evaluate_matchup(tmp_path / "old-blue", tmp_path / "old-red", **kwargs)
+    traces = env.trace_count
+    new = runner.evaluate_matchup(tmp_path / "new-blue", tmp_path / "old-red", **kwargs)
+    assert old.blue_returns == [0.0] * 5
+    assert new.blue_returns == [2.0] * 5
+    assert env.trace_count == traces == 1
+    assert len(constructed) == 1
+    assert len(loaded) == 3
+    assert new.policies["blue"]["path"].endswith("new-blue")

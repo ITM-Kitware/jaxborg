@@ -136,6 +136,20 @@ def test_stock_cotraining_recipes_stay_feedforward():
         assert "cell" not in arch and "trunk" not in arch
 
 
+@pytest.mark.parametrize("name", sorted(p.stem for p in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")))
+def test_cotraining_development_budget_preserves_checkpoint_spacing_and_sequence_batches(name):
+    recipe = load(name)
+    cfg = recipe["jax"]
+    stride = cfg["num_envs"] * recipe["train"]["episode_length"] * cfg["checkpoint_every_updates"]
+    assert cfg["num_envs"] == 96
+    assert stride == (480_000 if name == "cotraining_test_rule_change" else 960_000)
+    assert recipe["eval"]["cross_play"]["max_checkpoints"] == 3
+    assert recipe["eval"]["topology_generation"]["count"] == 10
+    if recipe["arch"]["name"] == "recurrent":
+        for agents in (5, 6):
+            assert (cfg["num_envs"] * agents) % cfg["num_minibatches"] == 0
+
+
 @pytest.mark.parametrize("suffix", ["", "_env_diversity"])
 def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
     """`cotraining_rnn` and `cotraining_lstm` are a controlled A/B on the cell.

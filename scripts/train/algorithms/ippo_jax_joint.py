@@ -415,6 +415,7 @@ def make_joint_train(
     *,
     trainable_teams: tuple[str, ...],
     initial_params: Mapping[str, Any] | None = None,
+    use_batched_reset: bool = True,
 ):
     """Build the joint environment and a JIT'd rollout/update function.
 
@@ -452,6 +453,9 @@ def make_joint_train(
         "red": tuple(env.red_agents),
     }
     num_agents = {team: len(names) for team, names in agents.items()}
+    # The production environment skips auto-reset construction on ordinary
+    # ticks. Small external/test environments may expose only scalar step.
+    step_batch = env.step_batch if use_batched_reset and hasattr(env, "step_batch") else jax.vmap(env.step)
 
     reset_key = jax.random.PRNGKey(int(base["SEED"]))
     reset_keys = jax.random.split(reset_key, num_envs)
@@ -545,7 +549,7 @@ def make_joint_train(
 
             before = env_state.state
             step_keys = jax.random.split(step_key, num_envs)
-            new_obs, new_env_state, rewards, dones, infos = jax.vmap(env.step)(step_keys, env_state, actions)
+            new_obs, new_env_state, rewards, dones, infos = step_batch(step_keys, env_state, actions)
             info_sums = {key: info_sums[key] + jnp.asarray(infos[key], dtype=jnp.float32) for key in info_keys}
             done_env = dones["__all__"].astype(jnp.float32)
             transitions = {}

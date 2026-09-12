@@ -37,6 +37,7 @@ from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.evaluation.matchup_runner import (
     LoadedMatchupPolicy,
     _eval_batch_size,
+    _padded_batch,
     _supports_batched_eval,
     _torch_actions,
     cyborg_blue_flat_to_jax_lookup,
@@ -301,12 +302,13 @@ def _run_jax_scripted_red_episodes_batched(
         stop = min(start + chunk, count)
         reward_batch, cia_batch = batched(
             policy.weights,
-            keys[start:stop],
-            indices[start:stop],
-            roles[start:stop],
+            _padded_batch(keys, start, stop, chunk),
+            _padded_batch(indices, start, stop, chunk),
+            _padded_batch(roles, start, stop, chunk),
         )
-        rewards = np.asarray(jax.device_get(reward_batch))
-        cia_rows = np.asarray(jax.device_get(cia_batch))
+        reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
+        rewards = np.asarray(reward_batch)[: stop - start]
+        cia_rows = np.asarray(cia_batch)[: stop - start]
         episodes.extend(
             JaxScriptedRedEpisode(reward=float(reward), cia=(float(c), float(i), float(a)))
             for reward, (c, i, a) in zip(rewards, cia_rows, strict=True)

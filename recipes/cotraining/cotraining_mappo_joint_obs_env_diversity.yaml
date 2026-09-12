@@ -90,11 +90,12 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
-  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 50
+    count: 10
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
@@ -110,17 +111,17 @@ eval:
 
   # Built-in post-training history suites, scheduled before after_training.
   # play_priors is a cheaper alternative to cross_play. With the identical
-  # settings below, its 10 adjacent matchups are already in the 36-cell matrix.
+  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
   # Leave it disabled to avoid replaying those same games in a second suite.
   play_priors:
     enabled: false
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 6
+    max_checkpoints: 3
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Six checkpoints -> 36 matchups x 150 episodes (3 seeds x 50 topologies).
+  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
@@ -128,7 +129,7 @@ eval:
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 6
+    max_checkpoints: 3
     required: false
 
   # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
@@ -179,7 +180,7 @@ eval:
         - --progress
 
 jax:
-  num_envs: 48
+  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 40  # Save every 960,000 environment steps.
+  checkpoint_every_updates: 20  # Save every 960,000 environment steps.

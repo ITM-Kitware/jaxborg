@@ -69,11 +69,12 @@ eval:
     metric: resilience
     role_assignment: fixed_per_topology
 
-  # Shared by checkpoint and final suites: held-out topology seeds 100-149.
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
   topology_generation:
     generator: jax
     seed_start: 100
-    count: 50
+    count: 10
     op_zone_servers: 3
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
@@ -93,7 +94,7 @@ eval:
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 6
+    max_checkpoints: 3
     required: false
 
   # Exact final-model checks, following the built-in history suites above.
@@ -142,7 +143,7 @@ cleanrl:
   num_minibatches: 16
 
 jax:
-  num_envs: 48
+  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
   num_minibatches: 16
   update_epochs: 4
-  checkpoint_every_updates: 20  # Save every 480,000 environment steps.
+  checkpoint_every_updates: 10  # Save every 480,000 environment steps.
