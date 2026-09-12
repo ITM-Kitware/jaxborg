@@ -72,6 +72,38 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
+  # One final Blue vs the next training seed's final Red (cyclic seed order).
+  # The multi-seed launcher supplies the opponent after all training finishes.
+  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  cross_seed_play:
+    enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # play_priors is a cheaper alternative to cross_play. With the identical
+  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
+  # Leave it disabled to avoid replaying those same games in a second suite.
+  play_priors:
+    enabled: false
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+
+  # Every sampled historical Blue vs every sampled historical Red in this run.
+  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+    required: false
+
   # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
   # against fixed scripted Reds. The final-model scripted sweep remains enabled.
   checkpoint_scripted_reds:
@@ -82,19 +114,15 @@ eval:
     max_checkpoints: 20
     required: false
 
-  cross_play:
-    enabled: true
-    seeds: 1000-1002
-    episodes_per_seed: 1
-    deterministic: false
-    max_checkpoints: 3
-    required: false
-
-  # Exact final-model checks, following the built-in history suites above.
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
   after_training:
     - name: learned-red-ppo
       script: scripts/eval/eval_matchup.py
-      model_arg: null
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
       args:
         - --recipe
         - "{recipe}"
@@ -123,6 +151,8 @@ eval:
         - 1000-1009
         - --episodes-per-seed
         - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
         - --progress
 
 # The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
