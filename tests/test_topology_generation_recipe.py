@@ -142,7 +142,7 @@ def test_cotraining_recipes_use_nested_train_pools_and_one_held_out_eval_pool(na
     assert len(baseline_train) == 1
     assert len(diversity_train) == 100
     assert baseline_train == diversity_train[:1]
-    assert len(baseline_eval) == 50
+    assert len(baseline_eval) == 10
     assert baseline_eval == diversity_eval
     assert baseline["eval"] == diversity["eval"]
     assert baseline["eval"]["topology_generation"] == load("cotraining")["eval"]["topology_generation"]

@@ -35,7 +35,7 @@ if [ "$#" -gt 1 ]; then
   exit 2
 fi
 
-echo "Preparing cotraining's 1-train/50-eval topology pools..."
+echo "Preparing cotraining's 1-train/10-eval topology pools..."
 JAX_PLATFORMS=cpu uv run materialize-topologies \
   --recipe cotraining \
   --scope all \

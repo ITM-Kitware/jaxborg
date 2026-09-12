@@ -240,6 +240,35 @@ def test_joint_train_forwards_shared_topology_bank(tiny_joint, monkeypatch):
     assert captured["kwargs"]["topology_path"] == list(bank)
 
 
+def test_joint_trainer_selects_batched_step_and_legacy_benchmark_path(tiny_joint):
+    networks, configs = tiny_joint
+    env = joint.make_joint_jax_env(None)
+    calls = []
+
+    def batched_step(keys, states, actions):
+        calls.append(True)
+        return jax.vmap(env.step)(keys, states, actions)
+
+    env.step_batch = batched_step
+    results = []
+    for use_batched_reset in (True, False):
+        _, obs, state, init_states, update = joint.make_joint_train(
+            configs,
+            networks,
+            trainable_teams=("blue", "red"),
+            use_batched_reset=use_batched_reset,
+        )
+        states = init_states(jax.random.PRNGKey(3))
+        norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+        result = update(states, state, obs, jax.random.PRNGKey(7), norm)
+        results.append(jax.block_until_ready(result))
+        assert len(calls) == 1
+    # TrainState carries different static optimizer functions in each build;
+    # compare the numerical leaves, including parameters and optimizer state.
+    for a, b in zip(jax.tree.leaves(results[0]), jax.tree.leaves(results[1]), strict=True):
+        np.testing.assert_array_equal(a, b)
+
+
 def test_joint_train_rejects_different_team_topology_banks(tiny_joint):
     networks, configs = tiny_joint
     configs["blue"]["TOPOLOGY_BANK"] = (Path("blue.snapshot.npz"),)

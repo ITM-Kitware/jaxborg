@@ -2,6 +2,7 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
+source scripts/jax_env.sh
 
 JAXBORG_EXP_DIR=./exp \
   uv run --with "jax-cuda12-plugin[with-cuda]==0.10.2" \

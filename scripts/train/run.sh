@@ -14,6 +14,7 @@ SEED="${3:-42}"
 if [[ $# -ge 3 ]]; then shift 3; else shift 2; fi
 ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
+if [[ "$BACKEND" == "jax" ]]; then source scripts/jax_env.sh; fi
 PYTHON="$ROOT/.venv/bin/python"
 # Resolve and retain the revision/environment before entering the allocation.
 if [[ -z "${JAXBORG_EXPECTED_SHA:-}" ]]; then

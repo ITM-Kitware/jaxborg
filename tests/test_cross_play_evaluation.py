@@ -148,3 +148,34 @@ def test_cotraining_recipes_enable_cross_play_without_failing_the_training_job()
         assert settings.max_checkpoints >= 2
         # On trial: a failure must not take down an hours-long training run.
         assert settings.required is False
+
+
+def test_default_cross_play_shares_one_context_across_all_cells(tmp_path, monkeypatch):
+    from jaxborg.evaluation import cross_play, matchup_runner
+
+    monkeypatch.setattr(cross_play, "find_periodic_checkpoints", lambda *_a, **_k: _checkpoints(2))
+    monkeypatch.setattr(cross_play, "_git_commit", lambda: "test")
+    contexts = []
+
+    def evaluate(*args, **kwargs):
+        contexts.append(kwargs["context"])
+        return SimpleNamespace(
+            blue_returns=[0.0],
+            red_returns=[0.0],
+            episode_seeds=[7],
+            policies={},
+            topology_paths=[],
+            episode_topology_paths=[],
+            topology_sampling="generative",
+            cia_summary=None,
+        )
+
+    monkeypatch.setattr(matchup_runner, "evaluate_matchup", evaluate)
+    run_cross_play(
+        tmp_path / "model.safetensors",
+        _recipe(),
+        output=tmp_path / "out.jsonl",
+        attach_metrics_fn=lambda *_a, **_k: None,
+    )
+    assert len(contexts) == 4
+    assert all(context is contexts[0] for context in contexts)
