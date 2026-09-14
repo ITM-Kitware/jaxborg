@@ -1,4 +1,4 @@
-"""Blue MAPPO / Red IPPO launcher using the shared JAX cotraining runtime.
+"""Blue MAPPO / Red MAPPO launcher using the shared JAX cotraining runtime.
 
 Example:
     uv run python scripts/train/algorithms/mappo_jax.py --recipe cotraining_mappo --seed 42

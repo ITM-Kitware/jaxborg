@@ -1,4 +1,4 @@
-"""Dual-team PPO helpers for IPPO and Blue MAPPO in the JAX CC4 environment.
+"""Dual-team PPO helpers for IPPO and MAPPO in the JAX CC4 environment.
 
 This module deliberately sits beside :mod:`ippo_jax` instead of replacing its
 legacy Blue-vs-FSM rollout.  A joint rollout is selected only when a learned
@@ -428,8 +428,9 @@ def make_joint_train(
         raise ValueError("joint training requires Blue and Red policy runtimes")
     if not trainable_teams or not set(trainable_teams) <= set(TEAMS):
         raise ValueError(f"invalid trainable teams: {trainable_teams}")
-    if has_centralized_critic(networks["red"]):
-        raise ValueError("CC4 centralized critic inputs are currently defined for Blue only; use IPPO for Red")
+    for team, network in networks.items():
+        if has_centralized_critic(network) and network.team != team:
+            raise ValueError(f"{team} MAPPO policy requires arch.team: {team}")
 
     base = team_configs[trainable_teams[0]]
     num_envs = int(base["NUM_ENVS"])
@@ -486,7 +487,7 @@ def make_joint_train(
     def critic_observations(team, env_state):
         if not centralized[team]:
             return None
-        return jax.vmap(lambda s: env.get_critic_obs(s, networks[team].critic_input))(env_state)
+        return jax.vmap(lambda s: env.get_critic_obs(s, networks[team].critic_input, team=team))(env_state)
 
     # One sequence per (env, agent), ordered env-major to match the flatten in
     # the rollout and the reshape in the updater.

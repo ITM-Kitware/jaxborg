@@ -1,13 +1,14 @@
 meta:
   name: cotraining_mappo
-  source: "Blue MAPPO / Red IPPO cotraining, adapted from JaxMARL"
+  source: "Blue MAPPO / Red MAPPO cotraining, adapted from JaxMARL"
   added: 2026-09-10
   notes: |
-    cotraining counterpart with a local Blue actor and a centralized
-    Blue critic. Red keeps the baseline feedforward IPPO policy. Action rules,
-    observations available to actors, and the zero-sum payoff remain stock CC4.
-    JaxMARL's MAPPO actor/critic and world-state data flow are adapted to the
-    existing joint trainer. See docs/mappo.md for provenance and input layout.
+    Both teams use local actors and centralized global_state critics: Blue
+    has 4114 critic features and Red has 7301, including agent identity.
+    Each critic pools its team's policy observations and adds the same
+    selected simulator features. Action rules, observations available to
+    actors, and the zero-sum payoff remain stock CC4. JaxMARL's MAPPO data
+    flow is adapted to the joint trainer. See docs/mappo.md for details.
     Start with --total-timesteps 5000000 for an ablation; the default budget,
     topology bank and evaluation protocol match cotraining.
 
@@ -56,10 +57,15 @@ train:
         clip_value_loss: true
     red:
       arch:
-        name: shared
+        name: mappo
+        team: red
         hidden_dim: 256
         hidden_layers: 2
         activation: tanh
+        # 7301 training-only features; the actor still receives 706.
+        critic_input: global_state
+      core:
+        clip_value_loss: true
   episode_length: 500
   buffer_size: 5120000
   minibatch_size: 320000
@@ -178,7 +184,7 @@ eval:
         - --progress
 
 jax:
-  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
+  num_envs: 96  # Both centralized critics add memory; use --num-envs 48 for a smaller pilot.
   num_minibatches: 16
   update_epochs: 4
   checkpoint_every_updates: 20  # Save every 960,000 environment steps.

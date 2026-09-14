@@ -1,16 +1,13 @@
 meta:
   name: cotraining_mappo_joint_obs
-  source: "Blue MAPPO (joint-observation critic) / Red IPPO cotraining, adapted from JaxMARL"
+  source: "Blue MAPPO (joint-observation critic) / Red MAPPO cotraining, adapted from JaxMARL"
   added: 2026-09-11
   notes: |
-    cotraining_mappo counterpart whose centralized Blue critic reads only the
-    five pooled Blue observations (joint_observations, 1055 features) instead
-    of the privileged simulator fields in global_state (4114 features). The
-    critic therefore sees exactly what the Blue team collectively observes,
-    so a gain over the IPPO control is attributable to centralized credit
-    assignment rather than to ground-truth compromise state. The smaller
-    critic tensor (0.47 GiB per rollout vs 1.84 GiB) also cuts update cost.
-    Red keeps the baseline feedforward IPPO policy. Action rules, observations
+    Both teams use local actors and centralized critics reading only their
+    own pooled policy observations: Blue has 1055 critic features and Red
+    has 4242, including agent identity. No hidden simulator fields enter
+    either critic. The global_state counterparts add the same selected
+    simulator features to each team's critic. Action rules, observations
     available to actors, and the zero-sum payoff remain stock CC4. See
     docs/mappo.md for provenance and input layout.
     Start with --total-timesteps 5000000 for an ablation; the default budget,
@@ -62,10 +59,15 @@ train:
         clip_value_loss: true
     red:
       arch:
-        name: shared
+        name: mappo
+        team: red
         hidden_dim: 256
         hidden_layers: 2
         activation: tanh
+        # 4242 training-only features; the actor still receives 706.
+        critic_input: joint_observations
+      core:
+        clip_value_loss: true
   episode_length: 500
   buffer_size: 5120000
   minibatch_size: 320000
@@ -184,7 +186,7 @@ eval:
         - --progress
 
 jax:
-  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
+  num_envs: 96  # Both centralized critics add memory; use --num-envs 48 for a smaller pilot.
   num_minibatches: 16
   update_epochs: 4
   checkpoint_every_updates: 20  # Save every 960,000 environment steps.

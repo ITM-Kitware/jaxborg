@@ -574,13 +574,14 @@ class _TinyMAPPOJointEnv(_TinyJointEnv):
     blue_agents = tuple(f"blue_{i}" for i in range(5))
     red_agents = tuple(f"red_{i}" for i in range(6))
 
-    def get_critic_obs(self, env_state, critic_input):
-        from jaxborg.critic_observations import blue_critic_obs_size
+    def get_critic_obs(self, env_state, critic_input, *, team="blue"):
+        from jaxborg.critic_observations import critic_obs_size
 
         # Distinguishable pre-step, next-step and per-agent values catch time
         # shifts or agent permutations independently of the simulator builder.
-        value = env_state.state.time.astype(jnp.float32)
-        return jnp.full((5, blue_critic_obs_size(critic_input)), value).at[:, -5:].set(jnp.eye(5))
+        value = env_state.state.time.astype(jnp.float32) + (10 if team == "red" else 0)
+        n = len(self.red_agents if team == "red" else self.blue_agents)
+        return jnp.full((n, critic_obs_size(critic_input, team=team)), value).at[:, -n:].set(jnp.eye(n))
 
 
 @pytest.fixture
@@ -589,15 +590,24 @@ def tiny_mappo(monkeypatch):
     monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_args, **_kwargs: env)
     networks = {
         "blue": policy_from_arch({"name": "mappo", "hidden_dim": 8, "hidden_layers": 1}, action_dim=3),
-        "red": make_jax_policy("shared", action_dim=5, hidden_dim=8, hidden_layers=1),
+        "red": policy_from_arch({"name": "mappo", "team": "red", "hidden_dim": 8, "hidden_layers": 1}, action_dim=5),
     }
     configs = {"blue": _config(), "red": _config()}
     configs["blue"]["CLIP_VALUE_LOSS"] = True
+    configs["red"]["CLIP_VALUE_LOSS"] = True
     return networks, configs
 
 
-def test_jitted_mappo_trains_blue_actor_and_central_critic_while_red_stays_ippo(tiny_mappo):
+@pytest.mark.parametrize("mode", ["global_state", "joint_observations"])
+@pytest.mark.parametrize("ippo_team", [None, "blue", "red"])
+def test_jitted_mappo_trains_each_actor_and_central_critic(tiny_mappo, mode, ippo_team):
     networks, configs = tiny_mappo
+    networks = {team: network.clone(critic_input=mode) for team, network in networks.items()}
+    if ippo_team is not None:
+        networks[ippo_team] = make_jax_policy(
+            "shared", action_dim=networks[ippo_team].action_dim, hidden_dim=8, hidden_layers=1
+        )
+        configs[ippo_team]["CLIP_VALUE_LOSS"] = False
     _, obs, env_state, init_states, collect_and_update = joint.make_joint_train(
         configs, networks, trainable_teams=("blue", "red")
     )
@@ -607,10 +617,12 @@ def test_jitted_mappo_trains_blue_actor_and_central_critic_while_red_stays_ippo(
     states, _, _, _, _, metrics = collect_and_update(states, env_state, obs, jax.random.PRNGKey(7), norm)
     jax.block_until_ready(metrics)
 
-    for subtree in ("actor_head", "critic_head"):
-        assert _tree_changed(before["blue"]["params"][subtree], states["blue"].params["params"][subtree])
-    assert _tree_changed(before["red"], states["red"].params)
     for team in joint.TEAMS:
+        if joint.has_centralized_critic(networks[team]):
+            for subtree in ("actor_head", "critic_head"):
+                assert _tree_changed(before[team]["params"][subtree], states[team].params["params"][subtree])
+        else:
+            assert _tree_changed(before[team], states[team].params)
         assert int(states[team].step) == 1
         assert np.isfinite(float(metrics[team]["total_loss"]))
     np.testing.assert_allclose(metrics["red"]["raw_rollout_return"], -metrics["blue"]["raw_rollout_return"])
@@ -625,18 +637,21 @@ def test_mappo_stores_pre_action_world_state_and_bootstraps_next_state(tiny_mapp
 
         def run(state, traj, last_value, rng, init_carry=None):
             if joint.has_centralized_critic(network):
-                assert traj.critic_obs.shape == (2, 1, 5, network.critic_obs_dim)
+                n, obs_dim, offset = (5, 4, 0) if network.team == "blue" else (6, 6, 10)
+                assert traj.critic_obs.shape == (2, 1, n, network.critic_obs_dim)
                 for step in range(2):
-                    np.testing.assert_array_equal(traj.critic_obs[step, 0, :, 0], np.full(5, step))
-                    np.testing.assert_array_equal(traj.critic_obs[step, 0, :, -5:], np.eye(5))
+                    np.testing.assert_array_equal(traj.critic_obs[step, 0, :, 0], np.full(n, step + offset))
+                    np.testing.assert_array_equal(traj.critic_obs[step, 0, :, -n:], np.eye(n))
                 _, stored_value, _ = joint.policy_step(
                     network, state.params, traj.obs, traj.avail_actions, critic_obs=traj.critic_obs
                 )
                 np.testing.assert_allclose(stored_value, traj.value, rtol=1e-5, atol=1e-7)
-                final_world = jnp.full((5, network.critic_obs_dim), 2.0).at[:, -5:].set(jnp.eye(5))
-                _, expected, _ = joint.policy_step(network, state.params, jnp.full((5, 4), 0.2), critic_obs=final_world)
+                final_world = jnp.full((n, network.critic_obs_dim), 2.0 + offset).at[:, -n:].set(jnp.eye(n))
+                _, expected, _ = joint.policy_step(
+                    network, state.params, jnp.full((n, obs_dim), 0.2), critic_obs=final_world
+                )
                 np.testing.assert_allclose(last_value[0], expected, rtol=1e-5, atol=1e-7)
-                checked.append(True)
+                checked.append(network.team)
             else:
                 assert traj.critic_obs is None
             return update(state, traj, last_value, rng, init_carry)
@@ -645,17 +660,66 @@ def test_mappo_stores_pre_action_world_state_and_bootstraps_next_state(tiny_mapp
 
     monkeypatch.setattr(joint, "_make_team_updater", checked_updater)
     _one_joint_update(tiny_mappo, ("blue", "red"))
+    assert checked == ["blue", "red"]
+
+
+@pytest.mark.parametrize("frozen_team", ["blue", "red"])
+def test_frozen_mappo_needs_only_local_observations(tiny_mappo, monkeypatch, frozen_team):
+    original = _TinyMAPPOJointEnv.get_critic_obs
+
+    def only_trainable_world_state(self, env_state, critic_input, *, team):
+        assert team != frozen_team, "frozen MAPPO actors must not request world state"
+        return original(self, env_state, critic_input, team=team)
+
+    monkeypatch.setattr(_TinyMAPPOJointEnv, "get_critic_obs", only_trainable_world_state)
+    trainable_team = "red" if frozen_team == "blue" else "blue"
+    before, after, _ = _one_joint_update(tiny_mappo, (trainable_team,))
+    _assert_tree_exact(before[frozen_team], after[frozen_team].params)
+    assert _tree_changed(before[trainable_team], after[trainable_team].params)
+
+
+def test_red_mappo_masks_dormant_and_busy_agents_and_final_bootstrap(tiny_mappo, monkeypatch):
+    original_step = _TinyMAPPOJointEnv.step
+    original_updater = joint._make_team_updater
+    checked = []
+
+    def step(self, key, state, actions):
+        obs, env_state, rewards, dones, infos = original_step(self, key, state, actions)
+        sim = env_state.state.replace(
+            red_agent_active=env_state.state.red_agent_active.at[0].set(False),
+            red_pending_ticks=env_state.state.red_pending_ticks.at[1].set(1),
+        )
+        return obs, env_state.replace(state=sim), rewards, dones, infos
+
+    def updater(network, config):
+        update = original_updater(network, config)
+
+        def run(state, traj, last_value, rng, init_carry=None):
+            if network.team == "red":
+                np.testing.assert_array_equal(traj.actor_mask[:, 0, 0], [1, 0])
+                np.testing.assert_array_equal(traj.critic_mask[:, 0, 0], [1, 0])
+                np.testing.assert_array_equal(traj.actor_mask[:, 0, 1], [1, 0])
+                np.testing.assert_array_equal(traj.critic_mask[:, 0, 1], [1, 1])
+                np.testing.assert_array_equal(traj.done, np.zeros((2, 1, 6)))
+                assert float(last_value[0, 0]) == 0.0
+                assert traj.critic_obs is not None
+                checked.append(True)
+            return update(state, traj, last_value, rng, init_carry)
+
+        return run
+
+    monkeypatch.setattr(_TinyMAPPOJointEnv, "step", step)
+    monkeypatch.setattr(joint, "_make_team_updater", updater)
+    _, _, metrics = _one_joint_update(tiny_mappo, ("blue", "red"))
     assert checked == [True]
+    assert np.isfinite(float(metrics["red"]["total_loss"]))
 
 
-def test_frozen_mappo_blue_needs_only_local_observations(tiny_mappo, monkeypatch):
-    def no_world_state(*_args):
-        raise AssertionError("frozen MAPPO actors must not request world state")
-
-    monkeypatch.setattr(_TinyMAPPOJointEnv, "get_critic_obs", no_world_state)
-    before, after, _ = _one_joint_update(tiny_mappo, ("red",))
-    _assert_tree_exact(before["blue"], after["blue"].params)
-    assert _tree_changed(before["red"], after["red"].params)
+def test_red_mappo_rejects_blue_critic_layout(tiny_mappo):
+    networks, configs = tiny_mappo
+    networks["red"] = networks["red"].clone(team="blue")
+    with pytest.raises(ValueError, match="red MAPPO policy requires arch.team: red"):
+        joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
 
 
 def test_mappo_updater_refuses_actor_only_values(tiny_mappo):
@@ -701,7 +765,7 @@ def test_mappo_large_critic_gradients_do_not_suppress_actor_update(tiny_mappo):
     _assert_tree_exact(ordinary["params"]["actor_head"], huge_critic["params"]["actor_head"])
 
 
-@pytest.mark.slow(reason="compiles the full CC4 simulator for a MAPPO/IPPO integration update")
+@pytest.mark.slow(reason="compiles the full CC4 simulator for a MAPPO/MAPPO integration update")
 def test_real_cc4_mappo_joint_update():
     """Exercise actual CC4 reset, centralized observations, step and PPO in JIT."""
     from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
@@ -712,10 +776,13 @@ def test_real_cc4_mappo_joint_update():
         "blue": policy_from_arch(
             {"name": "mappo", "hidden_dim": 8, "hidden_layers": 1}, action_dim=BLUE_ALLOW_TRAFFIC_END
         ),
-        "red": make_jax_policy("shared", action_dim=RED_POLICY_ACTION_DIM, hidden_dim=8, hidden_layers=1),
+        "red": policy_from_arch(
+            {"name": "mappo", "team": "red", "hidden_dim": 8, "hidden_layers": 1}, action_dim=RED_POLICY_ACTION_DIM
+        ),
     }
     configs = {team: dict(_config(), TRAIN_VARIANT=train_variant({})) for team in joint.TEAMS}
     configs["blue"]["CLIP_VALUE_LOSS"] = True
+    configs["red"]["CLIP_VALUE_LOSS"] = True
     env, obs, env_state, init_states, collect = joint.make_joint_train(configs, networks, trainable_teams=joint.TEAMS)
     assert len(env.blue_agents) == 5 and len(env.red_agents) == 6
     states = init_states(jax.random.PRNGKey(20))
