@@ -1,4 +1,4 @@
-"""Training-only CC4 world-state inputs for Blue's centralized value function.
+"""Training-only CC4 world-state inputs for each team's centralized critic.
 
 Like JaxMARL's MAPPO world-state wrapper, each agent gets the same centralized
 features plus its identity. These arrays never enter the actor observation dict.
@@ -14,17 +14,28 @@ from jaxborg.constants import (
     NUM_RED_AGENTS,
     NUM_SERVICES,
     NUM_SUBNETS,
+    RED_OBS_SIZE,
 )
+from jaxborg.learned_red import get_red_policy_obs
 from jaxborg.observations import get_blue_obs
 from jaxborg.state import SimulatorConst, SimulatorState
 
 CRITIC_INPUTS = ("joint_observations", "global_state")
 
 
-def blue_critic_obs_size(critic_input: str) -> int:
+def _team_observation_spec(team: str):
+    if team == "blue":
+        return NUM_BLUE_AGENTS, BLUE_OBS_SIZE, get_blue_obs
+    if team == "red":
+        return NUM_RED_AGENTS, RED_OBS_SIZE, get_red_policy_obs
+    raise ValueError(f"critic team must be 'blue' or 'red', got {team!r}")
+
+
+def critic_obs_size(critic_input: str, *, team: str = "blue") -> int:
     if critic_input not in CRITIC_INPUTS:
         raise ValueError(f"critic_input must be one of {CRITIC_INPUTS}, got {critic_input!r}")
-    size = NUM_BLUE_AGENTS * BLUE_OBS_SIZE + NUM_BLUE_AGENTS
+    num_agents, obs_size, _ = _team_observation_spec(team)
+    size = num_agents * obs_size + num_agents
     if critic_input == "global_state":
         size += (
             1  # normalized time
@@ -37,16 +48,19 @@ def blue_critic_obs_size(critic_input: str) -> int:
     return size
 
 
-def get_blue_critic_obs(state: SimulatorState, const: SimulatorConst, critic_input: str = "global_state"):
-    """Return (5, critic_obs_dim) features from this exact pre-action state.
+def get_critic_obs(
+    state: SimulatorState, const: SimulatorConst, critic_input: str = "global_state", *, team: str = "blue"
+):
+    """Return (team_agents, critic_obs_dim) features from the pre-action state.
 
     global_state is a compact representation, not the complete simulator state:
     it adds current compromise, service/decoy health, timing and reward weights
-    to pooled Blue observations. It excludes RNG keys and future information.
+    to that team's pooled policy observations. It excludes RNG keys and future information.
     Inactive hosts and reliability of absent services/decoys are zeroed.
     """
-    expected_size = blue_critic_obs_size(critic_input)
-    observations = jnp.stack([get_blue_obs(state, const, i) for i in range(NUM_BLUE_AGENTS)])
+    expected_size = critic_obs_size(critic_input, team=team)
+    num_agents, _, observe = _team_observation_spec(team)
+    observations = jnp.stack([observe(state, const, i) for i in range(num_agents)])
     features = [observations.reshape(-1)]
     if critic_input == "global_state":
         active = const.host_active.astype(jnp.float32)
@@ -71,8 +85,17 @@ def get_blue_critic_obs(state: SimulatorState, const: SimulatorConst, critic_inp
         )
     world_state = jnp.concatenate(features)
     result = jnp.concatenate(
-        [jnp.broadcast_to(world_state, (NUM_BLUE_AGENTS, world_state.size)), jnp.eye(NUM_BLUE_AGENTS)], axis=-1
+        [jnp.broadcast_to(world_state, (num_agents, world_state.size)), jnp.eye(num_agents)], axis=-1
     )
-    if result.shape != (NUM_BLUE_AGENTS, expected_size):
-        raise ValueError(f"centralized Blue observation has shape {result.shape}, expected width {expected_size}")
+    if result.shape != (num_agents, expected_size):
+        raise ValueError(f"centralized {team} observation has shape {result.shape}, expected width {expected_size}")
     return result
+
+
+def blue_critic_obs_size(critic_input: str) -> int:
+    """The original Blue layout, retained for existing callers and checkpoints."""
+    return critic_obs_size(critic_input, team="blue")
+
+
+def get_blue_critic_obs(state: SimulatorState, const: SimulatorConst, critic_input: str = "global_state"):
+    return get_critic_obs(state, const, critic_input, team="blue")

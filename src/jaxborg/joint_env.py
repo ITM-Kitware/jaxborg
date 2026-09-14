@@ -236,12 +236,14 @@ class JointPolicyCC4Env(MultiAgentEnv):
             obs[agent] = get_red_policy_obs(env_state.state, env_state.const, r)
         return obs
 
-    @partial(jax.jit, static_argnums=[0, 2])
-    def get_critic_obs(self, env_state: ScenarioEnvState, critic_input: str = "global_state") -> chex.Array:
-        """Blue's centralized training input; never part of policy observations."""
-        from jaxborg.critic_observations import get_blue_critic_obs
+    @partial(jax.jit, static_argnums=[0, 2], static_argnames=["critic_input", "team"])
+    def get_critic_obs(
+        self, env_state: ScenarioEnvState, critic_input: str = "global_state", *, team: str = "blue"
+    ) -> chex.Array:
+        """A team's centralized training input; never part of policy observations."""
+        from jaxborg.critic_observations import get_critic_obs
 
-        return get_blue_critic_obs(env_state.state, env_state.const, critic_input)
+        return get_critic_obs(env_state.state, env_state.const, critic_input, team=team)
 
     @partial(jax.jit, static_argnums=[0])
     def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:

@@ -17,7 +17,7 @@ is only a placeholder for evaluation callers that discard values.
 
 import jax.numpy as jnp
 
-from jaxborg.critic_observations import blue_critic_obs_size
+from jaxborg.critic_observations import critic_obs_size
 
 from .base import BUFFER_LAYOUT_FLAT, CentralizedCriticPolicy
 from .separate_actor_critic import _ActorTrunk, _CriticTrunk
@@ -29,10 +29,11 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
     hidden_layers: int = 2
     activation: str = "tanh"
     critic_input: str = "global_state"
+    team: str = "blue"
 
     @property
     def critic_obs_dim(self):
-        return blue_critic_obs_size(self.critic_input)
+        return critic_obs_size(self.critic_input, team=self.team)
 
     def setup(self):
         self.actor_head = _ActorTrunk(self.action_dim, self.hidden_dim, self.hidden_layers, self.activation)
@@ -47,9 +48,9 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
         return pi, self.critic_head(critic_obs)
 
 
-def jax_factory(action_dim, hidden_dim, hidden_layers, activation, *, critic_input="global_state"):
-    blue_critic_obs_size(critic_input)  # Fail before compiling for an invalid input mode.
-    return _JaxMAPPOActorCritic(action_dim, hidden_dim, hidden_layers, activation, critic_input)
+def jax_factory(action_dim, hidden_dim, hidden_layers, activation, *, critic_input="global_state", team="blue"):
+    critic_obs_size(critic_input, team=team)  # Validate the input mode and team before compiling.
+    return _JaxMAPPOActorCritic(action_dim, hidden_dim, hidden_layers, activation, critic_input, team)
 
 
 def torch_factory(**_):

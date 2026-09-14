@@ -691,7 +691,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
 
 
 def main(*, expected_algorithm: str | None = None):
-    parser = argparse.ArgumentParser(description="IPPO / Blue MAPPO on JAX, recipe-driven")
+    parser = argparse.ArgumentParser(description="IPPO / MAPPO on JAX, recipe-driven")
     parser.add_argument("--recipe", required=True, help="Recipe name (e.g. 'singh') or path to YAML")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
@@ -706,12 +706,14 @@ def main(*, expected_algorithm: str | None = None):
     learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
     blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
     red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
-    if has_centralized_critic(red_module) and "red" in teams:
-        parser.error("CC4 MAPPO critic inputs are currently supported for Blue only; configure Red as IPPO")
+    modules = {"blue": blue_module, "red": red_module}
+    for team, module in modules.items():
+        if has_centralized_critic(module) and module.team != team:
+            parser.error(f"{team} MAPPO policy requires arch.team: {team}")
     if has_centralized_critic(blue_module) and "blue" in teams and not learned_red:
         parser.error("MAPPO requires joint training: use train.teams: both or a frozen learned Red opponent")
-    if recipe["algorithm"] == "mappo" and ("blue" not in teams or not has_centralized_critic(blue_module)):
-        parser.error("algorithm: mappo requires a trainable Blue policy with arch.name: mappo")
+    if recipe["algorithm"] == "mappo" and not any(has_centralized_critic(modules[team]) for team in teams):
+        parser.error("algorithm: mappo requires a trainable policy with arch.name: mappo")
     # Apply CLI overrides to the resolved recipe itself so the exported
     # sidecar describes the run that actually happened.
     if args.total_timesteps is not None:
