@@ -86,6 +86,7 @@ class CyborgJointAdapter:
         self.raw_env = make_cyborg_env(variant, self._seed_rng.randrange(2**31), wrapper_class=None)
         self.blue_wrapper = BlueFlatWrapper(self.raw_env, pad_spaces=True)
         self.mappings: CC4Mappings | None = None
+        self.role_map: dict[str, int] | None = None
         self._discovered: list[set[int]] = [set() for _ in RED_AGENT_IDS]
         self._scanned_by_primary: list[set[int]] = [set() for _ in RED_AGENT_IDS]
         self._primary_identity: list[tuple[str, int] | None] = [None for _ in RED_AGENT_IDS]
@@ -96,6 +97,7 @@ class CyborgJointAdapter:
         if ep_seed is None:
             ep_seed = self._seed_rng.randrange(2**31)
         reset = reset_cyborg_env(self.blue_wrapper, self.variant, ep_seed=ep_seed)
+        self.role_map = reset.role_map
         self.mappings = build_mappings_from_cyborg(self.raw_env)
         self._discovered = [set() for _ in RED_AGENT_IDS]
         self._scanned_by_primary = [set() for _ in RED_AGENT_IDS]

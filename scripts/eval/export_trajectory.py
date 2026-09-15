@@ -606,6 +606,9 @@ def _build_trajectory_dict(
     step_states,
     *,
     _red_agent_name: str = "FiniteStateRedAgent",
+    metric_scores: list[dict] | None = None,
+    host_resilience_roles: dict[str, int] | None = None,
+    policies: dict | None = None,
 ) -> dict:
     """Build the V2 trajectory dict from collected episode data."""
     # Build flattened backward-compat arrays (interleaved all blue / all red)
@@ -619,7 +622,7 @@ def _build_trajectory_dict(
             if s < len(agent_actions[agent]):
                 flat_red.append(agent_actions[agent][s])
 
-    return {
+    trajectory = {
         "format_version": "2.0",
         "challenge": "cc4",
         "episode": episode_num,
@@ -633,13 +636,18 @@ def _build_trajectory_dict(
         "subnet_metadata": subnet_metadata,
         "agent_actions": agent_actions,
         "step_states": step_states,
-        "metric_scores": [],
+        "metric_scores": metric_scores or [],
         # Backward compatibility
         "blue_agent_name": blue_agent_name,
         "red_agent_name": _red_agent_name,
         "blue_actions": flat_blue,
         "red_actions": flat_red,
     }
+    if host_resilience_roles:
+        trajectory["host_resilience_roles"] = host_resilience_roles
+    if policies:
+        trajectory["policies"] = policies
+    return trajectory
 
 
 class _TrajectoryPolicyAdapter:

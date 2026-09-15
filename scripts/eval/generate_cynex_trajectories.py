@@ -15,11 +15,20 @@ Usage:
         --model-jax /path/to/checkpoint_final.safetensors \
         --tag jaxborg-g99 --seed 42 --num-episodes 2 \
         --output-dir ../../cynex/public/data/trajectories/
+
+    # Co-trained Blue/Red cross-play. Each path is a policy bundle; the Blue
+    # entry is selected from --blue-path and the Red entry from --red-path.
+    python scripts/eval/generate_cynex_trajectories.py \
+        --blue-path /runs/blue/checkpoint_final.safetensors \
+        --red-path /runs/red/checkpoint_final.safetensors \
+        --tag cotrained-crossplay --seed 42 --num-episodes 2 \
+        --output-dir ../../cynex/public/data/trajectories/
 """
 
 import argparse
 import json
 import time
+from dataclasses import replace
 from pathlib import Path
 
 import numpy as np
@@ -387,6 +396,224 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     )
 
 
+def infer_policy_backend(blue_path: str | Path, red_path: str | Path) -> str:
+    """Infer the shared policy backend from two model bundle paths."""
+    suffixes = {Path(blue_path).suffix, Path(red_path).suffix}
+    if suffixes == {".safetensors"}:
+        return "jax"
+    if suffixes == {".pt"}:
+        return "cyborg"
+    if len(suffixes) > 1:
+        raise ValueError("Blue and Red model bundles must use the same backend")
+    raise ValueError("Model bundles must use .safetensors (JAX) or .pt (CybORG/PyTorch)")
+
+
+def load_cotrained_policies(blue_path: str | Path, red_path: str | Path):
+    """Load independently selected Blue and Red entries for cross-play."""
+    from jaxborg.evaluation.matchup_runner import load_matchup_policy
+
+    backend = infer_policy_backend(blue_path, red_path)
+    policies = {
+        "blue": load_matchup_policy(blue_path, team="blue", backend=backend),
+        "red": load_matchup_policy(red_path, team="red", backend=backend),
+    }
+    return policies, backend
+
+
+def _canonical_blue_masks(env, const, mask_cache):
+    """Build the canonical JAX masks expected by a JAX-trained Blue policy."""
+    import jax.numpy as jnp
+
+    blocked_zones = _cyborg_blocked_zones(env.raw_env.environment_controller)
+    return jnp.stack(
+        [
+            _apply_traffic_filter(
+                jnp.asarray(_get_jax_mask(env.blue_wrapper, agent, mask_cache)),
+                blocked_zones,
+                const,
+                agent_id,
+            )
+            for agent_id, agent in enumerate(env.blue_wrapper.possible_agents)
+        ]
+    )
+
+
+def _cyborg_blue_indices(actions, flat_to_jax):
+    """Translate canonical JAX Blue actions to BlueFlatWrapper indices."""
+    translated = []
+    for action, lookup in zip(np.asarray(actions), flat_to_jax, strict=True):
+        matches = np.flatnonzero(lookup == int(action))
+        if len(matches) != 1:
+            raise RuntimeError(f"JAX Blue action {int(action)} has no unique CybORG translation")
+        translated.append(int(matches[0]))
+    return np.asarray(translated, dtype=np.int32)
+
+
+def _resilience_step(impacted, role_map, agent_actions, blue_agents, red_agents, step):
+    """Advance the event-based CIA state and return the current Cynex score."""
+    from jaxborg.evaluation.cia.resilience_metric import ResilienceMetric
+    from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_WEB
+
+    next_impacted = set(impacted)
+    for agent in blue_agents:
+        action = agent_actions[agent][step]
+        if action["Status"] == "TRUE" and action["Action"] == "Restore":
+            next_impacted.discard(action["Host"])
+    for agent in red_agents:
+        action = agent_actions[agent][step]
+        if action["Status"] == "TRUE" and action["Action"] in {"Impact", "DegradeServices"}:
+            if action["Host"] in role_map:
+                next_impacted.add(action["Host"])
+
+    roles = [role_map[host] for host in next_impacted]
+    drops = ResilienceMetric.CIA_DROP_WEIGHT
+    values = {
+        "C": -drops["C"] * sum(role in {ROLE_AUTH, ROLE_DB} for role in roles),
+        "I": -drops["I"] * sum(role in {ROLE_AUTH, ROLE_WEB} for role in roles),
+        "A": -drops["A"] * sum(role in {ROLE_AUTH, ROLE_DB, ROLE_WEB} for role in roles),
+    }
+    weights = ResilienceMetric.CIA_COMPOSITE_WEIGHT
+    values["Resilience"] = sum(weights[key] * values[key] for key in ("C", "I", "A"))
+    return frozenset(next_impacted), values
+
+
+def run_episode_cotrained(
+    seed,
+    episode_num,
+    policies,
+    backend,
+    deterministic=False,
+    steps=EPISODE_LENGTH,
+    *,
+    variant=None,
+):
+    """Run independently selected learned Blue and Red policies through CybORG."""
+    import jax
+    import jax.numpy as jnp
+
+    from jaxborg.cyborg_joint import BLUE_AGENT_IDS, RED_AGENT_IDS, CyborgJointAdapter
+    from jaxborg.evaluation.matchup_runner import _jax_actions, _torch_actions, cyborg_blue_flat_to_jax_lookup
+    from jaxborg.policies import initial_carry, is_recurrent
+    from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
+
+    v = replace(variant if variant is not None else CC4_STOCK, num_steps=steps)
+    env = CyborgJointAdapter(v, seed=seed)
+    observations, infos = env.reset(ep_seed=seed)
+    cyborg = env.raw_env
+    ctrl = cyborg.environment_controller
+    state = ctrl.state
+    blue_agents = list(BLUE_AGENT_IDS)
+    red_agents = list(RED_AGENT_IDS)
+    green_agents = sorted(ctrl.team_assignments.get("Green", []))
+    recorded_agents = blue_agents + red_agents + green_agents
+    agent_actions: dict[str, list] = {agent: [] for agent in recorded_agents}
+    step_states = []
+    metric_scores = []
+    cumulative_rewards = {agent: 0.0 for agent in blue_agents + red_agents}
+    topology = extract_topology(cyborg)
+    subnet_metadata = extract_subnet_metadata(cyborg)
+    role_map = env.role_map or {}
+    impacted = frozenset()
+    actual_steps = 0
+
+    const = build_const_from_cyborg(cyborg)
+    mask_cache = _build_mask_cache(env.blue_wrapper, env.mappings, const) if backend == "jax" else None
+    flat_to_jax = [cyborg_blue_flat_to_jax_lookup(const, agent_id) for agent_id in range(len(blue_agents))]
+    carries = {
+        team: initial_carry(policies[team].module, len(agents))
+        for team, agents in (("blue", blue_agents), ("red", red_agents))
+    }
+    red_reset = jnp.ones((len(red_agents),), dtype=jnp.bool_)
+    rng = jax.random.PRNGKey(seed)
+
+    try:
+        for step in range(steps):
+            selected = {}
+            for team, agents in (("blue", blue_agents), ("red", red_agents)):
+                obs = np.stack([observations[agent] for agent in agents])
+                if backend == "jax" and team == "blue":
+                    masks = _canonical_blue_masks(env, const, mask_cache)
+                else:
+                    masks = np.stack([infos[agent]["action_mask"] for agent in agents])
+
+                if backend == "jax":
+                    rng, action_key = jax.random.split(rng)
+                    actions, carries[team] = _jax_actions(
+                        policies[team],
+                        jnp.asarray(obs),
+                        jnp.asarray(masks),
+                        action_key,
+                        deterministic,
+                        carry=carries[team],
+                        reset=red_reset if team == "red" else None,
+                    )
+                    actions = np.asarray(actions)
+                    if team == "blue":
+                        actions = _cyborg_blue_indices(actions, flat_to_jax)
+                else:
+                    action_seed = seed * 1_000_003 + step * 17 + (0 if team == "blue" else 1)
+                    actions = _torch_actions(policies[team], obs, masks, action_seed, deterministic)
+
+                selected.update({agent: int(actions[index]) for index, agent in enumerate(agents)})
+
+            if backend == "jax" and is_recurrent(policies["red"].module):
+                red_reset = jnp.asarray([not infos[agent]["actor_active"] for agent in red_agents])
+
+            observations, rewards, terminated, truncated, infos = env.step(selected)
+            state = ctrl.state
+            actual_steps = step + 1
+
+            for agent in recorded_agents:
+                last = cyborg.get_last_action(agent)
+                action = last[0] if isinstance(last, list) and last else last
+                success = "TRUE"
+                raw_obs = cyborg.get_observation(agent)
+                if isinstance(raw_obs, dict) and "success" in raw_obs:
+                    value = raw_obs["success"]
+                    success = value.name if hasattr(value, "name") else str(value)
+                agent_actions[agent].append(action_to_dict(action, step, state, success))
+
+            step_rewards = {agent: float(rewards[agent]) for agent in blue_agents + red_agents}
+            for agent, reward in step_rewards.items():
+                cumulative_rewards[agent] += reward
+            step_states.append(
+                {
+                    "step": step,
+                    "mission_phase": state.mission_phase,
+                    "host_compromise": get_host_compromise(state, red_agents),
+                    "rewards": step_rewards,
+                    "cumulative_reward": {agent: round(value, 4) for agent, value in cumulative_rewards.items()},
+                    "reward_breakdown": compute_reward_breakdown(cyborg, state, green_agents, red_agents),
+                }
+            )
+            if role_map:
+                impacted, score = _resilience_step(impacted, role_map, agent_actions, blue_agents, red_agents, step)
+                metric_scores.append(score)
+
+            if all(terminated[agent] or truncated[agent] for agent in blue_agents):
+                break
+    finally:
+        env.close()
+
+    return _build_trajectory_dict(
+        episode_num,
+        seed,
+        actual_steps,
+        "LearnedBlue",
+        blue_agents,
+        red_agents,
+        green_agents,
+        topology,
+        subnet_metadata,
+        agent_actions,
+        step_states,
+        _red_agent_name="LearnedRed",
+        metric_scores=metric_scores,
+        host_resilience_roles=role_map,
+        policies={team: policy.source for team, policy in policies.items()},
+    )
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -405,19 +632,37 @@ def main():
         help="Recipe path or name (overrides --model-jax sidecar); defaults to cc4_stock",
     )
 
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group()
     group.add_argument("--model-pt", type=str, help="Path to PyTorch PPO model .pt file")
     group.add_argument("--model-jax", type=str, help="Path to JAXborg JAX/Flax checkpoint .safetensors file")
+    parser.add_argument("--blue-path", type=str, help="Bundle providing the learned Blue policy")
+    parser.add_argument("--red-path", type=str, help="Bundle providing the learned Red policy")
 
     args = parser.parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    variant = resolve_eval_variant(recipe_name=args.recipe, checkpoint=args.model_jax)
+    cotrained = args.blue_path is not None or args.red_path is not None
+    legacy = args.model_pt is not None or args.model_jax is not None
+    if cotrained and legacy:
+        parser.error("--blue-path/--red-path cannot be combined with --model-pt or --model-jax")
+    if cotrained and not (args.blue_path and args.red_path):
+        parser.error("co-trained export requires both --blue-path and --red-path")
+    if not cotrained and not legacy:
+        parser.error("provide --blue-path and --red-path, --model-jax, or --model-pt")
+
+    checkpoint = args.blue_path if cotrained else args.model_jax or args.model_pt
+    variant = resolve_eval_variant(recipe_name=args.recipe, checkpoint=checkpoint)
     print(f"Variant: {variant.name} (red_agent={variant.red_agent})")
 
     # Load the appropriate model
-    if args.model_pt:
+    policies = None
+    policy_backend = None
+    if cotrained:
+        policies, policy_backend = load_cotrained_policies(args.blue_path, args.red_path)
+        torch_model = None
+        jax_model = None
+    elif args.model_pt:
         torch_model = _load_torch_model(args.model_pt)
         jax_model = None
     else:
@@ -429,7 +674,17 @@ def main():
         print(f"\nEpisode {ep} (seed={seed}):")
         t0 = time.perf_counter()
 
-        if torch_model is not None:
+        if policies is not None:
+            trajectory = run_episode_cotrained(
+                seed,
+                ep,
+                policies,
+                policy_backend,
+                args.deterministic,
+                args.steps,
+                variant=variant,
+            )
+        elif torch_model is not None:
             trajectory = run_episode_torch(seed, ep, torch_model, args.deterministic, args.steps, variant=variant)
         else:
             trajectory = run_episode_jax(seed, ep, jax_model, args.deterministic, args.steps, variant=variant)

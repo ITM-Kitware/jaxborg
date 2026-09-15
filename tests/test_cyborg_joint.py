@@ -28,6 +28,7 @@ def test_joint_adapter_contract_and_local_red_observation():
         assert observations["red_agent_0"].shape == (RED_OBS_SIZE,)
         assert infos["red_agent_0"]["action_mask"].shape == (RED_POLICY_ACTION_DIM,)
         assert infos["red_agent_1"]["actor_active"] is False
+        assert env.role_map is None
         assert np.flatnonzero(infos["red_agent_1"]["action_mask"]).tolist() == [0]
         assert env._discovered[1] == set()
 
