@@ -477,6 +477,11 @@ def _resilience_step(impacted, role_map, agent_actions, blue_agents, red_agents,
     return frozenset(next_impacted), values
 
 
+def _cotrained_episode_variant(variant, steps):
+    """Compensate for CybORG terminating wrapped episodes one step early."""
+    return replace(variant if variant is not None else CC4_STOCK, num_steps=steps + 1)
+
+
 def run_episode_cotrained(
     seed,
     episode_num,
@@ -496,7 +501,7 @@ def run_episode_cotrained(
     from jaxborg.policies import initial_carry, is_recurrent
     from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
-    v = replace(variant if variant is not None else CC4_STOCK, num_steps=steps)
+    v = _cotrained_episode_variant(variant, steps)
     env = CyborgJointAdapter(v, seed=seed)
     observations, infos = env.reset(ep_seed=seed)
     cyborg = env.raw_env

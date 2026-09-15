@@ -11,10 +11,13 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from export_trajectory import _build_trajectory_dict  # noqa: E402
 from generate_cynex_trajectories import (  # noqa: E402
+    _cotrained_episode_variant,
     _cyborg_blue_indices,
     _resilience_step,
     infer_policy_backend,
 )
+
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK  # noqa: E402
 
 
 def _action(name: str, host: str, status: str = "TRUE") -> dict:
@@ -26,6 +29,10 @@ def test_policy_backend_is_inferred_and_mixed_backends_are_rejected():
     assert infer_policy_backend("blue.pt", "red.pt") == "cyborg"
     with pytest.raises(ValueError, match="same backend"):
         infer_policy_backend("blue.safetensors", "red.pt")
+
+
+def test_cotrained_episode_variant_compensates_for_cyborg_early_termination():
+    assert _cotrained_episode_variant(CC4_STOCK, 500).num_steps == 501
 
 
 def test_canonical_blue_actions_translate_to_cyborg_indices():
