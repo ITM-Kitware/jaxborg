@@ -18,9 +18,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/jaxborg-matplotlib")
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import matplotlib
 
@@ -31,7 +34,9 @@ import pandas as pd
 import seaborn as sns
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
-from plot_cotraining_diversity import COND_LABELS, CONDITIONS, _style
+
+from plots.cotraining.data import CONDITIONS
+from plots.cotraining.style import COND_LABELS, _style
 
 
 def read_cross_play(eval_dir: Path, seed: int):
