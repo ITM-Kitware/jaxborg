@@ -6,8 +6,13 @@ meta:
     Both Blue and Red use a LSTM policy with memory across timesteps.
     The training budget, stock CC4 rules and single training topology match
     cotraining. cotraining_rnn differs only in the recurrent cell and metadata.
-    Recurrent updates use eight minibatches of whole sequences; the
-    feedforward control uses sixteen minibatches of shuffled transitions.
+    Recurrent updates use sixteen minibatches of whole sequences; the
+    feedforward control uses sixteen minibatches of shuffled transitions, so
+    both take 64 optimizer steps per rollout and cross-architecture
+    comparisons are not confounded by optimizer budget.
+    The runs completed in September 2026 predate this and used eight
+    minibatches (32 optimizer steps per rollout); re-run before comparing
+    them against the feedforward or MAPPO families.
     See docs/training.md for architecture provenance and hidden-state handling.
 
 algorithm: ippo
@@ -172,18 +177,15 @@ eval:
         - --progress
 
 # The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
-# shuffles transitions across the time axis. This block only keeps the
-# projection well-formed for the recipe smoke tests; do not launch it.
-cleanrl:
-  num_envs: 48
-  rollout_length: 500
-  num_rollouts_per_update: 1
-  num_minibatches: 16
-
+# shuffles transitions across the time axis -- so this recipe is JAX-only and
+# carries no `cleanrl:` block; project_cleanrl's defaults keep the smoke tests
+# well-formed.
 jax:
   num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
-  # Preserve whole trajectories: 60 Blue / 72 Red sequences per minibatch.
-  # Four epochs give 32 optimizer steps per rollout for each team.
-  num_minibatches: 8
+  # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.
+  # env x agent is 480 Blue and 576 Red, both divisible by 16, so whole
+  # sequences survive the split. Four epochs give 64 optimizer steps per
+  # rollout for each team, matching cotraining and cotraining_mappo.
+  num_minibatches: 16
   update_epochs: 4
   checkpoint_every_updates: 20  # Save every 960,000 environment steps.
