@@ -273,6 +273,10 @@ def evaluate_scripted_reds(
     )
     backend = _detect_backend(model_path)
     recipe, bundle_metadata = _load_trained_blue_contract(model_path, backend)
+    from importlib.metadata import distribution
+
+    cyborg_dist = distribution("cyborg")
+    cyborg_source = json.loads(cyborg_dist.read_text("direct_url.json") or "{}")
     evaluate_cell = cell_evaluator or _evaluate_cell
     git_commit = _git_commit()
     run = recipe.get("run", {})
@@ -320,6 +324,12 @@ def evaluate_scripted_reds(
             "cage4_enhanced_obs": variant.cage4_enhanced_obs,
             "red_agent": variant.red_agent,
             "resilience_roles": variant.resilience_roles,
+            "episode_length": variant.num_steps,
+            "op_zone_servers": variant.op_zone_servers,
+            "reward_metric": "undiscounted shared Blue team return (counted once per step)",
+            "cyborg_version": cyborg_dist.version,
+            "cyborg_source": cyborg_source,
+            "train_variant_overrides": recipe.get("train", {}).get("variant_overrides", {}),
             "seeds": list(settings.seeds),
             "episodes_per_seed": settings.episodes_per_seed,
             "stochastic": not settings.deterministic,

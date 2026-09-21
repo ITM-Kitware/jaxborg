@@ -145,6 +145,21 @@ eval:
 
   # Explicit final-model scripts, run after the enabled built-in suites above.
   after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 4
+
     - name: learned-red-ppo
       script: scripts/eval/eval_matchup.py
       model_arg: null  # eval_matchup accepts separate Blue/Red model flags.

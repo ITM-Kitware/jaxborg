@@ -57,6 +57,7 @@ class PostTrainingEval:
     args: tuple[str, ...] = ()
     model_arg: str | None = "--model"
     required: bool = True
+    jax_platforms: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not _NAME_PATTERN.fullmatch(self.name):
@@ -72,6 +73,8 @@ class PostTrainingEval:
             raise ValueError("eval.after_training[].model_arg must be a command-line flag or null")
         if not isinstance(self.required, bool):
             raise ValueError("eval.after_training[].required must be a boolean")
+        if self.jax_platforms is not None and self.jax_platforms not in ("cpu", "cuda"):
+            raise ValueError("eval.after_training[].jax_platforms must be cpu or cuda")
         for index, arg in enumerate(self.args):
             if not isinstance(arg, str):
                 raise ValueError(f"eval.after_training[].args[{index}] must be a string")
@@ -111,7 +114,7 @@ class PostTrainingEvalSettings:
             location = f"eval.after_training[{index}]"
             if not isinstance(raw, Mapping):
                 raise ValueError(f"{location} must be a mapping")
-            allowed = {"name", "script", "args", "model_arg", "required"}
+            allowed = {"name", "script", "args", "model_arg", "required", "jax_platforms"}
             unknown = set(raw) - allowed
             if unknown:
                 raise ValueError(f"{location} has unknown settings: {sorted(unknown)}")
@@ -134,6 +137,7 @@ class PostTrainingEvalSettings:
                     args=args,
                     model_arg=model_arg,
                     required=raw.get("required", True),
+                    jax_platforms=raw.get("jax_platforms"),
                 )
             )
 
@@ -330,6 +334,7 @@ def run_configured_evaluations_after_training(
 
     for index, evaluation in enumerate(evaluations, 1):
         script = evaluation.resolve_script()
+        job_jax_platforms = evaluation.jax_platforms or jax_platforms
         job_replacements = {**replacements, "name": evaluation.name}
         command = [sys.executable, str(script)]
         if evaluation.model_arg is not None:
@@ -338,7 +343,7 @@ def run_configured_evaluations_after_training(
         child_env = os.environ.copy()
         child_env.update(
             {
-                "JAX_PLATFORMS": jax_platforms,
+                "JAX_PLATFORMS": job_jax_platforms,
                 "JAXBORG_EXP_DIR": str(exp_dir),
                 "JAXBORG_EVAL_DIR": str(eval_dir),
                 "JAXBORG_EVAL_NAME": evaluation.name,
@@ -353,13 +358,14 @@ def run_configured_evaluations_after_training(
             "script": str(script),
             "command": command,
             "required": evaluation.required,
+            "jax_platforms": job_jax_platforms,
             "status": "running",
         }
         manifest["evaluations"].append(record)
         _write_manifest(manifest_path, manifest)
         print(
             f"Running post-training evaluation {index}/{len(evaluations)} ({evaluation.name}):\n"
-            f"  JAX_PLATFORMS={jax_platforms}\n"
+            f"  JAX_PLATFORMS={job_jax_platforms}\n"
             f"  {shlex.join(command)}",
             flush=True,
         )

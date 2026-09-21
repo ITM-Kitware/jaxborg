@@ -204,6 +204,9 @@ def test_flag_is_enabled_only_for_actual_cotraining_recipes():
         assert train_variant(recipe).cage4_enhanced_obs is expected
         assert eval_variant(recipe).cage4_enhanced_obs is expected
         if expected:
+            benchmark = next(e for e in recipe["eval"]["after_training"] if e["name"] == "cage4-benchmark")
+            assert benchmark["script"] == "scripts/eval/eval_scripted_reds.py"
+            assert "1000-1099" in benchmark["args"]
             for team in ("blue", "red"):
                 arch = team_recipe(recipe, team)["arch"]
                 if arch["name"] == "mappo":
