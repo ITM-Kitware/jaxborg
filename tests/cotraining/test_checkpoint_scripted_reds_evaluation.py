@@ -110,7 +110,7 @@ def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch
 
 
 def test_cotraining_recipes_disable_checkpoint_curves_but_keep_final_scripted_reds():
-    for path in sorted((Path(__file__).resolve().parents[1] / "recipes" / "cotraining").glob("cotraining*.yaml")):
+    for path in sorted((Path(__file__).resolve().parents[2] / "recipes" / "cotraining").glob("cotraining*.yaml")):
         recipe = load(str(path))
         settings = CheckpointScriptedRedsSettings.from_recipe(recipe)
         assert not settings.enabled

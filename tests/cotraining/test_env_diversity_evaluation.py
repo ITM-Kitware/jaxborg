@@ -199,7 +199,7 @@ def test_summary_rejects_unpaired_case_provenance_and_incomplete_matrix(tmp_path
 
 def test_cli_dry_run_does_not_roll_out_or_write_results(tmp_path, recipes, monkeypatch, capsys):
     populate(tmp_path, recipes)
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     spec = importlib.util.spec_from_file_location("eval_env_diversity_cli", root / "scripts/eval/eval_env_diversity.py")
     cli = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(cli)
