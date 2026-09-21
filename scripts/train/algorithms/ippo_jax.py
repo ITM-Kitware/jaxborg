@@ -761,7 +761,7 @@ def main(*, expected_algorithm: str | None = None):
     if has_centralized_critic(blue_module) and "blue" in teams and not learned_red:
         parser.error("MAPPO requires joint training: use train.teams: both or a frozen learned Red opponent")
     if recipe["algorithm"] == "mappo" and not any(has_centralized_critic(modules[team]) for team in teams):
-        parser.error("algorithm: mappo requires a trainable policy with arch.name: mappo")
+        parser.error("algorithm: mappo requires a trainable policy with arch.name: mappo or recurrent_mappo")
     # Apply CLI overrides to the resolved recipe itself so the exported
     # sidecar describes the run that actually happened.
     if args.total_timesteps is not None:

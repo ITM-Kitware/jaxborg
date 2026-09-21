@@ -283,7 +283,7 @@ def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
         projected["arch"] = copy.deepcopy(arch_override)
     else:
         _deep_merge(projected["arch"], arch_override)
-    if projected["arch"]["name"] == "mappo":
+    if projected["arch"]["name"] in ("mappo", "recurrent_mappo"):
         projected["arch"]["cage4_enhanced_obs"] = enhanced_obs_enabled(projected)
     return projected
 
