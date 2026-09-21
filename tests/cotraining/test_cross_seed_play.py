@@ -15,7 +15,7 @@ from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, validate_c
 from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 from jaxborg.recipe import load
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 
 
 def test_config_all_documents_valid_cross_seed_settings_without_enabling_them():

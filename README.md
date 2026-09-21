@@ -79,6 +79,9 @@ uv run pytest            # default: -n auto -m 'not slow'
 uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
 uv run pytest -m ""      # everything
 
+# Red/Blue training, policy, and cotraining evaluation tests live in tests/cotraining/.
+uv run pytest tests/cotraining/test_recurrent_mappo.py
+
 # Train jaxborg IPPO (recipe-driven; see `recipes/`)
 ./scripts/train/run.sh jax default 42
 
