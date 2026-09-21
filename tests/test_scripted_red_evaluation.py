@@ -48,12 +48,19 @@ def _recipe(*, after_training: bool = True) -> dict:
     }
 
 
-def test_cotraining_recipe_runs_learned_then_scripted_red_evaluations():
+def test_cotraining_recipe_runs_native_benchmark_and_existing_evaluations():
     recipe = load("cotraining")
     settings = PostTrainingEvalSettings.from_recipe(recipe)
 
-    assert [evaluation.name for evaluation in settings.evaluations] == ["learned-red-ppo", "scripted-reds"]
-    learned, scripted = settings.evaluations
+    assert [evaluation.name for evaluation in settings.evaluations] == [
+        "cage4-benchmark",
+        "learned-red-ppo",
+        "scripted-reds",
+    ]
+    benchmark, learned, scripted = settings.evaluations
+    assert Path(benchmark.script).name == "eval_scripted_reds.py"
+    assert benchmark.jax_platforms == "cpu"
+    assert benchmark.args[benchmark.args.index("--seeds") + 1] == "1000-1099"
     assert Path(learned.script).name == "eval_matchup.py"
     assert learned.model_arg is None
     assert learned.args[learned.args.index("--blue-path") + 1] == "{model}"

@@ -189,7 +189,12 @@ def test_evaluation_override_is_archived_and_forwarded_to_children(tmp_path):
     assert saved["run"]["train_run_id"] == "original-run"
     assert json.loads(manifest_path.read_text())["recipe"] == str(effective)
     for command, kwargs in calls:
-        assert command[command.index("--recipe") + 1] == str(effective)
+        if Path(command[1]).name == "eval_scripted_reds.py":
+            # Native benchmark takes its observation contract from the checkpoint
+            # sidecar and always uses stock topologies, regardless of eval overrides.
+            assert "--recipe" not in command
+        else:
+            assert command[command.index("--recipe") + 1] == str(effective)
         assert kwargs["env"]["JAXBORG_RECIPE_PATH"] == str(effective)
     assert original_sidecar.read_bytes() == before
 
@@ -259,7 +264,10 @@ def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate
 
     # Historical cross-play runs first; priors and scripted checkpoint curves are off.
     # Cross-seed play needs an explicit opponent, so it is skipped here.
-    cross_play, learned, scripted = calls
+    cross_play, benchmark, learned, scripted = calls
+    assert Path(benchmark[1]).name == "eval_scripted_reds.py"
+    assert benchmark[benchmark.index("--seeds") + 1] == "1000-1099"
+    assert benchmark[benchmark.index("--reds") + 1] == "fsm"
     assert Path(cross_play[1]).name == "eval_cross_play.py"
     assert cross_play[cross_play.index("--model") + 1] == str(model.resolve())
     assert cross_play[cross_play.index("--recipe") + 1] == str(model.with_name("recipe_run.yaml").resolve())
@@ -291,6 +299,7 @@ def test_builtin_history_order_is_independent_of_yaml_key_order(tmp_path):
     assert [Path(cmd[1]).name for cmd in calls] == [
         "eval_cross_play.py",
         "eval_checkpoint_scripted_reds.py",
+        "eval_scripted_reds.py",
         "eval_matchup.py",
         "eval_scripted_reds_jax.py",
     ]
@@ -308,3 +317,29 @@ def test_absent_pipeline_delegates_to_legacy_scripted_red_hook(monkeypatch):
 
     assert result is None
     assert calls[0][0] == "model.pt"
+
+
+def test_native_benchmark_can_use_cpu_after_gpu_training(tmp_path, monkeypatch):
+    model = _final_model(tmp_path)
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    monkeypatch.delenv("JAXBORG_SKIP_POST_TRAIN_EVAL", raising=False)
+    recipe = _recipe(
+        [
+            {
+                "name": "cage4-benchmark",
+                "script": "scripts/eval/eval_scripted_reds.py",
+                "jax_platforms": "cpu",
+                "args": ["--reds", "fsm", "--seeds", "1000-1099"],
+            }
+        ]
+    )
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs["env"]["JAX_PLATFORMS"]))
+        return SimpleNamespace(returncode=0)
+
+    run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
+    assert len(calls) == 1
+    assert calls[0][1] == "cpu"
+    assert calls[0][0].count("--model") == 1
