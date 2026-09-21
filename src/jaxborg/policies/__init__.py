@@ -23,7 +23,14 @@ from typing import Any
 import jax
 import jax.numpy as jnp
 
-from . import mappo_actor_critic, per_agent, recurrent_actor_critic, separate_actor_critic, shared_actor_critic
+from . import (
+    mappo_actor_critic,
+    per_agent,
+    recurrent_actor_critic,
+    recurrent_mappo_actor_critic,
+    separate_actor_critic,
+    shared_actor_critic,
+)
 from .base import CentralizedCriticPolicy, RecurrentPolicy
 from .categorical import Categorical
 
@@ -33,6 +40,7 @@ POLICY_REGISTRY: dict[str, ModuleType] = {
     "per_agent": per_agent,
     "recurrent": recurrent_actor_critic,
     "mappo": mappo_actor_critic,
+    "recurrent_mappo": recurrent_mappo_actor_critic,
 }
 
 # `arch` keys every architecture understands; anything else is forwarded to the

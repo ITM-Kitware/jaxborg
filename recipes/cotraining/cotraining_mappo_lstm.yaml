@@ -1,0 +1,208 @@
+meta:
+  name: cotraining_mappo_lstm
+  source: "Blue LSTM MAPPO / Red LSTM MAPPO cotraining"
+  added: 2026-09-21
+  notes: |
+    Both teams train separate local LSTM actors and centralized LSTM critics.
+    Each actor and critic has its own encoder, cell state and hidden state;
+    Blue and Red have independent parameters and optimizers. Critics receive
+    global_state features; actors receive only local policy observations.
+    One dense layer precedes each LSTM and one follows it. Whole-sequence PPO
+    replay preserves temporal order and resets memory on episode boundaries
+    and Red dormancy. Budgets and evaluation match cotraining_mappo.
+    This recipe is JAX-only. See docs/mappo.md for launch instructions.
+
+algorithm: mappo
+cage4_enhanced_obs: true
+
+# During-training evaluation is disabled. Reward and CIA are measured after
+# training by the enabled built-in suites and explicit eval.after_training list.
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null  # Defaults to the training seed + 100000.
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  # Constant learning rate; assess progress against fixed scripted Reds.
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  teams: both
+  team_overrides:
+    blue:
+      arch:
+        name: recurrent_mappo
+        hidden_dim: 256
+        hidden_layers: 1
+        cell: lstm
+        activation: tanh
+        # Training-only pooled team observations and simulator features.
+        critic_input: global_state
+      core:
+        # JaxMARL MAPPO uses a clipped value objective.
+        clip_value_loss: true
+    red:
+      arch:
+        name: recurrent_mappo
+        team: red
+        hidden_dim: 256
+        hidden_layers: 1
+        cell: lstm
+        activation: tanh
+        # Red has its own centralized observation layout.
+        critic_input: global_state
+      core:
+        clip_value_loss: true
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Match the original IPPO control's budget. MAPPO convergence has not yet
+  # been measured; compare held-out performance across checkpoints.
+  total_timesteps: 70000000
+  variant: cc4_stock
+
+  # One fixed training topology; num_envs controls rollout parallelism.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 1
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # One final Blue vs the next training seed's final Red (cyclic seed order).
+  # The multi-seed launcher supplies the opponent after all training finishes.
+  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  cross_seed_play:
+    enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # play_priors is a cheaper alternative to cross_play. With the identical
+  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
+  # Leave it disabled to avoid replaying those same games in a second suite.
+  play_priors:
+    enabled: false
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+
+  # Every sampled historical Blue vs every sampled historical Red in this run.
+  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+    required: false
+
+  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
+  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 20
+    required: false
+
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
+  after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 4
+
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+jax:
+  num_envs: 96  # Both centralized critics add memory; use --num-envs 48 for a smaller pilot.
+  # Whole sequences: 480 Blue / 576 Red sequences, both divisible by 16.
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20  # Save every 960,000 environment steps.

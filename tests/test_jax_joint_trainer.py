@@ -595,12 +595,13 @@ class _TinyMAPPOJointEnv(_TinyJointEnv):
 
 
 @pytest.fixture
-def tiny_mappo(monkeypatch):
+def tiny_mappo(monkeypatch, request):
     env = _TinyMAPPOJointEnv(blue_obs_dim=4, red_obs_dim=6, blue_actions=3, red_actions=5)
     monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_args, **_kwargs: env)
+    arch = getattr(request, "param", "mappo")
     networks = {
-        "blue": policy_from_arch({"name": "mappo", "hidden_dim": 8, "hidden_layers": 1}, action_dim=3),
-        "red": policy_from_arch({"name": "mappo", "team": "red", "hidden_dim": 8, "hidden_layers": 1}, action_dim=5),
+        team: policy_from_arch({"name": arch, "team": team, "hidden_dim": 8, "hidden_layers": 1}, action_dim=actions)
+        for team, actions in (("blue", 3), ("red", 5))
     }
     configs = {"blue": _config(), "red": _config()}
     configs["blue"]["CLIP_VALUE_LOSS"] = True
@@ -610,6 +611,7 @@ def tiny_mappo(monkeypatch):
 
 @pytest.mark.parametrize("mode", ["global_state", "joint_observations"])
 @pytest.mark.parametrize("ippo_team", [None, "blue", "red"])
+@pytest.mark.parametrize("tiny_mappo", ["mappo", "recurrent_mappo"], indirect=True)
 def test_jitted_mappo_trains_each_actor_and_central_critic(tiny_mappo, mode, ippo_team):
     networks, configs = tiny_mappo
     networks = {team: network.clone(critic_input=mode) for team, network in networks.items()}
@@ -618,12 +620,14 @@ def test_jitted_mappo_trains_each_actor_and_central_critic(tiny_mappo, mode, ipp
             "shared", action_dim=networks[ippo_team].action_dim, hidden_dim=8, hidden_layers=1
         )
         configs[ippo_team]["CLIP_VALUE_LOSS"] = False
+    for config in configs.values():
+        config.update(NUM_ENVS=2, NUM_STEPS=3, TOTAL_TIMESTEPS=6, NUM_MINIBATCHES=2)
     _, obs, env_state, init_states, collect_and_update = joint.make_joint_train(
         configs, networks, trainable_teams=("blue", "red")
     )
     states = init_states(jax.random.PRNGKey(3))
     before = jax.tree.map(lambda x: np.array(x, copy=True), {t: states[t].params for t in joint.TEAMS})
-    norm = {t: joint.initial_reward_norm_state(1) for t in joint.TEAMS}
+    norm = {t: joint.initial_reward_norm_state(2) for t in joint.TEAMS}
     states, _, _, _, _, metrics = collect_and_update(states, env_state, obs, jax.random.PRNGKey(7), norm)
     jax.block_until_ready(metrics)
 
@@ -631,13 +635,21 @@ def test_jitted_mappo_trains_each_actor_and_central_critic(tiny_mappo, mode, ipp
         if joint.has_centralized_critic(networks[team]):
             for subtree in ("actor_head", "critic_head"):
                 assert _tree_changed(before[team]["params"][subtree], states[team].params["params"][subtree])
+            if joint.is_recurrent(networks[team]):
+                for role in ("actor", "critic"):
+                    subtree = f"{role}_trunk"
+                    assert _tree_changed(
+                        before[team]["params"][subtree]["ScannedRNN_0"],
+                        states[team].params["params"][subtree]["ScannedRNN_0"],
+                    )
         else:
             assert _tree_changed(before[team], states[team].params)
-        assert int(states[team].step) == 1
+        assert int(states[team].step) == 2
         assert np.isfinite(float(metrics[team]["total_loss"]))
     np.testing.assert_allclose(metrics["red"]["raw_rollout_return"], -metrics["blue"]["raw_rollout_return"])
 
 
+@pytest.mark.parametrize("tiny_mappo", ["mappo", "recurrent_mappo"], indirect=True)
 def test_mappo_stores_pre_action_world_state_and_bootstraps_next_state(tiny_mappo, monkeypatch):
     original = joint._make_team_updater
     checked = []
@@ -652,13 +664,19 @@ def test_mappo_stores_pre_action_world_state_and_bootstraps_next_state(tiny_mapp
                 for step in range(2):
                     np.testing.assert_array_equal(traj.critic_obs[step, 0, :, 0], np.full(n, step + offset))
                     np.testing.assert_array_equal(traj.critic_obs[step, 0, :, -n:], np.eye(n))
-                _, stored_value, _ = joint.policy_step(
-                    network, state.params, traj.obs, traj.avail_actions, critic_obs=traj.critic_obs
+                _, stored_value, carry = joint.policy_sequence(
+                    network,
+                    state.params,
+                    traj.obs[:, 0],
+                    traj.avail_actions[:, 0],
+                    carry=init_carry,
+                    reset=None if traj.reset is None else traj.reset[:, 0],
+                    critic_obs=traj.critic_obs[:, 0],
                 )
-                np.testing.assert_allclose(stored_value, traj.value, rtol=1e-5, atol=1e-7)
+                np.testing.assert_allclose(stored_value, traj.value[:, 0], rtol=1e-5, atol=1e-7)
                 final_world = jnp.full((n, network.critic_obs_dim), 2.0 + offset).at[:, -n:].set(jnp.eye(n))
                 _, expected, _ = joint.policy_step(
-                    network, state.params, jnp.full((n, obs_dim), 0.2), critic_obs=final_world
+                    network, state.params, jnp.full((n, obs_dim), 0.2), carry=carry, critic_obs=final_world
                 )
                 np.testing.assert_allclose(last_value[0], expected, rtol=1e-5, atol=1e-7)
                 checked.append(network.team)
@@ -674,6 +692,7 @@ def test_mappo_stores_pre_action_world_state_and_bootstraps_next_state(tiny_mapp
 
 
 @pytest.mark.parametrize("frozen_team", ["blue", "red"])
+@pytest.mark.parametrize("tiny_mappo", ["mappo", "recurrent_mappo"], indirect=True)
 def test_frozen_mappo_needs_only_local_observations(tiny_mappo, monkeypatch, frozen_team):
     original = _TinyMAPPOJointEnv.get_critic_obs
 
@@ -688,6 +707,7 @@ def test_frozen_mappo_needs_only_local_observations(tiny_mappo, monkeypatch, fro
     assert _tree_changed(before[trainable_team], after[trainable_team].params)
 
 
+@pytest.mark.parametrize("tiny_mappo", ["mappo", "recurrent_mappo"], indirect=True)
 def test_red_mappo_masks_dormant_and_busy_agents_and_final_bootstrap(tiny_mappo, monkeypatch):
     original_step = _TinyMAPPOJointEnv.step
     original_updater = joint._make_team_updater
@@ -804,7 +824,7 @@ def test_real_cc4_mappo_joint_update():
         assert np.isfinite(float(metrics[team]["total_loss"]))
 
 
-@pytest.mark.parametrize("architecture", ["shared", "recurrent", "mappo"])
+@pytest.mark.parametrize("architecture", ["shared", "recurrent", "mappo", "recurrent_mappo"])
 def test_enhanced_obs_joint_update(architecture, monkeypatch):
     """The actual rollout, PPO minibatches, and both optimizers accept 402-wide Blue inputs."""
     from jaxborg.blue_observation_contract import blue_obs_size
@@ -825,7 +845,7 @@ def test_enhanced_obs_joint_update(architecture, monkeypatch):
         arch = dict(name=architecture, hidden_dim=8, hidden_layers=1)
         if architecture == "recurrent":
             arch.update(cell="lstm")
-        if architecture == "mappo":
+        if architecture in ("mappo", "recurrent_mappo"):
             arch.update(team=team, cage4_enhanced_obs=True, critic_input="joint_observations")
         networks[team] = policy_from_arch(arch, action_dim=action_dim)
         configs[team]["TRAIN_VARIANT"] = GameVariant(name="enhanced", cage4_enhanced_obs=True)
