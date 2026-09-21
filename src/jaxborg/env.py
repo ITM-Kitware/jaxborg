@@ -34,6 +34,7 @@ from jaxborg.scenarios.cc4.topology import (
 )
 from jaxborg.scenarios.config import ScenarioConfig
 from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
+from jaxborg.training_topology_sampling import sample_training_topology_indices
 
 
 def apply_all_actions(
@@ -522,6 +523,18 @@ class ScenarioEnv(MultiAgentEnv):
         const = self._select_const(key)
         return self._reset_from_const(const)
 
+    @property
+    def topology_bank_size(self) -> int:
+        return self._const_bank_size
+
+    @partial(jax.jit, static_argnums=[0])
+    def reset_batch(self, keys: chex.Array, topology_key: chex.PRNGKey):
+        """Reset a parallel training batch with unique topology-bank entries."""
+        if self._const_bank is None:
+            return jax.vmap(self.reset)(keys)
+        indices = sample_training_topology_indices(topology_key, self._const_bank_size, keys.shape[0])
+        return jax.vmap(self.reset_at_topology)(keys, indices)
+
     def reset_at_topology(
         self,
         key: chex.PRNGKey,
@@ -547,6 +560,20 @@ class ScenarioEnv(MultiAgentEnv):
     def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
         const = self._select_const(key)
+        return self._reset_state_from_const(const)
+
+    @partial(jax.jit, static_argnums=[0])
+    def _reset_state_at_topology(
+        self,
+        env_state: ScenarioEnvState,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> ScenarioEnvState:
+        """Auto-reset state on one exact topology while retaining dynamic RNG."""
+        const = self._select_const(key, topology_index=topology_index)
+        return self._reset_state_from_const(const)
+
+    def _reset_state_from_const(self, const: SimulatorConst) -> ScenarioEnvState:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=const.initial_services,
@@ -554,6 +581,19 @@ class ScenarioEnv(MultiAgentEnv):
         )
         state = _init_red_state(const, state)
         return ScenarioEnvState(state=state, const=const)
+
+    @partial(jax.jit, static_argnums=[0])
+    def _reset_state_batch(
+        self,
+        env_states: ScenarioEnvState,
+        keys: chex.Array,
+        topology_key: chex.PRNGKey,
+    ) -> ScenarioEnvState:
+        """Auto-reset a training batch, sampling bank entries without replacement."""
+        if self._const_bank is None:
+            return jax.vmap(self._reset_state)(env_states, keys)
+        indices = sample_training_topology_indices(topology_key, self._const_bank_size, keys.shape[0])
+        return jax.vmap(self._reset_state_at_topology)(env_states, keys, indices)
 
     @partial(jax.jit, static_argnums=[0])
     def step(

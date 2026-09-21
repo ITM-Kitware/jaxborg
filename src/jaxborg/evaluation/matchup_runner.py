@@ -724,9 +724,9 @@ def evaluate_matchup(
     """Evaluate independently sourced learned policies in the JAX simulator.
 
     A configured bank defaults to exhaustive evaluation: every expanded
-    episode seed is run once on every topology. ``random`` retains the
-    training-style behavior where each reset samples the complete bank with
-    replacement.
+    episode seed is run once on every topology. ``random`` samples the complete
+    evaluation bank with replacement; this is separate from training's
+    without-replacement sampling within each parallel reset batch.
     """
     backend_name = _normalise_backend(backend)
     context = context if context is not None else MatchupEvaluationContext()

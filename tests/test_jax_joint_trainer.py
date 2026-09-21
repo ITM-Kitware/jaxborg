@@ -278,6 +278,16 @@ def test_joint_train_rejects_different_team_topology_banks(tiny_joint):
         joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
 
 
+def test_joint_train_rejects_diversified_bank_smaller_than_parallel_batch(tiny_joint):
+    networks, configs = tiny_joint
+    for config in configs.values():
+        config["NUM_ENVS"] = 3
+        config["TOPOLOGY_BANK"] = (Path("shape_00.snapshot.npz"), Path("shape_01.snapshot.npz"))
+
+    with pytest.raises(ValueError, match=r"bank_size >= NUM_ENVS"):
+        joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+
+
 def test_actor_and_critic_masks_update_only_their_separate_heads():
     network = make_jax_policy("separate", action_dim=3, hidden_dim=8, hidden_layers=1)
     params = network.init(jax.random.PRNGKey(11), jnp.zeros((4,), dtype=jnp.float32))

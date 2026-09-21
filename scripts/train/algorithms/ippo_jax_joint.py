@@ -24,6 +24,7 @@ from jaxborg.policies import (
     policy_sequence,
     policy_step,
 )
+from jaxborg.training_topology_sampling import validate_training_topology_coverage
 
 TEAMS = ("blue", "red")
 
@@ -436,6 +437,8 @@ def make_joint_train(
     num_envs = int(base["NUM_ENVS"])
     num_steps = int(base["NUM_STEPS"])
     topology_bank = tuple(base.get("TOPOLOGY_BANK") or ())
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), num_envs)
     for team, cfg in team_configs.items():
         if int(cfg["NUM_ENVS"]) != num_envs or int(cfg["NUM_STEPS"]) != num_steps:
             raise ValueError(f"{team} must share NUM_ENVS and NUM_STEPS in a joint rollout")
@@ -454,13 +457,23 @@ def make_joint_train(
         "red": tuple(env.red_agents),
     }
     num_agents = {team: len(names) for team, names in agents.items()}
+    if topology_bank and num_envs > 1 and (not hasattr(env, "reset_batch") or not hasattr(env, "step_batch")):
+        raise TypeError("parallel topology-bank training requires reset_batch and step_batch support")
     # The production environment skips auto-reset construction on ordinary
     # ticks. Small external/test environments may expose only scalar step.
-    step_batch = env.step_batch if use_batched_reset and hasattr(env, "step_batch") else jax.vmap(env.step)
+    scalar_or_batched_step = env.step_batch if use_batched_reset and hasattr(env, "step_batch") else jax.vmap(env.step)
 
-    reset_key = jax.random.PRNGKey(int(base["SEED"]))
+    def step_batch(keys, states, actions, topology_key):
+        if topology_bank and hasattr(env, "step_batch"):
+            return env.step_batch(keys, states, actions, topology_key)
+        return scalar_or_batched_step(keys, states, actions)
+
+    reset_key, topology_key = jax.random.split(jax.random.PRNGKey(int(base["SEED"])))
     reset_keys = jax.random.split(reset_key, num_envs)
-    init_obs, init_env_state = jax.vmap(env.reset)(reset_keys)
+    if topology_bank and hasattr(env, "reset_batch"):
+        init_obs, init_env_state = env.reset_batch(reset_keys, topology_key)
+    else:
+        init_obs, init_env_state = jax.vmap(env.reset)(reset_keys)
     supplied_params = dict(initial_params or {})
 
     def init_train_states(rng):
@@ -549,8 +562,9 @@ def make_joint_train(
                 )
 
             before = env_state.state
+            step_key, topology_key = jax.random.split(step_key)
             step_keys = jax.random.split(step_key, num_envs)
-            new_obs, new_env_state, rewards, dones, infos = step_batch(step_keys, env_state, actions)
+            new_obs, new_env_state, rewards, dones, infos = step_batch(step_keys, env_state, actions, topology_key)
             info_sums = {key: info_sums[key] + jnp.asarray(infos[key], dtype=jnp.float32) for key in info_keys}
             done_env = dones["__all__"].astype(jnp.float32)
             transitions = {}

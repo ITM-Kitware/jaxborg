@@ -148,6 +148,13 @@ class FsmRedCC4Env(MultiAgentEnv):
         obs, inner = self._env.reset_at_topology(key, topology_index)
         return self._wrap_reset(obs, inner, key_extras)
 
+    @partial(jax.jit, static_argnums=[0])
+    def reset_batch(self, keys: chex.Array, topology_key: chex.PRNGKey):
+        """Reset parallel training environments without bank-entry duplicates."""
+        split_keys = jax.vmap(jax.random.split)(keys)
+        obs, inner = self._env.reset_batch(split_keys[:, 0], topology_key)
+        return jax.vmap(self._wrap_reset)(obs, inner, split_keys[:, 1])
+
     def _wrap_reset(
         self,
         obs: Dict[str, chex.Array],
@@ -238,6 +245,37 @@ class FsmRedCC4Env(MultiAgentEnv):
             obs_st,
         )
         return obs, states, rewards, dones, infos
+
+    @partial(jax.jit, static_argnums=[0])
+    def step_batch(self, keys, states, actions, topology_key=None):
+        """Batched training step with coordinated without-replacement resets."""
+        split_keys = jax.vmap(lambda key: jax.random.split(key, 3))(keys)
+        obs, next_states, rewards, dones, info = jax.vmap(self.step_env)(split_keys[:, 0], states, actions)
+        done = dones["__all__"]
+
+        def reset_finished(_):
+            scenario_states = ScenarioEnvState(state=next_states.state, const=next_states.const)
+            if topology_key is None:
+                inner_reset = jax.vmap(self._env._reset_state)(scenario_states, split_keys[:, 1])
+            else:
+                inner_reset = self._env._reset_state_batch(scenario_states, split_keys[:, 1], topology_key)
+            inner_reset = jax.vmap(self._strip_inactive_red_reset_knowledge)(inner_reset)
+            extras = jax.vmap(self._extras_factory)(split_keys[:, 2], inner_reset.const)
+            reset_states = FsmRedEnvState(
+                state=inner_reset.state,
+                const=inner_reset.const,
+                extras=extras,
+            )
+            reset_obs = jax.vmap(self._get_blue_obs)(reset_states)
+
+            def select(reset_value, step_value):
+                mask = done.reshape(done.shape + (1,) * (step_value.ndim - done.ndim))
+                return jnp.where(mask, reset_value, step_value)
+
+            return jax.tree.map(select, (reset_obs, reset_states), (obs, next_states))
+
+        obs, next_states = jax.lax.cond(jnp.any(done), reset_finished, lambda _: (obs, next_states), None)
+        return obs, next_states, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
     def step_env(
