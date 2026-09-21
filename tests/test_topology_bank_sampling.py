@@ -170,6 +170,37 @@ def test_joint_env_can_reset_on_each_exact_bank_entry(bank_paths: list[Path]) ->
         np.testing.assert_array_equal(state.const.data_links, expected.data_links)
 
 
+def test_joint_training_batch_uses_distinct_bank_entries(bank_paths: list[Path]) -> None:
+    env = make_joint_jax_env(CC4_STOCK, topology_path=bank_paths)
+    reset_key, topology_key = jax.random.split(jax.random.PRNGKey(904))
+    keys = jax.random.split(reset_key, 12)
+
+    _, states = env.reset_batch(keys, topology_key)
+    signatures = {
+        (
+            np.asarray(states.const.host_subnet[i]).tobytes(),
+            np.asarray(states.const.data_links[i]).tobytes(),
+            np.asarray(states.const.allowed_subnet_pairs[i]).tobytes(),
+        )
+        for i in range(12)
+    }
+
+    assert len(signatures) == 12
+
+    next_key, next_topology_key = jax.random.split(jax.random.PRNGKey(905))
+    next_states = env._env._reset_state_batch(states, jax.random.split(next_key, 12), next_topology_key)
+    next_signatures = {
+        (
+            np.asarray(next_states.const.host_subnet[i]).tobytes(),
+            np.asarray(next_states.const.data_links[i]).tobytes(),
+            np.asarray(next_states.const.allowed_subnet_pairs[i]).tobytes(),
+        )
+        for i in range(12)
+    }
+
+    assert len(next_signatures) == 12
+
+
 @pytest.mark.parametrize("topology_index", [-1, 4, jnp.int32(-1), jnp.int32(4)])
 def test_joint_env_rejects_invalid_concrete_topology_index(
     bank_paths: list[Path],

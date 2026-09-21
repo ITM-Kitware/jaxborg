@@ -39,7 +39,7 @@ import jax.numpy as jnp
 import mlflow
 import optax
 from flax.training.train_state import TrainState
-from jaxmarl.wrappers.baselines import LogWrapper
+from jaxmarl.wrappers.baselines import LogEnvState, LogWrapper
 
 # Make `import jaxborg.*` work when invoked as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -80,6 +80,7 @@ from jaxborg.recipe import (
     training_teams,
 )
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.training_topology_sampling import validate_training_topology_coverage
 from scripts.train.algorithms.ippo_jax_joint import (
     GAME_COUNTERS as joint_game_counters,
 )
@@ -124,6 +125,8 @@ def make_train(config, network):
     num_envs = config["NUM_ENVS"]
     variant: GameVariant = config["TRAIN_VARIANT"]
     topology_bank = config.get("TOPOLOGY_BANK") or None
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), num_envs)
     inner_env = make_jax_env(
         variant,
         training_mode=bool(config.get("TRAINING_MODE", True)),
@@ -141,8 +144,49 @@ def make_train(config, network):
 
     env = LogWrapper(inner_env)
     init_key = jax.random.PRNGKey(config["SEED"])
-    init_keys = jax.random.split(init_key, num_envs)
-    init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
+    if topology_bank:
+        if not hasattr(inner_env, "reset_batch") or not hasattr(inner_env, "step_batch"):
+            raise TypeError("topology-bank training requires reset_batch and step_batch support")
+        init_key, topology_key = jax.random.split(init_key)
+        init_keys = jax.random.split(init_key, num_envs)
+        init_obs, init_inner_state = inner_env.reset_batch(init_keys, topology_key)
+        log_zeros = jnp.zeros((num_envs, num_agents))
+        init_env_state = LogEnvState(
+            env_state=init_inner_state,
+            episode_returns=log_zeros,
+            episode_lengths=log_zeros,
+            returned_episode_returns=log_zeros,
+            returned_episode_lengths=log_zeros,
+        )
+
+        def step_batch(keys, state, actions, topology_key):
+            obs, inner_state, rewards, dones, info = inner_env.step_batch(keys, state.env_state, actions, topology_key)
+            episode_done = dones["__all__"]
+            episode_done_column = episode_done[:, None]
+            keep = 1 - episode_done_column
+            new_episode_returns = state.episode_returns + jnp.stack([rewards[agent] for agent in agents], axis=-1)
+            new_episode_lengths = state.episode_lengths + 1
+            state = LogEnvState(
+                env_state=inner_state,
+                episode_returns=new_episode_returns * keep,
+                episode_lengths=new_episode_lengths * keep,
+                returned_episode_returns=state.returned_episode_returns * keep
+                + new_episode_returns * episode_done_column,
+                returned_episode_lengths=state.returned_episode_lengths * keep
+                + new_episode_lengths * episode_done_column,
+            )
+            info["returned_episode_returns"] = state.returned_episode_returns
+            info["returned_episode_lengths"] = state.returned_episode_lengths
+            info["returned_episode"] = jnp.repeat(episode_done_column, num_agents, axis=1)
+            return obs, state, rewards, dones, info
+
+    else:
+        init_keys = jax.random.split(init_key, num_envs)
+        init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
+
+        def step_batch(keys, state, actions, topology_key):
+            del topology_key
+            return jax.vmap(env.step)(keys, state, actions)
 
     norm_rewards = bool(config.get("NORM_REWARDS", False))
 
@@ -218,8 +262,9 @@ def make_train(config, network):
             value = value.reshape(num_envs, num_agents)
             env_act = {agents[i]: action[:, i] for i in range(num_agents)}
             rng, _rng = jax.random.split(rng)
-            step_keys = jax.random.split(_rng, num_envs)
-            new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
+            step_key, topology_key = jax.random.split(_rng)
+            step_keys = jax.random.split(step_key, num_envs)
+            new_obs, new_env_state, rewards, dones, info = step_batch(step_keys, env_state, env_act, topology_key)
             info_acc = jax.tree.map(lambda acc, v: acc + jnp.asarray(v, dtype=jnp.float32), info_acc, info)
             team_reward = rewards[agents[0]]
             done_signal = dones[agents[0]]
@@ -434,6 +479,9 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
     for config in configs.values():
         config["SEED"] = args.seed
+        topology_bank = config.get("TOPOLOGY_BANK") or ()
+        if topology_bank:
+            validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
     opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
     dims = {
@@ -722,6 +770,9 @@ def main(*, expected_algorithm: str | None = None):
         recipe.setdefault("jax", {})["num_envs"] = int(args.num_envs)
     config = project_jax(recipe)
     config["SEED"] = args.seed
+    topology_bank = config.get("TOPOLOGY_BANK") or ()
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
     save_dir = EXP_DIR / f"{recipe['algorithm']}_jax" / tag

@@ -98,7 +98,9 @@ train:
   # Optional JAX topology pool. Omit both declarations to generate a fresh
   # topology on every reset. topology_bank and topology_generation are
   # mutually exclusive; the latter creates one immutable cached snapshot per
-  # source seed. Relative paths are resolved from the repository root.
+  # source seed. A diversified bank must have at least jax.num_envs entries
+  # because each parallel reset batch samples without replacement. A one-entry
+  # bank is the fixed-topology control. Relative paths resolve from the repo root.
   # topology_bank:
   #   - topology_banks/my_experiment/train/shape_00.snapshot.npz
   #   - topology_banks/my_experiment/train/shape_01.snapshot.npz

@@ -121,6 +121,12 @@ class JointPolicyCC4Env(MultiAgentEnv):
         _, env_state = self._env.reset(key)
         return self.get_obs(env_state), env_state
 
+    @partial(jax.jit, static_argnums=[0])
+    def reset_batch(self, keys: chex.Array, topology_key: chex.PRNGKey):
+        """Reset parallel training environments without bank-entry duplicates."""
+        _, env_state = self._env.reset_batch(keys, topology_key)
+        return jax.vmap(self.get_obs)(env_state), env_state
+
     def reset_at_topology(
         self,
         key: chex.PRNGKey,
@@ -179,7 +185,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
         return obs, next_state, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
-    def step_batch(self, keys, states, actions):
+    def step_batch(self, keys, states, actions, topology_key=None):
         """Batched ``step`` with reset work behind one scalar conditional.
 
         Training episodes normally end together, so reset state/observations
@@ -193,7 +199,10 @@ class JointPolicyCC4Env(MultiAgentEnv):
         done = dones["__all__"]
 
         def reset_finished(_):
-            reset_states = jax.vmap(self._env._reset_state)(next_states, split_keys[:, 1])
+            if topology_key is None:
+                reset_states = jax.vmap(self._env._reset_state)(next_states, split_keys[:, 1])
+            else:
+                reset_states = self._env._reset_state_batch(next_states, split_keys[:, 1], topology_key)
             reset_obs = jax.vmap(self.get_obs)(reset_states)
 
             def select(reset_value, step_value):

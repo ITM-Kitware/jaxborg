@@ -72,6 +72,10 @@ class _TinyBlueEnv:
         )
         return self._obs(state), state
 
+    def reset_batch(self, keys, topology_key):
+        del topology_key
+        return jax.vmap(self.reset)(keys)
+
     def step(self, key, state, actions):
         del key
         time = state.state.time + 1
@@ -93,6 +97,10 @@ class _TinyBlueEnv:
             "green_asf_count": zero,
         }
         return self._obs(next_state), next_state, rewards, dones, info
+
+    def step_batch(self, keys, states, actions, topology_key):
+        del topology_key
+        return jax.vmap(self.step)(keys, states, actions)
 
 
 def _config(num_envs: int, num_steps: int, num_minibatches: int) -> dict:
@@ -193,6 +201,24 @@ def test_feedforward_path_is_untouched_by_the_recurrent_plumbing(tiny_blue):
     """The MLP recipes must train exactly as they did before sequences existed."""
     network = policy_from_arch({"name": "shared", "hidden_dim": 8, "hidden_layers": 1}, action_dim=ACTION_DIM)
     before, after, metric = _one_update(_config(num_envs=4, num_steps=4, num_minibatches=2), network)
+
+    assert _changed(before, after.params)
+    assert np.isfinite(float(metric["total_loss"]))
+
+
+def test_standard_train_rejects_diversified_bank_smaller_than_parallel_batch(tiny_blue):
+    config = _config(num_envs=3, num_steps=4, num_minibatches=1)
+    config["TOPOLOGY_BANK"] = ("shape_00.snapshot.npz", "shape_01.snapshot.npz")
+
+    with pytest.raises(ValueError, match=r"bank_size >= NUM_ENVS"):
+        ippo_jax.make_train(config, _recurrent())
+
+
+def test_standard_train_uses_parallel_topology_bank_path(tiny_blue):
+    config = _config(num_envs=4, num_steps=4, num_minibatches=2)
+    config["TOPOLOGY_BANK"] = tuple(f"shape_{i:02d}.snapshot.npz" for i in range(4))
+
+    before, after, metric = _one_update(config, _recurrent())
 
     assert _changed(before, after.params)
     assert np.isfinite(float(metric["total_loss"]))
