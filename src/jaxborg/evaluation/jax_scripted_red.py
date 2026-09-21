@@ -25,6 +25,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from jaxborg.actions.encoding import BLUE_SLEEP
 from jaxborg.evaluation.cia.fixed_topology import EvaluationCase, build_evaluation_cases
 from jaxborg.evaluation.cia.jax_resilience import (
     mean_resilience_episode,
@@ -152,6 +153,21 @@ def _fixed_role_state(state: Any, case: EvaluationCase) -> Any:
     return state.replace(extras=extras)
 
 
+def _blue_policy_action_masks(env: Any, state: Any, agents: Sequence[str]) -> jax.Array:
+    """Match training's Sleep-only decisions while an action is in progress.
+
+    The scripted environment exposes structural masks, which allow submitting
+    another Restore during a pending action. The simulator ignores that new
+    action but charges its cost. Joint training and native JAX-policy transfer
+    already force Sleep on these ticks; keep scripted evaluation consistent.
+    """
+    masks = env.get_avail_actions(state)
+    batch = jnp.stack([masks[agent] for agent in agents])
+    sleep_only = jnp.zeros_like(batch).at[:, BLUE_SLEEP].set(True)
+    busy = state.state.blue_pending_ticks[: len(agents)] > 0
+    return jnp.where(busy[:, None], sleep_only, batch)
+
+
 @partial(
     jax.jit,
     static_argnames=("policy_module", "env", "num_steps", "deterministic"),
@@ -178,9 +194,8 @@ def _run_jax_scripted_red_episode_scan(
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
 
     def _active_step(rng, current_obs, current_state, policy_carry):
-        masks = env.get_avail_actions(current_state)
         obs_batch = jnp.stack([current_obs[agent] for agent in blue_agents])
-        mask_batch = jnp.stack([masks[agent] for agent in blue_agents])
+        mask_batch = _blue_policy_action_masks(env, current_state, blue_agents)
         rng, policy_key = jax.random.split(rng)
         # Blue never goes dormant and the scan stops at termination, so its
         # sequence runs unbroken from the reset for the whole episode.
@@ -382,9 +397,8 @@ def run_jax_scripted_red_episode(
     total_reward = 0.0
     step_cia: list[jax.Array] = []
     for step_index in range(variant.num_steps):
-        masks = env.get_avail_actions(state)
         obs_batch = jnp.stack([obs[agent] for agent in blue_agents])
-        mask_batch = jnp.stack([masks[agent] for agent in blue_agents])
+        mask_batch = _blue_policy_action_masks(env, state, blue_agents)
         torch_seed = case.episode_seed * 1_000_003 + step_index * 17
         selected = _torch_blue_actions(
             policy,
@@ -417,7 +431,13 @@ def run_jax_scripted_red_episode(
 
 
 def _scripted_variant(base_variant: GameVariant, red: str) -> GameVariant:
-    variant = variant_for_red(red, resilience_roles=True)
+    variant = variant_for_red(
+        red,
+        resilience_roles=True,
+        red_reward=base_variant.red_reward,
+        blue_block_policy=base_variant.blue_block_policy,
+        cage4_enhanced_obs=base_variant.cage4_enhanced_obs,
+    )
     return replace(
         variant,
         name=f"{base_variant.name}_fsm" if red == "fsm" else variant.name,
@@ -572,6 +592,7 @@ def evaluate_jax_scripted_reds(
             "episodes_per_seed": episodes_per_seed,
             "episodes_per_topology": len(parsed_seeds) * episodes_per_seed,
             "stochastic": not deterministic,
+            "blue_busy_action_masking": True,
             "mean_reward": mean(rewards),
             "std_reward": stdev(rewards) if len(rewards) > 1 else 0.0,
             "n_episodes": len(rewards),

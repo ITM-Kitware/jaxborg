@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -50,7 +51,7 @@ class _OneStepEnv:
         assert topology_index == 4
         obs = {agent: jnp.zeros(2, dtype=jnp.float32) for agent in self.agents}
         state = _FakeState(
-            state=object(),
+            state=SimpleNamespace(blue_pending_ticks=jnp.zeros(len(self.agents), dtype=jnp.int32)),
             const=object(),
             extras={"host_resilience_role": jnp.zeros_like(jnp.asarray(self.expected_roles))},
         )
@@ -201,6 +202,7 @@ def test_sweep_supports_both_blue_bundle_backends_and_reuses_cases(
     assert all(call[-1] is True for call in episode_calls)
     for row in rows:
         assert row["eval_env"] == "jax_fsm"
+        assert row["blue_busy_action_masking"] is True
         assert row["topology_sampling"] == "exhaustive"
         assert row["episode_role_map_ids"] == ["map-a", "map-b"]
         assert row["cia_summary"] == {
