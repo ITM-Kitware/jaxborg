@@ -29,6 +29,7 @@ from jaxborg.actions.encoding import (
     BLUE_RESTORE_START,
     BLUE_SLEEP,
 )
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.checkpoint import (
     ModelBundle,
     PolicyBundleEntry,
@@ -208,6 +209,10 @@ def _bundle_entry(bundle: ModelBundle, path: Path, team: str) -> PolicyBundleEnt
         raise ValueError(f"{path} has no {team} policy; available: {sorted(bundle.policies)}")
     entry = bundle.policies[team]
     obs_dim, action_dim = TEAM_DIMS[team]
+    sidecar = _source_sidecar(path)
+    if team == "blue":
+        enabled = enhanced_obs_enabled(sidecar) if sidecar is not None else entry.obs_dim == blue_obs_size(True)
+        obs_dim = blue_obs_size(enabled)
     if entry.obs_dim not in (0, obs_dim):
         raise ValueError(f"{team} observation dimension mismatch: model={entry.obs_dim}, expected={obs_dim}")
     if entry.action_dim not in (0, action_dim):
@@ -235,6 +240,7 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
     entry = _bundle_entry(bundle, model_path, team)
     arch, sidecar = _entry_arch(model_path, entry, team)
     obs_dim, action_dim = TEAM_DIMS[team]
+    obs_dim = entry.obs_dim or obs_dim
     if backend_name == "jax":
         module = policy_from_arch(arch, action_dim=action_dim)
     else:
@@ -576,6 +582,9 @@ def run_matchup_episode(
     if len(backends) != 1:
         raise ValueError("mixed JAX/Torch matchup policies are not supported")
     backend = next(iter(backends))
+    actual_width = policies["blue"].source.get("observation_dim")
+    if actual_width is not None and actual_width != blue_obs_size(variant.cage4_enhanced_obs):
+        raise ValueError("Blue checkpoint and evaluation cage4_enhanced_obs must match")
 
     if env is None:
         env = make_joint_jax_env(

@@ -8,6 +8,7 @@ meta:
     game payoff (with the Red objective equal to the negative Blue score).
 
 algorithm: ippo
+cage4_enhanced_obs: true
 
 # During-training evaluation is disabled. Reward and CIA are measured after
 # training by the enabled built-in suites and explicit eval.after_training list.

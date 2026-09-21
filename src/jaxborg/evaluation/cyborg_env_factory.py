@@ -55,6 +55,10 @@ def make_cyborg_env(
     cyborg = CybORG(sg, "sim", seed=seed)
     if wrapper_class is None:
         return cyborg
+    if variant.cage4_enhanced_obs:
+        from jaxborg.evaluation.enhanced_blue_wrapper import enhanced_wrapper_class
+
+        wrapper_class = enhanced_wrapper_class(wrapper_class)
     return wrapper_class(env=cyborg, **(wrapper_kwargs or {}))
 
 

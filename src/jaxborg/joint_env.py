@@ -21,7 +21,8 @@ from jaxmarl.environments.spaces import Box, Discrete
 from jaxborg.actions.action_defs import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.red_policy import RED_POLICY_ACTION_DIM, RED_POLICY_SLEEP
-from jaxborg.constants import BLUE_OBS_SIZE, CC4_CONFIG, RED_OBS_SIZE
+from jaxborg.blue_observation_contract import blue_obs_size
+from jaxborg.constants import CC4_CONFIG, RED_OBS_SIZE
 from jaxborg.env import ScenarioEnv, ScenarioEnvState
 from jaxborg.learned_red import (
     compact_red_action_to_raw,
@@ -75,6 +76,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
         op_zone_min_servers: int | None = None,
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
+        cage4_enhanced_obs: bool = False,
         name: str | None = None,
     ):
         self._env = ScenarioEnv(
@@ -86,6 +88,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
             op_zone_min_servers=op_zone_min_servers,
             red_reward=red_reward,
             blue_block_policy=blue_block_policy,
+            cage4_enhanced_obs=cage4_enhanced_obs,
         )
         self.blue_block_policy = blue_block_policy
         self.cfg = scenario_config
@@ -104,8 +107,8 @@ class JointPolicyCC4Env(MultiAgentEnv):
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
             self.observation_spaces[agent] = Box(
                 low=0.0,
-                high=1.0,
-                shape=(BLUE_OBS_SIZE,),
+                high=2.0 if cage4_enhanced_obs else 1.0,
+                shape=(blue_obs_size(cage4_enhanced_obs),),
                 dtype=jnp.float32,
             )
         for agent in self.red_agents:

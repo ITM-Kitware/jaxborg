@@ -38,6 +38,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.checkpoint import load_torch_policy, read_sidecar, save_torch_bundle, write_sidecar
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.cyborg_joint import POLICY_AGENT_IDS, TEAM_SPECS, CyborgJointAdapter
@@ -264,6 +265,7 @@ class RewardScaler:
 
 
 def train_legacy(args, recipe, cfg):
+    obs_dim = blue_obs_size(enhanced_obs_enabled(recipe))
     device = torch.device("cpu")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -278,7 +280,7 @@ def train_legacy(args, recipe, cfg):
 
     agent = make_torch_policy(
         recipe["arch"]["name"],
-        obs_dim=OBS_DIM,
+        obs_dim=obs_dim,
         action_dim=ACT_DIM,
         hidden_dim=cfg["hidden_dim"],
         hidden_layers=cfg["hidden_layers"],
@@ -288,7 +290,7 @@ def train_legacy(args, recipe, cfg):
 
     num_steps = cfg["rollout_length"]
     num_envs = cfg["num_envs"]
-    obs_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, OBS_DIM))
+    obs_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, obs_dim))
     actions_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS), dtype=torch.long)
     logprobs_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS))
     rewards_all = torch.zeros((num_steps, num_envs))
@@ -350,7 +352,7 @@ def train_legacy(args, recipe, cfg):
                         actor_active_buf[step, env_idx, i] = bool(all_info[env_idx][aid]["actor_active"])
 
                 with torch.no_grad():
-                    obs_flat = obs_buf[step].reshape(-1, OBS_DIM)
+                    obs_flat = obs_buf[step].reshape(-1, obs_dim)
                     mask_flat = masks_buf[step].reshape(-1, ACT_DIM)
                     act, lp, _, val = agent.get_action_and_value(obs_flat, mask_flat)
                     actions_buf[step] = act.reshape(num_envs, NUM_AGENTS)
@@ -386,7 +388,7 @@ def train_legacy(args, recipe, cfg):
                 total_steps += num_envs
 
             with torch.no_grad():
-                next_obs_flat = torch.zeros(num_envs * NUM_AGENTS, OBS_DIM)
+                next_obs_flat = torch.zeros(num_envs * NUM_AGENTS, obs_dim)
                 for env_idx in range(num_envs):
                     for i in range(NUM_AGENTS):
                         raw_obs = all_obs[env_idx][AGENT_IDS[i]].astype(np.float32)
@@ -407,7 +409,7 @@ def train_legacy(args, recipe, cfg):
                     advantages[t] = lastgaelam = delta + cfg["gamma"] * cfg["gae_lambda"] * nextnonterminal * lastgaelam
                 returns = advantages + values_buf
 
-            accum_obs.append(obs_buf.reshape(-1, OBS_DIM).clone())
+            accum_obs.append(obs_buf.reshape(-1, obs_dim).clone())
             accum_act.append(actions_buf.reshape(-1).clone())
             accum_lp.append(logprobs_buf.reshape(-1).clone())
             accum_adv.append(advantages.reshape(-1).clone())
@@ -559,7 +561,7 @@ def train_legacy(args, recipe, cfg):
                     {
                         "blue": {
                             "weights": agent.state_dict(),
-                            "obs_dim": OBS_DIM,
+                            "obs_dim": obs_dim,
                             "action_dim": ACT_DIM,
                             "arch": dict(recipe["arch"]),
                             "trainable": True,
@@ -633,7 +635,7 @@ def train_legacy(args, recipe, cfg):
         {
             "blue": {
                 "weights": agent.state_dict(),
-                "obs_dim": OBS_DIM,
+                "obs_dim": obs_dim,
                 "action_dim": ACT_DIM,
                 "arch": dict(recipe["arch"]),
                 "trainable": True,
@@ -704,7 +706,11 @@ class TorchTeamRuntime:
     def __post_init__(self):
         spec = TEAM_SPECS[self.team]
         self.agent_ids = spec.agent_ids
-        self.obs_dim = spec.obs_dim
+        self.obs_dim = (
+            blue_obs_size(getattr(self.cfg.get("TRAIN_VARIANT"), "cage4_enhanced_obs", False))
+            if self.team == "blue"
+            else spec.obs_dim
+        )
         self.action_dim = spec.action_dim
         self.episode_rewards = np.zeros(self.num_envs, dtype=np.float64)
         if not self.trainable:
@@ -1019,6 +1025,8 @@ def _make_joint_runtimes(
     runtimes: dict[str, TorchTeamRuntime] = {}
     for team in ("blue", "red"):
         spec = TEAM_SPECS[team]
+        if team == "blue":
+            spec = type(spec)(spec.agent_ids, blue_obs_size(enhanced_obs_enabled(recipe)), spec.action_dim)
         team_cfg = project_cleanrl(recipe, team=team)
         for shared_key in ("num_envs", "rollout_length", "num_rollouts_per_update", "total_timesteps"):
             team_cfg[shared_key] = cfg[shared_key]

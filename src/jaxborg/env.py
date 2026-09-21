@@ -23,8 +23,9 @@ from jaxborg.actions.encoding import (
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
 from jaxborg.actions.red_common import apply_red_session_check, observed_exploit_ports
+from jaxborg.blue_observation_contract import blue_obs_size
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER
-from jaxborg.observations import get_blue_obs, get_red_obs
+from jaxborg.observations import get_blue_obs, get_red_obs, update_blue_observation_memory
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
@@ -65,6 +66,7 @@ def apply_all_actions(
     """
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
+    state = state.replace(blue_recovered_this_step=jnp.zeros_like(state.blue_recovered_this_step))
 
     if red_overrides is None:
         red_overrides = RedAgentOverrides.identity(n_red)
@@ -169,6 +171,7 @@ def apply_all_actions(
         axis=0,
     )
 
+    state = update_blue_observation_memory(state, const)
     return state.replace(
         fsm_host_entered=fsm_host_entered,
         red_impact_attempted=red_impact_attempted,
@@ -341,6 +344,7 @@ class ScenarioEnv(MultiAgentEnv):
         phase_rewards_bank: Sequence | None = None,
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
+        cage4_enhanced_obs: bool = False,
     ):
         if red_reward not in ("zero_sum", "damage"):
             raise ValueError(f"unknown red_reward {red_reward!r}")
@@ -350,6 +354,7 @@ class ScenarioEnv(MultiAgentEnv):
         # alternatives change and why they are opt-in.
         self.red_reward = red_reward
         self.blue_block_policy = blue_block_policy
+        self.cage4_enhanced_obs = cage4_enhanced_obs
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.training_mode = training_mode
@@ -441,7 +446,12 @@ class ScenarioEnv(MultiAgentEnv):
 
         for agent in self.blue_agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(
+                low=0.0,
+                high=2.0 if cage4_enhanced_obs else 1.0,
+                shape=(blue_obs_size(cage4_enhanced_obs),),
+                dtype=jnp.float32,
+            )
         for agent in self.red_agents:
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
@@ -520,7 +530,7 @@ class ScenarioEnv(MultiAgentEnv):
         return const
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
-        const = self._select_const(key)
+        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
         return self._reset_from_const(const)
 
     @property
@@ -541,7 +551,9 @@ class ScenarioEnv(MultiAgentEnv):
         topology_index: int | jax.Array,
     ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         """Reset on one exact snapshot-bank entry while retaining dynamic RNG."""
-        const = self._select_const(key, topology_index=topology_index)
+        const = self._select_const(key, topology_index=topology_index).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs
+        )
         return self._reset_from_const(const)
 
     def _reset_from_const(self, const: SimulatorConst) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
@@ -559,7 +571,7 @@ class ScenarioEnv(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
-        const = self._select_const(key)
+        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
         return self._reset_state_from_const(const)
 
     @partial(jax.jit, static_argnums=[0])
@@ -570,7 +582,9 @@ class ScenarioEnv(MultiAgentEnv):
         topology_index: int | jax.Array,
     ) -> ScenarioEnvState:
         """Auto-reset state on one exact topology while retaining dynamic RNG."""
-        const = self._select_const(key, topology_index=topology_index)
+        const = self._select_const(key, topology_index=topology_index).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs
+        )
         return self._reset_state_from_const(const)
 
     def _reset_state_from_const(self, const: SimulatorConst) -> ScenarioEnvState:

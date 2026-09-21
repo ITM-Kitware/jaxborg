@@ -31,6 +31,7 @@ from typing import Any
 
 import yaml
 
+from jaxborg.blue_observation_contract import enhanced_obs_enabled
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
@@ -73,6 +74,7 @@ def load(name_or_path: str) -> dict[str, Any]:
 def _validate(recipe: dict[str, Any], *, source: str) -> None:
     if not isinstance(recipe, dict):
         raise ValueError(f"{source}: recipe must be a YAML mapping")
+    enhanced_obs_enabled(recipe)
     for section in REQUIRED_SECTIONS:
         if section not in recipe:
             raise ValueError(f"{source}: missing required section '{section}'")
@@ -281,6 +283,8 @@ def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
         projected["arch"] = copy.deepcopy(arch_override)
     else:
         _deep_merge(projected["arch"], arch_override)
+    if projected["arch"]["name"] == "mappo":
+        projected["arch"]["cage4_enhanced_obs"] = enhanced_obs_enabled(projected)
     return projected
 
 
@@ -406,6 +410,7 @@ def _apply_variant_overrides(base: GameVariant, recipe: dict[str, Any]) -> GameV
         raise ValueError(
             f"unknown train.variant_overrides keys {sorted(unknown)}; allowed: {list(_VARIANT_OVERRIDE_KEYS)}"
         )
+    base = replace(base, cage4_enhanced_obs=enhanced_obs_enabled(recipe))
     if not overrides:
         return base
     return replace(base, **{k: overrides[k] for k in _VARIANT_OVERRIDE_KEYS if k in overrides})
@@ -441,6 +446,7 @@ def eval_variant(recipe: dict[str, Any]) -> GameVariant:
         resilience_roles=base.resilience_roles,
         red_reward=base.red_reward,
         blue_block_policy=base.blue_block_policy,
+        cage4_enhanced_obs=base.cage4_enhanced_obs,
     )
 
 

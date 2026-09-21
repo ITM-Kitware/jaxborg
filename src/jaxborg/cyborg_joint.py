@@ -84,7 +84,10 @@ class CyborgJointAdapter:
         self.variant = variant
         self._seed_rng = random.Random(seed)
         self.raw_env = make_cyborg_env(variant, self._seed_rng.randrange(2**31), wrapper_class=None)
-        self.blue_wrapper = BlueFlatWrapper(self.raw_env, pad_spaces=True)
+        from jaxborg.evaluation.enhanced_blue_wrapper import EnhancedBlueFlatWrapper
+
+        wrapper = EnhancedBlueFlatWrapper if variant.cage4_enhanced_obs else BlueFlatWrapper
+        self.blue_wrapper = wrapper(self.raw_env, pad_spaces=True)
         self.mappings: CC4Mappings | None = None
         self._discovered: list[set[int]] = [set() for _ in RED_AGENT_IDS]
         self._scanned_by_primary: list[set[int]] = [set() for _ in RED_AGENT_IDS]

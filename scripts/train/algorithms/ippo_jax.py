@@ -50,6 +50,7 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.checkpoint import (
     PolicyBundleEntry,
     load_jax_policy,
@@ -57,7 +58,6 @@ from jaxborg.checkpoint import (
     save_jax_bundle,
     write_sidecar,
 )
-from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
@@ -485,7 +485,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
 
     opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
     dims = {
-        "blue": (BLUE_OBS_SIZE, BLUE_ALLOW_TRAFFIC_END),
+        "blue": (blue_obs_size(enhanced_obs_enabled(recipe)), BLUE_ALLOW_TRAFFIC_END),
         "red": (RED_OBS_SIZE, RED_POLICY_ACTION_DIM),
     }
     networks = {}
@@ -897,7 +897,7 @@ def main(*, expected_algorithm: str | None = None):
                     "blue": PolicyBundleEntry(
                         weights=train_state.params,
                         team="blue",
-                        obs_dim=BLUE_OBS_SIZE,
+                        obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)),
                         action_dim=action_dim,
                         arch=dict(recipe["arch"]),
                         trainable=True,

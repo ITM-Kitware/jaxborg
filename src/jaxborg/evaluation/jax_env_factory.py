@@ -88,6 +88,7 @@ def make_jax_env(
         phase_rewards_bank=phase_rewards_bank,
         red_reward=variant.red_reward,
         blue_block_policy=variant.blue_block_policy,
+        cage4_enhanced_obs=variant.cage4_enhanced_obs,
         name=name,
     )
 
@@ -112,5 +113,6 @@ def make_joint_jax_env(
         op_zone_min_servers=variant.op_zone_servers,
         red_reward=variant.red_reward,
         blue_block_policy=variant.blue_block_policy,
+        cage4_enhanced_obs=variant.cage4_enhanced_obs,
         name=name,
     )

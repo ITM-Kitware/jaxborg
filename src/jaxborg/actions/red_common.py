@@ -819,6 +819,11 @@ def apply_exploit_success(
         host_max_pid=host_max_pid,
         host_compromised=host_compromised,
         host_has_malware=host_has_malware,
+        host_file_artifact=state.host_file_artifact.at[target_host].set(
+            jnp.where(
+                success, jnp.maximum(state.host_file_artifact[target_host], 1), state.host_file_artifact[target_host]
+            )
+        ),
         host_suspicious_process=host_suspicious_process,
         red_activity_this_step=activity,
         host_process_creation_pids=host_process_creation_pids,

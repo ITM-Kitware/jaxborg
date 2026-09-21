@@ -46,6 +46,7 @@ class SimulatorConst:
     num_hosts: chex.Array  # scalar int32
 
     green_agents_active: chex.Array  # scalar bool — False = skip green actions (SleepAgent parity)
+    cage4_enhanced_obs: bool = struct.field(pytree_node=False, default=False)
 
 
 @struct.dataclass
@@ -87,6 +88,12 @@ class SimulatorState:
     old_host_exploit_detected: chex.Array  # (num_hosts,) bool — malicious_processes aged
     host_suspicious_process: chex.Array  # (num_hosts,) bool
     host_has_malware: chex.Array  # (num_hosts,) bool
+    # File artefacts persist independently of live Red sessions: 0 none, 1 cmd, 2 escalate.
+    host_file_artifact: chex.Array
+    blue_file_evidence: chex.Array  # last completed Analyse result, not hidden file state
+    blue_process_memory: chex.Array
+    blue_network_memory: chex.Array
+    blue_recovered_this_step: chex.Array
 
     blocked_zones: chex.Array  # (num_subnets, num_subnets) bool
     messages: chex.Array  # (num_blue_agents, num_blue_agents, message_length) float
@@ -228,6 +235,11 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         old_host_exploit_detected=jnp.zeros(n_hosts, dtype=jnp.bool_),
         host_suspicious_process=jnp.zeros(n_hosts, dtype=jnp.bool_),
         host_has_malware=jnp.zeros(n_hosts, dtype=jnp.bool_),
+        host_file_artifact=jnp.zeros(n_hosts, dtype=jnp.int32),
+        blue_file_evidence=jnp.zeros(n_hosts, dtype=jnp.int32),
+        blue_process_memory=jnp.zeros(n_hosts, dtype=jnp.bool_),
+        blue_network_memory=jnp.zeros(n_hosts, dtype=jnp.bool_),
+        blue_recovered_this_step=jnp.zeros(n_hosts, dtype=jnp.bool_),
         blocked_zones=jnp.zeros((n_subnets, n_subnets), dtype=jnp.bool_),
         messages=jnp.zeros((n_blue, n_blue, cfg.message_length), dtype=jnp.float32),
         fsm_host_states=jnp.zeros((n_red, n_hosts), dtype=jnp.int32),

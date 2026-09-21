@@ -38,6 +38,7 @@ class GameVariant:
     num_steps: int = 500
     red_reward: str = "zero_sum"
     blue_block_policy: str = "cc4"
+    cage4_enhanced_obs: bool = False
 
     def __post_init__(self) -> None:
         if self.red_reward not in RED_REWARD_MODES:

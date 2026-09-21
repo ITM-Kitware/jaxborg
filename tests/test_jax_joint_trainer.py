@@ -802,3 +802,39 @@ def test_real_cc4_mappo_joint_update():
     for team in joint.TEAMS:
         assert int(states[team].step) == 1
         assert np.isfinite(float(metrics[team]["total_loss"]))
+
+
+@pytest.mark.parametrize("architecture", ["shared", "recurrent", "mappo"])
+def test_enhanced_obs_joint_update(architecture, monkeypatch):
+    """The actual rollout, PPO minibatches, and both optimizers accept 402-wide Blue inputs."""
+    from jaxborg.blue_observation_contract import blue_obs_size
+    from jaxborg.critic_observations import critic_obs_size
+    from jaxborg.scenarios.cc4.game_variant import GameVariant
+
+    class EnhancedEnv(_TinyMAPPOJointEnv):
+        def get_critic_obs(self, env_state, critic_input, *, team="blue"):
+            n = len(self.blue_agents if team == "blue" else self.red_agents)
+            width = critic_obs_size(critic_input, team=team, cage4_enhanced_obs=True)
+            return jnp.full((n, width), env_state.state.time.astype(jnp.float32))
+
+    env = EnhancedEnv(blue_obs_dim=blue_obs_size(True), red_obs_dim=706, blue_actions=3, red_actions=5)
+    monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_args, **_kwargs: env)
+    networks = {}
+    configs = {"blue": _config(), "red": _config()}
+    for team, action_dim in [("blue", 3), ("red", 5)]:
+        arch = dict(name=architecture, hidden_dim=8, hidden_layers=1)
+        if architecture == "recurrent":
+            arch.update(cell="lstm")
+        if architecture == "mappo":
+            arch.update(team=team, cage4_enhanced_obs=True, critic_input="joint_observations")
+        networks[team] = policy_from_arch(arch, action_dim=action_dim)
+        configs[team]["TRAIN_VARIANT"] = GameVariant(name="enhanced", cage4_enhanced_obs=True)
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    before = jax.tree.map(lambda x: np.array(x, copy=True), {t: states[t].params for t in joint.TEAMS})
+    norm = {t: joint.initial_reward_norm_state(1) for t in joint.TEAMS}
+    states, _, _, _, _, metrics = update(states, env_state, obs, jax.random.PRNGKey(7), norm)
+    jax.block_until_ready(metrics)
+    for team in joint.TEAMS:
+        assert _tree_changed(before[team], states[team].params)
+        assert np.isfinite(float(metrics[team]["total_loss"]))

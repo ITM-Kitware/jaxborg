@@ -15,6 +15,7 @@ meta:
       both         {red_reward: damage, blue_block_policy: mission_safe}
 
 algorithm: ippo
+cage4_enhanced_obs: true
 
 mlflow:
   checkpoint_eval:
