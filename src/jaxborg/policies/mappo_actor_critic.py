@@ -30,10 +30,11 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
     activation: str = "tanh"
     critic_input: str = "global_state"
     team: str = "blue"
+    cage4_enhanced_obs: bool = False
 
     @property
     def critic_obs_dim(self):
-        return critic_obs_size(self.critic_input, team=self.team)
+        return critic_obs_size(self.critic_input, team=self.team, cage4_enhanced_obs=self.cage4_enhanced_obs)
 
     def setup(self):
         self.actor_head = _ActorTrunk(self.action_dim, self.hidden_dim, self.hidden_layers, self.activation)
@@ -48,9 +49,20 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
         return pi, self.critic_head(critic_obs)
 
 
-def jax_factory(action_dim, hidden_dim, hidden_layers, activation, *, critic_input="global_state", team="blue"):
+def jax_factory(
+    action_dim,
+    hidden_dim,
+    hidden_layers,
+    activation,
+    *,
+    critic_input="global_state",
+    team="blue",
+    cage4_enhanced_obs=False,
+):
     critic_obs_size(critic_input, team=team)  # Validate the input mode and team before compiling.
-    return _JaxMAPPOActorCritic(action_dim, hidden_dim, hidden_layers, activation, critic_input, team)
+    return _JaxMAPPOActorCritic(
+        action_dim, hidden_dim, hidden_layers, activation, critic_input, team, cage4_enhanced_obs
+    )
 
 
 def torch_factory(**_):

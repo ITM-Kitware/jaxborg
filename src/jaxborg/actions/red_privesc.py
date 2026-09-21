@@ -166,6 +166,9 @@ def apply_privesc(
         state.host_suspicious_process,
     )
     return state.replace(
+        host_file_artifact=state.host_file_artifact.at[target_host].set(
+            jnp.where(success, 2, state.host_file_artifact[target_host])
+        ),
         red_sessions=red_sessions,
         red_session_count=red_session_count,
         red_abstract_session_count=red_abstract_session_count,

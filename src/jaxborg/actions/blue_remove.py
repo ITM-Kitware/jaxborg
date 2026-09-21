@@ -392,6 +392,12 @@ def apply_blue_remove(
         jnp.where(owner_killed, jnp.int32(-1), state.red_scan_source_pid[:, target_host])
     )
     return state.replace(
+        blue_file_evidence=state.blue_file_evidence.at[target_host].set(
+            jnp.where(covers_host & const.cage4_enhanced_obs, 0, state.blue_file_evidence[target_host])
+        ),
+        blue_recovered_this_step=state.blue_recovered_this_step.at[target_host].set(
+            state.blue_recovered_this_step[target_host] | (covers_host & const.cage4_enhanced_obs)
+        ),
         red_sessions=new_sessions,
         red_session_count=new_session_count,
         red_abstract_session_count=new_abstract_session_count,

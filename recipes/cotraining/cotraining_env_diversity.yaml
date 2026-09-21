@@ -9,6 +9,7 @@ meta:
     remain disabled. Evaluation uses the same held-out bank as cotraining.
 
 algorithm: ippo
+cage4_enhanced_obs: true
 
 # During-training evaluation is disabled. Reward and CIA are measured after
 # training by the enabled built-in suites and explicit eval.after_training list.

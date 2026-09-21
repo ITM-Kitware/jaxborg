@@ -25,6 +25,7 @@ def variant_for_red(
     resilience_roles: bool = False,
     red_reward: str = "zero_sum",
     blue_block_policy: str = "cc4",
+    cage4_enhanced_obs: bool = False,
 ) -> GameVariant:
     """Build the variant for one scripted/learned Red selector.
 
@@ -35,7 +36,11 @@ def variant_for_red(
     mask would score a different policy.
     """
     name = (red_agent or "finite_state").strip().lower()
-    overrides = {"red_reward": red_reward, "blue_block_policy": blue_block_policy}
+    overrides = {
+        "red_reward": red_reward,
+        "blue_block_policy": blue_block_policy,
+        "cage4_enhanced_obs": cage4_enhanced_obs,
+    }
     if name in {"fsm", "finite_state"}:
         return replace(
             CC4_STOCK,

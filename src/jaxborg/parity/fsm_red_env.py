@@ -30,7 +30,8 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import BLUE_OBS_SIZE, GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.blue_observation_contract import blue_obs_size
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import ScenarioEnv, ScenarioEnvState
 from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
@@ -101,6 +102,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         phase_rewards_bank: Sequence | None = None,
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
+        cage4_enhanced_obs: bool = False,
         name: Optional[str] = None,
     ):
         self.blue_block_policy = blue_block_policy
@@ -116,6 +118,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             phase_rewards_bank=phase_rewards_bank,
             red_reward=red_reward,
             blue_block_policy=blue_block_policy,
+            cage4_enhanced_obs=cage4_enhanced_obs,
         )
         self._red_selector = red_selector
         self._extras_factory = extras_factory
@@ -128,7 +131,12 @@ class FsmRedCC4Env(MultiAgentEnv):
 
         for agent in self.agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(
+                low=0.0,
+                high=2.0 if cage4_enhanced_obs else 1.0,
+                shape=(blue_obs_size(cage4_enhanced_obs),),
+                dtype=jnp.float32,
+            )
 
     # ------------------------------------------------------------------
     # Reset

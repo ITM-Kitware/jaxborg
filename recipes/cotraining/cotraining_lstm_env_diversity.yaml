@@ -12,6 +12,7 @@ meta:
     See docs/training.md for architecture provenance and hidden-state handling.
 
 algorithm: ippo
+cage4_enhanced_obs: true
 
 mlflow:
   checkpoint_eval:

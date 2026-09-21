@@ -18,6 +18,7 @@ import numpy as np
 import torch
 from CybORG.Agents.Wrappers import EnterpriseMAE
 
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.policies import make_torch_policy
@@ -33,7 +34,7 @@ EPISODE_LENGTH = 500
 
 
 def _pad_obs_mask(obs_dict, info_dict):
-    obs = np.zeros((NUM_AGENTS, OBS_DIM), dtype=np.float32)
+    obs = np.zeros((NUM_AGENTS, max(OBS_DIM, max(len(o) for o in obs_dict.values()))), dtype=np.float32)
     mask = np.zeros((NUM_AGENTS, ACT_DIM), dtype=np.float32)
     for i, aid in enumerate(AGENT_IDS):
         raw_o = np.asarray(obs_dict[aid], dtype=np.float32)
@@ -47,7 +48,7 @@ def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, determini
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
     obs_d, info_d = r.obs, r.info
     total = 0.0
-    for _ in range(EPISODE_LENGTH):
+    for _ in range(variant.num_steps):
         obs, mask = _pad_obs_mask(obs_d, info_d)
         with torch.no_grad():
             obs_t = torch.from_numpy(obs)
@@ -69,7 +70,7 @@ def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, 
     arch = recipe["arch"]
     agent = make_torch_policy(
         arch["name"],
-        obs_dim=OBS_DIM,
+        obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)),
         action_dim=ACT_DIM,
         hidden_dim=int(arch.get("hidden_dim", 256)),
         hidden_layers=int(arch.get("hidden_layers", 2)),
@@ -94,7 +95,7 @@ def load_torch_policy(model_path: str | Path):
     entry = load_bundle_policy(
         model_path,
         "blue",
-        expected_obs_dim=OBS_DIM,
+        expected_obs_dim=None,
         expected_action_dim=ACT_DIM,
     )
     state_dict = entry.weights
@@ -123,11 +124,17 @@ def load_torch_policy(model_path: str | Path):
         recipe = {
             "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
             "algorithm": "ippo",
+            "cage4_enhanced_obs": entry.obs_dim == blue_obs_size(True),
             "arch": arch,
         }
     if entry.arch.get("name"):
         recipe = dict(recipe)
         recipe["arch"] = dict(entry.arch)
+    expected_obs_dim = blue_obs_size(enhanced_obs_enabled(recipe))
+    if entry.obs_dim not in (0, expected_obs_dim):
+        raise ValueError(
+            f"Blue checkpoint observation dimension {entry.obs_dim} disagrees with recipe {expected_obs_dim}"
+        )
     agent = load_torch_policy_from_recipe(recipe, state_dict)
     return agent, recipe
 
@@ -135,7 +142,9 @@ def load_torch_policy(model_path: str | Path):
 def _cyborg_worker(args):
     """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
     model_path, deterministic, variant, items = args
-    agent, _ = load_torch_policy(model_path)
+    agent, recipe = load_torch_policy(model_path)
+    if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+        raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
     out = []
     for idx, seed in items:
         env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
@@ -166,7 +175,9 @@ def evaluate_on_cyborg(
     seed_log: list[int] = [0] * total
 
     if workers <= 1:
-        agent, _ = load_torch_policy(model_path)
+        agent, recipe = load_torch_policy(model_path)
+        if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+            raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
         for idx, seed in items:
             env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
             r = rollout_episode(env, variant, ep_seed=seed, agent=agent, deterministic=deterministic)

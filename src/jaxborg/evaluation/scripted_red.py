@@ -22,6 +22,8 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
+from jaxborg.blue_observation_contract import enhanced_obs_enabled
+
 DEFAULT_SCRIPTED_REDS = ("fsm", "cia_c", "cia_i", "cia_a")
 _SUPPORTED_SCRIPTED_REDS = frozenset(DEFAULT_SCRIPTED_REDS)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -279,7 +281,7 @@ def evaluate_scripted_reds(
     rows: list[dict[str, Any]] = []
 
     for red in settings.reds:
-        variant = variant_for_red(red)
+        variant = variant_for_red(red, cage4_enhanced_obs=enhanced_obs_enabled(recipe))
         print(
             f"Blue from {model_path.name} vs {red}: {len(settings.seeds) * settings.episodes_per_seed} episodes",
             flush=True,
@@ -315,6 +317,7 @@ def evaluate_scripted_reds(
             "eval_env": "cyborg",
             "eval_red": red,
             "variant": variant.name,
+            "cage4_enhanced_obs": variant.cage4_enhanced_obs,
             "red_agent": variant.red_agent,
             "resilience_roles": variant.resilience_roles,
             "seeds": list(settings.seeds),
