@@ -154,11 +154,15 @@ For an explicit bank, the number of paths listed under
 `jax.num_envs` controls the number of parallel environment instances. It does
 not control the number of distinct topologies.
 
-At every episode reset, each parallel environment samples one bank entry
-uniformly with replacement. A fixed training seed reproduces the sampling
-sequence. Sampling is not round-robin, and there is no quota that guarantees
-each entry will be used the same number of times. Weighted sampling,
-curricula, and without-replacement sampling are not currently implemented.
+At every episode reset, training draws a fresh random permutation of the bank
+and assigns one entry to each parallel environment. Sampling is therefore
+without replacement within a parallel reset batch, so a diversified bank must
+contain at least `jax.num_envs` entries. Sampling starts from a new permutation
+at the next reset; it is not round-robin and does not impose equal usage across
+episode batches. A one-entry bank remains the fixed-topology control and is
+intentionally shared by every parallel environment. A fixed training seed
+reproduces the sampling sequence. Weighted sampling and curricula are not
+currently implemented.
 
 Explicit paths may be absolute or relative. Relative paths are resolved from
 the repository root, not from the recipe's directory. Globs and directory
@@ -244,8 +248,9 @@ evaluator.
 - `exhaustive` (the default) runs every requested dynamics seed/episode on
   every held-out topology using paired rollout keys. The matchup and Phase 6
   JSON outputs record the exact per-episode topology path;
-- `random` preserves training-style uniform sampling with replacement from
-  the evaluation pool and therefore does not guarantee equal coverage.
+- `random` samples uniformly with replacement from the evaluation pool and
+  therefore does not guarantee equal coverage. This evaluation-only mode is
+  intentionally independent of training's without-replacement batch sampling.
 
 For learned Blue-versus-learned Red evaluation, the recipe is enough:
 
