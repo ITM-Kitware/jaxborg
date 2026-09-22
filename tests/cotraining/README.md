@@ -7,6 +7,9 @@ This folder groups tests for Red/Blue learning and the cotraining workflow:
 - Team recipe overrides, training topology sampling, and model bundles.
 - Checkpoint evaluation, learned matchups, cross-play, cross-seed play, and post-training evaluation.
 
+CLI argument handling and shell launchers are outside this folder's scope.
+Dedicated CIA and resilience tests live in [`../resilience`](../resilience).
+
 Shared fixtures and default slow-test exclusions come from `tests/conftest.py`
 and `pyproject.toml`. General simulator, recipe-loader, and parity tests remain
 in their existing locations.

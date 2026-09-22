@@ -115,7 +115,7 @@ def test_eval_red_cli_flag_overrides_recipe(monkeypatch, tmp_path):
     that ``eval_recipe.main`` actually resolves, exercising the CLI > recipe
     precedence end to end.
     """
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     script_path = repo_root / "scripts" / "eval" / "eval_recipe.py"
     spec_root = str(repo_root / "scripts" / "eval")
     if spec_root not in sys.path:
@@ -175,7 +175,7 @@ def test_eval_red_cli_flag_overrides_recipe(monkeypatch, tmp_path):
 
 def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
     """When --eval-red is not passed, recipe eval.red still applies."""
-    repo_root = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[2]
     script_path = repo_root / "scripts" / "eval" / "eval_recipe.py"
 
     sidecar_recipe = _make_recipe(eval_section={"variant": "cia_resilience", "red": "cia_i"})

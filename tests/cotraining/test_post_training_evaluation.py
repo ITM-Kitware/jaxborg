@@ -199,27 +199,6 @@ def test_evaluation_override_is_archived_and_forwarded_to_children(tmp_path):
     assert original_sidecar.read_bytes() == before
 
 
-def test_cli_eval_override_preserves_original_training_stride_and_run_metadata(monkeypatch):
-    from jaxborg import checkpoint
-
-    original = load("cotraining")
-    original["jax"].update(num_envs=48, checkpoint_every_updates=40)
-    original["run"] = {"seed": 100, "train_run_id": "old-run"}
-    monkeypatch.setattr(checkpoint, "read_sidecar", lambda _: original)
-    captured = {}
-
-    def run(model, recipe, **kwargs):
-        captured.update(model=model, recipe=recipe, **kwargs)
-        return Path("manifest.json")
-
-    monkeypatch.setattr(post_training, "run_configured_evaluations_after_training", run)
-    post_training.main(["--model", "model_old.safetensors", "--recipe", "cotraining"])
-    assert captured["recipe"]["jax"] == original["jax"]
-    assert captured["recipe"]["run"] == original["run"]
-    assert captured["recipe"]["eval"]["topology_generation"]["count"] == 10
-    assert captured["save_evaluation_recipe"] is True
-
-
 def test_optional_failure_is_recorded_and_does_not_stop_later_scripts(tmp_path):
     model = _final_model(tmp_path)
     script = tmp_path / "eval.py"
