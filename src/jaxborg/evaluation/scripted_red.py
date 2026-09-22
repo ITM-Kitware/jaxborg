@@ -467,6 +467,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--progress", action="store_true", help="Print every episode")
     parser.add_argument(
         "--name",
+        "--eval-name",  # Used by co-training recipes, including saved model sidecars.
         default=os.environ.get("JAXBORG_EVAL_NAME"),
         help="Optional evaluation name used in result files and MLflow metric keys",
     )
