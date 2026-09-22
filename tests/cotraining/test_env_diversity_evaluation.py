@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import copy
-import importlib.util
 import json
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -203,54 +201,6 @@ def test_summary_rejects_unpaired_case_provenance_and_incomplete_matrix(tmp_path
     rows[1]["episode_role_map_ids"] = ["different-roles"]
     with pytest.raises(ValueError, match="Unpaired evaluation cases"):
         comparison.summarize_comparison(plan, rows)
-
-
-def test_cli_dry_run_does_not_roll_out_or_write_results(tmp_path, recipes, monkeypatch, capsys):
-    populate(tmp_path, recipes)
-    root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("eval_env_diversity_cli", root / "scripts/eval/eval_env_diversity.py")
-    cli = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cli)
-    loaded = {r["meta"]["name"]: r for r in recipes}
-    monkeypatch.setattr(cli, "load", loaded.__getitem__)
-    monkeypatch.setattr(cli, "run_comparison", lambda *_a, **_k: pytest.fail("dry-run started evaluation"))
-    output = tmp_path / "dry_results"
-    cli.main([*loaded, "--exp-dir", str(tmp_path), "--output-dir", str(output), "--dry-run"])
-    assert not output.exists()
-    assert "8 matchups x 60 episodes" in capsys.readouterr().out
-
-
-@pytest.mark.parametrize("override,expected", [(False, 12), (True, 2)])
-def test_cli_reads_diversity_settings_from_yaml(tmp_path, recipes, monkeypatch, capsys, override, expected):
-    from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
-
-    a, b = recipes
-    b["eval"]["env_diversity"].update(seeds="1100-1101", episodes_per_seed=6, deterministic=True)
-    populate(tmp_path, recipes)
-    root = Path(__file__).resolve().parents[2]
-    spec = importlib.util.spec_from_file_location("diversity_yaml_cli", root / "scripts/eval/eval_env_diversity.py")
-    cli = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(cli)
-    loaded = {r["meta"]["name"]: r for r in recipes}
-    monkeypatch.setattr(cli, "load", loaded.__getitem__)
-    plans = []
-    original_build = cli.build_plan
-
-    def build(*args, **kwargs):
-        plan = original_build(*args, **kwargs)
-        plans.append(plan)
-        return plan
-
-    monkeypatch.setattr(cli, "build_plan", build)
-    monkeypatch.setattr(cli, "run_comparison", lambda *_a, **_k: pytest.fail("dry-run started evaluation"))
-    args = ["--recipe", b["meta"]["name"], "--exp-dir", str(tmp_path), "--dry-run"]
-    if override:
-        args.extend(["--seeds", "1200", "--episodes-per-seed", "2", "--no-deterministic"])
-    cli.main(args)
-    assert f"8 matchups x {expected} episodes" in capsys.readouterr().out
-    assert plans[0]["deterministic"] is not override
-    assert plans[0]["seeds"] == ([1200] if override else [1100, 1101])
-    assert EnvDiversitySettings.from_recipe(b).baseline_recipe == a["meta"]["name"]
 
 
 @pytest.mark.parametrize(

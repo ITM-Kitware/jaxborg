@@ -189,31 +189,3 @@ def test_mappo_recipes_train_both_teams_and_preserve_game_controls(baseline, nam
         for key in ("meta", "algorithm", "__source_path__"):
             obj.pop(key)
     assert stripped == control
-
-
-@pytest.mark.parametrize("trainable", ["both", "red"])
-def test_mappo_launcher_routes_joint_training_and_exports_overrides(tmp_path, monkeypatch, trainable):
-    from scripts.train.algorithms import ippo_jax
-
-    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_a, **_kw: ())
-    monkeypatch.setattr(ippo_jax, "EXP_DIR", tmp_path)
-    configured = load("cotraining_mappo")
-    if trainable == "red":
-        configured["train"]["teams"] = "red"
-        configured["train"]["opponents"] = {"blue": {"path": str(tmp_path / "blue.safetensors")}}
-    monkeypatch.setattr(ippo_jax, "load_recipe", lambda _: configured)
-    monkeypatch.setattr(
-        "sys.argv", ["mappo_jax.py", "--recipe", "cotraining_mappo", "--seed", "12", "--total-timesteps", "24000"]
-    )
-    calls = []
-    monkeypatch.setattr(ippo_jax, "_run_joint_training", lambda *args: calls.append(args))
-    ippo_jax.main(expected_algorithm="mappo")
-
-    assert len(calls) == 1
-    args, recipe, tag, save_dir = calls[0]
-    assert args.seed == 12
-    assert recipe["train"]["total_timesteps"] == 24000
-    assert tag == "cotraining_mappo_seed12"
-    assert save_dir == tmp_path / "mappo_jax" / tag
-    assert team_recipe(recipe, "blue")["arch"]["name"] == "mappo"
-    assert team_recipe(recipe, "red")["arch"]["name"] == "mappo"

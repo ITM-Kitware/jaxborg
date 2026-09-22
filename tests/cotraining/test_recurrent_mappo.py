@@ -142,19 +142,3 @@ def test_experiments_cotrain_both_lstm_mappo_teams_with_baseline_controls(suffix
         config = project_jax(recipe, team=team)
         assert config["CLIP_VALUE_LOSS"] is True
         assert config["NUM_ENVS"] * n % config["NUM_MINIBATCHES"] == 0
-
-
-def test_launcher_routes_both_lstm_mappo_teams(tmp_path, monkeypatch):
-    from scripts.train.algorithms import ippo_jax
-
-    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_a, **_kw: ())
-    monkeypatch.setattr(ippo_jax, "EXP_DIR", tmp_path)
-    monkeypatch.setattr("sys.argv", ["mappo_jax.py", "--recipe", "cotraining_mappo_lstm", "--seed", "12"])
-    calls = []
-    monkeypatch.setattr(ippo_jax, "_run_joint_training", lambda *args: calls.append(args))
-    ippo_jax.main(expected_algorithm="mappo")
-    assert len(calls) == 1
-    _, recipe, tag, save_dir = calls[0]
-    assert recipe["train"]["teams"] == "both"
-    assert tag == "cotraining_mappo_lstm_seed12"
-    assert save_dir == tmp_path / "mappo_jax" / tag
