@@ -54,17 +54,17 @@ def test_evaluation_cases_are_ordered_and_include_auditable_roles(tmp_path):
     _save_topology(first, 21)
     _save_topology(second, 22)
 
-    cases = build_evaluation_cases([first, second], [100, 200], 2)
+    cases = build_evaluation_cases([first, second], [100, 101], 2)
 
     assert [(case.topology_index, case.base_seed, case.replicate_index, case.episode_seed) for case in cases] == [
-        (0, 100, 0, 100),
-        (0, 100, 1, 101),
-        (0, 200, 0, 200),
-        (0, 200, 1, 201),
-        (1, 100, 0, 100),
-        (1, 100, 1, 101),
-        (1, 200, 0, 200),
-        (1, 200, 1, 201),
+        (0, 100, 0, 200),
+        (0, 100, 1, 201),
+        (0, 101, 0, 202),
+        (0, 101, 1, 203),
+        (1, 100, 0, 200),
+        (1, 100, 1, 201),
+        (1, 101, 0, 202),
+        (1, 101, 1, 203),
     ]
     assert all(case.topology_path.is_absolute() for case in cases)
     assert np.asarray(cases[0].role_array).dtype == np.int32

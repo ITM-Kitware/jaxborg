@@ -21,6 +21,7 @@ from CybORG.Agents.Wrappers import EnterpriseMAE
 from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.policies import make_torch_policy
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
@@ -45,6 +46,8 @@ def _pad_obs_mask(obs_dict, info_dict):
 
 
 def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool) -> float:
+    # Policy sampling must also be reproducible across worker counts and reruns.
+    torch.manual_seed(ep_seed)
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
     obs_d, info_d = r.obs, r.info
     total = 0.0
@@ -168,7 +171,7 @@ def evaluate_on_cyborg(
     Episodes are independent — set `workers > 1` to fan out across processes
     (each worker spawns a clean Python interpreter and loads the model).
     """
-    flat = [s + ep for s in seeds for ep in range(episodes_per_seed)]
+    flat = expand_episode_seeds(seeds, episodes_per_seed)
     total = len(flat)
     items = list(enumerate(flat))
     rewards: list[float] = [0.0] * total

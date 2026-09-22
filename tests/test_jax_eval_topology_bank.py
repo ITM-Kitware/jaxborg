@@ -47,7 +47,7 @@ def test_phase6_run_eval_resolves_and_records_topology_bank(monkeypatch, tmp_pat
 
     class FakePolicy:
         def apply(self, params, obs, mask):
-            return SimpleNamespace(logits=jnp.zeros((1,), dtype=jnp.float32)), None
+            return SimpleNamespace(logits=jnp.zeros((*obs.shape[:-1], 1), dtype=jnp.float32)), None
 
     class FakeEnv:
         def reset(self, key):

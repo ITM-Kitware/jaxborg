@@ -20,6 +20,7 @@ from typing import Any
 from safetensors import safe_open
 
 from jaxborg.checkpoint import read_sidecar
+from jaxborg.evaluation.episode_seeds import EPISODE_SEED_SCHEME
 from jaxborg.evaluation.play_priors import _git_commit
 from jaxborg.recipe import REPO_ROOT, project_eval, train_variant
 from jaxborg.topology_banks import validate_topology_split
@@ -209,6 +210,7 @@ def build_plan(
                     )
     return {
         "schema_version": 1,
+        "episode_seed_scheme": EPISODE_SEED_SCHEME,
         "git_commit": _git_commit(),
         "recipes": recipes,
         "eval_recipe": reference,

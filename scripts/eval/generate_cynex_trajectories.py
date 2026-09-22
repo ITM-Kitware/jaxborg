@@ -71,20 +71,23 @@ def _load_jax_model(path: str):
     import jax
 
     from jaxborg.evaluation.jax_runner import load_jax_checkpoint
+    from jaxborg.policies import initial_carry, policy_step
     from jaxborg.policies.categorical import Categorical as JaxCategorical
 
     policy, params, recipe = load_jax_checkpoint(path)
     print(f"Loaded JAX checkpoint from {path} (arch={recipe['arch']['name']})")
 
-    def _fwd(o, m):
-        pi, _ = policy.apply(params, o, m)
-        return pi.logits
-
     @jax.jit
-    def batched_step(obs_stack, mask_stack, keys):
-        logits = jax.vmap(_fwd)(obs_stack, mask_stack)
+    def batched_step(obs_stack, mask_stack, keys, carry=None, deterministic=False):
+        import jax.numpy as jnp
+
+        if carry is None:
+            carry = initial_carry(policy, obs_stack.shape[0])
+        pi, _, carry = policy_step(policy, params, obs_stack, mask_stack, carry=carry)
+        logits = pi.logits
         actions = jax.vmap(lambda lg, k: JaxCategorical(logits=lg).sample(seed=k))(logits, keys)
-        return actions, logits
+        actions = jnp.where(deterministic, jnp.argmax(logits, axis=-1), actions)
+        return actions, logits, carry
 
     return batched_step, params
 
@@ -283,6 +286,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     cumulative_rewards = {a: 0.0 for a in blue_agents}
     actual_steps = 0
     rng = jax.random.PRNGKey(seed)
+    policy_carry = None
 
     for step in range(steps):
         if wrapper.agents:
@@ -298,7 +302,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in wrapper.agents])
 
             # JAX policy inference
-            actions_arr, _ = batched_step_fn(obs_stack, masks, act_keys)
+            actions_arr, _, policy_carry = batched_step_fn(obs_stack, masks, act_keys, policy_carry, deterministic)
             actions_np = np.asarray(actions_arr)
 
             # Translate JAX actions -> CybORG actions

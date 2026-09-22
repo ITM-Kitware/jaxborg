@@ -218,10 +218,11 @@ def main():
     out_dir = EXP_DIR / "eval"
     out_dir.mkdir(parents=True, exist_ok=True)
     if args.output:
-        out_path = Path(args.output)
+        out_path = Path(args.output).expanduser()
     else:
         name = f"_{eval_name}" if eval_name else ""
         out_path = out_dir / f"{row['recipe_name']}_{model_path.stem}{name}_{eval_id}.jsonl"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(row, indent=2) + "\n")
     print(f"\nmean: {m:.2f} ± {s:.2f} (n={len(rewards)})", flush=True)
     print(f"wrote: {out_path}", flush=True)
