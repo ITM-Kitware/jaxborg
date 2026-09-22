@@ -15,25 +15,27 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
 from jaxborg.evaluation.env_diversity import build_plan, run_comparison
+from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
 from jaxborg.evaluation.play_priors import _parse_seeds
 from jaxborg.recipe import load
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("baseline_recipe", help="Non-diverse training recipe name or YAML path")
-    parser.add_argument("diverse_recipe", help="Diverse training recipe name or YAML path")
+    parser.add_argument("baseline_recipe", nargs="?", help="Non-diverse training recipe name or YAML path")
+    parser.add_argument("diverse_recipe", nargs="?", help="Diverse training recipe name or YAML path")
+    parser.add_argument("--recipe", help="Diverse recipe containing eval.env_diversity settings and baseline_recipe")
     parser.add_argument("--exp-dir", default=os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp"))
     parser.add_argument("--train-seeds", help="Training seeds to compare; default: intersection of available seeds")
-    parser.add_argument("--seeds", default="1000-1009", help="Evaluation episode seeds, separate from training seeds")
-    parser.add_argument("--episodes-per-seed", type=int, default=1)
+    parser.add_argument("--seeds", help="Override YAML evaluation episode seeds, separate from training seeds")
+    parser.add_argument("--episodes-per-seed", type=int, help="Override YAML episodes per seed")
     parser.add_argument(
         "--checkpoint-step", type=int, help="Exact periodic checkpoint step; default: completed final models"
     )
     parser.add_argument("--baseline-tag", default="*", help="Run-directory glob to disambiguate baseline reruns")
     parser.add_argument("--diverse-tag", default="*", help="Run-directory glob to disambiguate diverse reruns")
     parser.add_argument("--eval-recipe", help="Optional recipe supplying a common eval section for both conditions")
-    parser.add_argument("--deterministic", action="store_true")
+    parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--output-dir", help="New result directory; default: timestamped directory under EXP_DIR/eval")
     parser.add_argument("--resume", action="store_true", help="Resume the identical plan in --output-dir")
     parser.add_argument(
@@ -43,18 +45,31 @@ def main(argv=None):
     if args.resume and not args.output_dir:
         parser.error("--resume requires --output-dir")
     try:
+        if args.recipe:
+            if args.baseline_recipe or args.diverse_recipe:
+                raise ValueError("Use --recipe or two positional recipes, not both")
+            diverse = load(args.recipe)
+            settings = EnvDiversitySettings.from_recipe(diverse)
+            if not settings.enabled:
+                raise ValueError("--recipe requires enabled eval.env_diversity settings")
+            baseline = load(settings.baseline_recipe)
+        else:
+            if not args.baseline_recipe or not args.diverse_recipe:
+                raise ValueError("Supply --recipe or both baseline_recipe and diverse_recipe")
+            baseline, diverse = load(args.baseline_recipe), load(args.diverse_recipe)
+            settings = EnvDiversitySettings.from_recipe(diverse)
         plan = build_plan(
-            load(args.baseline_recipe),
-            load(args.diverse_recipe),
+            baseline,
+            diverse,
             args.exp_dir,
             train_seeds=None if args.train_seeds is None else _parse_seeds(args.train_seeds),
-            seeds=_parse_seeds(args.seeds),
-            episodes_per_seed=args.episodes_per_seed,
+            seeds=settings.seeds if args.seeds is None else _parse_seeds(args.seeds),
+            episodes_per_seed=settings.episodes_per_seed if args.episodes_per_seed is None else args.episodes_per_seed,
             checkpoint_step=args.checkpoint_step,
             baseline_tag=args.baseline_tag,
             diverse_tag=args.diverse_tag,
             eval_recipe=None if args.eval_recipe is None else load(args.eval_recipe),
-            deterministic=args.deterministic,
+            deterministic=settings.deterministic if args.deterministic is None else args.deterministic,
         )
     except (ValueError, FileNotFoundError) as exc:
         parser.error(str(exc))

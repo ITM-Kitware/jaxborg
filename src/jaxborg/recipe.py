@@ -173,6 +173,7 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
     from jaxborg.evaluation.cross_play import CrossPlaySettings
     from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings
+    from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
     from jaxborg.evaluation.play_priors import PlayPriorsSettings
     from jaxborg.evaluation.post_training import PostTrainingEvalSettings
     from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
@@ -182,6 +183,7 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     play_priors = PlayPriorsSettings.from_recipe(recipe)
     cross_play = CrossPlaySettings.from_recipe(recipe)
     cross_seed_play = CrossSeedPlaySettings.from_recipe(recipe)
+    env_diversity = EnvDiversitySettings.from_recipe(recipe)
     checkpoint_scripted_reds = CheckpointScriptedRedsSettings.from_recipe(recipe)
     # Every checkpoint-history suite replays durable checkpoints, so they all
     # need a positive checkpoint stride and a reserved pipeline name.
@@ -203,7 +205,11 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         if any(evaluation.name == name for evaluation in post_training.evaluations):
             raise ValueError(f"{source}: eval.after_training name {name!r} is reserved")
     # Replaying a co-trained pair needs both policies in every bundle.
-    for name, enabled in (*checkpoint_suites[:2], ("cross_seed_play", cross_seed_play.enabled)):
+    for name, enabled in (
+        *checkpoint_suites[:2],
+        ("cross_seed_play", cross_seed_play.enabled),
+        ("env_diversity", env_diversity.enabled),
+    ):
         if enabled and mode != "both":
             raise ValueError(f"{source}: eval.{name} is only supported when train.teams is 'both'")
     if cross_seed_play.enabled and any(

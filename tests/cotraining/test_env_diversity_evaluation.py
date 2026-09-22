@@ -56,12 +56,15 @@ def populate(root, recipes):
 def test_plan_matches_common_opponents_and_uses_provenance_not_tag_budget(tmp_path, recipes):
     a, b = recipes
     a["jax"]["num_envs"] = 48
+    # A common completed step count despite different rollout batch sizes.
+    for recipe in recipes:
+        recipe["train"]["total_timesteps"] = 49_968_000
     populate(tmp_path, recipes)
     write_model(tmp_path, b, 100)
     plan = comparison.build_plan(a, b, tmp_path, seeds=(1000,))
     assert plan["train_seeds"] == [42, 200]
     assert len(plan["matchups"]) == 8
-    assert {m["steps"] for m in plan["models"]} == {69_984_000}
+    assert {m["steps"] for m in plan["models"]} == {49_968_000}
     assert all("-40M" in m["path"] for m in plan["models"])
     assert any("Excluded diverse seeds [100]" in note for note in plan["notes"])
     assert any("baseline num_envs=48, diverse num_envs=96" in note for note in plan["notes"])
@@ -209,4 +212,56 @@ def test_cli_dry_run_does_not_roll_out_or_write_results(tmp_path, recipes, monke
     output = tmp_path / "dry_results"
     cli.main([*loaded, "--exp-dir", str(tmp_path), "--output-dir", str(output), "--dry-run"])
     assert not output.exists()
-    assert "8 matchups x 10 episodes" in capsys.readouterr().out
+    assert "8 matchups x 60 episodes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("override,expected", [(False, 12), (True, 2)])
+def test_cli_reads_diversity_settings_from_yaml(tmp_path, recipes, monkeypatch, capsys, override, expected):
+    from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
+
+    a, b = recipes
+    b["eval"]["env_diversity"].update(seeds="1100-1101", episodes_per_seed=6, deterministic=True)
+    populate(tmp_path, recipes)
+    root = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location("diversity_yaml_cli", root / "scripts/eval/eval_env_diversity.py")
+    cli = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(cli)
+    loaded = {r["meta"]["name"]: r for r in recipes}
+    monkeypatch.setattr(cli, "load", loaded.__getitem__)
+    plans = []
+    original_build = cli.build_plan
+
+    def build(*args, **kwargs):
+        plan = original_build(*args, **kwargs)
+        plans.append(plan)
+        return plan
+
+    monkeypatch.setattr(cli, "build_plan", build)
+    monkeypatch.setattr(cli, "run_comparison", lambda *_a, **_k: pytest.fail("dry-run started evaluation"))
+    args = ["--recipe", b["meta"]["name"], "--exp-dir", str(tmp_path), "--dry-run"]
+    if override:
+        args.extend(["--seeds", "1200", "--episodes-per-seed", "2", "--no-deterministic"])
+    cli.main(args)
+    assert f"8 matchups x {expected} episodes" in capsys.readouterr().out
+    assert plans[0]["deterministic"] is not override
+    assert plans[0]["seeds"] == ([1200] if override else [1100, 1101])
+    assert EnvDiversitySettings.from_recipe(b).baseline_recipe == a["meta"]["name"]
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        True,
+        {"enabled": True},
+        {"baseline_recipe": "cotraining", "episodes_per_seed": 0},
+        {"baseline_recipe": "cotraining", "enabled": "true"},
+        {"baseline_recipe": "cotraining", "unknown": 1},
+    ],
+)
+def test_invalid_diversity_settings_fail_at_recipe_load(tmp_path, recipes, settings):
+    recipe = recipes[1]
+    recipe["eval"]["env_diversity"] = settings
+    path = tmp_path / "invalid.yaml"
+    path.write_text(yaml.safe_dump(recipe))
+    with pytest.raises(ValueError, match="eval.env_diversity"):
+        load(str(path))
