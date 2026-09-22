@@ -42,13 +42,16 @@ def _recipe(*, teams: str = "both", play_priors=True) -> dict:
     }
 
 
-def _run_files(tmp_path: Path, suffix: str = ".safetensors") -> Path:
+def _run_files(tmp_path: Path, suffix: str = ".safetensors", *, run_id="train-123") -> Path:
     run_dir = tmp_path / "exp" / "ippo_jax" / "run"
     run_dir.mkdir(parents=True)
     model = run_dir / f"model_run{suffix}"
     model.touch()
     for steps in (40, 60, 80):
         (run_dir / f"checkpoint_{steps}{suffix}").touch()
+        (run_dir / f"recipe_checkpoint_{steps}.yaml").write_text(
+            yaml.safe_dump({"run": {"train_run_id": run_id, "total_steps": steps}})
+        )
     return model
 
 
@@ -136,6 +139,26 @@ def test_finds_only_checkpoints_on_the_periodic_training_cadence(tmp_path):
     checkpoints = find_periodic_checkpoints(model, _recipe())
 
     assert [checkpoint.steps for checkpoint in checkpoints] == [40, 80]
+
+
+@pytest.mark.parametrize("suffix", [".safetensors", ".pt"])
+def test_overwritten_run_excludes_old_or_unverifiable_checkpoints(tmp_path, suffix):
+    model = _run_files(tmp_path, suffix=suffix)
+    recipe = _recipe()
+    recipe["run"] = {"train_run_id": "new-run", "total_steps": 200}
+    for steps, saved_run in (
+        (40, {"train_run_id": "new-run", "total_steps": 40}),
+        (80, {"train_run_id": "old-run", "total_steps": 80}),
+        (120, None),
+        (160, {"train_run_id": "new-run", "total_steps": 120}),
+        (200, {"train_run_id": "new-run", "total_steps": 200}),
+        (240, {"train_run_id": "new-run", "total_steps": 240}),
+    ):
+        model.with_name(f"checkpoint_{steps}{suffix}").touch()
+        if saved_run is not None:
+            model.with_name(f"recipe_checkpoint_{steps}.yaml").write_text(yaml.safe_dump({"run": saved_run}))
+    assert [c.steps for c in find_periodic_checkpoints(model, recipe)] == [40, 200]
+    assert model.with_name(f"checkpoint_80{suffix}").exists()  # Filtering does not delete old files.
 
 
 def test_uses_cleanrl_cadence_for_torch_checkpoints(tmp_path):
@@ -246,7 +269,7 @@ def test_cotraining_recipes_disable_redundant_priors_but_retain_history(recipe_n
 def test_play_priors_logs_comparison_qualified_cia_and_writes_audit_fields(tmp_path, monkeypatch):
     from jaxborg import recipe as recipe_module
 
-    model = _run_files(tmp_path)
+    model = _run_files(tmp_path, run_id="train-cia")
     recipe = _recipe(play_priors={"seeds": [7], "episodes_per_seed": 1})
     recipe["eval"].update(
         {
