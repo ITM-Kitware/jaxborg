@@ -17,6 +17,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from jaxborg.constants import GLOBAL_MAX_HOSTS, SUBNET_IDS
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.scenarios.cc4.topology import TOPOLOGY_SNAPSHOT_FIELDS, load_topology
 from jaxborg.scenarios.cc4.topology_roles import (
     ROLE_AUTH,
@@ -248,15 +249,7 @@ def build_evaluation_cases(
 
     if not topology_paths:
         raise ValueError("CIA evaluation requires a non-empty topology bank")
-    if isinstance(episodes_per_seed, bool) or not isinstance(episodes_per_seed, int):
-        raise ValueError("episodes_per_seed must be an integer")
-    if episodes_per_seed < 1:
-        raise ValueError("episodes_per_seed must be positive")
-    if not seeds:
-        raise ValueError("CIA evaluation requires at least one episode seed")
-    for seed in seeds:
-        if isinstance(seed, bool) or not isinstance(seed, int) or seed < 0:
-            raise ValueError("evaluation seeds must be non-negative integers")
+    episode_seeds = expand_episode_seeds(seeds, episodes_per_seed)
 
     cases: list[EvaluationCase] = []
     for topology_index, raw_path in enumerate(topology_paths):
@@ -267,7 +260,7 @@ def build_evaluation_cases(
             const,
             topology_fingerprint=fingerprint,
         )
-        for base_seed in seeds:
+        for seed_index, base_seed in enumerate(seeds):
             for replicate_index in range(episodes_per_seed):
                 cases.append(
                     EvaluationCase(
@@ -276,7 +269,7 @@ def build_evaluation_cases(
                         topology_fingerprint=fingerprint,
                         base_seed=base_seed,
                         replicate_index=replicate_index,
-                        episode_seed=base_seed + replicate_index,
+                        episode_seed=episode_seeds[seed_index * episodes_per_seed + replicate_index],
                         host_roles=assignment.host_roles,
                         role_map_id=assignment.role_map_id,
                     )

@@ -45,6 +45,7 @@ from jaxborg.constants import (
     OBS_VECTOR_HOSTS_PER_SUBNET,
     SUBNET_NAMES,
 )
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.policies import initial_carry, is_recurrent, policy_from_arch, policy_step
@@ -737,6 +738,7 @@ def evaluate_matchup(
     evaluation bank with replacement; this is separate from training's
     without-replacement sampling within each parallel reset batch.
     """
+    expanded_seeds = expand_episode_seeds(seeds, episodes_per_seed)
     backend_name = _normalise_backend(backend)
     context = context if context is not None else MatchupEvaluationContext()
     policies = {
@@ -844,10 +846,9 @@ def evaluate_matchup(
             sampling_label = "generative"
         total_episodes = len(topology_assignments) * len(seeds) * episodes_per_seed
         plan = [
-            (base_seed + episode_idx, topology_index, topology_label)
+            (episode_seed, topology_index, topology_label)
             for topology_index, topology_label in topology_assignments
-            for base_seed in seeds
-            for episode_idx in range(episodes_per_seed)
+            for episode_seed in expanded_seeds
         ]
         episode_seeds.extend(entry[0] for entry in plan)
         episode_topology_paths.extend(entry[2] for entry in plan)

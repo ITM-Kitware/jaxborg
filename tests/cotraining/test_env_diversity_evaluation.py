@@ -179,12 +179,17 @@ def test_execute_paired_summary_and_resume_without_replaying(tmp_path, recipes, 
     assert set(summary["by_red_condition"]) == {"baseline", "diverse"}
     assert (output / "summary.md").exists()
     assert json.loads((output / "manifest.json").read_text())["models"][0]["sha256"]
+    assert plan["episode_seed_scheme"] == "base_times_count_plus_replica_v1"
     comparison.run_comparison(plan, output, resume=True, evaluate_fn=evaluate)
     assert len(calls) == 8
     changed = copy.deepcopy(plan)
     changed["models"][0]["sha256"] = "changed-checkpoint"
     with pytest.raises(ValueError, match="identical manifest"):
         comparison.run_comparison(changed, output, resume=True, evaluate_fn=evaluate)
+    old_protocol = copy.deepcopy(plan)
+    del old_protocol["episode_seed_scheme"]
+    with pytest.raises(ValueError, match="identical manifest"):
+        comparison.run_comparison(old_protocol, output, resume=True, evaluate_fn=evaluate)
     with pytest.raises(FileExistsError):
         comparison.run_comparison(plan, output, evaluate_fn=evaluate)
 

@@ -18,6 +18,7 @@ os.environ.setdefault("JAX_COMPILATION_CACHE_DIR", "/tmp/jaxborg-xla-cache")
 os.environ.setdefault("JAXBORG_EVAL_BATCH_SIZE", "6")
 
 from jaxborg.checkpoint import read_sidecar
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.evaluation.jax_scripted_red import evaluate_jax_scripted_reds
 from jaxborg.recipe import eval_variant
@@ -32,7 +33,7 @@ def matched_checkpoints(cross_play: Path, exp_dir: Path, topology_dir: Path):
     for step in summary["steps"]:
         cell = next(row for row in cells if row["blue_step"] == step)
         original = Path(cell["blue_checkpoint"])
-        checkpoint = exp_dir / "ippo_jax" / original.parent.name / original.name
+        checkpoint = exp_dir / original.parent.parent.name / original.parent.name / original.name
         if not checkpoint.is_file():
             raise FileNotFoundError(checkpoint)
         recipe = read_sidecar(checkpoint)
@@ -43,6 +44,12 @@ def matched_checkpoints(cross_play: Path, exp_dir: Path, topology_dir: Path):
         for path in topologies:
             if not path.is_file():
                 raise FileNotFoundError(path)
+        expected_seeds = expand_episode_seeds(cell["seeds"], cell["episodes_per_seed"]) * len(topologies)
+        if cell.get("topology_sampling") != "exhaustive" or cell.get("per_episode_seeds") != expected_seeds:
+            raise ValueError(
+                "Saved cross-play uses a different episode seed or topology protocol; "
+                "rerun cross-play before comparing it with the current scripted-Red evaluator"
+            )
         signature = {
             "source_cross_play": str(cross_play.resolve()),
             "source_cross_play_eval_id": summary["eval_id"],
@@ -51,6 +58,8 @@ def matched_checkpoints(cross_play: Path, exp_dir: Path, topology_dir: Path):
             "seeds": cell["seeds"],
             "episodes_per_seed": cell["episodes_per_seed"],
             "stochastic": cell["stochastic"],
+            "per_episode_seeds": expected_seeds,
+            "topology_paths": [str(path.resolve()) for path in topologies],
         }
         yield checkpoint, recipe, variant, topologies, signature
 

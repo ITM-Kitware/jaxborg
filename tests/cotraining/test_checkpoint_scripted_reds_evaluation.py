@@ -43,6 +43,12 @@ def test_settings_default_to_the_full_scripted_suite():
     assert settings.reds == ("fsm", "cia_c", "cia_i", "cia_a")
 
 
+@pytest.mark.parametrize("reds", [["typo"], ["fsm", "fsm"], [1]])
+def test_invalid_red_names_are_rejected_before_running_checkpoints(reds):
+    with pytest.raises(ValueError, match="eval.checkpoint_scripted_reds.reds"):
+        CheckpointScriptedRedsSettings.from_recipe(_recipe(checkpoint_scripted_reds={"reds": reds}))
+
+
 def test_disabled_suite_is_a_no_op():
     assert run_checkpoint_scripted_reds("m.safetensors", _recipe(checkpoint_scripted_reds=False)) is None
 

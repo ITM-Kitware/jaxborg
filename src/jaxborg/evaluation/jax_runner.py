@@ -27,6 +27,7 @@ from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_
 from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.checkpoint import load_jax_policy
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import initial_carry, policy_from_arch, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
@@ -203,10 +204,9 @@ def evaluate_jax_on_cyborg(
     Episodes are independent — set `workers > 1` to fan out across processes
     (each worker spawns a clean Python interpreter and loads the model).
     """
-    flat = [s + ep for s in seeds for ep in range(episodes_per_seed)]
+    flat = expand_episode_seeds(seeds, episodes_per_seed)
     total = len(flat)
-    base_seed = seeds[0] if seeds else 0
-    items = [(idx, env_seed, base_seed * 100003 + idx) for idx, env_seed in enumerate(flat)]
+    items = [(idx, env_seed, env_seed) for idx, env_seed in enumerate(flat)]
     rewards: list[float] = [0.0] * total
     seed_log: list[int] = [0] * total
 

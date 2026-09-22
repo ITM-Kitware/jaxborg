@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from jaxborg.evaluation.play_priors import _parse_seeds, find_periodic_checkpoints, select_checkpoints
+from jaxborg.evaluation.scripted_red import _normalise_reds
 
 _ALLOWED_SETTINGS = {
     "enabled",
@@ -88,9 +89,10 @@ class CheckpointScriptedRedsSettings:
         raw_reds = raw.get("reds", cls.reds)
         if isinstance(raw_reds, str) or not isinstance(raw_reds, Sequence):
             raise ValueError("eval.checkpoint_scripted_reds.reds must be a list of scripted Red names")
-        reds = tuple(str(red) for red in raw_reds)
-        if not reds:
-            raise ValueError("eval.checkpoint_scripted_reds.reds must contain at least one Red")
+        try:
+            reds = _normalise_reds(raw_reds)
+        except ValueError as exc:
+            raise ValueError(str(exc).replace("eval.scripted_red", "eval.checkpoint_scripted_reds")) from exc
         return cls(
             enabled=enabled,
             reds=reds,

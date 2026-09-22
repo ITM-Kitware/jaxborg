@@ -41,6 +41,7 @@ import numpy as np
 
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.policies import initial_carry, policy_step
 from jaxborg.scenarios.cc4.game_variants import variant_for_red
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -142,24 +143,21 @@ def run_eval(
         mask = env.get_avail_actions(env_state)
 
         def step_fn(carry, _):
-            state, obs, mask, k = carry
+            state, obs, mask, k, policy_carry = carry
             k, step_key = jax.random.split(k)
             obs_stack = jnp.stack([obs[a] for a in blue_agents])
             mask_stack = jnp.stack([mask[a] for a in blue_agents])
 
-            def _fwd(o, m):
-                pi, _ = policy.apply(params, o, m)
-                return pi.logits
-
-            logits = jax.vmap(_fwd)(obs_stack, mask_stack)
-            acts = jnp.argmax(logits, axis=-1)
+            pi, _, policy_carry = policy_step(policy, params, obs_stack, mask_stack, carry=policy_carry)
+            acts = jnp.argmax(pi.logits, axis=-1)
             actions = {a: acts[i] for i, a in enumerate(blue_agents)}
             new_obs, new_state, rewards, _, _ = env.step(step_key, state, actions)
             new_mask = env.get_avail_actions(new_state)
             mean_reward = jnp.stack([rewards[a] for a in blue_agents]).mean()
-            return (new_state, new_obs, new_mask, k), mean_reward
+            return (new_state, new_obs, new_mask, k, policy_carry), mean_reward
 
-        (_, _, _, _), per_step = jax.lax.scan(step_fn, (env_state, obs, mask, scan_key), None, length=num_steps)
+        carry = (env_state, obs, mask, scan_key, initial_carry(policy, len(blue_agents)))
+        _, per_step = jax.lax.scan(step_fn, carry, None, length=num_steps)
         return per_step.sum()
 
     topology_repetitions = len(topology_paths) if exhaustive else 1

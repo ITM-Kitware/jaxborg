@@ -201,7 +201,7 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
         lambda run_id, metrics: captured.update(run_id=run_id, metrics=metrics),
     )
     monkeypatch.setenv("JAXBORG_EVAL_NAME", "second-way")
-    output = tmp_path / "out.jsonl"
+    output = tmp_path / "new" / "nested" / "out.jsonl"
 
     argv = [
         "eval_recipe.py",

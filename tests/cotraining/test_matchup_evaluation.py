@@ -225,7 +225,7 @@ def test_evaluate_matchup_expands_seeds_and_reports_zero_sum_returns(monkeypatch
         "red-b.safetensors",
         backend="jax",
         variant=CC4_STOCK,
-        seeds=[10, 20],
+        seeds=[10, 11],
         episodes_per_seed=2,
         deterministic=True,
         progress=False,
@@ -235,12 +235,12 @@ def test_evaluate_matchup_expands_seeds_and_reports_zero_sum_returns(monkeypatch
         (Path("blue-a.safetensors"), "blue", "jax"),
         (Path("red-b.safetensors"), "red", "jax"),
     ]
-    assert [call[2] for call in episode_calls] == [10, 11, 20, 21]
+    assert [call[2] for call in episode_calls] == [20, 21, 22, 23]
     assert all(call[0] == {"blue", "red"} and call[3] for call in episode_calls)
     assert all(call[4:] == (sentinel_env, None) for call in episode_calls)
-    assert result.episode_seeds == [10, 11, 20, 21]
-    assert result.blue_returns == [10.0, 11.0, 20.0, 21.0]
-    assert result.red_returns == [-10.0, -11.0, -20.0, -21.0]
+    assert result.episode_seeds == [20, 21, 22, 23]
+    assert result.blue_returns == [20.0, 21.0, 22.0, 23.0]
+    assert result.red_returns == [-20.0, -21.0, -22.0, -23.0]
     assert result.policies["blue"]["source_run"] == "run-blue"
     assert result.policies["red"]["source_run"] == "run-red"
     assert result.topology_paths == []
