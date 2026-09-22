@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 import yaml
@@ -17,7 +18,7 @@ from jaxborg.evaluation.scripted_red import (
     run_configured_after_training,
     write_results,
 )
-from jaxborg.recipe import load
+from jaxborg.recipe import RECIPES_DIR, load
 
 
 def _recipe(*, after_training: bool = True) -> dict:
@@ -73,6 +74,57 @@ def test_cotraining_recipe_runs_native_benchmark_and_existing_evaluations():
     assert scripted.args[scripted.args.index("--reds") + 1 : scripted.args.index("--seeds")] == DEFAULT_SCRIPTED_REDS
     assert "--workers" not in scripted.args
     assert ScriptedRedEvalSettings.from_recipe(recipe).after_training is False
+
+
+@pytest.fixture
+def cli_evaluator(monkeypatch, tmp_path):
+    evaluator = Mock(return_value=[])
+    monkeypatch.setattr(scripted_red, "evaluate_scripted_reds", evaluator)
+    monkeypatch.setattr(scripted_red, "write_results", lambda rows, output: tmp_path / "sweep.jsonl")
+    return evaluator
+
+
+@pytest.mark.parametrize("name_flag", ["--name", "--eval-name", None])
+def test_cli_name_flags_and_environment_default(monkeypatch, cli_evaluator, name_flag):
+    monkeypatch.setenv("JAXBORG_EVAL_NAME", "inherited-name")
+    args = ["--model", "model.safetensors", "--no-mlflow"]
+    if name_flag is not None:
+        args.extend([name_flag, "explicit-name"])
+
+    scripted_red.main(args)
+
+    cli_evaluator.assert_called_once_with(
+        "model.safetensors",
+        reds=list(DEFAULT_SCRIPTED_REDS),
+        seeds="1000-1009",
+        episodes_per_seed=1,
+        deterministic=False,
+        workers=1,
+        progress=False,
+        eval_name="inherited-name" if name_flag is None else "explicit-name",
+    )
+
+
+@pytest.mark.parametrize(
+    "recipe_name",
+    sorted(path.stem for path in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")),
+)
+def test_cotraining_benchmark_arguments_are_accepted_by_cli(cli_evaluator, recipe_name):
+    settings = PostTrainingEvalSettings.from_recipe(load(recipe_name))
+    benchmark = next(evaluation for evaluation in settings.evaluations if evaluation.name == "cage4-benchmark")
+
+    scripted_red.main([benchmark.model_arg, "model.safetensors", *benchmark.args, "--no-mlflow"])
+
+    cli_evaluator.assert_called_once_with(
+        "model.safetensors",
+        reds=["fsm"],
+        seeds="1000-1099",
+        episodes_per_seed=6,
+        deterministic=False,
+        workers=4,
+        progress=False,
+        eval_name="cage4-benchmark",
+    )
 
 
 @pytest.mark.parametrize(
