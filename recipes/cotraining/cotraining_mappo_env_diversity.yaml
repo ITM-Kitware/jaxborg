@@ -20,7 +20,7 @@ cage4_enhanced_obs: true
 mlflow:
   checkpoint_eval:
     every_steps: 0
-    episodes_per_seed: 3
+    episodes_per_seed: 6
     seed: null  # Defaults to the training seed + 100000.
     deterministic: false
 
@@ -73,7 +73,7 @@ train:
   sgd_iterations: 64
   # Match the original IPPO control's budget. MAPPO convergence has not yet
   # been measured; compare held-out performance across checkpoints.
-  total_timesteps: 70000000
+  total_timesteps: 50000000
   variant: cc4_stock
 
   # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
@@ -107,7 +107,16 @@ eval:
   cross_seed_play:
     enabled: true
     seeds: 1000-1009
-    episodes_per_seed: 1
+    episodes_per_seed: 6
+    deterministic: false
+
+  # Multi-seed launcher: compare both Blue conditions against both Red pools.
+  # Excludes same-training-seed opponents; runs once after all seeds finish.
+  env_diversity:
+    enabled: true
+    baseline_recipe: cotraining_mappo
+    seeds: 1000-1009
+    episodes_per_seed: 6
     deterministic: false
 
   # Built-in post-training history suites, scheduled before after_training.
@@ -117,18 +126,18 @@ eval:
   play_priors:
     enabled: false
     seeds: 1000-1002
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     deterministic: false
     max_checkpoints: 3
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Three checkpoints -> 9 matchups x 180 episodes (3 seeds x 6 episodes x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
     enabled: true
     seeds: 1000-1002
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     deterministic: false
     max_checkpoints: 3
     required: false
@@ -139,7 +148,7 @@ eval:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     max_checkpoints: 20
     required: false
 
@@ -156,7 +165,7 @@ eval:
         - --seeds
         - 1000-1099
         - --episodes-per-seed
-        - 1
+        - 6
         - --workers
         - 4
 
@@ -173,7 +182,7 @@ eval:
         - --red-path
         - "{model}"
         - --episodes-per-seed
-        - 1
+        - 6
         - --seeds
         - 1000-1009
 
@@ -190,7 +199,7 @@ eval:
         - --seeds
         - 1000-1009
         - --episodes-per-seed
-        - 1
+        - 6
         # One line per vmapped batch. Without it a Red in flight prints
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress

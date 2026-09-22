@@ -162,6 +162,10 @@ def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
     for recipe in (gru, lstm):
         # Prose and file path are expected to differ; nothing else is.
         del recipe["meta"], recipe["__source_path__"]
+        if suffix:
+            # Each recurrent arm compares against its own non-diverse baseline.
+            baseline = recipe["eval"]["env_diversity"].pop("baseline_recipe")
+            assert baseline == f"cotraining_{'rnn' if recipe['arch']['cell'] == 'gru' else 'lstm'}"
 
     assert gru["arch"].pop("cell") == "gru"
     assert lstm["arch"].pop("cell") == "lstm"

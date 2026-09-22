@@ -159,6 +159,17 @@ eval:
     deterministic: false
     required: true  # Once scheduled, an evaluator failure fails the pipeline.
 
+  # Multi-seed launcher only: run once after both conditions finish all seeds.
+  # Configure on the diverse recipe. Both Blue conditions face both Red pools,
+  # excluding same-training-seed opponents. Failures fail the launcher.
+  # Manual: eval_env_diversity.py --recipe DIVERSE_RECIPE
+  env_diversity:
+    enabled: false
+    baseline_recipe: cotraining
+    seeds: 1000-1009
+    episodes_per_seed: 6
+    deterministic: false
+
   # The three history evaluators below all run after training, all
   # stride the durable checkpoints, and all accept the same seeds /
   # episodes_per_seed / deterministic / required / max_checkpoints fields.

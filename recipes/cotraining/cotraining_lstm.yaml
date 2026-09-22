@@ -21,7 +21,7 @@ cage4_enhanced_obs: true
 mlflow:
   checkpoint_eval:
     every_steps: 0
-    episodes_per_seed: 3
+    episodes_per_seed: 6
     seed: null
     deterministic: false
 
@@ -50,7 +50,7 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 70000000
+  total_timesteps: 50000000
   variant: cc4_stock
 
   # One fixed training topology, shared with the feedforward control.
@@ -84,7 +84,7 @@ eval:
   cross_seed_play:
     enabled: true
     seeds: 1000-1009
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     deterministic: false
 
   # Built-in post-training history suites, scheduled before after_training.
@@ -94,18 +94,18 @@ eval:
   play_priors:
     enabled: false
     seeds: 1000-1002
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     deterministic: false
     max_checkpoints: 3
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 10 topologies).
+  # Three checkpoints -> 9 matchups x 180 episodes (3 seeds x 6 episodes x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
     enabled: true
     seeds: 1000-1002
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     deterministic: false
     max_checkpoints: 3
     required: false
@@ -116,7 +116,7 @@ eval:
     enabled: false
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
-    episodes_per_seed: 1
+    episodes_per_seed: 6
     max_checkpoints: 20
     required: false
 
@@ -137,7 +137,7 @@ eval:
         - --seeds
         - 1000-1099
         - --episodes-per-seed
-        - 1
+        - 6
         - --workers
         - 4
 
@@ -154,7 +154,7 @@ eval:
         - --red-path
         - "{model}"
         - --episodes-per-seed
-        - 1
+        - 6
         - --seeds
         - 1000-1009
 
@@ -171,7 +171,7 @@ eval:
         - --seeds
         - 1000-1009
         - --episodes-per-seed
-        - 1
+        - 6
         # One line per vmapped batch. Without it a Red in flight prints
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress
