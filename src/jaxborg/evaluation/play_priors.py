@@ -163,19 +163,33 @@ def find_periodic_checkpoints(
     final_model: str | Path,
     recipe: Mapping[str, Any],
 ) -> list[PeriodicCheckpoint]:
-    """Return durable periodic checkpoints, excluding MLflow-only snapshots."""
+    """Return this run's periodic checkpoints, excluding leftovers from reruns."""
+
+    from jaxborg.checkpoint import read_sidecar
 
     model_path = Path(final_model).expanduser().resolve()
     backend = _backend_from_model(model_path)
     stride = _periodic_step_stride(recipe, backend)
+    run = recipe.get("run") or {}
+    run_id = run.get("train_run_id")
+    completed_steps = run.get("total_steps")
     checkpoints: list[PeriodicCheckpoint] = []
     for path in model_path.parent.glob(f"checkpoint_*{model_path.suffix}"):
         match = _CHECKPOINT_PATTERN.fullmatch(path.stem)
         if match is None:
             continue
         steps = int(match.group(1))
-        if steps % stride == 0:
-            checkpoints.append(PeriodicCheckpoint(path.resolve(), steps))
+        if steps % stride != 0 or (completed_steps is not None and steps > completed_steps):
+            continue
+        if run_id:
+            try:
+                saved_run = (read_sidecar(path) or {}).get("run") or {}
+            except FileNotFoundError:
+                # Missing provenance cannot establish membership in this run.
+                continue
+            if saved_run.get("train_run_id") != run_id or saved_run.get("total_steps") != steps:
+                continue
+        checkpoints.append(PeriodicCheckpoint(path.resolve(), steps))
     checkpoints.sort(key=lambda checkpoint: checkpoint.steps)
     return checkpoints
 
