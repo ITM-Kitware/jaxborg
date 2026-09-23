@@ -1,0 +1,38 @@
+# Run: uv run python scripts/eval/eval_hmarl.py --recipe hmarl_expert
+kind: pretrained_eval
+meta:
+  name: hmarl_expert
+  source: "Singh et al., arXiv:2410.17351; released h-marl-3policy iter_49"
+  notes: "Pretrained H-MARL Expert; JAX inference and simulator. No training."
+
+cage4_enhanced_obs: true
+pretrained:
+  family: hmarl
+  variant: expert
+  checkpoint: .cache/pretrained/hmarl/actors.safetensors
+  architecture:
+    hidden_layers: 2
+    hidden_dim: 256
+    activation: tanh
+    observation_filter: NoFilter
+
+eval:
+  variant: cia_resilience
+  episode_length: 500
+  reds: [fsm, cia_c, cia_i, cia_a]
+  seeds: 1000-1009
+  episodes_per_seed: 6
+  deterministic: false
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+  # Same held-out cases as cotraining_lstm_env_diversity's JAX scripted sweep:
+  # 10 topologies x 10 seeds x 6 episodes = 600 episodes per Red.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive

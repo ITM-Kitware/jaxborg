@@ -29,7 +29,7 @@ from jaxborg.actions.encoding import (
     BLUE_RESTORE_START,
     BLUE_SLEEP,
 )
-from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.blue_observation_contract import blue_obs_size, observation_version_from_size, recipe_blue_obs_size
 from jaxborg.checkpoint import (
     ModelBundle,
     PolicyBundleEntry,
@@ -47,6 +47,7 @@ from jaxborg.constants import (
 )
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
+from jaxborg.evaluation.stateful_blue import StatefulBluePolicy
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.policies import initial_carry, is_recurrent, policy_from_arch, policy_step
 from jaxborg.recipe import team_recipe
@@ -212,8 +213,8 @@ def _bundle_entry(bundle: ModelBundle, path: Path, team: str) -> PolicyBundleEnt
     obs_dim, action_dim = TEAM_DIMS[team]
     sidecar = _source_sidecar(path)
     if team == "blue":
-        enabled = enhanced_obs_enabled(sidecar) if sidecar is not None else entry.obs_dim == blue_obs_size(True)
-        obs_dim = blue_obs_size(enabled)
+        obs_dim = recipe_blue_obs_size(sidecar) if sidecar is not None else (entry.obs_dim or blue_obs_size())
+        observation_version_from_size(obs_dim)
     if entry.obs_dim not in (0, obs_dim):
         raise ValueError(f"{team} observation dimension mismatch: model={entry.obs_dim}, expected={obs_dim}")
     if entry.action_dim not in (0, action_dim):
@@ -319,6 +320,11 @@ def _run_jax_matchup_episode_scan(
     blue_agents = tuple(env.blue_agents)
     red_agents = tuple(env.red_agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
+    stateful_blue = isinstance(blue_module, StatefulBluePolicy)
+    if stateful_blue:
+        state, blue_carry = blue_module.initialize(state)
+    else:
+        blue_carry = initial_carry(blue_module, len(blue_agents))
     # Only a recurrent Red has a sequence to restart, and only it needs the
     # simulator's activity mask read out on every step.
     red_recurrent = is_recurrent(red_module)
@@ -326,15 +332,19 @@ def _run_jax_matchup_episode_scan(
     def _active_step(rng, current_obs, current_state, carries, red_reset):
         masks = env.get_avail_actions(current_state)
 
-        blue_obs = jnp.stack([current_obs[name] for name in blue_agents])
-        blue_masks = jnp.stack([masks[name] for name in blue_agents])
         rng, blue_key = jax.random.split(rng)
-        # Blue never goes dormant and the scan stops at termination, so within
-        # one episode its sequence never restarts.
-        blue_pi, _, carries["blue"] = policy_step(
-            blue_module, blue_weights, blue_obs, blue_masks, carry=carries["blue"]
-        )
-        blue_actions = jnp.argmax(blue_pi.logits, axis=-1) if deterministic else blue_pi.sample(seed=blue_key)
+        if stateful_blue:
+            blue_actions, carries["blue"] = blue_module.select_actions(
+                blue_weights, current_state, blue_key, carries["blue"], deterministic=deterministic
+            )
+        else:
+            blue_obs = jnp.stack([current_obs[name] for name in blue_agents])
+            blue_masks = jnp.stack([masks[name] for name in blue_agents])
+            # Blue stays active throughout an episode; its sequence never restarts.
+            blue_pi, _, carries["blue"] = policy_step(
+                blue_module, blue_weights, blue_obs, blue_masks, carry=carries["blue"]
+            )
+            blue_actions = jnp.argmax(blue_pi.logits, axis=-1) if deterministic else blue_pi.sample(seed=blue_key)
 
         red_obs = jnp.stack([current_obs[name] for name in red_agents])
         red_masks = jnp.stack([masks[name] for name in red_agents])
@@ -420,7 +430,7 @@ def _run_jax_matchup_episode_scan(
         zero_cia,
         jnp.int32(0),
         {
-            "blue": initial_carry(blue_module, len(blue_agents)),
+            "blue": blue_carry,
             "red": initial_carry(red_module, len(red_agents)),
         },
         jnp.ones((len(red_agents),), dtype=jnp.bool_),
@@ -528,13 +538,21 @@ def _run_jax_matchup_episodes_batched(
     cia_scores: list[list[float]] = []
     for start in range(0, count, chunk):
         stop = min(start + chunk, count)
-        reward_batch, cia_batch = batched(
-            policies["blue"].weights,
-            policies["red"].weights,
-            _padded_batch(keys, start, stop, chunk),
-            _padded_batch(indices, start, stop, chunk),
-            _padded_batch(roles, start, stop, chunk),
-        )
+        if chunk == 1:
+            # A singleton vmap expands simulator conditionals without adding
+            # parallelism. Keep CPU smoke runs on the scalar compiled scan.
+            reward, cia = scan(
+                policies["blue"].weights, policies["red"].weights, keys[start], indices[start], roles[start]
+            )
+            reward_batch, cia_batch = reward[None], cia[None]
+        else:
+            reward_batch, cia_batch = batched(
+                policies["blue"].weights,
+                policies["red"].weights,
+                _padded_batch(keys, start, stop, chunk),
+                _padded_batch(indices, start, stop, chunk),
+                _padded_batch(roles, start, stop, chunk),
+            )
         reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
         valid = stop - start
         rewards.extend(float(value) for value in np.asarray(reward_batch)[:valid])
@@ -584,7 +602,9 @@ def run_matchup_episode(
         raise ValueError("mixed JAX/Torch matchup policies are not supported")
     backend = next(iter(backends))
     actual_width = policies["blue"].source.get("observation_dim")
-    if actual_width is not None and actual_width != blue_obs_size(variant.cage4_enhanced_obs):
+    if actual_width is not None and actual_width != blue_obs_size(
+        variant.cage4_enhanced_obs, variant.blue_observation_version
+    ):
         raise ValueError("Blue checkpoint and evaluation cage4_enhanced_obs must match")
 
     if env is None:

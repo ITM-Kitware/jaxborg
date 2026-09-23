@@ -18,7 +18,10 @@ import numpy as np
 import torch
 from CybORG.Agents.Wrappers import EnterpriseMAE
 
-from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.blue_observation_contract import (
+    blue_obs_size,
+    recipe_blue_obs_size,
+)
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
@@ -73,7 +76,7 @@ def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, 
     arch = recipe["arch"]
     agent = make_torch_policy(
         arch["name"],
-        obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)),
+        obs_dim=recipe_blue_obs_size(recipe),
         action_dim=ACT_DIM,
         hidden_dim=int(arch.get("hidden_dim", 256)),
         hidden_layers=int(arch.get("hidden_layers", 2)),
@@ -127,13 +130,14 @@ def load_torch_policy(model_path: str | Path):
         recipe = {
             "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
             "algorithm": "ippo",
-            "cage4_enhanced_obs": entry.obs_dim == blue_obs_size(True),
+            "cage4_enhanced_obs": entry.obs_dim in (blue_obs_size(True, 1), blue_obs_size(True)),
+            "run": {"blue_observation_version": 1 if entry.obs_dim == blue_obs_size(True, 1) else 2},
             "arch": arch,
         }
     if entry.arch.get("name"):
         recipe = dict(recipe)
         recipe["arch"] = dict(entry.arch)
-    expected_obs_dim = blue_obs_size(enhanced_obs_enabled(recipe))
+    expected_obs_dim = recipe_blue_obs_size(recipe)
     if entry.obs_dim not in (0, expected_obs_dim):
         raise ValueError(
             f"Blue checkpoint observation dimension {entry.obs_dim} disagrees with recipe {expected_obs_dim}"
@@ -146,7 +150,7 @@ def _cyborg_worker(args):
     """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
     model_path, deterministic, variant, items = args
     agent, recipe = load_torch_policy(model_path)
-    if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+    if blue_obs_size(variant.cage4_enhanced_obs, variant.blue_observation_version) != recipe_blue_obs_size(recipe):
         raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
     out = []
     for idx, seed in items:
@@ -179,7 +183,7 @@ def evaluate_on_cyborg(
 
     if workers <= 1:
         agent, recipe = load_torch_policy(model_path)
-        if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+        if blue_obs_size(variant.cage4_enhanced_obs, variant.blue_observation_version) != recipe_blue_obs_size(recipe):
             raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
         for idx, seed in items:
             env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)

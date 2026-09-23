@@ -45,6 +45,7 @@ from jaxborg.evaluation.matchup_runner import (
     jax_mask_to_cyborg_blue,
     load_matchup_policy,
 )
+from jaxborg.evaluation.stateful_blue import StatefulBluePolicy
 from jaxborg.policies import initial_carry, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import variant_for_red
@@ -192,15 +193,24 @@ def _run_jax_scripted_red_episode_scan(
     state = state.replace(extras=extras)
     blue_agents = tuple(env.agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
+    if isinstance(policy_module, StatefulBluePolicy):
+        state, policy_carry = policy_module.initialize(state)
+    else:
+        policy_carry = initial_carry(policy_module, len(blue_agents))
 
     def _active_step(rng, current_obs, current_state, policy_carry):
-        obs_batch = jnp.stack([current_obs[agent] for agent in blue_agents])
-        mask_batch = _blue_policy_action_masks(env, current_state, blue_agents)
         rng, policy_key = jax.random.split(rng)
         # Blue never goes dormant and the scan stops at termination, so its
         # sequence runs unbroken from the reset for the whole episode.
-        pi, _, policy_carry = policy_step(policy_module, policy_weights, obs_batch, mask_batch, carry=policy_carry)
-        selected = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=policy_key)
+        if isinstance(policy_module, StatefulBluePolicy):
+            selected, policy_carry = policy_module.select_actions(
+                policy_weights, current_state, policy_key, policy_carry, deterministic=deterministic
+            )
+        else:
+            obs_batch = jnp.stack([current_obs[agent] for agent in blue_agents])
+            mask_batch = _blue_policy_action_masks(env, current_state, blue_agents)
+            pi, _, policy_carry = policy_step(policy_module, policy_weights, obs_batch, mask_batch, carry=policy_carry)
+            selected = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=policy_key)
         actions = {agent: jnp.asarray(selected[index], dtype=jnp.int32) for index, agent in enumerate(blue_agents)}
         rng, step_key = jax.random.split(rng)
         # ``FsmRedCC4Env.step`` splits the caller key into transition/reset/
@@ -263,7 +273,7 @@ def _run_jax_scripted_red_episode_scan(
         jnp.float32(0.0),
         zero_cia,
         jnp.int32(0),
-        initial_carry(policy_module, len(blue_agents)),
+        policy_carry,
     )
     final_carry, _ = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
     reward_sum = final_carry[4]
@@ -437,6 +447,7 @@ def _scripted_variant(base_variant: GameVariant, red: str) -> GameVariant:
         red_reward=base_variant.red_reward,
         blue_block_policy=base_variant.blue_block_policy,
         cage4_enhanced_obs=base_variant.cage4_enhanced_obs,
+        blue_observation_version=base_variant.blue_observation_version,
     )
     return replace(
         variant,
@@ -592,6 +603,8 @@ def evaluate_jax_scripted_reds(
             "episodes_per_seed": episodes_per_seed,
             "episodes_per_topology": len(parsed_seeds) * episodes_per_seed,
             "stochastic": not deterministic,
+            "cage4_enhanced_obs": variant.cage4_enhanced_obs,
+            "blue_observation_version": variant.blue_observation_version,
             "blue_busy_action_masking": True,
             "mean_reward": mean(rewards),
             "std_reward": stdev(rewards) if len(rewards) > 1 else 0.0,

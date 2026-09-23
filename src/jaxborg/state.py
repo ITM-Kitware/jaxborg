@@ -47,6 +47,7 @@ class SimulatorConst:
 
     green_agents_active: chex.Array  # scalar bool — False = skip green actions (SleepAgent parity)
     cage4_enhanced_obs: bool = struct.field(pytree_node=False, default=False)
+    blue_observation_version: int = struct.field(pytree_node=False, default=2)
 
 
 @struct.dataclass
@@ -150,6 +151,15 @@ class SimulatorState:
     red_impact_attempted_by_agent: chex.Array
 
     red_agent_active: chex.Array  # (num_red_agents,) bool — dynamically activated via session reassignment
+
+    # Optional observable connection telemetry for enhanced v2 and H-MARL.
+    # Rows are decoy destinations, columns are event slots (one per Red).
+    # Values are remote/source host indices, -1 for no connection.
+    # Unenhanced and legacy-v1 training leave these None.
+    blue_decoy_sources: chex.Array | None = None
+    blue_old_decoy_sources: chex.Array | None = None
+    blue_ioc_memory: dict | None = None
+    blue_ioc_codes: chex.Array | None = None
 
 
 def create_initial_const(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorConst:

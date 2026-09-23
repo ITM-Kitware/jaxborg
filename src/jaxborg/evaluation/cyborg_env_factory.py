@@ -59,6 +59,7 @@ def make_cyborg_env(
         from jaxborg.evaluation.enhanced_blue_wrapper import enhanced_wrapper_class
 
         wrapper_class = enhanced_wrapper_class(wrapper_class)
+        wrapper_kwargs = {**(wrapper_kwargs or {}), "blue_observation_version": variant.blue_observation_version}
     return wrapper_class(env=cyborg, **(wrapper_kwargs or {}))
 
 

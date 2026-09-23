@@ -12,13 +12,16 @@ cycles instead of 125).
 from pathlib import Path
 
 import pytest
+import yaml
 
 from jaxborg.policies import POLICY_REGISTRY
 from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, train_variant
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
-RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.rglob("*.yaml"))
+RECIPE_NAMES = sorted(
+    p.stem for p in RECIPES_DIR.rglob("*.yaml") if yaml.safe_load(p.read_text()).get("kind") != "pretrained_eval"
+)
 
 assert RECIPE_NAMES, f"No recipes found in {RECIPES_DIR}"
 

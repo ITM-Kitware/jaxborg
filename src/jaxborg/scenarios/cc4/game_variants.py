@@ -26,6 +26,7 @@ def variant_for_red(
     red_reward: str = "zero_sum",
     blue_block_policy: str = "cc4",
     cage4_enhanced_obs: bool = False,
+    blue_observation_version: int = 2,
 ) -> GameVariant:
     """Build the variant for one scripted/learned Red selector.
 
@@ -40,6 +41,7 @@ def variant_for_red(
         "red_reward": red_reward,
         "blue_block_policy": blue_block_policy,
         "cage4_enhanced_obs": cage4_enhanced_obs,
+        "blue_observation_version": blue_observation_version,
     }
     if name in {"fsm", "finite_state"}:
         return replace(

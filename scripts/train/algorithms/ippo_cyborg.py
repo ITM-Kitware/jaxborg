@@ -38,7 +38,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.blue_observation_contract import blue_obs_size, recipe_blue_obs_size
 from jaxborg.checkpoint import load_torch_policy, read_sidecar, save_torch_bundle, write_sidecar
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.cyborg_joint import POLICY_AGENT_IDS, TEAM_SPECS, CyborgJointAdapter
@@ -265,7 +265,7 @@ class RewardScaler:
 
 
 def train_legacy(args, recipe, cfg):
-    obs_dim = blue_obs_size(enhanced_obs_enabled(recipe))
+    obs_dim = recipe_blue_obs_size(recipe)
     device = torch.device("cpu")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -707,7 +707,10 @@ class TorchTeamRuntime:
         spec = TEAM_SPECS[self.team]
         self.agent_ids = spec.agent_ids
         self.obs_dim = (
-            blue_obs_size(getattr(self.cfg.get("TRAIN_VARIANT"), "cage4_enhanced_obs", False))
+            blue_obs_size(
+                getattr(self.cfg.get("TRAIN_VARIANT"), "cage4_enhanced_obs", False),
+                getattr(self.cfg.get("TRAIN_VARIANT"), "blue_observation_version", 2),
+            )
             if self.team == "blue"
             else spec.obs_dim
         )
@@ -1026,7 +1029,7 @@ def _make_joint_runtimes(
     for team in ("blue", "red"):
         spec = TEAM_SPECS[team]
         if team == "blue":
-            spec = type(spec)(spec.agent_ids, blue_obs_size(enhanced_obs_enabled(recipe)), spec.action_dim)
+            spec = type(spec)(spec.agent_ids, recipe_blue_obs_size(recipe), spec.action_dim)
         team_cfg = project_cleanrl(recipe, team=team)
         for shared_key in ("num_envs", "rollout_length", "num_rollouts_per_update", "total_timesteps"):
             team_cfg[shared_key] = cfg[shared_key]

@@ -8,6 +8,7 @@ build/
 .pytest_cache/
 .cache/
 jaxborg-exp/
+jaxborg-harml-comparison/
 .bank_cache/
 .ruff_cache/
 mlruns/
