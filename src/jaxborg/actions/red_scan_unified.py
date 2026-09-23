@@ -2,6 +2,7 @@ import chex
 import jax
 import jax.numpy as jnp
 
+from jaxborg.actions.decoy_telemetry import record_decoy_connection
 from jaxborg.actions.red_common import (
     can_reach_subnet_from_source_host,
     observed_exploit_ports,
@@ -43,6 +44,7 @@ def apply_scan_unified(
 
     # CybORG Portscan: decoy processes always trigger detection regardless of random
     has_decoy = jnp.any(state.host_decoys[target_host])
+    state = record_decoy_connection(state, const, agent_id, target_host, success & has_decoy)
 
     def with_roll(s: SimulatorState):
         rand_val, next_state = sample_detection_random(s, const, key)

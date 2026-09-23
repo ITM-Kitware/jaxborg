@@ -32,11 +32,11 @@ from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 from jaxborg.state import create_initial_state
 
 
-def _native(wrapper=EnhancedBlueFlatWrapper):
+def _native(wrapper=EnhancedBlueFlatWrapper, version=1):
     sg = EnterpriseScenarioGenerator(
         blue_agent_class=SleepAgent, green_agent_class=SleepAgent, red_agent_class=SleepAgent, steps=500
     )
-    env = wrapper(CybORG(sg, "sim", seed=42), pad_spaces=True)
+    env = wrapper(CybORG(sg, "sim", seed=42), pad_spaces=True, blue_observation_version=version)
     obs, _ = env.reset(seed=42)
     return env, obs
 
@@ -48,7 +48,7 @@ def _extra(obs):
 @pytest.fixture
 def scenario():
     env, obs = _native()
-    const = build_const_from_cyborg(env.env).replace(cage4_enhanced_obs=True)
+    const = build_const_from_cyborg(env.env).replace(cage4_enhanced_obs=True, blue_observation_version=1)
     state = create_initial_state().replace(host_services=const.initial_services)
     mappings = build_mappings_from_cyborg(env.env)
     host = next(h for h in env.hosts("blue_agent_0") if "router" not in h and h in mappings.hostname_to_idx)
@@ -170,12 +170,12 @@ def test_enhanced_checkpoint_roundtrip_and_inference(scenario, tmp_path, name):
     if name == "recurrent":
         arch.update(cell="lstm", trunk="shared")
     if name == "mappo":
-        arch.update(cage4_enhanced_obs=True, critic_input="joint_observations")
+        arch.update(cage4_enhanced_obs=True, critic_input="joint_observations", blue_observation_version=1)
     policy = policy_from_arch(arch, action_dim=BLUE_ALLOW_TRAFFIC_END)
     params = init_policy_params(policy, jax.random.PRNGKey(0), obs_dim=402)
     path = tmp_path / "model_test.safetensors"
     save_jax_bundle(path, {"blue": PolicyBundleEntry(params, "blue", 402, BLUE_ALLOW_TRAFFIC_END, arch)})
-    recipe = {"arch": arch, "core": {}, "cage4_enhanced_obs": True}
+    recipe = {"arch": arch, "core": {}, "cage4_enhanced_obs": True, "run": {"blue_observation_version": 1}}
     (tmp_path / "recipe_test.yaml").write_text(yaml.safe_dump(recipe))
     loaded, weights, _ = load_jax_checkpoint(path)
     matchup = load_matchup_policy(path, team="blue", backend="jax")
@@ -199,6 +199,9 @@ def test_enhanced_checkpoint_roundtrip_and_inference(scenario, tmp_path, name):
 def test_flag_is_enabled_only_for_actual_cotraining_recipes():
     for path in Path("recipes").rglob("*.yaml"):
         recipe = load(str(path))
+        if recipe.get("kind") == "pretrained_eval":
+            assert enhanced_obs_enabled(recipe)
+            continue
         expected = path.parent.name == "cotraining" and recipe.get("train", {}).get("teams") == "both"
         assert enhanced_obs_enabled(recipe) is expected, path
         assert train_variant(recipe).cage4_enhanced_obs is expected
@@ -285,7 +288,7 @@ def test_jax_snapshot_reset_and_batched_step_shapes(scenario, tmp_path):
     _, _, const, _, _, _, _ = scenario
     snapshot = tmp_path / "topology.npz"
     save_topology(const.replace(cage4_enhanced_obs=False), snapshot)
-    variant = replace(CC4_STOCK, cage4_enhanced_obs=True)
+    variant = replace(CC4_STOCK, cage4_enhanced_obs=True, blue_observation_version=1)
     for factory in (make_jax_env, make_joint_jax_env):
         env = factory(variant, topology_path=snapshot)
         obs, state = env.reset(jax.random.PRNGKey(0))
@@ -305,7 +308,7 @@ def test_native_enhanced_lstm_rollout_ends_at_episode_horizon():
     from jaxborg.evaluation.jax_runner import run_episode
     from jaxborg.scenarios.cc4.game_variant import GameVariant
 
-    variant = GameVariant(name="smoke", cage4_enhanced_obs=True, num_steps=3)
+    variant = GameVariant(name="smoke", cage4_enhanced_obs=True, blue_observation_version=1, num_steps=3)
     env = make_cyborg_env(variant, 9, wrapper_class=BlueFlatWrapper)
     module = policy_from_arch(
         dict(name="recurrent", cell="lstm", hidden_dim=8, hidden_layers=1), action_dim=BLUE_ALLOW_TRAFFIC_END
@@ -323,6 +326,7 @@ def test_torch_enhanced_checkpoint_and_joint_buffer_contract(tmp_path):
     from scripts.train.algorithms.ippo_cyborg import _make_joint_runtimes
 
     recipe = load("cotraining")
+    recipe["run"] = {"blue_observation_version": 1}
     recipe["arch"].update(hidden_dim=8, hidden_layers=1)
     cfg = project_cleanrl(recipe)
     runtimes = _make_joint_runtimes(recipe, cfg, seed=0, num_envs=1, num_steps=2)

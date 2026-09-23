@@ -1,0 +1,96 @@
+{
+  "repository": "https://github.com/adityavs14/Hierarchical-MARL",
+  "commit": "6fe960f5931f2d7dc5ef522f09ca4a179f377ee4",
+  "checkpoints": [
+    {
+      "agent": 0,
+      "branch": "investigate",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent0_investigate/policy_state.pkl",
+      "sha256": "0bca62b3fdb9627da136a60598b41a8d7aa431b14f411fd1917a07c975a89c89"
+    },
+    {
+      "agent": 0,
+      "branch": "recover",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent0_recover/policy_state.pkl",
+      "sha256": "b2186118b9475005f3efe52a8c278247c77f2e741cd231665d4ff4ecce23dd97"
+    },
+    {
+      "agent": 0,
+      "branch": "master",
+      "path": "h-marl-3policy/saved_policies/master/iter_49/policies/Agent0_master/policy_state.pkl",
+      "sha256": "5ed0bc3fd4e369b439777296bc9cb1c8658bdcbc25b9de6d44be9970debad96f"
+    },
+    {
+      "agent": 1,
+      "branch": "investigate",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent1_investigate/policy_state.pkl",
+      "sha256": "c0e32b6e3d86799c7d297211bb278456152a8f8e3f6f61bf2b311b1862af0c00"
+    },
+    {
+      "agent": 1,
+      "branch": "recover",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent1_recover/policy_state.pkl",
+      "sha256": "4f9383a83298480ff574aafafabc1ba86a6c952084673414541bfa8bc292c0f2"
+    },
+    {
+      "agent": 1,
+      "branch": "master",
+      "path": "h-marl-3policy/saved_policies/master/iter_49/policies/Agent1_master/policy_state.pkl",
+      "sha256": "c39a73d15e857534c8c6e55ec1e6d90c8a37f0b76d94d945910884089b7de08c"
+    },
+    {
+      "agent": 2,
+      "branch": "investigate",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent2_investigate/policy_state.pkl",
+      "sha256": "71627cb686286ad2974528f8b2594a1bf427ae2667b28ad7f5fae3b0048d4bd4"
+    },
+    {
+      "agent": 2,
+      "branch": "recover",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent2_recover/policy_state.pkl",
+      "sha256": "8e2c40219fd072649aa91a457e0a9182ed28c604c75261b90c60e4f6afc347cc"
+    },
+    {
+      "agent": 2,
+      "branch": "master",
+      "path": "h-marl-3policy/saved_policies/master/iter_49/policies/Agent2_master/policy_state.pkl",
+      "sha256": "4510aeedd973e06ed905ef8b97df20be4f78ff60453e9576b793d5e51fd87a9e"
+    },
+    {
+      "agent": 3,
+      "branch": "investigate",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent3_investigate/policy_state.pkl",
+      "sha256": "a0e0a293871bcfcec66fe9c6deadec9e988155a4c8d78c184c7c27196b0ece4b"
+    },
+    {
+      "agent": 3,
+      "branch": "recover",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent3_recover/policy_state.pkl",
+      "sha256": "52808475d8aa9c5fc6eec8ef84805c15028cb84a5b5cc421e1a0ac5a964ee7e5"
+    },
+    {
+      "agent": 3,
+      "branch": "master",
+      "path": "h-marl-3policy/saved_policies/master/iter_49/policies/Agent3_master/policy_state.pkl",
+      "sha256": "5bc3624187b7d39f26e9e7171b7f1b6c462808f1a7f25e7ac2c811fde9d4c4b8"
+    },
+    {
+      "agent": 4,
+      "branch": "investigate",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent4_investigate/policy_state.pkl",
+      "sha256": "ec1932228a93f9c76e5e80869e6c72b9b870c7f020771772de91a1916b638291"
+    },
+    {
+      "agent": 4,
+      "branch": "recover",
+      "path": "h-marl-3policy/saved_policies/sub/iter_49/policies/Agent4_recover/policy_state.pkl",
+      "sha256": "dfbc1f8efa88a82da4032e5ae086a2da6cd86f10f685ba5681e6bb3c7561c533"
+    },
+    {
+      "agent": 4,
+      "branch": "master",
+      "path": "h-marl-3policy/saved_policies/master/iter_49/policies/Agent4_master/policy_state.pkl",
+      "sha256": "f918e6a5d7963cd3171a743443f17d064b72f162264095c80974e030ee03f3af"
+    }
+  ]
+}

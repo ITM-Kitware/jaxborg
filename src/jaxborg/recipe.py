@@ -31,7 +31,7 @@ from typing import Any
 
 import yaml
 
-from jaxborg.blue_observation_contract import enhanced_obs_enabled
+from jaxborg.blue_observation_contract import enhanced_obs_enabled, enhanced_obs_version
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
@@ -75,6 +75,12 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     if not isinstance(recipe, dict):
         raise ValueError(f"{source}: recipe must be a YAML mapping")
     enhanced_obs_enabled(recipe)
+    enhanced_obs_version(recipe)
+    if recipe.get("kind") == "pretrained_eval":
+        from jaxborg.pretrained.hmarl_eval import validate_recipe
+
+        validate_recipe(recipe, source=source)
+        return
     for section in REQUIRED_SECTIONS:
         if section not in recipe:
             raise ValueError(f"{source}: missing required section '{section}'")
@@ -291,6 +297,7 @@ def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
         _deep_merge(projected["arch"], arch_override)
     if projected["arch"]["name"] in ("mappo", "recurrent_mappo"):
         projected["arch"]["cage4_enhanced_obs"] = enhanced_obs_enabled(projected)
+        projected["arch"]["blue_observation_version"] = enhanced_obs_version(projected)
     return projected
 
 
@@ -416,7 +423,9 @@ def _apply_variant_overrides(base: GameVariant, recipe: dict[str, Any]) -> GameV
         raise ValueError(
             f"unknown train.variant_overrides keys {sorted(unknown)}; allowed: {list(_VARIANT_OVERRIDE_KEYS)}"
         )
-    base = replace(base, cage4_enhanced_obs=enhanced_obs_enabled(recipe))
+    base = replace(
+        base, cage4_enhanced_obs=enhanced_obs_enabled(recipe), blue_observation_version=enhanced_obs_version(recipe)
+    )
     if not overrides:
         return base
     return replace(base, **{k: overrides[k] for k in _VARIANT_OVERRIDE_KEYS if k in overrides})
@@ -444,6 +453,8 @@ def eval_variant(recipe: dict[str, Any]) -> GameVariant:
     eval_cfg = recipe.get("eval") or {}
     base_name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
     base = _apply_variant_overrides(VARIANTS[base_name], recipe)
+    if recipe.get("kind") == "pretrained_eval":
+        base = replace(base, num_steps=eval_cfg["episode_length"])
     red = eval_cfg.get("red")
     if red is None:
         return base
@@ -453,6 +464,7 @@ def eval_variant(recipe: dict[str, Any]) -> GameVariant:
         red_reward=base.red_reward,
         blue_block_policy=base.blue_block_policy,
         cage4_enhanced_obs=base.cage4_enhanced_obs,
+        blue_observation_version=base.blue_observation_version,
     )
 
 
@@ -552,6 +564,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
     select Blue for this one-policy view and should use ``project_team_configs``
     to obtain both views.
     """
+    if recipe.get("kind") == "pretrained_eval":
+        raise ValueError("This is an evaluation-only pretrained recipe; use scripts/eval/eval_hmarl.py")
     validate_topology_split(recipe, repo_root=REPO_ROOT)
     teams = training_teams(recipe)
     selected_team = team or (teams[0] if len(teams) == 1 else "blue")
@@ -605,6 +619,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
 
 def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
     """Flatten a team view into the dict that ippo_cyborg.py consumes."""
+    if recipe.get("kind") == "pretrained_eval":
+        raise ValueError("This is an evaluation-only pretrained recipe; use scripts/eval/eval_hmarl.py")
     teams = training_teams(recipe)
     selected_team = team or (teams[0] if len(teams) == 1 else "blue")
     resolved = team_recipe(recipe, selected_team)

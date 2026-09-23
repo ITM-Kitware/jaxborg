@@ -9,7 +9,7 @@ import seaborn as sns
 from matplotlib.lines import Line2D
 from matplotlib.ticker import MaxNLocator
 
-from .data import CONDITIONS, MAX_STEPS, _seed_band, paired_families
+from .data import CONDITIONS, _seed_band, paired_families
 from .style import (
     COND_COLORS,
     COND_LABELS,
@@ -194,7 +194,7 @@ def fig_eval_by_step(by_step: pd.DataFrame) -> plt.Figure | None:
                 ax.set_title(FAMILY_LABELS[fam])
             if r == 1:
                 ax.set_xlabel("Checkpoint environment steps (M)")
-            ax.set_xlim(-2, MAX_STEPS / 1e6 + 2)
+            ax.set_xlim(-2, float(by_step["step"].max()) / 1e6 + 2)
             _grid(ax)
         axes[r, 0].set_ylabel(ylabel)
     _cond_legend(axes[0, -1], loc="lower right")
@@ -223,7 +223,7 @@ def fig_scripted_reds_by_step(checkpoint_scripted: pd.DataFrame) -> plt.Figure |
                 ax.set_title(f"{RED_LABELS[red]} Red")
             if r == len(families) - 1:
                 ax.set_xlabel("Checkpoint environment steps (M)")
-            ax.set_xlim(-2, MAX_STEPS / 1e6 + 2)
+            ax.set_xlim(-2, float(checkpoint_scripted["step"].max()) / 1e6 + 2)
             _grid(ax)
         axes[r, 0].set_ylabel(f"{FAMILY_LABELS[fam]}\nBlue return")
     _cond_legend(axes[0, 0])
