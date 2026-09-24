@@ -4,6 +4,16 @@ These recipes evaluate **H-MARL Expert** and **H-MARL Meta** from
 [Singh et al., arXiv:2410.17351](https://arxiv.org/abs/2410.17351).
 Both policy inference and environment rollouts run in JAX. There is no training
 configuration, optimizer, or training entry point in this implementation.
+The default sweep includes FSM, CIA C/I/A, and the paper's Aggressive, Stealthy,
+and Impact Reds. To run just the paper's four-adversary comparison:
+
+```bash
+uv run python scripts/eval/eval_hmarl_reds.py --recipe hmarl_expert
+uv run python scripts/eval/eval_hmarl_reds.py --recipe hmarl_meta
+```
+
+See [H-MARL Red evaluation](hmarl_reds.md)
+for behavior definitions, checkpoint evaluation, and the matching IPPO-LSTM hooks.
 
 ```bash
 uv run python scripts/eval/eval_hmarl.py --recipe hmarl_expert
@@ -53,15 +63,18 @@ The launcher first trains both `cotraining_lstm` and
 `cotraining_lstm_env_diversity`, each with seeds **42, 100, 200** and its
 unchanged 50M-step budget. Both use the new 450-input enhanced observations.
 It then evaluates all six final LSTM Blues against FSM and CIA C/I/A.
-Finally, **Expert and Meta run on one GPU each**; each faces the same four
-scripted opponents and all **six final cotrained Reds**, covering both training
-conditions and all seeds. No historical checkpoints are selected, and H-MARL
+Finally, **Expert and Meta run on one GPU each**; each faces the four FSM/CIA
+opponents plus Aggressive, Stealthy and Impact Red and all **six final cotrained
+Reds**, covering both training conditions and all seeds. No historical checkpoints are selected, and H-MARL
 is never trained. All matchups use the evaluation contract below: 600 episodes
-per opponent, 500 steps each (6,000 episodes per H-MARL policy).
+per opponent, 500 steps each (7,800 episodes per H-MARL policy).
 
 The launcher explicitly schedules these suites; the cotraining recipes' automatic
 history/cross-play and native CybORG suites are deferred and are not part of this
-comparison. Comparing the LSTM Blues with H-MARL on learned Reds would additionally
+comparison. The launcher's explicit LSTM sweep covers FSM/CIA; run
+`eval_hmarl_reds.py --model <final-bundle>` to add the H-MARL Red suite when using that
+launcher. Normal LSTM training schedules it through the recipe automatically.
+Comparing the LSTM Blues with H-MARL on learned Reds would additionally
 require evaluating those Blues against the same Red pool with appropriate
 training-seed exclusions; the common FSM/CIA sweep is directly comparable here.
 
@@ -114,7 +127,7 @@ Both recipes match the JAX scripted-Red sweep in
 
 | Setting | Value |
 | --- | --- |
-| Red opponents | `fsm`, `cia_c`, `cia_i`, `cia_a` |
+| Red opponents | `fsm`, `cia_c`, `cia_i`, `cia_a`, `aggressive`, `stealthy`, `impact` |
 | Episode length | 500 environment steps, with native action durations |
 | Evaluation seeds | 1000–1009 |
 | Episodes per seed per topology | 6 |
@@ -123,7 +136,7 @@ Both recipes match the JAX scripted-Red sweep in
 | Topology sampling | Exhaustive |
 | Policy sampling | Stochastic |
 | CIA metric | Resilience, fixed roles per topology |
-| Budget | 600 episodes per Red, 2,400 per recipe |
+| Budget | 600 episodes per Red, 4,200 per recipe (2,400 for the dedicated H-MARL Red suite) |
 
 The existing topology cache, episode-seed expansion, role-map fingerprints,
 reward calculation and temporal CIA scoring are reused. Results use the existing

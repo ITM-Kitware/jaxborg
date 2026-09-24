@@ -176,6 +176,19 @@ eval:
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress
 
+    # Section 5.2 of Singh et al.: Default, Aggressive, Stealthy and Impact.
+    # Uses the same held-out bank and CIA roles as scripted-reds above.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 6
+        - --progress
+
 # The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
 # shuffles transitions across the time axis -- so this recipe is JAX-only and
 # carries no `cleanrl:` block; project_cleanrl's defaults keep the smoke tests

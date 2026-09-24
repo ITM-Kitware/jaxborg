@@ -246,7 +246,7 @@ def test_eval_only_recipe_matches_cotraining_cases_and_rejects_training(variant)
     assert ev["seeds"] == reference["eval"]["checkpoint_scripted_reds"]["seeds"]
     assert ev["episodes_per_seed"] == 6
     assert ev["episode_length"] == reference["train"]["episode_length"] == 500
-    assert ev["reds"] == ["fsm", "cia_c", "cia_i", "cia_a"]
+    assert ev["reds"] == ["fsm", "cia_c", "cia_i", "cia_a", "aggressive", "stealthy", "impact"]
     assert ev["deterministic"] is False
     assert ev["cia"] == reference["eval"]["cia"]
     assert "train" not in recipe and "core" not in recipe

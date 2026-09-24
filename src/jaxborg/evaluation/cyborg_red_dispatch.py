@@ -2,6 +2,7 @@
 
 Maps recipe `red_agent` strings to CybORG agent classes:
   finite_state / fsm  -> FiniteStateRedAgent  (CybORG default)
+  aggressive/stealthy/impact -> paper FSM variants (Singh et al.)
   sleep               -> SleepAgent           (no-op adversary)
   resilience          -> ResilienceRedAgent   (op-zone biased)
   c / cia_c           -> CRedAgent            (CIA-C biased)
@@ -30,6 +31,10 @@ def cyborg_red_class(red_agent: str, target_weight: float = 5.0):
         return FiniteStateRedAgent
     if name == "sleep":
         return SleepAgent
+    if name in {"aggressive", "stealthy", "impact"}:
+        from jaxborg.scenarios.cc4.cyborg_hmarl_agents import AggressiveRedAgent, ImpactRedAgent, StealthyRedAgent
+
+        return {"aggressive": AggressiveRedAgent, "stealthy": StealthyRedAgent, "impact": ImpactRedAgent}[name]
     if name == "resilience":
         return ResilienceRedAgent.with_weight(target_weight)
     if name in {"c", "cia_c"}:
@@ -40,5 +45,5 @@ def cyborg_red_class(red_agent: str, target_weight: float = 5.0):
         return ARedAgent.with_weight(target_weight)
     raise ValueError(
         f"Unknown red_agent name: {red_agent!r} "
-        "(expected one of finite_state/fsm/sleep/resilience/c/i/a/cia_c/cia_i/cia_a)"
+        "(expected one of finite_state/fsm/aggressive/stealthy/impact/sleep/resilience/c/i/a/cia_c/cia_i/cia_a)"
     )

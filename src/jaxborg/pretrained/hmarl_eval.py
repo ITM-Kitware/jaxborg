@@ -12,7 +12,7 @@ from statistics import mean, stdev
 import jax
 
 from jaxborg.evaluation.jax_scripted_red import (
-    DEFAULT_SCRIPTED_REDS,
+    SUPPORTED_SCRIPTED_REDS,
     _git_commit,
     _normalise_reds,
     _parse_seeds,
@@ -152,7 +152,7 @@ def main(argv=None):
         "--upstream-dir", type=Path, help="Import from a local upstream checkout if weights are missing"
     )
     parser.add_argument("--prepare-only", action="store_true", help="Fetch/convert/validate weights without evaluation")
-    parser.add_argument("--reds", nargs="+", choices=DEFAULT_SCRIPTED_REDS)
+    parser.add_argument("--reds", nargs="+", choices=SUPPORTED_SCRIPTED_REDS)
     parser.add_argument(
         "--red-model",
         action="append",
