@@ -49,9 +49,11 @@ from jaxborg.evaluation.stateful_blue import StatefulBluePolicy
 from jaxborg.policies import initial_carry, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import variant_for_red
+from jaxborg.scenarios.cc4.hmarl_reds import HMARL_REDS
 
 DEFAULT_SCRIPTED_REDS = ("fsm", "cia_c", "cia_i", "cia_a")
-_SUPPORTED_SCRIPTED_REDS = frozenset(DEFAULT_SCRIPTED_REDS)
+SUPPORTED_SCRIPTED_REDS = (*DEFAULT_SCRIPTED_REDS, *HMARL_REDS[1:])
+_SUPPORTED_SCRIPTED_REDS = frozenset(SUPPORTED_SCRIPTED_REDS)
 _EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
@@ -117,7 +119,7 @@ def _normalise_reds(value: str | Sequence[str]) -> tuple[str, ...]:
     unknown = set(reds) - _SUPPORTED_SCRIPTED_REDS
     if unknown:
         raise ValueError(
-            f"unsupported scripted Red agents {sorted(unknown)}; expected a subset of {list(DEFAULT_SCRIPTED_REDS)}"
+            f"unsupported scripted Red agents {sorted(unknown)}; expected a subset of {list(SUPPORTED_SCRIPTED_REDS)}"
         )
     if len(set(reds)) != len(reds):
         raise ValueError("reds must not contain duplicates")
@@ -698,7 +700,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         default=os.environ.get("JAXBORG_RECIPE_PATH"),
         help="Recipe name/path (default: post-training environment or model sidecar)",
     )
-    parser.add_argument("--reds", nargs="+", choices=DEFAULT_SCRIPTED_REDS, default=list(DEFAULT_SCRIPTED_REDS))
+    parser.add_argument("--reds", nargs="+", choices=SUPPORTED_SCRIPTED_REDS, default=list(DEFAULT_SCRIPTED_REDS))
     parser.add_argument("--seeds", default="1000-1009")
     parser.add_argument("--episodes-per-seed", type=int, default=1)
     parser.add_argument("--deterministic", action="store_true")

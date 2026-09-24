@@ -1,4 +1,5 @@
 # Run: uv run python scripts/eval/eval_hmarl.py --recipe hmarl_meta
+# H-MARL Red suite: uv run python scripts/eval/eval_hmarl_reds.py --recipe hmarl_meta
 kind: pretrained_eval
 meta:
   name: hmarl_meta
@@ -19,7 +20,8 @@ pretrained:
 eval:
   variant: cia_resilience
   episode_length: 500
-  reds: [fsm, cia_c, cia_i, cia_a]
+  # Includes the H-MARL Red suite in the standard H-MARL evaluation as well.
+  reds: [fsm, cia_c, cia_i, cia_a, aggressive, stealthy, impact]
   seeds: 1000-1009
   episodes_per_seed: 6
   deterministic: false

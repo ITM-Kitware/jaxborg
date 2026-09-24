@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.scenarios.cc4.hmarl_reds import HMARL_RED_TRANSFERS
 
 CC4_STOCK = GameVariant(name="cc4_stock")
 
@@ -46,6 +47,15 @@ def variant_for_red(
     if name in {"fsm", "finite_state"}:
         return replace(
             CC4_STOCK,
+            resilience_roles=resilience_roles,
+            op_zone_servers=3 if resilience_roles else None,
+            **overrides,
+        )
+    if name in HMARL_RED_TRANSFERS:
+        return replace(
+            CC4_STOCK,
+            name=f"cc4_{name}",
+            red_agent=name,
             resilience_roles=resilience_roles,
             op_zone_servers=3 if resilience_roles else None,
             **overrides,
