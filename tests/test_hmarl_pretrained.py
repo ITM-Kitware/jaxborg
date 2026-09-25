@@ -243,7 +243,9 @@ def test_eval_only_recipe_matches_cotraining_cases_and_rejects_training(variant)
     reference = load("cotraining_lstm_env_diversity")
     ev = recipe["eval"]
     assert ev["topology_generation"] == reference["eval"]["topology_generation"]
-    assert ev["seeds"] == reference["eval"]["checkpoint_scripted_reds"]["seeds"]
+    # Same seeds as the final-model FSM/CIA sweep (not the cheaper checkpoint curve).
+    scripted = next(job for job in reference["eval"]["after_training"] if job["name"] == "scripted-reds")
+    assert ev["seeds"] == scripted["args"][scripted["args"].index("--seeds") + 1]
     assert ev["episodes_per_seed"] == 6
     assert ev["episode_length"] == reference["train"]["episode_length"] == 500
     assert ev["reds"] == ["fsm", "cia_c", "cia_i", "cia_a", "aggressive", "stealthy", "impact"]

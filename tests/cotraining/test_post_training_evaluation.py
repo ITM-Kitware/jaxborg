@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from jaxborg.evaluation import post_training
+from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
 from jaxborg.evaluation.post_training import (
     PostTrainingEvalSettings,
     run_configured_evaluations_after_training,
@@ -241,9 +242,17 @@ def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    # Historical cross-play runs first; priors and scripted checkpoint curves are off.
+    # Historical cross-play runs first, then any scripted checkpoint curve; priors are off.
     # Cross-seed play needs an explicit opponent, so it is skipped here.
-    cross_play, benchmark, learned, scripted = calls
+    cross_play, *calls = calls
+    if CheckpointScriptedRedsSettings.from_recipe(recipe).enabled:
+        curve, *calls = calls
+        assert Path(curve[1]).name == "eval_checkpoint_scripted_reds.py"
+    benchmark, learned, scripted, *extra = calls
+    if any(job["name"] == "hmarl-reds" for job in recipe["eval"]["after_training"]):
+        assert len(extra) == 1 and Path(extra[0][1]).name == "eval_hmarl_reds.py"
+    else:
+        assert not extra
     assert Path(benchmark[1]).name == "eval_scripted_reds.py"
     assert benchmark[benchmark.index("--seeds") + 1] == "1000-1099"
     assert benchmark[benchmark.index("--reds") + 1] == "fsm"
@@ -322,3 +331,89 @@ def test_native_benchmark_can_use_cpu_after_gpu_training(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert calls[0][1] == "cpu"
     assert calls[0][0].count("--model") == 1
+
+
+@pytest.mark.parametrize("launcher_platform", [None, "cuda"])
+def test_comparison_checkpoint_curves_run_on_gpu(tmp_path, monkeypatch, launcher_platform):
+    model = _final_model(tmp_path)
+    if launcher_platform is None:
+        monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    else:
+        monkeypatch.setenv("JAX_PLATFORMS", launcher_platform)
+    monkeypatch.delenv("JAXBORG_SKIP_POST_TRAINING_EVAL", raising=False)
+    platforms = {}
+
+    def fake_run(command, **kwargs):
+        platforms[Path(command[1]).name] = kwargs["env"]["JAX_PLATFORMS"]
+        return SimpleNamespace(returncode=0)
+
+    run_configured_evaluations_after_training(model, load("cotraining_lstm"), run_subprocess=fake_run)
+    assert platforms["eval_checkpoint_scripted_reds.py"] == "cuda"
+    assert platforms["eval_scripted_reds.py"] == "cpu"  # CybORG benchmark stays on CPU.
+
+
+@pytest.mark.parametrize("base", ["cotraining", "cotraining_lstm", "cotraining_mappo"])
+def test_diverse_recipe_evaluates_exact_nondiverse_counterpart(tmp_path, base):
+    model = _final_model(tmp_path)
+    recipe = load(base + "_env_diversity")
+    recipe["run"] = {"seed": 42}
+    red = model.with_name("model_baseline.safetensors")
+    red.touch()
+    saved = load(base)
+    saved["run"] = {"seed": 42}
+    red.with_name("recipe_baseline.yaml").write_text(yaml.safe_dump(saved))
+    calls = []
+    manifest_path = run_configured_evaluations_after_training(
+        model,
+        recipe,
+        nondiverse_red=red,
+        run_subprocess=lambda cmd, **kw: calls.append(cmd),
+    )
+    command = next(cmd for cmd in calls if "nondiverse-red" in cmd)
+    assert command[command.index("--blue-path") + 1] == str(model)
+    assert command[command.index("--red-path") + 1] == str(red)
+    assert command[command.index("--seeds") + 1] == "1000-1009"
+    manifest = json.loads(manifest_path.read_text())
+    assert all(job["status"] == "succeeded" and job["required"] for job in manifest["evaluations"])
+
+
+@pytest.mark.parametrize("wrong_seed,wrong_recipe", [(100, False), (42, True)])
+def test_nondiverse_counterpart_rejects_wrong_seed_or_condition(tmp_path, wrong_seed, wrong_recipe):
+    model = _final_model(tmp_path)
+    recipe = load("cotraining_env_diversity")
+    recipe["run"] = {"seed": 42}
+    red = model.with_name("model_baseline.safetensors")
+    red.touch()
+    saved = load("cotraining_env_diversity" if wrong_recipe else "cotraining")
+    saved["run"] = {"seed": wrong_seed}
+    red.with_name("recipe_baseline.yaml").write_text(yaml.safe_dump(saved))
+    with pytest.raises(ValueError, match="configured baseline.*same seed"):
+        run_configured_evaluations_after_training(
+            model, recipe, nondiverse_red=red, run_subprocess=lambda *a, **kw: pytest.fail("must fail before work")
+        )
+
+
+def test_cli_passes_counterpart_and_preserves_saved_training_settings(tmp_path, monkeypatch):
+    model = _final_model(tmp_path)
+    saved = load("cotraining_lstm_env_diversity")
+    saved["run"] = {"seed": 42, "total_steps": 49_968_000}
+    saved["jax"]["num_minibatches"] = 8  # Eval override must never rewrite training provenance.
+    saved["eval"] = {}
+    model.with_name("recipe_run.yaml").write_text(yaml.safe_dump(saved))
+    captured = []
+    monkeypatch.setattr(
+        post_training,
+        "run_configured_evaluations_after_training",
+        lambda *args, **kwargs: captured.append((args, kwargs)) or Path("manifest.json"),
+    )
+    post_training.main(
+        ["--model", str(model), "--recipe", "cotraining_lstm_env_diversity", "--nondiverse-red", "baseline.safetensors"]
+    )
+    (actual_model, recipe), kwargs = captured[0]
+    assert actual_model == str(model)
+    assert recipe["jax"]["num_minibatches"] == 8
+    assert recipe["run"] == saved["run"]
+    assert any(job["name"] == "nondiverse-red" for job in recipe["eval"]["after_training"])
+    assert kwargs["nondiverse_red"] == "baseline.safetensors"
+    assert kwargs["save_evaluation_recipe"] is True
+    assert yaml.safe_load(model.with_name("recipe_run.yaml").read_text())["eval"] == {}

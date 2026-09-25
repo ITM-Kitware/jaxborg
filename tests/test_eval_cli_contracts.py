@@ -43,6 +43,7 @@ def test_recipe_commands_match_real_evaluation_parsers(monkeypatch, evaluation, 
         "name": evaluation.name,
         "exp_dir": "/tmp/exp",
         "eval_dir": "/tmp/exp/eval",
+        "nondiverse_red": "/tmp/nondiverse_red.safetensors",
     }
     args = [evaluation.script]
     if evaluation.model_arg:

@@ -32,7 +32,7 @@ from jaxborg.evaluation.play_priors import PlayPriorsSettings
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
-_PLACEHOLDERS = frozenset({"model", "recipe", "backend", "exp_dir", "eval_dir", "name"})
+_PLACEHOLDERS = frozenset({"model", "recipe", "backend", "exp_dir", "eval_dir", "name", "nondiverse_red"})
 
 
 def _normalise_arg(value: Any, *, location: str) -> str:
@@ -255,6 +255,7 @@ def run_configured_evaluations_after_training(
     recipe: Mapping[str, Any],
     *,
     cross_seed_red: str | Path | None = None,
+    nondiverse_red: str | Path | None = None,
     save_evaluation_recipe: bool = False,
     run_subprocess: Callable[..., Any] = subprocess.run,
 ) -> Path | None:
@@ -281,7 +282,35 @@ def run_configured_evaluations_after_training(
         )
         if evaluation is not None
     )
-    evaluations = built_in + settings.evaluations
+    configured = settings.evaluations
+    counterpart_jobs = tuple(job for job in configured if any("{nondiverse_red}" in arg for arg in job.args))
+    if counterpart_jobs:
+        if nondiverse_red is None:
+            print("Skipping nondiverse-red: supply --nondiverse-red after the baseline finishes training.", flush=True)
+            configured = tuple(job for job in configured if job not in counterpart_jobs)
+        else:
+            from jaxborg.checkpoint import read_sidecar
+            from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
+
+            red = Path(nondiverse_red).expanduser().resolve()
+            if not red.is_file() or not red.name.startswith("model_"):
+                raise ValueError("nondiverse-red requires an existing final model bundle")
+            saved = read_sidecar(red)
+            baseline = EnvDiversitySettings.from_recipe(recipe).baseline_recipe
+            seed = recipe.get("run", {}).get("seed")
+            if (
+                baseline is None
+                or saved.get("meta", {}).get("name") != baseline
+                or isinstance(seed, bool)
+                or not isinstance(seed, int)
+                or saved.get("run", {}).get("seed") != seed
+                or saved.get("algorithm") != recipe.get("algorithm")
+                or saved.get("train", {}).get("teams") != "both"
+                or red == Path(model_path).resolve()
+            ):
+                raise ValueError("nondiverse-red must be the configured baseline's cotrained model at the same seed")
+            nondiverse_red = red
+    evaluations = built_in + configured
     if not evaluations:
         from jaxborg.evaluation.scripted_red import run_configured_after_training
 
@@ -331,6 +360,9 @@ def run_configured_evaluations_after_training(
         "exp_dir": str(exp_dir),
         "eval_dir": str(eval_dir),
     }
+
+    if nondiverse_red is not None:
+        replacements["nondiverse_red"] = str(nondiverse_red)
 
     for index, evaluation in enumerate(evaluations, 1):
         script = evaluation.resolve_script()
@@ -398,6 +430,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run a recipe's ordered post-training evaluation scripts")
     parser.add_argument("--model", required=True, help="Final model bundle to pass to every evaluation")
     parser.add_argument("--cross-seed-red", help="Final Red bundle from another training seed for eval.cross_seed_play")
+    parser.add_argument("--nondiverse-red", help="Same-seed baseline Red bundle for {nondiverse_red} recipe jobs")
     parser.add_argument(
         "--recipe",
         help="Override the eval section using this recipe; keep the model's training settings and provenance",
@@ -413,7 +446,11 @@ def main(argv: Sequence[str] | None = None) -> None:
         recipe = copy.deepcopy(recipe)
         recipe["eval"] = copy.deepcopy(load(args.recipe).get("eval", {}))
     manifest = run_configured_evaluations_after_training(
-        args.model, recipe, cross_seed_red=args.cross_seed_red, save_evaluation_recipe=bool(args.recipe)
+        args.model,
+        recipe,
+        cross_seed_red=args.cross_seed_red,
+        nondiverse_red=args.nondiverse_red,
+        save_evaluation_recipe=bool(args.recipe),
     )
     if manifest is None:
         from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings

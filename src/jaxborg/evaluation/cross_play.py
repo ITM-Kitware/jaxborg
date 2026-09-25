@@ -34,6 +34,7 @@ from jaxborg.evaluation.play_priors import (
     _parse_seeds,
     find_periodic_checkpoints,
     select_checkpoints,
+    with_final_checkpoint,
 )
 
 _ALLOWED_SETTINGS = {
@@ -43,6 +44,7 @@ _ALLOWED_SETTINGS = {
     "deterministic",
     "required",
     "max_checkpoints",
+    "include_final",
 }
 
 
@@ -56,6 +58,7 @@ class CrossPlaySettings:
     deterministic: bool = False
     required: bool = True
     max_checkpoints: int = 6
+    include_final: bool = False
 
     @classmethod
     def from_recipe(cls, recipe: Mapping[str, Any]) -> CrossPlaySettings:
@@ -78,9 +81,15 @@ class CrossPlaySettings:
         enabled = raw.get("enabled", True)
         deterministic = raw.get("deterministic", False)
         required = raw.get("required", True)
+        include_final = raw.get("include_final", False)
         episodes_per_seed = raw.get("episodes_per_seed", 1)
         max_checkpoints = raw.get("max_checkpoints", 6)
-        for name, value in (("enabled", enabled), ("deterministic", deterministic), ("required", required)):
+        for name, value in (
+            ("enabled", enabled),
+            ("deterministic", deterministic),
+            ("required", required),
+            ("include_final", include_final),
+        ):
             if not isinstance(value, bool):
                 raise ValueError(f"eval.cross_play.{name} must be a boolean")
         for name, value in (("episodes_per_seed", episodes_per_seed), ("max_checkpoints", max_checkpoints)):
@@ -98,6 +107,7 @@ class CrossPlaySettings:
             deterministic=deterministic,
             required=required,
             max_checkpoints=max_checkpoints,
+            include_final=include_final,
         )
 
 
@@ -235,10 +245,10 @@ def run_cross_play(
 
     resolved_model = Path(final_model).expanduser().resolve()
     backend = "cyborg" if resolved_model.suffix == ".pt" else "jax"
-    checkpoints = select_checkpoints(
-        find_periodic_checkpoints(resolved_model, recipe),
-        settings.max_checkpoints,
-    )
+    checkpoints = find_periodic_checkpoints(resolved_model, recipe)
+    if settings.include_final:
+        checkpoints = with_final_checkpoint(checkpoints, resolved_model, recipe, setting="eval.cross_play")
+    checkpoints = select_checkpoints(checkpoints, settings.max_checkpoints)
     if len(checkpoints) < 2:
         raise ValueError(
             "eval.cross_play requires at least two saved periodic checkpoints; "

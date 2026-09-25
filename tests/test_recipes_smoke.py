@@ -142,6 +142,8 @@ def test_stock_cotraining_recipes_stay_feedforward():
 @pytest.mark.parametrize("name", sorted(p.stem for p in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")))
 def test_cotraining_development_budget_preserves_checkpoint_spacing_and_sequence_batches(name):
     recipe = load(name)
+    if name != "cotraining_test_rule_change":
+        assert recipe["train"]["total_timesteps"] == 50_000_000
     cfg = recipe["jax"]
     stride = cfg["num_envs"] * recipe["train"]["episode_length"] * cfg["checkpoint_every_updates"]
     assert cfg["num_envs"] == 96
@@ -165,6 +167,12 @@ def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
     for recipe in (gru, lstm):
         # Prose and file path are expected to differ; nothing else is.
         del recipe["meta"], recipe["__source_path__"]
+        # LSTM additionally participates in the HMARL comparison. Its final-model
+        # suites, history inclusion and scripted-Red curve differ; the underlying
+        # eval cases match.
+        recipe["eval"].pop("after_training")
+        recipe["eval"].pop("cross_play")
+        recipe["eval"].pop("checkpoint_scripted_reds")
         if suffix:
             # Each recurrent arm compares against its own non-diverse baseline.
             baseline = recipe["eval"]["env_diversity"].pop("baseline_recipe")

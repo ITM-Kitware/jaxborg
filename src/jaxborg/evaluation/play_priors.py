@@ -213,6 +213,28 @@ def select_checkpoints(
     return [checkpoints[index] for index in picked]
 
 
+def with_final_checkpoint(
+    checkpoints: list[PeriodicCheckpoint],
+    final_model: Path,
+    recipe: Mapping[str, Any],
+    *,
+    setting: str,
+) -> list[PeriodicCheckpoint]:
+    """Append the exact final bundle at ``run.total_steps``.
+
+    ``setting`` names the recipe key (for example ``eval.cross_play``) in errors.
+    """
+    steps = (recipe.get("run") or {}).get("total_steps")
+    if isinstance(steps, bool) or not isinstance(steps, int) or steps <= 0:
+        raise ValueError(f"{setting}.include_final requires run.total_steps")
+    if not final_model.is_file() or not final_model.name.startswith("model_"):
+        raise ValueError(f"{setting}.include_final requires an existing final model bundle")
+    # Prefer the exact final bundle when a periodic save has the same step.
+    return [checkpoint for checkpoint in checkpoints if checkpoint.steps < steps] + [
+        PeriodicCheckpoint(final_model, steps)
+    ]
+
+
 def _git_commit() -> str:
     try:
         return subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
@@ -452,4 +474,5 @@ __all__ = [
     "find_periodic_checkpoints",
     "run_play_priors",
     "select_checkpoints",
+    "with_final_checkpoint",
 ]

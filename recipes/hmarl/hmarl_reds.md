@@ -32,11 +32,12 @@ uv run python scripts/eval/eval_hmarl_reds.py --recipe hmarl_expert
 uv run python scripts/eval/eval_hmarl_reds.py --recipe hmarl_meta
 ```
 
-Both `cotraining_lstm` and `cotraining_lstm_env_diversity` schedule this script as
-`hmarl-reds` in `eval.after_training`. H-MARL's regular `eval_hmarl.py` sweep also
-includes all three variants alongside FSM and CIA C/I/A. The dedicated H-MARL Red
-script defaults to `fsm aggressive stealthy impact`; `--reds` selects a subset.
-The LSTM suites intentionally repeat FSM to include a baseline in each output.
+The standard and diverse IPPO, IPPO-LSTM, MAPPO and MAPPO-LSTM recipes schedule this script
+as `hmarl-reds` in `eval.after_training`, selecting Aggressive, Stealthy and Impact.
+Default/FSM is already covered by their `scripted-reds` suite. H-MARL's regular
+`eval_hmarl.py` sweep includes all three variants alongside FSM and CIA C/I/A.
+Invoked directly, the dedicated H-MARL Red script defaults to
+`fsm aggressive stealthy impact`; `--reds` selects a subset.
 
 The configured protocol is 10 held-out topologies × 10 seeds × 6 episodes =
 600 episodes per opponent, each 500 steps. The evaluator reuses the exhaustive

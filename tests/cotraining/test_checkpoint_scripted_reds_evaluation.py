@@ -85,7 +85,7 @@ def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch
 
     attached: list[tuple[int, dict]] = []
     recipe = load("cotraining")
-    recipe["eval"]["checkpoint_scripted_reds"]["enabled"] = True
+    recipe["eval"]["checkpoint_scripted_reds"] = {"reds": ["fsm", "cia_c"], "max_checkpoints": 20}
     recipe["run"] = {"train_run_id": "run-1", "seed": 42}
     output = tmp_path / "rows.jsonl"
 
@@ -115,18 +115,92 @@ def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch
     assert all(row["suite"] == "checkpoint_scripted_reds" for row in rows)
 
 
-def test_cotraining_recipes_disable_checkpoint_curves_but_keep_final_scripted_reds():
+HMARL_COMPARISON = {
+    base + suffix
+    for base in ("cotraining", "cotraining_lstm", "cotraining_mappo", "cotraining_mappo_lstm")
+    for suffix in ("", "_env_diversity")
+}
+
+
+def test_hmarl_comparison_recipes_curve_fsm_and_cia_every_48m_steps_plus_final():
     for path in sorted((Path(__file__).resolve().parents[2] / "recipes" / "cotraining").glob("cotraining*.yaml")):
         recipe = load(str(path))
         settings = CheckpointScriptedRedsSettings.from_recipe(recipe)
-        assert not settings.enabled
-        assert settings.required is False
-        assert settings.max_checkpoints == 20
-        # Seeds match eval.after_training so the last checkpoint is directly
-        # comparable with the final-model scripted-Red numbers.
+        # The final-model sweep is the headline number in every recipe.
         scripted = next(e for e in recipe["eval"]["after_training"] if e["name"] == "scripted-reds")
         assert scripted["args"][scripted["args"].index("--seeds") + 1] == "1000-1009"
-        assert settings.seeds == tuple(range(1000, 1010))
+        if path.stem not in HMARL_COMPARISON:
+            assert not settings.enabled
+            continue
+        assert settings.enabled and settings.required
+        assert settings.reds == ("fsm", "cia_c", "cia_i", "cia_a")
+        # Five 960k checkpoints per point; cross_play's per-cell budget.
+        assert settings.every_steps == 4_800_000
+        assert settings.every_steps % 960_000 == 0
+        assert settings.include_final is True
+        assert settings.seeds == (1000, 1001, 1002)
+        assert settings.episodes_per_seed == 6
+
+
+def test_every_steps_selects_fixed_interval_and_appends_exact_final(tmp_path, monkeypatch):
+    from jaxborg.evaluation import checkpoint_scripted_reds as module
+
+    # Stride is 2 updates x 2 envs x 10 steps = 40; saves at 40..240.
+    monkeypatch.setattr(module, "find_periodic_checkpoints", lambda *_a, **_k: _checkpoints(6))
+    final = tmp_path / "model_x.safetensors"
+    final.touch()
+    recipe = _recipe(checkpoint_scripted_reds={"reds": ["fsm"], "every_steps": 80, "include_final": True})
+    recipe["run"]["total_steps"] = 250
+    evaluated, attached = [], []
+
+    def evaluate(model_path, **kwargs):
+        evaluated.append(Path(model_path))
+        return [{"eval_red": "fsm", "mean_reward": -1.0, "std_reward": 0.0, "n_episodes": 1}]
+
+    output = run_checkpoint_scripted_reds(
+        final,
+        recipe,
+        output=tmp_path / "rows.jsonl",
+        evaluate_fn=evaluate,
+        attach_metrics_fn=lambda run_id, metrics, step: attached.append(step),
+    )
+
+    assert attached == [80, 160, 240, 250]
+    assert evaluated[-1] == final.resolve()
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [row["checkpoint_step"] for row in rows] == [80, 160, 240, 250]
+
+
+def test_every_steps_must_land_on_saved_checkpoints(tmp_path, monkeypatch):
+    from jaxborg.evaluation import checkpoint_scripted_reds as module
+
+    monkeypatch.setattr(module, "find_periodic_checkpoints", lambda *_a, **_k: _checkpoints(6))
+    recipe = _recipe(checkpoint_scripted_reds={"every_steps": 60})
+    with pytest.raises(ValueError, match="multiple of the 40-step checkpoint interval"):
+        run_checkpoint_scripted_reds(tmp_path / "model_x.safetensors", recipe, evaluate_fn=pytest.fail)
+
+
+@pytest.mark.parametrize(
+    "config,message",
+    [
+        ({"every_steps": 80, "max_checkpoints": 4}, "every_steps or max_checkpoints, not both"),
+        ({"every_steps": 0}, "every_steps must be a positive integer"),
+        ({"every_steps": True}, "every_steps must be a positive integer"),
+        ({"include_final": "yes"}, "include_final must be a boolean"),
+    ],
+)
+def test_interval_settings_are_validated(config, message):
+    with pytest.raises(ValueError, match=message):
+        CheckpointScriptedRedsSettings.from_recipe(_recipe(checkpoint_scripted_reds=config))
+
+
+def test_include_final_requires_step_provenance(tmp_path, monkeypatch):
+    from jaxborg.evaluation import checkpoint_scripted_reds as module
+
+    monkeypatch.setattr(module, "find_periodic_checkpoints", lambda *_a, **_k: _checkpoints(2))
+    recipe = _recipe(checkpoint_scripted_reds={"include_final": True})
+    with pytest.raises(ValueError, match="checkpoint_scripted_reds.include_final requires run.total_steps"):
+        run_checkpoint_scripted_reds(tmp_path / "model_x.safetensors", recipe, evaluate_fn=pytest.fail)
 
 
 def test_malformed_cia_summary_does_not_lose_the_reward_metrics(tmp_path, monkeypatch, capsys):
@@ -150,7 +224,7 @@ def test_malformed_cia_summary_does_not_lose_the_reward_metrics(tmp_path, monkey
 
     attached: list[dict] = []
     recipe = load("cotraining")
-    recipe["eval"]["checkpoint_scripted_reds"]["enabled"] = True
+    recipe["eval"]["checkpoint_scripted_reds"] = {"reds": ["fsm", "cia_c"], "max_checkpoints": 20}
     recipe["run"] = {"train_run_id": "run-1", "seed": 42}
     run_checkpoint_scripted_reds(
         tmp_path / "model_x.safetensors",
