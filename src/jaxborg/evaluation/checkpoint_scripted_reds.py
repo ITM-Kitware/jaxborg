@@ -12,8 +12,10 @@ into a curve.  Scripted opponents are fixed, so unlike the self-play return
 these values are an *absolute* scale: they move only when Blue changes.
 
 The suite is Blue-only, so it works for single-team runs as well as co-training
-pairs.  Cost is ``max_checkpoints`` times the final-model evaluation, so the
-checkpoint list is strided the same way as ``cross_play``.
+pairs.  Cost is one final-model evaluation per selected checkpoint.  The list
+is strided to ``max_checkpoints`` the same way as ``cross_play``, or taken at a
+fixed ``every_steps`` interval; ``include_final`` ends the curve at the exact
+final bundle.
 """
 
 from __future__ import annotations
@@ -26,7 +28,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from jaxborg.evaluation.play_priors import _parse_seeds, find_periodic_checkpoints, select_checkpoints
+from jaxborg.evaluation.play_priors import (
+    _backend_from_model,
+    _parse_seeds,
+    _periodic_step_stride,
+    find_periodic_checkpoints,
+    select_checkpoints,
+    with_final_checkpoint,
+)
 from jaxborg.evaluation.scripted_red import _normalise_reds
 
 _ALLOWED_SETTINGS = {
@@ -37,6 +46,8 @@ _ALLOWED_SETTINGS = {
     "deterministic",
     "required",
     "max_checkpoints",
+    "every_steps",
+    "include_final",
 }
 
 
@@ -51,6 +62,8 @@ class CheckpointScriptedRedsSettings:
     deterministic: bool = False
     required: bool = True
     max_checkpoints: int = 6
+    every_steps: int | None = None  # Replaces the max_checkpoints stride when set.
+    include_final: bool = False
 
     @classmethod
     def from_recipe(cls, recipe: Mapping[str, Any]) -> CheckpointScriptedRedsSettings:
@@ -75,9 +88,21 @@ class CheckpointScriptedRedsSettings:
         required = raw.get("required", True)
         episodes_per_seed = raw.get("episodes_per_seed", 1)
         max_checkpoints = raw.get("max_checkpoints", 6)
-        for name, value in (("enabled", enabled), ("deterministic", deterministic), ("required", required)):
+        every_steps = raw.get("every_steps")
+        include_final = raw.get("include_final", False)
+        for name, value in (
+            ("enabled", enabled),
+            ("deterministic", deterministic),
+            ("required", required),
+            ("include_final", include_final),
+        ):
             if not isinstance(value, bool):
                 raise ValueError(f"eval.checkpoint_scripted_reds.{name} must be a boolean")
+        if every_steps is not None:
+            if "max_checkpoints" in raw:
+                raise ValueError("eval.checkpoint_scripted_reds may set every_steps or max_checkpoints, not both")
+            if isinstance(every_steps, bool) or not isinstance(every_steps, int) or every_steps <= 0:
+                raise ValueError("eval.checkpoint_scripted_reds.every_steps must be a positive integer")
         for name, value in (("episodes_per_seed", episodes_per_seed), ("max_checkpoints", max_checkpoints)):
             if isinstance(value, bool) or not isinstance(value, int):
                 raise ValueError(f"eval.checkpoint_scripted_reds.{name} must be an integer")
@@ -101,6 +126,8 @@ class CheckpointScriptedRedsSettings:
             deterministic=deterministic,
             required=required,
             max_checkpoints=max_checkpoints,
+            every_steps=every_steps,
+            include_final=include_final,
         )
 
 
@@ -148,10 +175,21 @@ def run_checkpoint_scripted_reds(
         return None
 
     resolved_model = Path(final_model).expanduser().resolve()
-    checkpoints = select_checkpoints(
-        find_periodic_checkpoints(resolved_model, recipe),
-        settings.max_checkpoints,
-    )
+    checkpoints = find_periodic_checkpoints(resolved_model, recipe)
+    if settings.every_steps is not None:
+        stride = _periodic_step_stride(recipe, _backend_from_model(resolved_model))
+        if settings.every_steps % stride:
+            raise ValueError(
+                f"eval.checkpoint_scripted_reds.every_steps must be a multiple of the {stride:,}-step "
+                "checkpoint interval"
+            )
+        checkpoints = [checkpoint for checkpoint in checkpoints if checkpoint.steps % settings.every_steps == 0]
+    if settings.include_final:
+        checkpoints = with_final_checkpoint(
+            checkpoints, resolved_model, recipe, setting="eval.checkpoint_scripted_reds"
+        )
+    if settings.every_steps is None:
+        checkpoints = select_checkpoints(checkpoints, settings.max_checkpoints)
     if not checkpoints:
         raise ValueError(
             "eval.checkpoint_scripted_reds requires at least one saved periodic checkpoint; "

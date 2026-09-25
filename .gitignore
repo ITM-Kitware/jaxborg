@@ -11,6 +11,7 @@ jaxborg-exp/
 jaxborg-harml-comparison/
 .bank_cache/
 .ruff_cache/
+.vscode/
 mlruns/
 .agent_handoff/
 .jax_cache/

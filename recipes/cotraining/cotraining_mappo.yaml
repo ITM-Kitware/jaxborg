@@ -121,7 +121,7 @@ eval:
     deterministic: false
     max_checkpoints: 3
 
-  # Every sampled historical Blue vs every sampled historical Red in this run.
+  # First, middle and exact final bundle: every Blue vs every Red in this run.
   # Three checkpoints -> 9 matchups x 180 episodes (3 seeds x 6 episodes x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
@@ -131,17 +131,21 @@ eval:
     episodes_per_seed: 6
     deterministic: false
     max_checkpoints: 3
-    required: false
+    include_final: true  # Final Blue is evaluated against the sampled prior Reds.
+    required: true
 
-  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
-  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
+  # Blue's curve against fixed FSM and CIA Reds, run on the evaluation GPU.
+  # Every 4.8M steps (each fifth 960k checkpoint) plus the exact final bundle:
+  # 11 points at 50M, each 4 Reds x 180 episodes (3 seeds x 6 episodes x 10 topologies).
+  # The final-model scripted-reds sweep below remains the 600-episode result.
   checkpoint_scripted_reds:
-    enabled: false
+    enabled: true
     reds: [fsm, cia_c, cia_i, cia_a]
-    seeds: 1000-1009
+    seeds: 1000-1002
     episodes_per_seed: 6
-    max_checkpoints: 20
-    required: false
+    every_steps: 4800000
+    include_final: true
+    required: true
 
   # Explicit final-model scripts, run after the enabled built-in suites above.
   # The learned matchup selects both policies from the exact final bundle.
@@ -197,6 +201,22 @@ eval:
         - 6
         # One line per vmapped batch. Without it a Red in flight prints
         # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 6
         - --progress
 
 jax:

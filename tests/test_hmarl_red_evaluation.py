@@ -111,14 +111,41 @@ def test_cli_reuses_cases_and_loads_correct_blue_policy(monkeypatch, tmp_path, r
             assert row["pretrained"]["variant"] == recipe_name.removeprefix("hmarl_")
 
 
-@pytest.mark.parametrize("recipe_name", ["cotraining_lstm", "cotraining_lstm_env_diversity"])
-def test_lstm_recipes_schedule_hmarl_suite(recipe_name):
+@pytest.mark.parametrize(
+    "recipe_name",
+    [
+        base + suffix
+        for base in ("cotraining", "cotraining_lstm", "cotraining_mappo", "cotraining_mappo_lstm")
+        for suffix in ("", "_env_diversity")
+    ],
+)
+def test_comparison_recipes_schedule_hmarl_suite(recipe_name):
     recipe = load(recipe_name)
     jobs = PostTrainingEvalSettings.from_recipe(recipe).evaluations
     job = next(job for job in jobs if job.name == "hmarl-reds")
     assert job.resolve_script() == Path("scripts/eval/eval_hmarl_reds.py").resolve()
     assert job.model_arg == "--model"
-    assert job.args == ("--recipe", "{recipe}", "--seeds", "1000-1009", "--episodes-per-seed", "6", "--progress")
+    assert job.args == (
+        "--recipe",
+        "{recipe}",
+        "--reds",
+        "aggressive",
+        "stealthy",
+        "impact",
+        "--seeds",
+        "1000-1009",
+        "--episodes-per-seed",
+        "6",
+        "--progress",
+    )
+    # FSM/Default is evaluated once by the existing scripted sweep.
+    scripted = next(job for job in jobs if job.name == "scripted-reds")
+    assert scripted.args[scripted.args.index("--reds") + 1 : scripted.args.index("--seeds")] == (
+        "fsm",
+        "cia_c",
+        "cia_i",
+        "cia_a",
+    )
     assert ScriptedRedEvalSettings(reds=HMARL_REDS).reds == HMARL_REDS
 
 
