@@ -144,6 +144,7 @@ class _JaxRecurrentActorCritic(RecurrentPolicy):
     activation: str = "tanh"
     cell: str = "gru"
     trunk: str = "shared"
+    message_dim: int = 0
 
     @nn.nowrap
     def initialize_carry(self, batch_size: int):
@@ -215,7 +216,14 @@ class _JaxRecurrentActorCritic(RecurrentPolicy):
             bias_init=constant(0.0),
             name="critic_head",
         )(critic)
-        return new_carry, JaxCategorical(logits=logits), jnp.squeeze(critic, axis=-1)
+        message_logits = (
+            nn.Dense(self.message_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), name="actor_message")(
+                actor_mean
+            )
+            if self.message_dim
+            else None
+        )
+        return new_carry, JaxCategorical(logits=logits, message_logits=message_logits), jnp.squeeze(critic, axis=-1)
 
 
 def jax_factory(
@@ -226,6 +234,7 @@ def jax_factory(
     *,
     cell: str = "gru",
     trunk: str = "shared",
+    message_dim: int = 0,
     **unknown,
 ):
     if unknown:
@@ -243,6 +252,7 @@ def jax_factory(
         activation=activation,
         cell=cell,
         trunk=trunk,
+        message_dim=message_dim,
     )
 
 

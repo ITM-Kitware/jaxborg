@@ -33,6 +33,7 @@ from . import (
 )
 from .base import CentralizedCriticPolicy, RecurrentPolicy
 from .categorical import Categorical
+from .message_override import MessageOverridePolicy
 
 POLICY_REGISTRY: dict[str, ModuleType] = {
     "shared": shared_actor_critic,
@@ -64,6 +65,11 @@ def make_jax_policy(
     **options: Any,
 ):
     """Return a Flax module instance ready to .init() / .apply()."""
+    message_dim = options.get("message_dim", 0)
+    if isinstance(message_dim, bool) or message_dim not in (0, 8):
+        raise ValueError("message_dim must be 0 or 8")
+    if message_dim and options.get("team", "blue") != "blue":
+        raise ValueError("messages are supported for Blue only")
     try:
         return _resolve(name).JAX_FACTORY(
             action_dim=action_dim,
@@ -95,6 +101,11 @@ def make_torch_policy(
     **options: Any,
 ):
     """Return a torch.nn.Module instance with get_action_and_value/get_value."""
+    message_dim = options.get("message_dim", 0)
+    if isinstance(message_dim, bool) or message_dim not in (0, 8):
+        raise ValueError("message_dim must be 0 or 8")
+    if message_dim and options.get("team", "blue") != "blue":
+        raise ValueError("messages are supported for Blue only")
     return _resolve(name).TORCH_FACTORY(
         obs_dim=obs_dim,
         action_dim=action_dim,
@@ -139,7 +150,11 @@ def has_centralized_critic(module: Any) -> bool:
 
 def initial_carry(module: Any, batch_size: int):
     """Zeroed hidden state for `batch_size` sequences, or None if memoryless."""
-    return module.initialize_carry(batch_size) if is_recurrent(module) else None
+    return (
+        module.initialize_carry(batch_size)
+        if is_recurrent(module) or isinstance(module, MessageOverridePolicy)
+        else None
+    )
 
 
 def init_policy_params(module: Any, rng: jax.Array, obs_dim: int):
@@ -176,6 +191,10 @@ def policy_step(
     carry is returned unchanged (it is `None`), so callers can thread it
     unconditionally.
     """
+    if isinstance(module, MessageOverridePolicy):
+        if critic_obs is not None:
+            raise ValueError("message overrides are for evaluation only")
+        return module.step(params, obs, avail_actions, carry=carry, reset=reset)
     kwargs = {"critic_obs": critic_obs} if has_centralized_critic(module) else {}
     if critic_obs is not None and not has_centralized_critic(module):
         raise ValueError("critic_obs was supplied to a policy with a local critic")
@@ -195,7 +214,11 @@ def policy_step(
         resets[None],
         **kwargs,
     )
-    return Categorical(logits=pi.logits[0]), value[0], next_carry
+    return (
+        pi.replace(logits=pi.logits[0], message_logits=None if pi.message_logits is None else pi.message_logits[0]),
+        value[0],
+        next_carry,
+    )
 
 
 def policy_sequence(

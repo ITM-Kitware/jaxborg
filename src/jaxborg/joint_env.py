@@ -46,6 +46,10 @@ def force_sleep_for_unavailable_actions(
 
     sim = state.state
     out: Dict[str, chex.Array] = {}
+    if "red_messages" in actions:
+        raise ValueError("messages are supported for Blue only")
+    if "blue_messages" in actions:
+        out["blue_messages"] = actions["blue_messages"]
     for b in range(sim.blue_pending_ticks.shape[0]):
         submitted = jnp.asarray(actions[f"blue_{b}"], dtype=jnp.int32)
         valid = (submitted >= 0) & (submitted < BLUE_ALLOW_TRAFFIC_END)
@@ -151,6 +155,8 @@ class JointPolicyCC4Env(MultiAgentEnv):
         submitted = force_sleep_for_unavailable_actions(env_state, actions)
         red_keys = jax.random.split(key, self.cfg.num_red_agents)
         raw_actions: Dict[str, chex.Array] = {agent: submitted[agent] for agent in self.blue_agents}
+        if "blue_messages" in submitted:
+            raw_actions["blue_messages"] = submitted["blue_messages"]
         for r, agent in enumerate(self.red_agents):
             raw_actions[agent] = compact_red_action_to_raw(
                 env_state.state,

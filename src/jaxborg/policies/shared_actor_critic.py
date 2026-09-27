@@ -17,6 +17,7 @@ from torch.distributions import Categorical
 
 from .base import BUFFER_LAYOUT_FLAT
 from .categorical import Categorical as JaxCategorical
+from .torch_messages import TorchMessages
 
 
 class _JaxSharedActorCritic(nn.Module):
@@ -24,6 +25,7 @@ class _JaxSharedActorCritic(nn.Module):
     hidden_dim: int = 256
     hidden_layers: int = 2
     activation: str = "tanh"
+    message_dim: int = 0
 
     @nn.compact
     def __call__(self, x, avail_actions=None):
@@ -41,19 +43,25 @@ class _JaxSharedActorCritic(nn.Module):
         logits = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0))(h)
         if avail_actions is not None:
             logits = logits - (1 - avail_actions) * 1e10
-        pi = JaxCategorical(logits=logits)
+        message_logits = (
+            nn.Dense(self.message_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), name="actor_message")(h)
+            if self.message_dim
+            else None
+        )
+        pi = JaxCategorical(logits=logits, message_logits=message_logits)
 
         value = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0))(h)
         value = jnp.squeeze(value, axis=-1)
         return pi, value
 
 
-def jax_factory(action_dim: int, hidden_dim: int, hidden_layers: int, activation: str):
+def jax_factory(action_dim: int, hidden_dim: int, hidden_layers: int, activation: str, *, message_dim: int = 0):
     return _JaxSharedActorCritic(
         action_dim=action_dim,
         hidden_dim=hidden_dim,
         hidden_layers=hidden_layers,
         activation=activation,
+        message_dim=message_dim,
     )
 
 
@@ -70,12 +78,14 @@ def _build_torch_mlp(in_dim: int, hidden_dims: tuple[int, ...]) -> tnn.Sequentia
     return tnn.Sequential(*layers)
 
 
-class _TorchSharedActorCritic(tnn.Module):
+class _TorchSharedActorCritic(TorchMessages, tnn.Module):
     """Shared-trunk PyTorch actor-critic, action-masked."""
 
     arch_name = "shared"
 
-    def __init__(self, obs_dim: int, action_dim: int, hidden_dim: int = 256, hidden_layers: int = 2):
+    def __init__(
+        self, obs_dim: int, action_dim: int, hidden_dim: int = 256, hidden_layers: int = 2, message_dim: int = 0
+    ):
         super().__init__()
         hidden_dims = tuple([hidden_dim] * hidden_layers)
         self.features = _build_torch_mlp(obs_dim, hidden_dims)
@@ -86,6 +96,7 @@ class _TorchSharedActorCritic(tnn.Module):
         tnn.init.constant_(self.actor.bias, 0.0)
         tnn.init.orthogonal_(self.critic.weight, gain=1.0)
         tnn.init.constant_(self.critic.bias, 0.0)
+        self.init_message_head(head_in, message_dim)
 
     def get_value(self, obs: torch.Tensor) -> torch.Tensor:
         return self.critic(self.features(obs)).squeeze(-1)
@@ -111,8 +122,10 @@ class _TorchSharedActorCritic(tnn.Module):
         return logits.argmax(dim=-1)
 
 
-def torch_factory(obs_dim: int, action_dim: int, hidden_dim: int, hidden_layers: int, **_) -> tnn.Module:
-    return _TorchSharedActorCritic(obs_dim, action_dim, hidden_dim, hidden_layers)
+def torch_factory(
+    obs_dim: int, action_dim: int, hidden_dim: int, hidden_layers: int, message_dim: int = 0, **_
+) -> tnn.Module:
+    return _TorchSharedActorCritic(obs_dim, action_dim, hidden_dim, hidden_layers, message_dim)
 
 
 JAX_FACTORY = jax_factory

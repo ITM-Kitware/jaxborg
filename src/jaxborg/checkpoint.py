@@ -114,6 +114,8 @@ def _coerce_policy_entry(team: str, value: PolicyBundleEntry | Mapping[str, Any]
         raise ValueError(f"policy {team!r} action_dim must be positive, got {entry.action_dim}")
     if not isinstance(entry.arch, dict) or not entry.arch.get("name"):
         raise ValueError(f"policy {team!r} arch must be a mapping containing name")
+    if team == "red" and entry.arch.get("message_dim", 0):
+        raise ValueError("messages are supported for Blue only")
     return entry
 
 

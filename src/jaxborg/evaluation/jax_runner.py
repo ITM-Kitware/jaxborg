@@ -72,7 +72,9 @@ def _policy_dist(policy: Any, params: dict, obs_jax, mask, carry=None):
     a recurrent policy keeps one length-1 sequence per agent.
     """
     pi, _, carry = policy_step(policy, params, obs_jax[None], mask[None], carry=carry)
-    return type(pi)(logits=pi.logits[0]), carry
+    return pi.replace(
+        logits=pi.logits[0], message_logits=None if pi.message_logits is None else pi.message_logits[0]
+    ), carry
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const):
@@ -130,8 +132,8 @@ def _live_cyborg_mask_in_jax_space(env, agent_name, lookup):
     return jnp.array(m)
 
 
-def _raw_step(wrapper, actions):
-    obs, rews, dones, _ = wrapper.env.parallel_step(actions, messages=None, skip_valid_action_check=True)
+def _raw_step(wrapper, actions, messages=None):
+    obs, rews, dones, _ = wrapper.env.parallel_step(actions, messages=messages, skip_valid_action_check=True)
     observations = {a: wrapper.observation_change(a, obs[a]) for a in wrapper.possible_agents if a in obs}
     rewards = {a: sum(rews[a].values()) for a in wrapper.possible_agents if a in rews}
     terminated = {a: bool(dones[a]) for a in wrapper.possible_agents if a in dones}
@@ -154,6 +156,7 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
     total = 0.0
     for _ in range(variant.num_steps):
         actions = {}
+        messages = {}
         for agent_idx, agent_name in enumerate(env.agents):
             obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
             mask = _live_cyborg_mask_in_jax_space(env, agent_name, lookups[agent_name])
@@ -163,9 +166,12 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
             else:
                 rng, _rng = jax.random.split(rng)
                 action_idx = int(pi.sample(seed=_rng))
+            message = pi.sample_messages(rng if deterministic else _rng, deterministic=deterministic)
+            if message is not None:
+                messages[agent_name] = np.asarray(message, dtype=bool)
             actions[agent_name] = jax_blue_to_cyborg(action_idx, agent_idx, mappings, const=const)
 
-        observations, rewards, terms, truncs = _raw_step(env, actions)
+        observations, rewards, terms, truncs = _raw_step(env, actions, messages=messages or None)
         total += mean(rewards.values())
         if terms.get("__all__", False) or truncs.get("__all__", False):
             break

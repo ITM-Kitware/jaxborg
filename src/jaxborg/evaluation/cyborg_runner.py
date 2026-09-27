@@ -65,7 +65,14 @@ def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, determini
                 a, _, _, _ = agent.get_action_and_value(obs_t, mask_t)
                 act = a.cpu().numpy()
         action_dict = {AGENT_IDS[i]: int(act[i]) for i in range(NUM_AGENTS)}
-        obs_d, rew_d, term_d, trunc_d, info_d = env.step(action_dict)
+        messages = None
+        if getattr(agent, "message_dim", 0):
+            with torch.no_grad():
+                bits, _, _ = agent.get_message_and_stats(obs_t, deterministic=deterministic)
+            messages = {name: bits[i].cpu().numpy().astype(bool) for i, name in enumerate(AGENT_IDS)}
+        obs_d, rew_d, term_d, trunc_d, info_d = (
+            env.step(action_dict, messages=messages) if messages is not None else env.step(action_dict)
+        )
         total += float(rew_d[AGENT_IDS[0]])
         if any(term_d.values()) or any(trunc_d.values()):
             break
@@ -80,6 +87,7 @@ def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, 
         action_dim=ACT_DIM,
         hidden_dim=int(arch.get("hidden_dim", 256)),
         hidden_layers=int(arch.get("hidden_layers", 2)),
+        message_dim=int(arch.get("message_dim", 8 if recipe.get("use_messages", False) else 0)),
     )
     agent.load_state_dict(state_dict)
     agent.eval()

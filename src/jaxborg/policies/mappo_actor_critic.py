@@ -32,6 +32,7 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
     team: str = "blue"
     cage4_enhanced_obs: bool = False
     blue_observation_version: int = 2
+    message_dim: int = 0
 
     @property
     def critic_obs_dim(self):
@@ -43,7 +44,9 @@ class _JaxMAPPOActorCritic(CentralizedCriticPolicy):
         )
 
     def setup(self):
-        self.actor_head = _ActorTrunk(self.action_dim, self.hidden_dim, self.hidden_layers, self.activation)
+        self.actor_head = _ActorTrunk(
+            self.action_dim, self.hidden_dim, self.hidden_layers, self.activation, self.message_dim
+        )
         self.critic_head = _CriticTrunk(self.hidden_dim, self.hidden_layers, self.activation)
 
     def __call__(self, obs, avail_actions=None, *, critic_obs=None):
@@ -65,6 +68,7 @@ def jax_factory(
     team="blue",
     cage4_enhanced_obs=False,
     blue_observation_version=2,
+    message_dim=0,
 ):
     critic_obs_size(critic_input, team=team)  # Validate the input mode and team before compiling.
     return _JaxMAPPOActorCritic(
@@ -76,6 +80,7 @@ def jax_factory(
         team,
         cage4_enhanced_obs,
         blue_observation_version,
+        message_dim,
     )
 
 

@@ -712,6 +712,16 @@ class ScenarioEnv(MultiAgentEnv):
         done = state.time >= const.max_steps
         state = state.replace(done=jnp.array(done))
 
+        if "red_messages" in actions:
+            raise ValueError("messages are supported for Blue only")
+        outgoing = jnp.asarray(
+            actions.get("blue_messages", jnp.zeros((n_blue, self.cfg.message_length))), dtype=jnp.float32
+        )
+        if outgoing.shape != (n_blue, self.cfg.message_length):
+            raise ValueError("blue_messages must have shape (num_blue_agents, message_length)")
+        received = jnp.broadcast_to(outgoing[:, None, :], state.messages.shape)
+        received = jnp.where(jnp.eye(n_blue, dtype=jnp.bool_)[:, :, None], 0.0, received)
+        state = state.replace(messages=received)
         env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
 

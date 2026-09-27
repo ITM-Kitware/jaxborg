@@ -214,6 +214,10 @@ def _run_jax_scripted_red_episode_scan(
             pi, _, policy_carry = policy_step(policy_module, policy_weights, obs_batch, mask_batch, carry=policy_carry)
             selected = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=policy_key)
         actions = {agent: jnp.asarray(selected[index], dtype=jnp.int32) for index, agent in enumerate(blue_agents)}
+        if not isinstance(policy_module, StatefulBluePolicy):
+            message = pi.sample_messages(policy_key, deterministic=deterministic)
+            if message is not None:
+                actions["blue_messages"] = message
         rng, step_key = jax.random.split(rng)
         # ``FsmRedCC4Env.step`` splits the caller key into transition/reset/
         # extras children. Retain its transition child while bypassing the

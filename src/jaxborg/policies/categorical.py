@@ -14,6 +14,8 @@ import jax
 import jax.numpy as jnp
 from flax import struct
 
+from .bernoulli import Bernoulli
+
 
 @struct.dataclass
 class Categorical:
@@ -24,6 +26,26 @@ class Categorical:
     """
 
     logits: jax.Array
+    # Optional Blue message head; ordinary action APIs and legacy pytrees stay usable.
+    message_logits: jax.Array | None = None
+
+    @property
+    def messages(self):
+        return None if self.message_logits is None else Bernoulli(self.message_logits)
+
+    def sample_messages(self, seed, *, deterministic=False):
+        if self.messages is None:
+            return None
+        # Independent from action sampling, without changing the legacy RNG stream.
+        return self.messages.mode() if deterministic else self.messages.sample(jax.random.fold_in(seed, 1))
+
+    def joint_log_prob(self, action, message=None):
+        result = self.log_prob(action)
+        if self.messages is not None:
+            if message is None:
+                raise ValueError("message-enabled PPO requires stored message actions")
+            result = result + self.messages.log_prob(message)
+        return result
 
     def sample(self, seed: jax.Array) -> jax.Array:
         return jax.random.categorical(seed, self.logits, axis=-1)

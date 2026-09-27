@@ -112,9 +112,17 @@ class CyborgJointAdapter:
         self._sync_primary_identities()
         return self._collect_observations(reset.obs), self._collect_infos(reset.info)
 
-    def step(self, actions: dict[str, int]):
+    def step(self, actions: dict[str, Any]):
         """Submit all 11 policy actions from the same pre-step state."""
 
+        if "red_messages" in actions:
+            raise ValueError("messages are supported for Blue only")
+        messages = None
+        if "blue_messages" in actions:
+            bits = np.asarray(actions["blue_messages"])
+            if bits.shape != (len(BLUE_AGENT_IDS), 8) or not np.isin(bits, [0, 1]).all():
+                raise ValueError("blue_messages must be a binary array with shape (5, 8)")
+            messages = {agent: bits[i].astype(bool) for i, agent in enumerate(BLUE_AGENT_IDS)}
         missing = set(POLICY_AGENT_IDS) - set(actions)
         if missing:
             raise ValueError(f"joint action is missing policy agents: {sorted(missing)}")
@@ -137,6 +145,7 @@ class CyborgJointAdapter:
 
         raw_obs, raw_rewards, raw_dones, raw_info = self.raw_env.parallel_step(
             native,
+            messages=messages,
             skip_valid_action_check=True,
         )
         self._update_scan_memory(raw_obs)

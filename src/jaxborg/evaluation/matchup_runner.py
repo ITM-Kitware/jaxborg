@@ -50,6 +50,8 @@ from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.evaluation.stateful_blue import StatefulBluePolicy
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
 from jaxborg.policies import initial_carry, is_recurrent, policy_from_arch, policy_step
+from jaxborg.policies.message_override import MessageOverridePolicy
+from jaxborg.policies.torch_messages import TorchMessageOverride
 from jaxborg.recipe import team_recipe
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
@@ -181,6 +183,7 @@ class MatchupEvaluation:
     episode_role_map_ids: list[str] = field(default_factory=list)
     episode_topology_fingerprints: list[str] = field(default_factory=list)
     topology_role_maps: list[dict[str, Any]] = field(default_factory=list)
+    per_episode_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _normalise_backend(backend: str) -> PolicyBackend:
@@ -241,6 +244,8 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
         raise ValueError(f"{team} bundle backend is {bundle.backend!r}, expected {backend_name!r}")
     entry = _bundle_entry(bundle, model_path, team)
     arch, sidecar = _entry_arch(model_path, entry, team)
+    if team == "red" and arch.get("message_dim", 0):
+        raise ValueError("messages are supported for Blue only")
     obs_dim, action_dim = TEAM_DIMS[team]
     obs_dim = entry.obs_dim or obs_dim
     if backend_name == "jax":
@@ -255,6 +260,8 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
         "path": str(model_path),
         "backend": backend_name,
         "team": team,
+        "message_dim": int(arch.get("message_dim", 0)),
+        "mute": False,
         "bundle_schema": bundle.schema_version,
         "bundle_legacy": bundle.legacy,
         "bundle_teams": sorted(bundle.policies),
@@ -271,7 +278,9 @@ def load_matchup_policy(path: str | Path, *, team: str, backend: str) -> LoadedM
     return LoadedMatchupPolicy(team, backend_name, module, entry.weights, source)
 
 
-def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: bool, carry=None, reset=None):
+def _jax_actions(
+    policy: LoadedMatchupPolicy, obs, mask, key, deterministic: bool, carry=None, reset=None, *, with_messages=False
+):
     """Sample one joint action. Returns ``(actions, next_carry)``.
 
     ``carry`` is ``None`` for a feedforward policy and threads back unchanged,
@@ -279,6 +288,8 @@ def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: boo
     """
     pi, _, carry = policy_step(policy.module, policy.weights, obs, mask, carry=carry, reset=reset)
     actions = jnp.argmax(pi.logits, axis=-1) if deterministic else pi.sample(seed=key)
+    if with_messages:
+        return actions, carry, pi.sample_messages(key, deterministic=deterministic)
     return actions, carry
 
 
@@ -292,6 +303,7 @@ def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: boo
         "deterministic",
         "use_topology_index",
         "score_cia",
+        "collect_messages",
     ),
 )
 def _run_jax_matchup_episode_scan(
@@ -308,6 +320,7 @@ def _run_jax_matchup_episode_scan(
     deterministic: bool,
     use_topology_index: bool,
     score_cia: bool,
+    collect_messages: bool = False,
 ) -> tuple[jax.Array, jax.Array]:
     """Compile policy inference and all simulator steps as one episode."""
 
@@ -360,6 +373,16 @@ def _run_jax_matchup_episode_scan(
             **{name: jnp.asarray(blue_actions[index], dtype=jnp.int32) for index, name in enumerate(blue_agents)},
             **{name: jnp.asarray(red_actions[index], dtype=jnp.int32) for index, name in enumerate(red_agents)},
         }
+        if not stateful_blue:
+            message = blue_pi.sample_messages(blue_key, deterministic=deterministic)
+            if message is not None:
+                actions["blue_messages"] = message
+                if collect_messages:
+                    from jaxborg.evaluation.message_diagnostics import message_statistics
+
+                    carries["message_stats"] = carries["message_stats"] + message_statistics(
+                        blue_pi, message, blue_obs, current_state.const
+                    )
         rng, step_key = jax.random.split(rng)
         # ``JointPolicyCC4Env.step`` splits the caller key once before its
         # transition. Use that first child here so bypassing auto-reset does
@@ -432,6 +455,7 @@ def _run_jax_matchup_episode_scan(
         {
             "blue": blue_carry,
             "red": initial_carry(red_module, len(red_agents)),
+            **({"message_stats": jnp.zeros(34, dtype=jnp.float32)} if collect_messages else {}),
         },
         jnp.ones((len(red_agents),), dtype=jnp.bool_),
     )
@@ -440,6 +464,8 @@ def _run_jax_matchup_episode_scan(
     cia_sum = final_carry[5]
     valid_steps = final_carry[6]
     cia_mean = jnp.where(valid_steps > 0, cia_sum / jnp.maximum(valid_steps, 1), zero_cia)
+    if collect_messages:
+        return reward_sum, cia_mean, final_carry[7]["message_stats"]
     return reward_sum, cia_mean
 
 
@@ -494,6 +520,7 @@ def _run_jax_matchup_episodes_batched(
     batch_size: int | None = None,
     progress: bool = False,
     progress_label: str = "",
+    message_diagnostics: list | None = None,
 ) -> tuple[list[float], list[list[float]]]:
     """Evaluate many episodes per compiled call via ``jax.vmap``.
 
@@ -520,6 +547,7 @@ def _run_jax_matchup_episodes_batched(
         deterministic=deterministic,
         use_topology_index=use_topology_index,
         score_cia=score_cia,
+        collect_messages=message_diagnostics is not None,
     )
     # Weights are shared across the batch; keys, topologies and role maps vary.
     batched = jax.vmap(scan, in_axes=(None, None, 0, 0, 0))
@@ -541,17 +569,25 @@ def _run_jax_matchup_episodes_batched(
         if chunk == 1:
             # A singleton vmap expands simulator conditionals without adding
             # parallelism. Keep CPU smoke runs on the scalar compiled scan.
-            reward, cia = scan(
+            reward, cia, *stats = scan(
                 policies["blue"].weights, policies["red"].weights, keys[start], indices[start], roles[start]
             )
             reward_batch, cia_batch = reward[None], cia[None]
+            stats_batch = stats[0][None] if stats else None
         else:
-            reward_batch, cia_batch = batched(
+            reward_batch, cia_batch, *stats = batched(
                 policies["blue"].weights,
                 policies["red"].weights,
                 _padded_batch(keys, start, stop, chunk),
                 _padded_batch(indices, start, stop, chunk),
                 _padded_batch(roles, start, stop, chunk),
+            )
+            stats_batch = stats[0] if stats else None
+        if message_diagnostics is not None:
+            from jaxborg.evaluation.message_diagnostics import summarize_message_statistics
+
+            message_diagnostics.extend(
+                summarize_message_statistics(s) for s in np.asarray(jax.device_get(stats_batch))[: stop - start]
             )
         reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
         valid = stop - start
@@ -565,7 +601,7 @@ def _run_jax_matchup_episodes_batched(
     return rewards, cia_scores
 
 
-def _torch_actions(policy: LoadedMatchupPolicy, obs, mask, seed: int, deterministic: bool):
+def _torch_actions(policy: LoadedMatchupPolicy, obs, mask, seed: int, deterministic: bool, *, with_messages=False):
     import torch
 
     # Categorical.sample has no generator argument. Isolate deterministic
@@ -580,7 +616,14 @@ def _torch_actions(policy: LoadedMatchupPolicy, obs, mask, seed: int, determinis
             actions = policy.module.deterministic_action(obs_tensor, mask_tensor)
         else:
             actions = policy.module.get_action_and_value(obs_tensor, mask_tensor)[0]
-    return np.asarray(actions.cpu(), dtype=np.int32)
+        message = None
+        message_entropy = None
+        if with_messages and getattr(policy.module, "message_dim", 0):
+            bits, _, ent = policy.module.get_message_and_stats(obs_tensor, deterministic=deterministic)
+            message_entropy = np.asarray(ent.cpu())
+            message = np.asarray(bits.cpu(), dtype=np.float32)
+    result = np.asarray(actions.cpu(), dtype=np.int32)
+    return (result, message, message_entropy) if with_messages else result
 
 
 def run_matchup_episode(
@@ -593,6 +636,7 @@ def run_matchup_episode(
     env: Any | None = None,
     topology_index: int | jax.Array | None = None,
     host_resilience_role: Any | None = None,
+    message_diagnostics: list | None = None,
 ) -> float | tuple[float, list[float]]:
     """Run one episode and optionally return its temporal C/I/A means."""
     if set(policies) != {"blue", "red"}:
@@ -652,6 +696,7 @@ def run_matchup_episode(
     red_reset = jnp.ones((len(team_agents["red"]),), dtype=jnp.bool_)
     total = 0.0
     cia_step_scores = []
+    message_stats = jnp.zeros(34, dtype=jnp.float32)
 
     for step_idx in range(variant.num_steps):
         masks = env.get_avail_actions(state)
@@ -663,7 +708,7 @@ def run_matchup_episode(
             mask_batch = jnp.stack([masks[name] for name in names])
             if backend == "jax":
                 rng, policy_key = jax.random.split(rng)
-                team_actions, carries[team] = _jax_actions(
+                team_actions, carries[team], message = _jax_actions(
                     policies[team],
                     obs_batch,
                     mask_batch,
@@ -671,6 +716,7 @@ def run_matchup_episode(
                     deterministic,
                     carry=carries[team],
                     reset=red_reset if team == "red" else None,
+                    with_messages=True,
                 )
             else:
                 torch_seed = seed * 1_000_003 + step_idx * 17 + (0 if team == "blue" else 1)
@@ -686,12 +732,13 @@ def run_matchup_episode(
                             for agent_id, lookup in enumerate(blue_lookups)
                         ]
                     )
-                team_actions = _torch_actions(
+                team_actions, message, message_entropy = _torch_actions(
                     policies[team],
                     obs_batch,
                     policy_mask,
                     torch_seed,
                     deterministic,
+                    with_messages=True,
                 )
                 if blue_lookups is not None:
                     team_actions = np.asarray(
@@ -700,6 +747,14 @@ def run_matchup_episode(
                     )
                     if np.any(team_actions < 0):  # pragma: no cover - masked defensive guard
                         raise RuntimeError("Torch Blue policy selected a padded CybORG action")
+            if team == "blue" and message is not None:
+                all_actions["blue_messages"] = message
+                if backend == "cyborg" and message_diagnostics is not None:
+                    from jaxborg.evaluation.message_diagnostics import statistics_from_observations
+
+                    message_stats = message_stats + statistics_from_observations(
+                        jnp.asarray(message_entropy), jnp.asarray(message), obs_batch, state.const
+                    )
             for idx, name in enumerate(names):
                 all_actions[name] = jnp.asarray(team_actions[idx], dtype=jnp.int32)
 
@@ -727,6 +782,10 @@ def run_matchup_episode(
         total += float(rewards[team_agents["blue"][0]])
         if bool(dones["__all__"]):
             break
+    if message_diagnostics is not None:
+        from jaxborg.evaluation.message_diagnostics import summarize_message_statistics
+
+        message_diagnostics.append(summarize_message_statistics(message_stats))
     if host_resilience_role is None:
         return total
 
@@ -750,6 +809,8 @@ def evaluate_matchup(
     topology_sampling: str = "exhaustive",
     cia: Mapping[str, Any] | None = None,
     context: MatchupEvaluationContext | None = None,
+    mute: bool = False,
+    message_sender_path: str | Path | None = None,
 ) -> MatchupEvaluation:
     """Evaluate independently sourced learned policies in the JAX simulator.
 
@@ -758,6 +819,7 @@ def evaluate_matchup(
     evaluation bank with replacement; this is separate from training's
     without-replacement sampling within each parallel reset batch.
     """
+    per_episode_messages = []
     expanded_seeds = expand_episode_seeds(seeds, episodes_per_seed)
     backend_name = _normalise_backend(backend)
     context = context if context is not None else MatchupEvaluationContext()
@@ -765,6 +827,28 @@ def evaluate_matchup(
         "blue": context.load_policy(blue_model, team="blue", backend=backend_name),
         "red": context.load_policy(red_model, team="red", backend=backend_name),
     }
+    if mute or message_sender_path is not None:
+        blue = policies["blue"]
+        if not getattr(blue.module, "message_dim", 0):
+            raise ValueError("message controls require a Blue checkpoint trained with use_messages: true")
+        if mute and message_sender_path is not None:
+            raise ValueError("choose mute or a foreign message sender, not both")
+        sender = None
+        if message_sender_path is not None:
+            sender = context.load_policy(message_sender_path, team="blue", backend=backend_name)
+            if not getattr(sender.module, "message_dim", 0):
+                raise ValueError("message sender must have a Blue message head")
+            if sender.source["observation_dim"] != blue.source["observation_dim"]:
+                raise ValueError("message sender and Blue actor must use the same observation contract")
+        policies["blue"] = LoadedMatchupPolicy(
+            team="blue",
+            backend=backend_name,
+            module=(MessageOverridePolicy if backend_name == "jax" else TorchMessageOverride)(
+                blue.module, None if sender is None else sender.module, mute
+            ),
+            weights={"actor": blue.weights, "sender": None if sender is None else sender.weights},
+            source={**blue.source, "mute": mute, "message_sender": None if sender is None else sender.source},
+        )
     if topology_path is None:
         topology_paths: list[Path] = []
     elif isinstance(topology_path, (str, Path)):
@@ -831,6 +915,9 @@ def evaluate_matchup(
                 role_arrays=[case.role_array for case in cases],
                 deterministic=deterministic,
                 progress=progress,
+                message_diagnostics=per_episode_messages
+                if getattr(policies["blue"].module, "message_dim", 0)
+                else None,
             )
         else:
             for idx, case in enumerate(cases, start=1):
@@ -841,6 +928,9 @@ def evaluate_matchup(
                     deterministic=deterministic,
                     env=env,
                     topology_index=case.topology_index,
+                    message_diagnostics=per_episode_messages
+                    if getattr(policies["blue"].module, "message_dim", 0)
+                    else None,
                     host_resilience_role=case.role_array,
                 )
                 blue_returns.append(score)
@@ -885,6 +975,9 @@ def evaluate_matchup(
                 role_arrays=None,
                 deterministic=deterministic,
                 progress=progress,
+                message_diagnostics=per_episode_messages
+                if getattr(policies["blue"].module, "message_dim", 0)
+                else None,
             )
         else:
             for idx, (episode_seed, topology_index, topology_label) in enumerate(plan, start=1):
@@ -895,6 +988,9 @@ def evaluate_matchup(
                     deterministic=deterministic,
                     env=env,
                     topology_index=topology_index,
+                    message_diagnostics=per_episode_messages
+                    if getattr(policies["blue"].module, "message_dim", 0)
+                    else None,
                 )
                 blue_returns.append(score)
                 if progress:
@@ -919,6 +1015,7 @@ def evaluate_matchup(
         red_returns=[-score for score in blue_returns],
         episode_seeds=episode_seeds,
         policies={team: policy.source for team, policy in policies.items()},
+        per_episode_messages=per_episode_messages,
         topology_paths=[str(path) for path in topology_paths],
         episode_topology_paths=episode_topology_paths,
         topology_sampling=sampling_label,

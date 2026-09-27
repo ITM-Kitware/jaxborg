@@ -26,6 +26,7 @@ class _JaxRecurrentMAPPOActorCritic(RecurrentPolicy, CentralizedCriticPolicy):
     team: str = "blue"
     cage4_enhanced_obs: bool = False
     blue_observation_version: int = 2
+    message_dim: int = 0
 
     @property
     def critic_obs_dim(self):
@@ -46,7 +47,7 @@ class _JaxRecurrentMAPPOActorCritic(RecurrentPolicy, CentralizedCriticPolicy):
         args = (self.hidden_dim, self.hidden_layers, self.activation, self.cell)
         self.actor_trunk = _Trunk(*args)
         self.critic_trunk = _Trunk(*args)
-        self.actor_head = _ActorTrunk(self.action_dim, self.hidden_dim, 1, self.activation)
+        self.actor_head = _ActorTrunk(self.action_dim, self.hidden_dim, 1, self.activation, self.message_dim)
         self.critic_head = _CriticTrunk(self.hidden_dim, 1, self.activation)
 
     def __call__(self, carry, obs, avail_actions=None, resets=None, *, critic_obs=None):
@@ -75,6 +76,7 @@ def jax_factory(
     team="blue",
     cage4_enhanced_obs=False,
     blue_observation_version=2,
+    message_dim=0,
 ):
     critic_obs_size(critic_input, team=team)
     if cell not in CELLS:
@@ -91,6 +93,7 @@ def jax_factory(
         team=team,
         cage4_enhanced_obs=cage4_enhanced_obs,
         blue_observation_version=blue_observation_version,
+        message_dim=message_dim,
     )
 
 

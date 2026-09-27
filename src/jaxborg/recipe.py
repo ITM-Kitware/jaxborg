@@ -74,6 +74,10 @@ def load(name_or_path: str) -> dict[str, Any]:
 def _validate(recipe: dict[str, Any], *, source: str) -> None:
     if not isinstance(recipe, dict):
         raise ValueError(f"{source}: recipe must be a YAML mapping")
+    use_messages = recipe.get("use_messages", False)
+    if not isinstance(use_messages, bool):
+        raise ValueError(f"{source}: use_messages must be a YAML boolean")
+    recipe.setdefault("use_messages", False)
     enhanced_obs_enabled(recipe)
     enhanced_obs_version(recipe)
     if recipe.get("kind") == "pretrained_eval":
@@ -137,6 +141,9 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         for section, values in override.items():
             if not isinstance(values, dict):
                 raise ValueError(f"{source}: train.team_overrides.{team}.{section} must be a mapping")
+
+    for team in TEAMS:
+        team_recipe(recipe, team)  # Validate Blue-only message configuration before launching.
 
     ev = recipe.get("eval") or {}
     if not isinstance(ev, dict):
@@ -295,6 +302,17 @@ def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
         projected["arch"] = copy.deepcopy(arch_override)
     else:
         _deep_merge(projected["arch"], arch_override)
+    enabled = recipe.get("use_messages", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("use_messages must be a YAML boolean")
+    requested = projected["arch"].get("message_dim", 0)
+    if team == "red" and requested:
+        raise ValueError("messages are supported for Blue only")
+    expected = 8 if enabled and team == "blue" else 0
+    if requested not in (0, expected):
+        raise ValueError("use_messages controls Blue's message_dim; remove the conflicting arch option")
+    if expected:
+        projected["arch"]["message_dim"] = expected
     if projected["arch"]["name"] in ("mappo", "recurrent_mappo"):
         projected["arch"]["cage4_enhanced_obs"] = enhanced_obs_enabled(projected)
         projected["arch"]["blue_observation_version"] = enhanced_obs_version(projected)
@@ -587,6 +605,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "CLIP_VALUE_LOSS": bool(core.get("clip_value_loss", False)),
         "MAX_GRAD_NORM": float(core.get("max_grad_norm", 0.5)),
         "ENT_COEF": float(core.get("ent_coef", 0.0)),
+        "MSG_ENT_COEF": float(core.get("msg_ent_coef", core.get("ent_coef", 0.0))),
+        "USE_MESSAGES": bool(arch.get("message_dim", 0)),
         "NORM_REWARDS": bool(core.get("norm_rewards", False)),
         "REWARD_SCALE": float(core.get("reward_scale", 1.0)),
         "ANNEAL_LR": bool(core.get("anneal_lr", False)),
@@ -648,6 +668,8 @@ def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[
         "clip_coef": float(core.get("clip_eps", 0.2)),
         "vf_coef": float(core.get("vf_coef", 0.5)),
         "ent_coef": float(core.get("ent_coef", 0.0)),
+        "msg_ent_coef": float(core.get("msg_ent_coef", core.get("ent_coef", 0.0))),
+        "use_messages": bool(arch.get("message_dim", 0)),
         "max_grad_norm": float(core.get("max_grad_norm", 0.5)),
         "norm_rewards": bool(core.get("norm_rewards", False)),
         "anneal_lr": bool(core.get("anneal_lr", False)),
