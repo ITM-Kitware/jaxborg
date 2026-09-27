@@ -1,0 +1,232 @@
+meta:
+  name: cotraining_lstm_env_diversity_comm
+  source: "LSTM twin of cotraining_rnn_env_diversity"
+  added: 2026-09-11
+  notes: |
+    Both Blue and Red use a LSTM policy with memory across timesteps.
+    The training budget, stock CC4 rules and 100 training topologies match
+    cotraining_env_diversity. cotraining_rnn_env_diversity differs only in the
+    recurrent cell and metadata.
+    Recurrent updates use sixteen minibatches of whole sequences; the
+    feedforward control uses sixteen minibatches of shuffled transitions, so
+    both take 64 optimizer steps per rollout and cross-architecture
+    comparisons are not confounded by optimizer budget.
+    Older eight-minibatch runs used 32 optimizer steps per rollout.
+    The completed 20260923_023547_3829 cohort uses sixteen minibatches
+    at 50M steps, matching the new comparison runs. Reuse its saved
+    models and retain their original sidecars for evaluation.
+    See docs/training.md for architecture provenance and hidden-state handling.
+
+algorithm: ippo
+use_messages: true  # Learned 8-bit Blue messages; Red never sends messages.
+cage4_enhanced_obs: true
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 6
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+# Recurrent IPPO adapted from JaxMARL; hidden_layers counts pre-cell layers.
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: lstm         # gru | lstm
+  trunk: shared      # shared | separate
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 50000000
+  variant: cc4_stock
+
+  # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 100
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # One final Blue vs the next training seed's final Red (cyclic seed order).
+  # The multi-seed launcher supplies the opponent after all training finishes.
+  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  cross_seed_play:
+    enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 6
+    deterministic: false
+
+  # Multi-seed launcher: compare both Blue conditions against both Red pools.
+  # Excludes same-training-seed opponents; runs once after all seeds finish.
+  env_diversity:
+    enabled: true
+    baseline_recipe: cotraining_lstm_comm
+    seeds: 1000-1009
+    episodes_per_seed: 6
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # play_priors is a cheaper alternative to cross_play. With the identical
+  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
+  # Leave it disabled to avoid replaying those same games in a second suite.
+  play_priors:
+    enabled: false
+    seeds: 1000-1002
+    episodes_per_seed: 6
+    deterministic: false
+    max_checkpoints: 3
+
+  # First, middle and exact final bundle: every Blue vs every Red in this run.
+  # Three checkpoints -> 9 matchups x 180 episodes (3 seeds x 6 episodes x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 6
+    deterministic: false
+    max_checkpoints: 3
+    include_final: true  # Final Blue is evaluated against the sampled prior Reds.
+    required: true
+
+  # Blue's curve against fixed FSM and CIA Reds, run on the evaluation GPU.
+  # Every 4.8M steps (each fifth 960k checkpoint) plus the exact final bundle:
+  # 11 points at 50M, each 4 Reds x 180 episodes (3 seeds x 6 episodes x 10 topologies).
+  # The final-model scripted-reds sweep below remains the 600-episode result.
+  checkpoint_scripted_reds:
+    enabled: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1002
+    episodes_per_seed: 6
+    every_steps: 4800000
+    include_final: true
+    required: true
+
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
+  after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 6
+        - --workers
+        - 4
+
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 6
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 6
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 6
+        - --progress
+
+    # Same-seed non-diverse Red; supplied after both conditions finish training.
+    # Other seeds from both Red conditions are covered by eval.env_diversity.
+    - name: nondiverse-red
+      script: scripts/eval/eval_matchup.py
+      model_arg: --blue-path
+      args: [--recipe, "{recipe}", --policy-backend, "{backend}",
+             --red-path, "{nondiverse_red}", --name, nondiverse-red,
+             --seeds, 1000-1009, --episodes-per-seed, 6]
+
+# The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
+# shuffles transitions across the time axis -- so this recipe is JAX-only and
+# carries no `cleanrl:` block; project_cleanrl's defaults keep the smoke tests
+# well-formed.
+jax:
+  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
+  # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.
+  # env x agent is 480 Blue and 576 Red, both divisible by 16, so whole
+  # sequences survive the split. Four epochs give 64 optimizer steps per
+  # rollout for each team, matching cotraining and cotraining_mappo.
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20  # Save every 960,000 environment steps.

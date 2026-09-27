@@ -12,6 +12,7 @@ meta:
 
 # Selects scripts/train/algorithms/ippo_{jax,cyborg}.py.
 algorithm: ippo
+use_messages: false  # Opt-in learned Blue messages; Red never sends.
 
 # MLflow checkpoint evaluation. The trainer freezes and evaluates the first
 # completed update crossing each interval, plus the final update.
