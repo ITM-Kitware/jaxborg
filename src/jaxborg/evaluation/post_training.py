@@ -250,6 +250,46 @@ def _evaluation_jax_platforms(backend: str) -> str:
     return "cuda" if backend == "jax" else "cpu"
 
 
+def _evaluation_resume_key(
+    name: str, command: Sequence[str], jax_platforms: str, recipe_path: str
+) -> tuple[str, str, tuple[str, ...]]:
+    # uv may use a different temporary interpreter, and each invocation archives
+    # the same effective recipe under a new timestamp. Neither changes the job.
+    args = tuple("{recipe}" if arg == recipe_path else arg for arg in command[1:])
+    return name, jax_platforms, args
+
+
+def _successful_evaluations(
+    model: Path, recipe_path: Path, manifest_dir: Path
+) -> dict[tuple[str, str, tuple[str, ...]], str]:
+    """Find completed jobs with the same model, recipe, command and platform."""
+    import yaml
+
+    recipe = yaml.safe_load(recipe_path.read_text())
+    successes = {}
+    for path in sorted(manifest_dir.glob(f"{model.stem}_*.json")):
+        try:
+            saved = json.loads(path.read_text())
+            if saved["model"] != str(model):
+                continue
+            saved_recipe = saved["recipe"]
+            if yaml.safe_load(Path(saved_recipe).read_text()) != recipe:
+                continue
+            for record in saved["evaluations"]:
+                if record["status"] != "succeeded" or record.get("returncode") != 0:
+                    continue
+                command = record["command"]
+                if not isinstance(command, list) or len(command) < 2 or not all(
+                    isinstance(arg, str) for arg in command
+                ):
+                    continue
+                key = _evaluation_resume_key(record["name"], command, record["jax_platforms"], saved_recipe)
+                successes[key] = str(path)
+        except (OSError, ValueError, KeyError, TypeError, yaml.YAMLError) as exc:
+            print(f"Cannot reuse evaluation manifest {path}: {exc}", flush=True)
+    return successes
+
+
 def run_configured_evaluations_after_training(
     model_path: str | Path,
     recipe: Mapping[str, Any],
@@ -257,6 +297,7 @@ def run_configured_evaluations_after_training(
     cross_seed_red: str | Path | None = None,
     nondiverse_red: str | Path | None = None,
     save_evaluation_recipe: bool = False,
+    resume: bool = False,
     run_subprocess: Callable[..., Any] = subprocess.run,
 ) -> Path | None:
     """Run configured evaluation scripts sequentially and return the manifest.
@@ -264,6 +305,7 @@ def run_configured_evaluations_after_training(
     If the new list is absent, this delegates to the legacy scripted-Red hook.
     Required evaluations fail the training command after their failure has been
     recorded; optional evaluations are recorded and the next script still runs.
+    With resume=True, matching successful jobs from earlier manifests are reused.
     """
 
     settings = PostTrainingEvalSettings.from_recipe(recipe)
@@ -334,7 +376,7 @@ def run_configured_evaluations_after_training(
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     nonce = f"{time.time_ns() % 1_000_000_000:09d}"
     manifest_path = eval_dir / "manifests" / f"{resolved_model.stem}_{timestamp}_{nonce}.json"
-    if save_evaluation_recipe:
+    if save_evaluation_recipe or resume:
         # A CLI evaluation override must reach child processes, too. Preserve
         # the original training sidecar; archive the effective recipe beside
         # this evaluation's manifest so the smaller/larger protocol is auditable.
@@ -344,6 +386,7 @@ def run_configured_evaluations_after_training(
         sidecar.parent.mkdir(parents=True, exist_ok=True)
         payload = {key: value for key, value in recipe.items() if not str(key).startswith("__")}
         sidecar.write_text(yaml.safe_dump(payload, sort_keys=False))
+    successes = _successful_evaluations(resolved_model, sidecar, manifest_path.parent) if resume else {}
     manifest: dict[str, Any] = {
         "model": str(resolved_model),
         "recipe": str(sidecar),
@@ -394,6 +437,12 @@ def run_configured_evaluations_after_training(
             "status": "running",
         }
         manifest["evaluations"].append(record)
+        resume_key = _evaluation_resume_key(evaluation.name, command, job_jax_platforms, str(sidecar))
+        if resume_key in successes:
+            record.update(status="succeeded", returncode=0, reused_from=successes[resume_key])
+            _write_manifest(manifest_path, manifest)
+            print(f"SKIP completed evaluation {index}/{len(evaluations)} ({evaluation.name})", flush=True)
+            continue
         _write_manifest(manifest_path, manifest)
         print(
             f"Running post-training evaluation {index}/{len(evaluations)} ({evaluation.name}):\n"
@@ -435,6 +484,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         "--recipe",
         help="Override the eval section using this recipe; keep the model's training settings and provenance",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=os.environ.get("JAXBORG_RESUME_POST_TRAINING_EVAL") == "1",
+        help="Reuse matching successful evaluations from previous manifests",
+    )
     args = parser.parse_args(argv)
 
     from jaxborg.checkpoint import read_sidecar
@@ -451,6 +506,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         cross_seed_red=args.cross_seed_red,
         nondiverse_red=args.nondiverse_red,
         save_evaluation_recipe=bool(args.recipe),
+        resume=args.resume,
     )
     if manifest is None:
         from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings

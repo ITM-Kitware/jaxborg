@@ -25,6 +25,7 @@ import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import cache, partial
 from pathlib import Path
 from typing import Any
 
@@ -199,9 +200,13 @@ def run_checkpoint_scripted_reds(
     from jaxborg.recipe import eval_variant, project_eval
 
     if evaluate_fn is None:
+        from jaxborg.evaluation.jax_env_factory import make_jax_env
         from jaxborg.evaluation.jax_scripted_red import evaluate_jax_scripted_reds
 
-        evaluate = evaluate_jax_scripted_reds
+        # The episode scan treats env as a static JIT argument. Recreating it
+        # per checkpoint retains another executable and CUDA graphs for each
+        # Red. Reuse environments within this sweep; weights still load anew.
+        evaluate = partial(evaluate_jax_scripted_reds, env_factory=cache(make_jax_env))
     else:
         evaluate = evaluate_fn
     if attach_metrics_fn is None:

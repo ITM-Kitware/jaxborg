@@ -76,6 +76,84 @@ def _fake_rows(reward_by_red):
     return evaluate
 
 
+def test_checkpoint_sweep_reuses_compilations_with_fresh_weights(tmp_path, monkeypatch):
+    from functools import partial
+
+    import jax
+    import jax.numpy as jnp
+
+    from jaxborg import recipe as recipe_module
+    from jaxborg.evaluation import checkpoint_scripted_reds as module
+    from jaxborg.evaluation import jax_env_factory, jax_scripted_red
+    from jaxborg.evaluation.cia.fixed_topology import EvaluationCase
+    from jaxborg.evaluation.matchup_runner import LoadedMatchupPolicy
+
+    checkpoints = []
+    for step in (40, 80, 120):
+        path = tmp_path / f"checkpoint_{step}.safetensors"
+        path.touch()
+        checkpoints.append(PeriodicCheckpoint(path, step))
+    topology = tmp_path / "topology.snapshot.npz"
+    topology.touch()
+    case = EvaluationCase(0, topology, "fp", 1000, 0, 1000, (0, 1, 2, 3), "roles")
+    monkeypatch.setattr(module, "find_periodic_checkpoints", lambda *_a, **_k: checkpoints)
+    monkeypatch.setattr(recipe_module, "project_eval", lambda *_a, **_k: {"TOPOLOGY_BANK": [topology]})
+    monkeypatch.setattr(jax_scripted_red, "build_evaluation_cases", lambda *_a: (case,))
+    monkeypatch.setattr(jax_scripted_red, "_git_commit", lambda: "test")
+    monkeypatch.setenv("JAXBORG_EVAL_BATCH_SIZE", "2")
+
+    class FakeEnv:
+        # The fake scan below replaces these operations, but retain the
+        # interface so evaluation follows the production vmap batching path.
+        reset = reset_at_topology = step_env = None
+
+    created_envs = []
+
+    def make_env(variant, **kwargs):
+        env = FakeEnv()
+        created_envs.append(env)
+        return env
+
+    monkeypatch.setattr(jax_env_factory, "make_jax_env", make_env)
+    policy_module = object()
+    loaded = []
+
+    def load_policy(path, *, team, backend):
+        loaded.append(path)
+        step = int(path.stem.split("_")[1])
+        return LoadedMatchupPolicy(team, backend, policy_module, jnp.float32(step), {})
+
+    monkeypatch.setattr(jax_scripted_red, "load_matchup_policy", load_policy)
+    traced_envs = []
+
+    @partial(jax.jit, static_argnames=("policy_module", "env", "num_steps", "deterministic"))
+    def scan(weights, key, topology_index, roles, *, policy_module, env, num_steps, deterministic):
+        # This runs at trace time. A fresh static env per checkpoint would
+        # compile six times; the same two envs should compile only twice.
+        traced_envs.append(env)
+        return weights + topology_index.astype(jnp.float32), jnp.zeros(3)
+
+    monkeypatch.setattr(jax_scripted_red, "_run_jax_scripted_red_episode_scan", scan)
+    recipe = _recipe(
+        cia={"enabled": True, "metric": "resilience", "role_assignment": "fixed_per_topology"},
+        checkpoint_scripted_reds={"reds": ["fsm", "cia_c"], "seeds": [1000], "max_checkpoints": 3},
+    )
+    recipe["run"] = {}
+    output = run_checkpoint_scripted_reds(
+        tmp_path / "model_x.safetensors",
+        recipe,
+        output=tmp_path / "rows.jsonl",
+        attach_metrics_fn=lambda *_a, **_k: None,
+    )
+
+    assert loaded == [checkpoint.path for checkpoint in checkpoints]
+    assert len(created_envs) == 2
+    assert traced_envs == created_envs
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert [row["mean_reward"] for row in rows] == [40.0, 40.0, 80.0, 80.0, 120.0, 120.0]
+    assert [row["eval_red"] for row in rows] == ["fsm", "cia_c"] * 3
+
+
 def test_each_checkpoint_gets_its_own_step_stamped_metrics(tmp_path, monkeypatch):
     from jaxborg.evaluation import checkpoint_scripted_reds as module
 
