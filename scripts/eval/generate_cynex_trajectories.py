@@ -77,8 +77,10 @@ def _load_jax_model(path: str):
     policy, params, recipe = load_jax_checkpoint(path)
     print(f"Loaded JAX checkpoint from {path} (arch={recipe['arch']['name']})")
 
-    @jax.jit
-    def batched_step(obs_stack, mask_stack, keys, carry=None, deterministic=False):
+    from functools import partial
+
+    @partial(jax.jit, static_argnames=("include_messages",))
+    def batched_step(obs_stack, mask_stack, keys, carry=None, deterministic=False, *, include_messages=False):
         import jax.numpy as jnp
 
         if carry is None:
@@ -87,6 +89,13 @@ def _load_jax_model(path: str):
         logits = pi.logits
         actions = jax.vmap(lambda lg, k: JaxCategorical(logits=lg).sample(seed=k))(logits, keys)
         actions = jnp.where(deterministic, jnp.argmax(logits, axis=-1), actions)
+        if include_messages:
+            messages = None
+            if pi.messages is not None:
+                messages = jnp.where(
+                    deterministic, pi.messages.mode(), pi.messages.sample(jax.random.fold_in(keys[0], 1))
+                )
+            return actions, logits, carry, messages
         return actions, logits, carry
 
     return batched_step, params
@@ -289,6 +298,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     policy_carry = None
 
     for step in range(steps):
+        messages = None
         if wrapper.agents:
             rng, *_rngs = jax.random.split(rng, NUM_AGENTS + 1)
             act_keys = jnp.stack(_rngs)
@@ -302,7 +312,11 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in wrapper.agents])
 
             # JAX policy inference
-            actions_arr, _, policy_carry = batched_step_fn(obs_stack, masks, act_keys, policy_carry, deterministic)
+            actions_arr, _, policy_carry, bits = batched_step_fn(
+                obs_stack, masks, act_keys, policy_carry, deterministic, include_messages=True
+            )
+            if bits is not None:
+                messages = {name: np.asarray(bits[i], dtype=bool) for i, name in enumerate(wrapper.agents)}
             actions_np = np.asarray(actions_arr)
 
             # Translate JAX actions -> CybORG actions
@@ -316,6 +330,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
         # Step CybORG directly with the translated actions
         obs_raw, rews, dones, _info = cyborg.parallel_step(
             cyborg_actions,
+            messages=messages,
             skip_valid_action_check=True,
         )
         # Flatten observations through the wrapper

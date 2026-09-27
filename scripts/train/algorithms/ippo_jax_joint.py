@@ -52,6 +52,7 @@ class TeamTransition(NamedTuple):
     reset: jax.Array | None = None
     # MAPPO only: world state from the same pre-step state as obs/value.
     critic_obs: jax.Array | None = None
+    message: jax.Array | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -217,6 +218,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
     clip_eps = float(config["CLIP_EPS"])
     vf_coef = float(config["VF_COEF"])
     ent_coef = float(config["ENT_COEF"])
+    msg_ent_coef = float(config.get("MSG_ENT_COEF", ent_coef))
     max_grad_norm = float(config["MAX_GRAD_NORM"])
     clip_value_loss = bool(config.get("CLIP_VALUE_LOSS", False))
     num_minibatches = int(config["NUM_MINIBATCHES"])
@@ -227,7 +229,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
     def ppo_objective(pi, value, transitions, gae, targets):
         """Shared loss body. Every reduction is a mask-weighted mean, so it is
         indifferent to whether the batch is flat rows or (time, sequence)."""
-        log_prob = pi.log_prob(transitions.action)
+        log_prob = pi.joint_log_prob(transitions.action, transitions.message)
         ratio = jnp.exp(log_prob - transitions.log_prob)
         log_ratio = log_prob - transitions.log_prob
         actor_mask = transitions.actor_mask
@@ -265,6 +267,10 @@ def _make_team_updater(network, config: Mapping[str, Any]):
             "clip_frac": clip_frac,
             "explained_var": explained_var,
         }
+        if pi.messages is not None:
+            msg_entropy = _masked_mean(pi.messages.entropy(), actor_mask)
+            total = total - msg_ent_coef * msg_entropy
+            aux.update(total_loss=total, msg_entropy=msg_entropy)
         return total, aux
 
     def apply_gradients(train_state, loss_fn, params):
@@ -429,6 +435,8 @@ def make_joint_train(
         raise ValueError("joint training requires Blue and Red policy runtimes")
     if not trainable_teams or not set(trainable_teams) <= set(TEAMS):
         raise ValueError(f"invalid trainable teams: {trainable_teams}")
+    if getattr(networks["red"], "message_dim", 0):
+        raise ValueError("messages are supported for Blue only")
     for team, network in networks.items():
         if has_centralized_critic(network) and network.team != team:
             raise ValueError(f"{team} MAPPO policy requires arch.team: {team}")
@@ -547,7 +555,12 @@ def make_joint_train(
                     critic_obs=None if critic_obs is None else critic_obs.reshape((-1, critic_obs.shape[-1])),
                 )
                 flat_action = pi.sample(seed=action_key)
-                flat_log_prob = pi.log_prob(flat_action)
+                message = pi.sample_messages(action_key)
+                if team == "red" and message is not None:
+                    raise ValueError("messages are supported for Blue only")
+                if message is not None:
+                    actions["blue_messages"] = message.reshape((num_envs, num_agents[team], -1))
+                flat_log_prob = pi.joint_log_prob(flat_action, message)
                 shape = (num_envs, num_agents[team])
                 team_actions = flat_action.reshape(shape)
                 for idx, name in enumerate(names):
@@ -559,6 +572,7 @@ def make_joint_train(
                     value.reshape(shape),
                     flat_log_prob.reshape(shape),
                     critic_obs,
+                    None if message is None else actions["blue_messages"],
                 )
 
             before = env_state.state
@@ -571,7 +585,7 @@ def make_joint_train(
             next_resets = {}
             for team in TEAMS:
                 names = agents[team]
-                obs_batch, mask_batch, team_actions, value, log_prob, critic_obs = transition_parts[team]
+                obs_batch, mask_batch, team_actions, value, log_prob, critic_obs, message = transition_parts[team]
                 raw_reward = rewards[names[0]]
                 scaled_reward, next_norm = _normalize_reward(
                     raw_reward,
@@ -584,7 +598,12 @@ def make_joint_train(
                 episode_done = jnp.repeat(done_env[:, None], num_agents[team], axis=1)
                 if team == "blue":
                     idle_before = before.blue_pending_ticks == 0
-                    actor_mask = idle_before.astype(jnp.float32)
+                    # Busy Blue agents still choose a message on every tick.
+                    actor_mask = (
+                        jnp.ones_like(idle_before, dtype=jnp.float32)
+                        if message is not None
+                        else idle_before.astype(jnp.float32)
+                    )
                     critic_mask = jnp.ones_like(actor_mask)
                     transition_done = episode_done
                     next_resets[team] = next_sequence_reset(team, episode_done, None)
@@ -612,6 +631,7 @@ def make_joint_train(
                     critic_mask=critic_mask,
                     reset=resets[team] if recurrent[team] else None,
                     critic_obs=critic_obs,
+                    message=message,
                 )
             return (new_env_state, new_obs, rng, norm_states, info_sums, carries, next_resets), transitions
 
@@ -663,6 +683,10 @@ def make_joint_train(
                     "pre_clip_grad_norm": zero,
                     "grad_norm": zero,
                 }
+            if trajectories[team].message is not None:
+                bit_mean = trajectories[team].message.mean(axis=(0, 1, 2))
+                for bit in range(bit_mean.shape[0]):
+                    team_metrics[f"msg_bit_mean_{bit}"] = bit_mean[bit]
             sign = 1.0 if team == "blue" else -1.0
             # Signed so the four components still sum to raw_rollout_return.
             # Logging them apart separates "Red landed impacts" from "Blue

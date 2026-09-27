@@ -102,7 +102,11 @@ def env_worker(pipe, env_id, variant: GameVariant):
             obs, info = _reset_and_inject()
             pipe.send((obs, info))
         elif cmd == "step":
-            obs, rew, term, trunc, info = env.step(data)
+            if "red_messages" in data:
+                raise ValueError("messages are supported for Blue only")
+            bits = data.pop("blue_messages", None)
+            messages = None if bits is None else {a: np.asarray(bits[i], dtype=bool) for i, a in enumerate(AGENT_IDS)}
+            obs, rew, term, trunc, info = env.step(data, messages=messages)
             info = _availability_info(info)
             done = any(term.values()) or any(trunc.values())
             if done:
@@ -279,11 +283,12 @@ def train_legacy(args, recipe, cfg):
     envs = ParallelEnvs(cfg["num_envs"], variant=variant)
 
     agent = make_torch_policy(
-        recipe["arch"]["name"],
+        team_recipe(recipe, "blue")["arch"]["name"],
         obs_dim=obs_dim,
         action_dim=ACT_DIM,
         hidden_dim=cfg["hidden_dim"],
         hidden_layers=cfg["hidden_layers"],
+        message_dim=8 if cfg.get("use_messages", False) else 0,
     ).to(device)
     optimizer = optim.Adam(agent.parameters(), lr=cfg["lr"], eps=1e-5)
     reward_scaler = RewardScaler(cfg["num_envs"], cfg["gamma"]) if cfg["norm_rewards"] else None
@@ -298,6 +303,8 @@ def train_legacy(args, recipe, cfg):
     values_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS))
     masks_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, ACT_DIM))
     actor_active_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS), dtype=torch.bool)
+    messages_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, 8)) if agent.message_dim else None
+    accum_messages = []
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="cyborg", seed=args.seed)
@@ -355,6 +362,11 @@ def train_legacy(args, recipe, cfg):
                     obs_flat = obs_buf[step].reshape(-1, obs_dim)
                     mask_flat = masks_buf[step].reshape(-1, ACT_DIM)
                     act, lp, _, val = agent.get_action_and_value(obs_flat, mask_flat)
+                    if messages_buf is not None:
+                        message, msg_lp, _ = agent.get_message_and_stats(obs_flat)
+                        lp = lp + msg_lp
+                        messages_buf[step].copy_(message.reshape(num_envs, NUM_AGENTS, 8))
+                        actor_active_buf[step].fill_(True)
                     actions_buf[step] = act.reshape(num_envs, NUM_AGENTS)
                     logprobs_buf[step] = lp.reshape(num_envs, NUM_AGENTS)
                     values_buf[step] = val.reshape(num_envs, NUM_AGENTS)
@@ -365,6 +377,9 @@ def train_legacy(args, recipe, cfg):
                         {AGENT_IDS[i]: int(actions_buf[step, env_idx, i].item()) for i in range(NUM_AGENTS)}
                     )
 
+                if messages_buf is not None:
+                    for env_idx, submitted in enumerate(action_dicts):
+                        submitted["blue_messages"] = messages_buf[step, env_idx].numpy()
                 all_obs, all_rew, all_done, all_info = envs.step(action_dicts)
                 raw_rewards = np.array([all_rew[e][AGENT_IDS[0]] for e in range(num_envs)])
                 dones = np.array(all_done, dtype=bool)
@@ -417,6 +432,8 @@ def train_legacy(args, recipe, cfg):
             accum_val.append(values_buf.reshape(-1).clone())
             accum_mask.append(masks_buf.reshape(-1, ACT_DIM).clone())
             accum_actor_active.append(actor_active_buf.reshape(-1).clone())
+            if messages_buf is not None:
+                accum_messages.append(messages_buf.reshape(-1, 8).clone())
             rollouts_collected += 1
             if rollouts_collected < cfg["num_rollouts_per_update"]:
                 continue
@@ -429,6 +446,8 @@ def train_legacy(args, recipe, cfg):
                 for pg in optimizer.param_groups:
                     pg["lr"] = lr
 
+            b_messages = torch.cat(accum_messages) if accum_messages else None
+            accum_messages.clear()
             b_obs = torch.cat(accum_obs)
             b_act = torch.cat(accum_act)
             b_lp = torch.cat(accum_lp)
@@ -451,7 +470,7 @@ def train_legacy(args, recipe, cfg):
             mb_size_n = total_n // cfg["num_minibatches"]
 
             ep_pg = ep_vf = ep_ent = ep_kl = ep_clipfrac = 0.0
-            ep_pre_grad = ep_grad = 0.0
+            ep_pre_grad = ep_grad = ep_msg_ent = 0.0
             n_mb = 0
             for _epoch in range(cfg["num_epochs"]):
                 perm = torch.randperm(total_n)
@@ -465,6 +484,9 @@ def train_legacy(args, recipe, cfg):
                     mb_mask = b_mask[idx]
                     mb_actor_active = b_actor_active[idx]
                     _, new_lp, ent, new_val = agent.get_action_and_value(mb_obs, mb_mask, mb_act)
+                    if b_messages is not None:
+                        _, msg_lp, msg_ent = agent.get_message_and_stats(mb_obs, b_messages[idx])
+                        new_lp = new_lp + msg_lp
                     loss, loss_parts = compute_torch_ppo_loss(
                         new_logprob=new_lp,
                         entropy=ent,
@@ -477,6 +499,9 @@ def train_legacy(args, recipe, cfg):
                         vf_coef=cfg["vf_coef"],
                         ent_coef=cfg["ent_coef"],
                     )
+                    if b_messages is not None:
+                        loss = loss - cfg.get("msg_ent_coef", cfg["ent_coef"]) * msg_ent.mean()
+                        ep_msg_ent += float(msg_ent.mean().detach())
                     pg_loss = loss_parts["loss_policy"]
                     vf_loss = loss_parts["loss_value"]
                     entropy_loss = loss_parts["loss_entropy"]
@@ -537,6 +562,11 @@ def train_legacy(args, recipe, cfg):
                     "cyborg.num_rollouts_accumulated": cfg["num_rollouts_per_update"],
                 },
             )
+            if b_messages is not None:
+                row["team.blue.msg_entropy"] = ep_msg_ent / max(n_mb, 1)
+                row["loss_total"] -= cfg.get("msg_ent_coef", cfg["ent_coef"]) * row["team.blue.msg_entropy"]
+                for bit, value in enumerate(b_messages.mean(0)):
+                    row[f"team.blue.msg_bit_mean_{bit}"] = float(value)
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
 
@@ -563,7 +593,7 @@ def train_legacy(args, recipe, cfg):
                             "weights": agent.state_dict(),
                             "obs_dim": obs_dim,
                             "action_dim": ACT_DIM,
-                            "arch": dict(recipe["arch"]),
+                            "arch": dict(team_recipe(recipe, "blue")["arch"]),
                             "trainable": True,
                             "source": {"kind": "fresh", "seed": int(args.seed)},
                         }
@@ -637,7 +667,7 @@ def train_legacy(args, recipe, cfg):
                 "weights": agent.state_dict(),
                 "obs_dim": obs_dim,
                 "action_dim": ACT_DIM,
-                "arch": dict(recipe["arch"]),
+                "arch": dict(team_recipe(recipe, "blue")["arch"]),
                 "trainable": True,
                 "source": {"kind": "fresh", "seed": int(args.seed)},
             }
@@ -704,6 +734,9 @@ class TorchTeamRuntime:
     completed_rewards: list[float] = field(default_factory=list)
 
     def __post_init__(self):
+        if self.team == "red" and getattr(self.agent, "message_dim", 0):
+            raise ValueError("messages are supported for Blue only")
+        self.outgoing_messages = None
         spec = TEAM_SPECS[self.team]
         self.agent_ids = spec.agent_ids
         self.obs_dim = (
@@ -754,6 +787,10 @@ class TorchTeamRuntime:
             )
         }
 
+        if getattr(self.agent, "message_dim", 0):
+            self.rollout["messages"] = torch.zeros((self.num_steps, self.num_envs, len(self.agent_ids), 8))
+            self.accumulated["messages"] = []
+
     def select_actions(self, step: int, all_obs: list[dict], all_info: list[dict]) -> np.ndarray:
         obs = np.stack(
             [[all_obs[env_idx][agent] for agent in self.agent_ids] for env_idx in range(self.num_envs)]
@@ -782,6 +819,13 @@ class TorchTeamRuntime:
                 obs_t.reshape(-1, self.obs_dim),
                 masks_t.reshape(-1, self.action_dim),
             )
+            if getattr(self.agent, "message_dim", 0):
+                message, msg_lp, _ = self.agent.get_message_and_stats(obs_t.reshape(-1, self.obs_dim))
+                logprob = logprob + msg_lp
+                self.outgoing_messages = message.reshape(self.num_envs, len(self.agent_ids), 8).numpy()
+                actor_active[:] = True
+                if self.trainable:
+                    self.rollout["messages"][step].copy_(torch.from_numpy(self.outgoing_messages))
             action = action.reshape(self.num_envs, len(self.agent_ids))
 
         if self.trainable:
@@ -862,6 +906,8 @@ class TorchTeamRuntime:
             "actor_active": (-1,),
             "critic_active": (-1,),
         }
+        if "messages" in self.rollout:
+            flat_shapes["messages"] = (-1, 8)
         values = {**self.rollout, "advantages": advantages, "returns": returns}
         for key, shape in flat_shapes.items():
             self.accumulated[key].append(values[key].reshape(shape).clone())
@@ -959,6 +1005,9 @@ def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) 
                 batches["masks"][idx],
                 batches["actions"][idx],
             )
+            if "messages" in batches:
+                _, msg_lp, msg_ent = runtime.agent.get_message_and_stats(batches["obs"][idx], batches["messages"][idx])
+                new_logprob = new_logprob + msg_lp
             loss, parts = compute_torch_ppo_loss(
                 new_logprob=new_logprob,
                 entropy=entropy,
@@ -972,6 +1021,10 @@ def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) 
                 vf_coef=cfg["vf_coef"],
                 ent_coef=cfg["ent_coef"],
             )
+            if "messages" in batches:
+                loss = loss - cfg.get("msg_ent_coef", cfg["ent_coef"]) * msg_ent.mean()
+                parts["loss_total"] = loss
+                totals["msg_entropy"] = totals.get("msg_entropy", 0.0) + float(msg_ent.mean().detach())
             runtime.optimizer.zero_grad()
             loss.backward()
             pre_clip = float(nn.utils.clip_grad_norm_(runtime.agent.parameters(), cfg["max_grad_norm"]))
@@ -999,6 +1052,9 @@ def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) 
     if target_var > 1e-8:
         explained = float(1 - (returns - old_values).var(unbiased=False) / (target_var + 1e-8))
     totals["ppo_explained_variance"] = explained
+    if "messages" in batches:
+        for bit, value in enumerate(batches["messages"].mean(0)):
+            totals[f"msg_bit_mean_{bit}"] = float(value)
     totals["lr"] = float(lr)
     return totals
 
@@ -1057,6 +1113,7 @@ def _make_joint_runtimes(
             action_dim=spec.action_dim,
             hidden_dim=int(arch.get("hidden_dim", 256)),
             hidden_layers=int(arch.get("hidden_layers", 2)),
+            message_dim=int(arch.get("message_dim", 0)),
         )
         optimizer = optim.Adam(agent.parameters(), lr=team_cfg["lr"], eps=1e-5) if trainable else None
         if not trainable:
@@ -1153,7 +1210,10 @@ def train_joint(args, recipe, cfg):
                             }
                         )
                     action_dicts.append(joint_actions)
-                if set(action_dicts[0]) != set(POLICY_AGENT_IDS):
+                if runtimes["blue"].outgoing_messages is not None:
+                    for env_idx, submitted in enumerate(action_dicts):
+                        submitted["blue_messages"] = runtimes["blue"].outgoing_messages[env_idx]
+                if set(action_dicts[0]) - {"blue_messages"} != set(POLICY_AGENT_IDS):
                     raise RuntimeError("joint trainer did not select all 11 actions")
 
                 all_obs, all_rewards, all_done, all_info = envs.step(action_dicts)
@@ -1178,7 +1238,7 @@ def train_joint(args, recipe, cfg):
 
             elapsed = time.perf_counter() - start
             sps = total_steps / elapsed if elapsed else 0.0
-            primary_stats = stats.get("blue", stats["red"])
+            primary_stats = stats["blue"] if "blue" in stats else stats["red"]
             blue_rewards = runtimes["blue"].completed_rewards
             blue_return = float(np.mean(blue_rewards[-50:])) if blue_rewards else float("nan")
             ep_len = float(np.mean(completed_lengths[-50:])) if completed_lengths else float("nan")

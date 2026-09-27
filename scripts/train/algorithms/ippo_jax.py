@@ -104,6 +104,7 @@ class Transition(NamedTuple):
     # Recurrent archs only: the hidden state was zeroed before this row acted,
     # i.e. the previous step ended the episode. ``None`` for feedforward archs.
     reset: jnp.ndarray | None = None
+    message: jnp.ndarray | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -258,11 +259,15 @@ def make_train(config, network):
                 reset=reset.reshape(-1),
             )
             action_flat = pi.sample(seed=_rng)
-            log_prob_flat = pi.log_prob(action_flat)
+            message = pi.sample_messages(_rng)
+            log_prob_flat = pi.joint_log_prob(action_flat, message)
             action = action_flat.reshape(num_envs, num_agents)
             log_prob = log_prob_flat.reshape(num_envs, num_agents)
             value = value.reshape(num_envs, num_agents)
             env_act = {agents[i]: action[:, i] for i in range(num_agents)}
+            if message is not None:
+                message = message.reshape(num_envs, num_agents, -1)
+                env_act["blue_messages"] = message
             rng, _rng = jax.random.split(rng)
             step_key, topology_key = jax.random.split(_rng)
             step_keys = jax.random.split(step_key, num_envs)
@@ -301,6 +306,7 @@ def make_train(config, network):
                 avail_actions=avail_batch,
                 blue_busy=busy_batch.astype(jnp.float32),
                 reset=reset if recurrent else None,
+                message=message,
             )
             return (new_env_state, new_obs, rng, info_acc, rn_state, policy_carry, agent_done > 0), transition
 
@@ -341,7 +347,9 @@ def make_train(config, network):
         # CybORG ignores submissions while an action is in progress. Force
         # Sleep above and omit those rows from the actor objective while still
         # retaining them in GAE/value learning for delayed-action credit.
-        policy_mask = 1.0 - traj_batch.blue_busy
+        policy_mask = (
+            jnp.ones_like(traj_batch.blue_busy) if traj_batch.message is not None else 1.0 - traj_batch.blue_busy
+        )
 
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
@@ -364,7 +372,7 @@ def make_train(config, network):
                         carry=init_carry,
                         reset=traj_batch.reset,
                     )
-                    log_prob = pi.log_prob(traj_batch.action)
+                    log_prob = pi.joint_log_prob(traj_batch.action, traj_batch.message)
                     value_loss = compute_value_loss(
                         value,
                         traj_batch.value,
@@ -383,7 +391,17 @@ def make_train(config, network):
                     var_targets = jnp.var(targets)
                     explained_var = jnp.where(var_targets > 0, 1 - jnp.var(targets - value) / var_targets, 0.0)
                     total_loss = loss_actor + config["VF_COEF"] * value_loss - config["ENT_COEF"] * entropy
-                    return total_loss, (value_loss, loss_actor, entropy, approx_kl, clip_frac, explained_var)
+                    msg_entropy = jnp.mean(pi.messages.entropy()) if pi.messages is not None else jnp.float32(0)
+                    total_loss = total_loss - float(config.get("MSG_ENT_COEF", config["ENT_COEF"])) * msg_entropy
+                    return total_loss, (
+                        value_loss,
+                        loss_actor,
+                        entropy,
+                        approx_kl,
+                        clip_frac,
+                        explained_var,
+                        msg_entropy,
+                    )
 
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
                 total_loss, grads = grad_fn(
@@ -406,6 +424,8 @@ def make_train(config, network):
                     "pre_clip_grad_norm": pre_clip,
                     "grad_norm": grad_norm,
                 }
+                if traj_batch.message is not None:
+                    loss_info["msg_entropy"] = total_loss[1][6]
                 return train_state, loss_info
 
             train_state, traj_batch, advantages, targets, policy_mask, rng = update_state
@@ -458,6 +478,10 @@ def make_train(config, network):
             "mean_rollout_return": traj_batch.reward.sum(axis=0).mean(),
         }
         metric = {**loss_info, **rollout_info}
+        if traj_batch.message is not None:
+            bit_mean = traj_batch.message.mean(axis=(0, 1, 2))
+            for bit in range(bit_mean.shape[0]):
+                metric[f"msg_bit_mean_{bit}"] = bit_mean[bit]
         return train_state, env_state, obs, rng, reward_norm_state, metric
 
     return env, init_obs, init_env_state, _init_train_state, _collect_and_update
@@ -651,6 +675,9 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                     team,
                     {metric_names[key]: float(metrics[team][key]) for key in metric_names},
                 )
+                for name, value in metrics[team].items():
+                    if name.startswith("msg_"):
+                        row[f"team.{team}.{name}"] = float(value)
                 row[f"team.{team}.lr"] = float(configs[team]["LR"])
                 row[f"team.{team}.trainable"] = team in trainable_teams
             metrics_file.write(json.dumps(row) + "\n")
@@ -802,7 +829,7 @@ def main(*, expected_algorithm: str | None = None):
         phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
-    network = _network_from_arch(recipe["arch"], action_dim)
+    network = _network_from_arch(team_recipe(recipe, "blue")["arch"], action_dim)
 
     print("=" * 60, flush=True)
     print(f"IPPO-JAX [{recipe['meta']['name']}] seed={args.seed}")
@@ -873,6 +900,9 @@ def main(*, expected_algorithm: str | None = None):
             ppo_pre_clip_grad_norm=float(metric["pre_clip_grad_norm"]),
             backend_extras={"jax.mean_rollout_return": float(metric["mean_rollout_return"])},
         )
+        for name, value in metric.items():
+            if name.startswith("msg_"):
+                row[f"team.blue.{name}"] = float(value)
         metrics_file.write(json.dumps(row) + "\n")
         metrics_file.flush()
         mlflow.log_metrics(
@@ -901,7 +931,7 @@ def main(*, expected_algorithm: str | None = None):
                         team="blue",
                         obs_dim=recipe_blue_obs_size(recipe),
                         action_dim=action_dim,
-                        arch=dict(recipe["arch"]),
+                        arch=dict(team_recipe(recipe, "blue")["arch"]),
                         trainable=True,
                         source={"kind": "fresh", "seed": int(args.seed)},
                     )

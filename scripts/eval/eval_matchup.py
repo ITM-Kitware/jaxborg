@@ -95,6 +95,9 @@ def main() -> None:
     )
     parser.add_argument("--seeds", default="42-51")
     parser.add_argument("--deterministic", action="store_true")
+    comm = parser.add_mutually_exclusive_group()
+    comm.add_argument("--mute", action="store_true", help="Zero all learned Blue messages")
+    comm.add_argument("--message-sender-path", help="Use another Blue checkpoint to generate messages")
     parser.add_argument(
         "--topology-path",
         action="append",
@@ -172,6 +175,8 @@ def main() -> None:
         topology_path=topology_paths,
         topology_sampling=topology_sampling,
     )
+    if args.mute or args.message_sender_path:
+        matchup_kwargs.update(mute=args.mute, message_sender_path=args.message_sender_path)
     if cia_config["enabled"]:
         matchup_kwargs["cia"] = cia_config
     result = evaluate_matchup(
@@ -195,6 +200,9 @@ def main() -> None:
         "variant": variant.name,
         "policy_backend": backend,
         "policies": result.policies,
+        "mute": args.mute,
+        "message_sender_path": args.message_sender_path,
+        "per_episode_messages": result.per_episode_messages,
         "seeds": seeds,
         "episodes_per_seed": args.episodes_per_seed,
         "episodes_per_topology": (

@@ -151,6 +151,9 @@ def run_eval(
             pi, _, policy_carry = policy_step(policy, params, obs_stack, mask_stack, carry=policy_carry)
             acts = jnp.argmax(pi.logits, axis=-1)
             actions = {a: acts[i] for i, a in enumerate(blue_agents)}
+            messages = pi.sample_messages(step_key, deterministic=True)
+            if messages is not None:
+                actions["blue_messages"] = messages
             new_obs, new_state, rewards, _, _ = env.step(step_key, state, actions)
             new_mask = env.get_avail_actions(new_state)
             mean_reward = jnp.stack([rewards[a] for a in blue_agents]).mean()
