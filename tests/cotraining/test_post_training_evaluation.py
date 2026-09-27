@@ -43,6 +43,28 @@ def _final_model(tmp_path: Path) -> Path:
     return model
 
 
+def test_cli_coordinator_uses_cpu_and_preserves_child_gpu_selection(monkeypatch):
+    import os
+    import runpy
+    import sys
+
+    events = []
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
+    fake_jax = SimpleNamespace(config=SimpleNamespace(update=lambda key, value: events.append(("config", key, value))))
+    monkeypatch.setitem(sys.modules, "jax", fake_jax)
+
+    def fake_main():
+        events.append(("main", post_training._evaluation_jax_platforms("jax"), os.environ["CUDA_VISIBLE_DEVICES"]))
+
+    monkeypatch.setattr(post_training, "main", fake_main)
+    script = Path(__file__).resolve().parents[2] / "scripts" / "eval" / "run_after_training.py"
+    runpy.run_path(str(script), run_name="__main__")
+
+    assert events == [("config", "jax_platforms", "cpu"), ("main", "cuda", "7")]
+    assert os.environ["JAX_PLATFORMS"] == "cuda"
+
+
 def test_settings_preserve_order_and_accept_numeric_cli_arguments(tmp_path):
     first = tmp_path / "first.py"
     second = tmp_path / "second.py"
@@ -147,6 +169,99 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
     assert manifest["jax_platforms"] == "cuda"
     assert [entry["name"] for entry in manifest["evaluations"]] == ["first-way", "second-way"]
     assert [entry["status"] for entry in manifest["evaluations"]] == ["succeeded", "succeeded"]
+
+
+def test_resume_retries_failed_and_missing_suites_and_preserves_successes(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    nonces = iter((1, 2, 3))
+    monkeypatch.setattr(post_training.time, "time_ns", lambda: next(nonces))
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    names = ["cross-seed", "cross-play", "checkpoint-reds", "final-reds"]
+    recipe = _recipe(
+        [
+            {"name": name, "script": str(script), "args": ["--name", name, "--recipe", "{recipe}"]}
+            for name in names
+        ]
+    )
+    calls = []
+
+    def fail_checkpoint(command, **kwargs):
+        name = kwargs["env"]["JAXBORG_EVAL_NAME"]
+        calls.append(name)
+        if name == "checkpoint-reds":
+            raise subprocess.CalledProcessError(1, command)
+        return SimpleNamespace(returncode=0)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_configured_evaluations_after_training(
+            model, recipe, save_evaluation_recipe=True, run_subprocess=fail_checkpoint
+        )
+    assert calls == names[:3]
+    old_manifest = next((model.parents[2] / "eval" / "manifests").glob("*.json"))
+
+    # Recovery must tolerate uv choosing a new interpreter and a new recipe
+    # archive filename, while retaining the same commands and recipe contents.
+    monkeypatch.setattr(post_training.sys, "executable", "/tmp/recovery-python")
+    calls.clear()
+
+    def succeed(command, **kwargs):
+        calls.append(kwargs["env"]["JAXBORG_EVAL_NAME"])
+        assert kwargs["env"]["JAX_PLATFORMS"] == "cuda"
+        return SimpleNamespace(returncode=0)
+
+    manifest_path = run_configured_evaluations_after_training(model, recipe, resume=True, run_subprocess=succeed)
+    assert calls == names[2:]
+    records = json.loads(manifest_path.read_text())["evaluations"]
+    assert [record["status"] for record in records] == ["succeeded"] * 4
+    assert [record["reused_from"] for record in records[:2]] == [str(old_manifest)] * 2
+    assert all("reused_from" not in record for record in records[2:])
+
+    calls.clear()
+    run_configured_evaluations_after_training(model, recipe, resume=True, run_subprocess=succeed)
+    assert calls == []
+
+
+@pytest.mark.parametrize("change", ["recipe", "command", "platform", "model", "running", "failed", "nonzero", "corrupt"])
+def test_resume_does_not_skip_changed_or_unfinished_jobs(tmp_path, monkeypatch, change):
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    nonces = iter((1, 2))
+    monkeypatch.setattr(post_training.time, "time_ns", lambda: next(nonces))
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    recipe = _recipe([{"name": "one", "script": str(script), "args": ["--recipe", "{recipe}"]}])
+    previous = run_configured_evaluations_after_training(
+        model,
+        recipe,
+        save_evaluation_recipe=True,
+        run_subprocess=lambda *_a, **_k: SimpleNamespace(returncode=0),
+    )
+    saved = json.loads(previous.read_text())
+    record = saved["evaluations"][0]
+    if change == "recipe":
+        recipe["core"]["lr"] = 1e-4
+    elif change == "command":
+        record["command"].extend(["--red-path", "/tmp/different-opponent.safetensors"])
+    elif change == "platform":
+        record["jax_platforms"] = "cpu"
+    elif change == "model":
+        saved["model"] = str(tmp_path / "different-model.safetensors")
+    elif change in ("running", "failed"):
+        record["status"] = change
+    elif change == "nonzero":
+        record["returncode"] = 1
+    previous.write_text("{" if change == "corrupt" else json.dumps(saved))
+
+    calls = []
+    run_configured_evaluations_after_training(
+        model,
+        recipe,
+        resume=True,
+        run_subprocess=lambda command, **kwargs: calls.append(command),
+    )
+    assert len(calls) == 1
 
 
 def test_explicit_jax_platform_is_preserved(tmp_path, monkeypatch):
