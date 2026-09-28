@@ -136,6 +136,7 @@ def main():
     seeds = _parse_seeds(args.seeds)
     eval_name = _normalise_eval_name(args.name)
 
+    reward_report = {}
     if trained_backend == "cyborg":
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
         from jaxborg.recipe import eval_variant
@@ -159,6 +160,7 @@ def main():
             episodes_per_seed=args.episodes_per_seed,
             deterministic=args.deterministic,
             workers=args.workers,
+            reward_report=reward_report,
         )
         wall = time.perf_counter() - t0
     else:
@@ -178,6 +180,7 @@ def main():
             episodes_per_seed=args.episodes_per_seed,
             deterministic=args.deterministic,
             workers=args.workers,
+            reward_report=reward_report,
         )
         wall = time.perf_counter() - t0
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)
@@ -222,6 +225,7 @@ def main():
     else:
         name = f"_{eval_name}" if eval_name else ""
         out_path = out_dir / f"{row['recipe_name']}_{model_path.stem}{name}_{eval_id}.jsonl"
+    row.update(reward_report)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(row, indent=2) + "\n")
     print(f"\nmean: {m:.2f} ± {s:.2f} (n={len(rewards)})", flush=True)
@@ -230,9 +234,12 @@ def main():
     if train_run_id:
         try:
             prefix = f"eval.after_training.{eval_name}.cyborg" if eval_name else "eval.cyborg"
+            from jaxborg.evaluation.reward_reporting import reward_mlflow_metrics
+
             attach_eval_metrics(
                 train_run_id,
                 {
+                    **reward_mlflow_metrics(prefix, row),
                     f"{prefix}.mean": m,
                     f"{prefix}.std": s,
                     f"{prefix}.episodes": len(rewards),

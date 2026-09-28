@@ -33,6 +33,7 @@ from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.blue_observation_contract import blue_obs_size
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import ScenarioEnv, ScenarioEnvState
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
     fsm_red_schedule_post_step_update,
@@ -100,6 +101,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         mission_bank_amplify: float = 1.0,
         phase_boundary_bank: Sequence[Sequence[int]] | None = None,
         phase_rewards_bank: Sequence | None = None,
+        reward_config: RewardConfig = RewardConfig(),
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
         cage4_enhanced_obs: bool = False,
@@ -117,6 +119,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             mission_bank_amplify=mission_bank_amplify,
             phase_boundary_bank=phase_boundary_bank,
             phase_rewards_bank=phase_rewards_bank,
+            reward_config=reward_config,
             red_reward=red_reward,
             blue_block_policy=blue_block_policy,
             cage4_enhanced_obs=cage4_enhanced_obs,
@@ -174,7 +177,15 @@ class FsmRedCC4Env(MultiAgentEnv):
         inner = self._strip_inactive_red_reset_knowledge(inner)
         extras = self._extras_factory(key_extras, inner.const)
         blue_obs = {a: obs[a] for a in self.agents}
-        return blue_obs, FsmRedEnvState(state=inner.state, const=inner.const, extras=extras)
+        return blue_obs, self._with_reward_roles(FsmRedEnvState(state=inner.state, const=inner.const, extras=extras))
+
+    def _with_reward_roles(self, state: FsmRedEnvState) -> FsmRedEnvState:
+        # Keep the selector's established role RNG and synchronize reward state
+        # immediately, including after autoreset. Stock FSM extras are empty;
+        # its counterfactual uses the roles assigned by ScenarioEnv.
+        if self._extras_factory is not _empty_extras_factory:
+            return state.replace(state=state.state.replace(host_resilience_role=state.extras["host_resilience_role"]))
+        return state
 
     def wrap_scenario_state(
         self,
@@ -189,7 +200,7 @@ class FsmRedCC4Env(MultiAgentEnv):
         """
         k = key if key is not None else jax.random.PRNGKey(0)
         extras = self._extras_factory(k, env_state.const)
-        return FsmRedEnvState(state=env_state.state, const=env_state.const, extras=extras)
+        return self._with_reward_roles(FsmRedEnvState(state=env_state.state, const=env_state.const, extras=extras))
 
     def _strip_inactive_red_reset_knowledge(self, env_state: ScenarioEnvState) -> ScenarioEnvState:
         """Match native FiniteStateRedAgent reset knowledge.
@@ -241,7 +252,9 @@ class FsmRedCC4Env(MultiAgentEnv):
             inner_re_const = inner_re.const
             extras_re = self._extras_factory(key_extras, inner_re_const)
 
-        states_re = FsmRedEnvState(state=inner_re_state, const=inner_re_const, extras=extras_re)
+        states_re = self._with_reward_roles(
+            FsmRedEnvState(state=inner_re_state, const=inner_re_const, extras=extras_re)
+        )
         obs_re = self._get_blue_obs(states_re)
 
         states = jax.tree.map(
@@ -276,6 +289,7 @@ class FsmRedCC4Env(MultiAgentEnv):
                 const=inner_reset.const,
                 extras=extras,
             )
+            reset_states = self._with_reward_roles(reset_states)
             reset_obs = jax.vmap(self._get_blue_obs)(reset_states)
 
             def select(reset_value, step_value):
@@ -315,6 +329,8 @@ class FsmRedCC4Env(MultiAgentEnv):
         target_subnets = [target_subnets_arr[r] for r in range(NUM_RED_AGENTS)]
         fsm_actions = [fsm_actions_arr[r] for r in range(NUM_RED_AGENTS)]
         eligible_flags = [eligible_arr[r] for r in range(NUM_RED_AGENTS)]
+        if self._extras_factory is not _empty_extras_factory:
+            sim_state = sim_state.replace(host_resilience_role=host_resilience_role)
         inner = ScenarioEnvState(state=sim_state, const=env_state.const)
 
         all_actions = {**blue_actions, **red_actions}

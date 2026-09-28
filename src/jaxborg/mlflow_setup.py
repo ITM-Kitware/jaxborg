@@ -177,7 +177,14 @@ class MlflowCheckpointEvaluator:
         if missing:
             raise ValueError(f"evaluation did not return trained teams: {sorted(missing)}")
         trained_means = {team: means[team] for team in self.trainable_teams}
-        metrics = {f"eval.checkpoint.{team}.mean_reward": value for team, value in trained_means.items()}
+        metrics = {
+            f"eval.checkpoint.{team}.{name}": value
+            for team, value in trained_means.items()
+            for name in ("mean_reward", "mean_reward_default")
+        }
+        from jaxborg.evaluation.reward_reporting import reward_mlflow_metrics
+
+        metrics.update(reward_mlflow_metrics("eval.checkpoint.blue", getattr(raw_result, "reward_scores", {})))
         if cia_summary is not None:
             from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
 

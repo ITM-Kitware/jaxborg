@@ -27,12 +27,14 @@ from jaxborg.blue_observation_contract import blue_obs_size
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER
 from jaxborg.observations import get_blue_obs, get_red_obs, update_blue_observation_memory
 from jaxborg.reassignment import reassign_cross_subnet_sessions
+from jaxborg.reward_config import RewardConfig
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
 from jaxborg.scenarios.cc4.topology import (
     build_topology,
     load_topology,
 )
+from jaxborg.scenarios.cc4.topology_roles import assign_resilience_roles_from_const, count_resilience_candidates
 from jaxborg.scenarios.config import ScenarioConfig
 from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
 from jaxborg.training_topology_sampling import sample_training_topology_indices
@@ -342,6 +344,7 @@ class ScenarioEnv(MultiAgentEnv):
         mission_bank_amplify: float = 1.0,
         phase_boundary_bank: Sequence[Sequence[int]] | None = None,
         phase_rewards_bank: Sequence | None = None,
+        reward_config: RewardConfig = RewardConfig(),
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
         cage4_enhanced_obs: bool = False,
@@ -353,6 +356,7 @@ class ScenarioEnv(MultiAgentEnv):
             raise ValueError(f"unknown blue_block_policy {blue_block_policy!r}")
         # Both default to the stock CC4 contract; see GameVariant for what the
         # alternatives change and why they are opt-in.
+        self.reward_config = reward_config
         self.red_reward = red_reward
         self.blue_block_policy = blue_block_policy
         self.cage4_enhanced_obs = cage4_enhanced_obs
@@ -426,6 +430,8 @@ class ScenarioEnv(MultiAgentEnv):
                 load_topology(path, training_mode=training_mode, scenario_config=scenario_config)
                 for path in topology_paths
             ]
+            if reward_config.name == "shaping" and any(count_resilience_candidates(c) < 3 for c in consts):
+                raise ValueError("shaping requires at least three active operational-zone servers")
             self._const_bank = jax.tree.map(
                 lambda *xs: jnp.stack([jnp.asarray(x) for x in xs]),
                 *consts,
@@ -435,6 +441,8 @@ class ScenarioEnv(MultiAgentEnv):
         elif topology_mode != "generative":
             raise ValueError(f"Unknown topology_mode={topology_mode!r}")
         else:
+            if reward_config.name == "shaping" and (op_zone_min_servers is None or 2 * op_zone_min_servers < 3):
+                raise ValueError("shaping requires a generative floor of at least three operational-zone servers")
             self.topology_mode = "generative"
 
         self.blue_agents = [f"blue_{i}" for i in range(self.cfg.num_blue_agents)]
@@ -535,7 +543,7 @@ class ScenarioEnv(MultiAgentEnv):
         const = self._select_const(key).replace(
             cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
-        return self._reset_from_const(const)
+        return self._reset_from_const(const, key)
 
     @property
     def topology_bank_size(self) -> int:
@@ -558,14 +566,33 @@ class ScenarioEnv(MultiAgentEnv):
         const = self._select_const(key, topology_index=topology_index).replace(
             cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
-        return self._reset_from_const(const)
+        return self._reset_from_const(const, key)
 
-    def _reset_from_const(self, const: SimulatorConst) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
+    def _assign_reward_roles(self, state, const, key):
+        # Role assignment consumes a derived key without changing simulator RNG.
+        role_key = jax.random.fold_in(jax.random.PRNGKey(0) if key is None else key, 0xC1A)
+        roles = assign_resilience_roles_from_const(const, role_key)
+        # The role helper's unchecked tail can contain non-candidates when a
+        # stock topology has fewer than three servers. Reject that whole map.
+        from jaxborg.constants import SUBNET_IDS
+
+        eligible = (
+            const.host_active
+            & const.host_is_server
+            & (
+                (const.host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_A"])
+                | (const.host_subnet == SUBNET_IDS["OPERATIONAL_ZONE_B"])
+            )
+        )
+        return state.replace(host_resilience_role=jnp.where(jnp.sum(eligible) >= 3, roles, 0))
+
+    def _reset_from_const(self, const: SimulatorConst, key=None) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=jnp.array(const.initial_services),
             host_max_pid=const.host_initial_max_pid,
         )
+        state = self._assign_reward_roles(state, const, key)
         state = _init_red_state(const, state)
         if const.cage4_enhanced_obs and const.blue_observation_version >= 2:
             from jaxborg.blue_ioc import initialize_blue_ioc
@@ -582,7 +609,7 @@ class ScenarioEnv(MultiAgentEnv):
         const = self._select_const(key).replace(
             cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
-        return self._reset_state_from_const(const)
+        return self._reset_state_from_const(const, key)
 
     @partial(jax.jit, static_argnums=[0])
     def _reset_state_at_topology(
@@ -595,14 +622,15 @@ class ScenarioEnv(MultiAgentEnv):
         const = self._select_const(key, topology_index=topology_index).replace(
             cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
-        return self._reset_state_from_const(const)
+        return self._reset_state_from_const(const, key)
 
-    def _reset_state_from_const(self, const: SimulatorConst) -> ScenarioEnvState:
+    def _reset_state_from_const(self, const: SimulatorConst, key=None) -> ScenarioEnvState:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=const.initial_services,
             host_max_pid=const.host_initial_max_pid,
         )
+        state = self._assign_reward_roles(state, const, key)
         state = _init_red_state(const, state)
         if const.cage4_enhanced_obs and const.blue_observation_version >= 2:
             from jaxborg.blue_ioc import initialize_blue_ioc
@@ -705,6 +733,7 @@ class ScenarioEnv(MultiAgentEnv):
             state.green_lwf_this_step,
             state.green_asf_this_step,
             blue_actions=blue_action_arr,
+            reward_config=self.reward_config,
         )
         reward = reward_breakdown.total
 
@@ -718,13 +747,14 @@ class ScenarioEnv(MultiAgentEnv):
         rewards = {}
         for agent in self.blue_agents:
             rewards[agent] = reward
-        # Blue's payoff is the CC4 contract and never varies. Red's does:
-        # under `zero_sum` it is the exact negation, which pays Red for
+        # Red negates the selected complete payoff under `zero_sum`, including
         # `asf_reward` (only Blue's BlockTraffic can trigger ASF) and for
         # Blue's Restore `action_cost`. `damage` pays Red only for harm Red
         # can actually cause. See docs/cotraining_collapse.md.
         if self.red_reward == "damage":
             red_reward = -(reward_breakdown.ria_reward + reward_breakdown.lwf_reward)
+            if self.reward_config.name == "shaping":
+                red_reward = red_reward - reward_breakdown.cia_reward
         else:
             red_reward = -reward
         for agent in self.red_agents:
@@ -734,6 +764,15 @@ class ScenarioEnv(MultiAgentEnv):
         dones["__all__"] = done
 
         info = {
+            "reward_default": reward_breakdown.default_reward,
+            "reward_shaping": reward_breakdown.shaping_reward,
+            "reward_selected": reward,
+            "red_reward_selected": red_reward,
+            "reward_cia": reward_breakdown.cia_reward,
+            "reward_cia_c": reward_breakdown.cia_scores[0],
+            "reward_cia_i": reward_breakdown.cia_scores[1],
+            "reward_cia_a": reward_breakdown.cia_scores[2],
+            "cia_valid": reward_breakdown.cia_valid,
             "reward_ria": reward_breakdown.ria_reward,
             "reward_lwf": reward_breakdown.lwf_reward,
             "reward_asf": reward_breakdown.asf_reward,

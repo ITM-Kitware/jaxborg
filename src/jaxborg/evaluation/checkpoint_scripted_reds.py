@@ -142,6 +142,9 @@ def _checkpoint_metrics(rows: Sequence[Mapping[str, Any]]) -> dict[str, float]:
         prefix = f"eval.checkpoint_scripted_reds.{row['eval_red']}.blue"
         reward = float(row["mean_reward"])
         rewards.append(reward)
+        from jaxborg.evaluation.reward_reporting import reward_mlflow_metrics
+
+        metrics.update(reward_mlflow_metrics(prefix, row))
         metrics[f"{prefix}.mean_reward"] = reward
         metrics[f"{prefix}.std_reward"] = float(row["std_reward"])
         metrics[f"{prefix}.episodes"] = float(row["n_episodes"])

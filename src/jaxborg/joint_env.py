@@ -30,6 +30,7 @@ from jaxborg.learned_red import (
     get_red_policy_obs,
 )
 from jaxborg.observations import get_blue_obs
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.config import ScenarioConfig
 
 
@@ -74,6 +75,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
         topology_path: str | Path | Sequence[str | Path] | None = None,
         scenario_config: ScenarioConfig = CC4_CONFIG,
         op_zone_min_servers: int | None = None,
+        reward_config: RewardConfig = RewardConfig(),
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
         cage4_enhanced_obs: bool = False,
@@ -87,6 +89,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
             topology_path=topology_path,
             scenario_config=scenario_config,
             op_zone_min_servers=op_zone_min_servers,
+            reward_config=reward_config,
             red_reward=red_reward,
             blue_block_policy=blue_block_policy,
             cage4_enhanced_obs=cage4_enhanced_obs,

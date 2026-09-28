@@ -37,6 +37,7 @@ from typing import NamedTuple
 import jax
 import jax.numpy as jnp
 import mlflow
+import numpy as np
 import optax
 from flax.training.train_state import TrainState
 from jaxmarl.wrappers.baselines import LogEnvState, LogWrapper
@@ -81,13 +82,14 @@ from jaxborg.recipe import (
     team_recipe,
     training_teams,
 )
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.training_topology_sampling import validate_training_topology_coverage
 from scripts.train.algorithms.ippo_jax_joint import (
     GAME_COUNTERS as joint_game_counters,
 )
 from scripts.train.algorithms.ippo_jax_joint import (
-    REWARD_COMPONENTS as joint_reward_components,
+    REWARD_METRICS as joint_reward_components,
 )
 from scripts.train.algorithms.ippo_jax_joint import initial_reward_norm_state, make_joint_train
 
@@ -137,6 +139,7 @@ def make_train(config, network):
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
         phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
         phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
+        reward_config=config.get("REWARD_CONFIG", RewardConfig()),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
@@ -225,6 +228,18 @@ def make_train(config, network):
         _mask_over_agents = jax.vmap(_mask_over_envs, in_axes=(None, 0, None))
 
         _info_acc_init = {
+            **{
+                key: jnp.zeros(num_envs, dtype=jnp.float32)
+                for key in (
+                    "reward_default",
+                    "reward_shaping",
+                    "reward_selected",
+                    "reward_cia",
+                    "reward_cia_c",
+                    "reward_cia_i",
+                    "reward_cia_a",
+                )
+            },
             "reward_ria": jnp.zeros(num_envs, dtype=jnp.float32),
             "reward_lwf": jnp.zeros(num_envs, dtype=jnp.float32),
             "reward_asf": jnp.zeros(num_envs, dtype=jnp.float32),
@@ -449,11 +464,10 @@ def make_train(config, network):
         rng = update_state[-1]
         loss_info = jax.tree.map(lambda x: x.mean(), loss_info)
 
-        raw_rollout_return = (
-            info_sums["reward_ria"] + info_sums["reward_lwf"] + info_sums["reward_asf"] + info_sums["action_cost"]
-        ).mean()
+        raw_rollout_return = info_sums["reward_selected"].mean()
 
         rollout_info = {
+            **{key: info_sums[key].mean() for key in joint_reward_components},
             "raw_rollout_return": raw_rollout_return,
             "mean_rollout_return": traj_batch.reward.sum(axis=0).mean(),
         }
@@ -653,6 +667,16 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 )
                 row[f"team.{team}.lr"] = float(configs[team]["LR"])
                 row[f"team.{team}.trainable"] = team in trainable_teams
+            row = {
+                key: (
+                    None
+                    if key.endswith(("reward_shaping", "reward_cia", "reward_cia_c", "reward_cia_i", "reward_cia_a"))
+                    and isinstance(value, float)
+                    and not np.isfinite(value)
+                    else value
+                )
+                for key, value in row.items()
+            }
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             mlflow.log_metrics(
@@ -800,6 +824,7 @@ def main(*, expected_algorithm: str | None = None):
         mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
         phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
         phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
+        reward_config=config.get("REWARD_CONFIG", RewardConfig()),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
     network = _network_from_arch(recipe["arch"], action_dim)
@@ -871,8 +896,21 @@ def main(*, expected_algorithm: str | None = None):
             train_episode_reward_mean=float(metric["raw_rollout_return"]),
             ppo_grad_norm=float(metric["grad_norm"]),
             ppo_pre_clip_grad_norm=float(metric["pre_clip_grad_norm"]),
-            backend_extras={"jax.mean_rollout_return": float(metric["mean_rollout_return"])},
+            backend_extras={
+                "jax.mean_rollout_return": float(metric["mean_rollout_return"]),
+            },
         )
+        add_team_metrics(row, "blue", {key: float(metric[key]) for key in joint_reward_components})
+        row = {
+            key: (
+                None
+                if key.endswith(("reward_shaping", "reward_cia", "reward_cia_c", "reward_cia_i", "reward_cia_a"))
+                and isinstance(value, float)
+                and not np.isfinite(value)
+                else value
+            )
+            for key, value in row.items()
+        }
         metrics_file.write(json.dumps(row) + "\n")
         metrics_file.flush()
         mlflow.log_metrics(

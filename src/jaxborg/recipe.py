@@ -32,6 +32,7 @@ from typing import Any
 import yaml
 
 from jaxborg.blue_observation_contract import enhanced_obs_enabled, enhanced_obs_version
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
@@ -92,6 +93,9 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         raise ValueError(f"{source}: core.lr is required")
 
     train = recipe["train"]
+    reward = RewardConfig.from_recipe(recipe)
+    if reward.name == "shaping" and not train_variant(recipe).resilience_roles:
+        raise ValueError(f"{source}: train.reward shaping requires a variant with resilience_roles=True")
     mode = train.get("teams", "blue")
     if mode not in TRAIN_TEAM_MODES:
         raise ValueError(f"{source}: train.teams must be one of {TRAIN_TEAM_MODES}, got {mode!r}")
@@ -602,6 +606,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),
+        "REWARD_CONFIG": RewardConfig.from_recipe(recipe),
         "TRAIN_VARIANT": train_variant(recipe),
         "EVAL_VARIANT": eval_variant(recipe),
         "TRAIN_TEAMS": teams,
@@ -619,6 +624,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
 
 def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
     """Flatten a team view into the dict that ippo_cyborg.py consumes."""
+    if RewardConfig.from_recipe(recipe).name == "shaping":
+        raise ValueError("CIA shaping training is supported by the JAX backend; use backend jax")
     if recipe.get("kind") == "pretrained_eval":
         raise ValueError("This is an evaluation-only pretrained recipe; use scripts/eval/eval_hmarl.py")
     teams = training_teams(recipe)

@@ -3,6 +3,8 @@ import jax.numpy as jnp
 from flax import struct
 
 from jaxborg.actions.encoding import BLUE_RESTORE_END, BLUE_RESTORE_START
+from jaxborg.evaluation.cia.jax_resilience import score_resilience_state
+from jaxborg.reward_config import RewardConfig
 from jaxborg.state import SimulatorConst, SimulatorState
 
 LWF = 0
@@ -13,6 +15,11 @@ RIA = 2
 @struct.dataclass
 class RewardBreakdown:
     total: chex.Array
+    default_reward: chex.Array
+    shaping_reward: chex.Array
+    cia_reward: chex.Array
+    cia_scores: chex.Array
+    cia_valid: chex.Array
     ria_reward: chex.Array
     lwf_reward: chex.Array
     asf_reward: chex.Array
@@ -29,6 +36,8 @@ def compute_reward_breakdown(
     green_lwf_hosts: chex.Array,
     green_asf_hosts: chex.Array,
     blue_actions: chex.Array = None,
+    *,
+    reward_config: RewardConfig = RewardConfig(),
 ) -> RewardBreakdown:
     """Compute blue team shared reward for this step.
 
@@ -67,8 +76,21 @@ def compute_reward_breakdown(
     else:
         action_cost = jnp.float32(0.0)
 
+    default_reward = ria_reward + lwf_reward + asf_reward + action_cost
+    roles = state.host_resilience_role
+    cia_valid = jnp.all(jnp.any(roles[:, None] == jnp.arange(1, 4)[None, :], axis=0))
+    scores = score_resilience_state(state, roles)
+    cia_reward = reward_config.scale * jnp.dot(jnp.asarray(reward_config.weights, dtype=jnp.float32), scores)
+    # Invalid legacy topologies retain their stock payoff. The counterfactual
+    # shaped score is explicitly unavailable instead of claiming zero damage.
+    shaping_reward = jnp.where(cia_valid, default_reward + cia_reward, jnp.float32(jnp.nan))
     return RewardBreakdown(
-        total=ria_reward + lwf_reward + asf_reward + action_cost,
+        total=shaping_reward if reward_config.name == "shaping" else default_reward,
+        default_reward=default_reward,
+        shaping_reward=shaping_reward,
+        cia_reward=jnp.where(cia_valid, cia_reward, jnp.float32(jnp.nan)),
+        cia_scores=jnp.where(cia_valid, scores, jnp.float32(jnp.nan)),
+        cia_valid=cia_valid,
         ria_reward=ria_reward,
         lwf_reward=lwf_reward,
         asf_reward=asf_reward,

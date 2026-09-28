@@ -24,12 +24,21 @@ from jaxborg.policies import (
     policy_sequence,
     policy_step,
 )
+from jaxborg.reward_config import RewardConfig
 from jaxborg.training_topology_sampling import validate_training_topology_coverage
 
 TEAMS = ("blue", "red")
 
-# Signed payoff terms; these four sum to a team's rollout return.
+# Stock payoff components; CIA shaping is reported separately below.
 REWARD_COMPONENTS = ("reward_ria", "reward_lwf", "reward_asf", "action_cost")
+REWARD_METRICS = REWARD_COMPONENTS + (
+    "reward_default",
+    "reward_shaping",
+    "reward_cia",
+    "reward_cia_c",
+    "reward_cia_i",
+    "reward_cia_a",
+)
 # Unsigned game outcomes shared by both teams.
 GAME_COUNTERS = ("impact_count", "green_lwf_count", "green_asf_count")
 
@@ -451,6 +460,7 @@ def make_joint_train(
         topology_mode=base.get("TOPOLOGY_MODE", "generative"),
         training_mode=bool(base.get("TRAINING_MODE", True)),
         topology_path=list(topology_bank) if topology_bank else None,
+        reward_config=base.get("REWARD_CONFIG", RewardConfig()),
     )
     agents = {
         "blue": tuple(env.blue_agents),
@@ -493,7 +503,7 @@ def make_joint_train(
         return states
 
     updaters = {team: _make_team_updater(networks[team], team_configs[team]) for team in trainable_teams}
-    info_keys = REWARD_COMPONENTS + GAME_COUNTERS
+    info_keys = REWARD_METRICS + GAME_COUNTERS + ("reward_selected", "red_reward_selected", "cia_valid")
     recurrent = {team: is_recurrent(networks[team]) for team in TEAMS}
     centralized = {team: has_centralized_critic(networks[team]) and team in trainable_teams for team in TEAMS}
 
@@ -664,20 +674,20 @@ def make_joint_train(
                     "grad_norm": zero,
                 }
             sign = 1.0 if team == "blue" else -1.0
-            # Signed so the four components still sum to raw_rollout_return.
-            # Logging them apart separates "Red landed impacts" from "Blue
-            # burned budget", which the zero-sum total cannot distinguish.
-            for component in REWARD_COMPONENTS:
+            for component in REWARD_METRICS:
                 team_metrics[component] = sign * info_sums[component].mean()
-            raw_return = (
-                sign
-                * (
-                    info_sums["reward_ria"]
-                    + info_sums["reward_lwf"]
-                    + info_sums["reward_asf"]
-                    + info_sums["action_cost"]
-                ).mean()
-            )
+            if team == "red" and base["TRAIN_VARIANT"].red_reward == "damage":
+                default_red = -(info_sums["reward_ria"] + info_sums["reward_lwf"]).mean()
+                team_metrics["reward_default"] = default_red
+                team_metrics["reward_shaping"] = jnp.where(
+                    jnp.all(info_sums["cia_valid"] == num_steps),
+                    default_red - info_sums["reward_cia"].mean(),
+                    jnp.nan,
+                )
+                team_metrics["reward_asf"] = jnp.float32(0)
+                team_metrics["action_cost"] = jnp.float32(0)
+            selected_key = "reward_selected" if team == "blue" else "red_reward_selected"
+            raw_return = info_sums[selected_key].mean()
             team_metrics["raw_rollout_return"] = raw_return
             team_metrics["mean_rollout_return"] = trajectories[team].reward.sum(axis=0).mean()
             team_metrics["actor_fraction"] = trajectories[team].actor_mask.mean()

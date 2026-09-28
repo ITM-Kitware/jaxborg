@@ -219,6 +219,9 @@ def main() -> None:
         "topology_sampling": result.topology_sampling,
         "per_episode_topology_paths": result.episode_topology_paths,
     }
+    from jaxborg.evaluation.reward_reporting import matchup_reward_fields, reward_mlflow_metrics
+
+    row.update(matchup_reward_fields(result, recipe))
     if cia_summary is not None:
         row.update(
             {
@@ -265,6 +268,7 @@ def main() -> None:
                 f"{prefix}.red_std": red_std,
                 f"{prefix}.episodes": len(result.blue_returns),
             }
+            metrics.update(reward_mlflow_metrics(prefix, row))
             if cia_summary is not None:
                 metrics.update(cia_mlflow_metrics(f"{prefix}.cia", cia_summary))
             attach_eval_metrics(run_id, metrics)

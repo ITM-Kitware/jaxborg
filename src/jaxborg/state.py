@@ -61,6 +61,7 @@ class SimulatorState:
     host_service_reliability: chex.Array  # (num_hosts, num_services) int32 — 0-100
     host_decoys: chex.Array  # (num_hosts, num_decoy_types) bool
     host_decoy_reliability: chex.Array  # (num_hosts, num_decoy_types) int32 — 0-100
+    host_resilience_role: chex.Array  # (num_hosts,) int32; zero when unavailable
     ot_service_stopped: chex.Array  # (num_hosts,) bool
 
     red_sessions: chex.Array  # (num_red_agents, num_hosts) bool
@@ -221,6 +222,7 @@ def create_initial_state(cfg: ScenarioConfig = CC4_CONFIG) -> SimulatorState:
         host_service_reliability=jnp.full((n_hosts, n_services), 100, dtype=jnp.int32),
         host_decoys=jnp.zeros((n_hosts, n_decoys), dtype=jnp.bool_),
         host_decoy_reliability=jnp.full((n_hosts, n_decoys), 100, dtype=jnp.int32),
+        host_resilience_role=jnp.zeros(n_hosts, dtype=jnp.int32),
         ot_service_stopped=jnp.zeros(n_hosts, dtype=jnp.bool_),
         red_sessions=jnp.zeros((n_red, n_hosts), dtype=jnp.bool_),
         red_session_count=jnp.zeros((n_red, n_hosts), dtype=jnp.int32),
