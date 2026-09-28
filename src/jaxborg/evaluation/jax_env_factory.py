@@ -7,6 +7,7 @@ from typing import Sequence
 
 from jaxborg.joint_env import JointPolicyCC4Env
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env, _empty_extras_factory
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.red_selectors import make_red_selector
 from jaxborg.scenarios.cc4.topology import load_topology
@@ -68,8 +69,11 @@ def make_jax_env(
     mission_bank_amplify: float = 1.0,
     phase_boundary_bank: Sequence[Sequence[int]] | None = None,
     phase_rewards_bank: Sequence | None = None,
+    reward_config: RewardConfig = RewardConfig(),
     name: str | None = None,
 ) -> FsmRedCC4Env:
+    if reward_config.name == "shaping" and not variant.resilience_roles:
+        raise ValueError("shaping requires a variant with resilience_roles=True")
     if variant.resilience_roles:
         _validate_resilience_topology(variant, topology_path)
     extras = _resilience_extras_factory if variant.resilience_roles else _empty_extras_factory
@@ -86,6 +90,7 @@ def make_jax_env(
         mission_bank_amplify=mission_bank_amplify,
         phase_boundary_bank=phase_boundary_bank,
         phase_rewards_bank=phase_rewards_bank,
+        reward_config=reward_config,
         red_reward=variant.red_reward,
         blue_block_policy=variant.blue_block_policy,
         cage4_enhanced_obs=variant.cage4_enhanced_obs,
@@ -100,10 +105,13 @@ def make_joint_jax_env(
     topology_mode: str = "generative",
     training_mode: bool = False,
     topology_path: str | Path | Sequence[str | Path] | None = None,
+    reward_config: RewardConfig = RewardConfig(),
     name: str | None = None,
 ) -> JointPolicyCC4Env:
     """Build the all-policy JAX env used for learned Red or joint training."""
 
+    if reward_config.name == "shaping" and not variant.resilience_roles:
+        raise ValueError("shaping requires a variant with resilience_roles=True")
     if variant.resilience_roles:
         _validate_resilience_topology(variant, topology_path)
     return JointPolicyCC4Env(
@@ -112,6 +120,7 @@ def make_joint_jax_env(
         training_mode=training_mode,
         topology_path=topology_path,
         op_zone_min_servers=variant.op_zone_servers,
+        reward_config=reward_config,
         red_reward=variant.red_reward,
         blue_block_policy=variant.blue_block_policy,
         cage4_enhanced_obs=variant.cage4_enhanced_obs,

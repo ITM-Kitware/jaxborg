@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import random
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -24,10 +24,11 @@ class TrainingCheckpointEvaluation:
     """Structured reward and CIA result returned by an enabled checkpoint eval."""
 
     mean_rewards: dict[str, float]
-    cia_summary: dict[str, Any]
+    cia_summary: dict[str, Any] | None
     per_episode_cia: list[dict[str, float]]
     episode_role_map_ids: list[str]
     topology_role_maps: list[dict[str, Any]]
+    reward_scores: dict[str, Any] = field(default_factory=dict)
 
 
 def _uses_learned_red(recipe: dict) -> bool:
@@ -70,7 +71,7 @@ def evaluate_training_checkpoint(
     seed: int,
     episodes_per_seed: int | None = None,
     episodes: int | None = None,
-) -> dict[str, float] | TrainingCheckpointEvaluation:
+) -> TrainingCheckpointEvaluation:
     """Return mean checkpoint rewards for each policy team being evaluated.
 
     Learned Blue/Red matchups use the existing JAX-native matchup evaluator
@@ -126,21 +127,25 @@ def evaluate_training_checkpoint(
                 "red": float(np.mean(result.red_returns)),
             }
             trained_means = {team: means[team] for team in trainable_teams}
-            if not cia_config["enabled"]:
-                return trained_means
+            from jaxborg.evaluation.reward_reporting import matchup_reward_fields
+
             return TrainingCheckpointEvaluation(
                 mean_rewards=trained_means,
-                cia_summary=result.cia_summary,
-                per_episode_cia=result.per_episode_cia,
-                episode_role_map_ids=result.episode_role_map_ids,
-                topology_role_maps=result.topology_role_maps,
+                reward_scores=matchup_reward_fields(result, recipe),
+                cia_summary=getattr(result, "cia_summary", None),
+                per_episode_cia=getattr(result, "per_episode_cia", []),
+                episode_role_map_ids=getattr(result, "episode_role_map_ids", []),
+                topology_role_maps=getattr(result, "topology_role_maps", []),
             )
 
+        reward_report = {}
+        reward_kwargs = {"reward_report": reward_report}
         if backend_name == "jax":
             from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
 
             rewards, _seed_log, _checkpoint_recipe = evaluate_jax_on_cyborg(
                 checkpoint_path,
+                **reward_kwargs,
                 variant=variant,
                 seeds=[eval_seed],
                 episodes_per_seed=episodes_per_seed,
@@ -153,6 +158,7 @@ def evaluate_training_checkpoint(
 
             rewards, _seed_log = evaluate_on_cyborg(
                 checkpoint_path,
+                **reward_kwargs,
                 variant=variant,
                 seeds=[eval_seed],
                 episodes_per_seed=episodes_per_seed,
@@ -160,7 +166,17 @@ def evaluate_training_checkpoint(
                 workers=1,
                 progress=False,
             )
-        return {"blue": float(np.mean(rewards))}
+        means = {"blue": float(np.mean(rewards))}
+        from jaxborg.evaluation.reward_reporting import reward_fields
+
+        return TrainingCheckpointEvaluation(
+            mean_rewards=means,
+            cia_summary=None,
+            per_episode_cia=[],
+            episode_role_map_ids=[],
+            topology_role_maps=[],
+            reward_scores=reward_report or reward_fields(rewards, [], steps=variant.num_steps, recipe=recipe),
+        )
 
 
 __all__ = ["TrainingCheckpointEvaluation", "evaluate_training_checkpoint"]

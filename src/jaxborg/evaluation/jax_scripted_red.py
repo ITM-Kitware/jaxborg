@@ -153,7 +153,7 @@ def _fixed_role_state(state: Any, case: EvaluationCase) -> Any:
 
     extras = dict(state.extras)
     extras["host_resilience_role"] = case.role_array
-    return state.replace(extras=extras)
+    return state.replace(extras=extras, state=state.state.replace(host_resilience_role=case.role_array))
 
 
 def _blue_policy_action_masks(env: Any, state: Any, agents: Sequence[str]) -> jax.Array:
@@ -192,7 +192,7 @@ def _run_jax_scripted_red_episode_scan(
     obs, state = env.reset_at_topology(reset_key, topology_index)
     extras = dict(state.extras)
     extras["host_resilience_role"] = host_resilience_role
-    state = state.replace(extras=extras)
+    state = state.replace(extras=extras, state=state.state.replace(host_resilience_role=host_resilience_role))
     blue_agents = tuple(env.agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
     if isinstance(policy_module, StatefulBluePolicy):
@@ -629,6 +629,9 @@ def evaluate_jax_scripted_reds(
             "per_episode_topology_fingerprints": [case.topology_fingerprint for case in cases],
             "topology_role_maps": role_maps,
         }
+        from jaxborg.evaluation.reward_reporting import reward_fields
+
+        row.update(reward_fields(rewards, cia_records, steps=variant.num_steps, recipe=source_recipe))
         rows.append(row)
         print(
             f"Blue vs {red}: reward {row['mean_reward']:.2f} +/- {row['std_reward']:.2f}; "
@@ -674,6 +677,9 @@ def attach_results_to_mlflow(rows: Sequence[Mapping[str, Any]]) -> None:
             if eval_name
             else f"eval.scripted_red.{row['eval_red']}.blue"
         )
+        from jaxborg.evaluation.reward_reporting import reward_mlflow_metrics
+
+        metrics.update(reward_mlflow_metrics(prefix, row))
         metrics[f"{prefix}.mean_reward"] = float(row["mean_reward"])
         metrics[f"{prefix}.std_reward"] = float(row["std_reward"])
         metrics[f"{prefix}.episodes"] = float(row["n_episodes"])

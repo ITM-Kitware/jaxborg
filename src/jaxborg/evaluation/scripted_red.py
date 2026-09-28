@@ -216,6 +216,7 @@ def _evaluate_cell(
     deterministic: bool,
     workers: int,
     progress: bool,
+    reward_report: dict | None = None,
 ) -> tuple[list[float], list[int]]:
     if backend == "jax":
         from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
@@ -228,6 +229,7 @@ def _evaluate_cell(
             deterministic=deterministic,
             workers=workers,
             progress=progress,
+            reward_report=reward_report,
         )
         return rewards, seed_log
 
@@ -241,6 +243,7 @@ def _evaluate_cell(
         deterministic=deterministic,
         workers=workers,
         progress=progress,
+        reward_report=reward_report,
     )
 
 
@@ -295,9 +298,11 @@ def evaluate_scripted_reds(
             flush=True,
         )
         t0 = time.perf_counter()
+        reward_report = {}
         rewards, seed_log = evaluate_cell(
             backend,
             model_path,
+            **({"reward_report": reward_report} if cell_evaluator is None else {}),
             variant=variant,
             seeds=list(settings.seeds),
             episodes_per_seed=settings.episodes_per_seed,
@@ -349,6 +354,9 @@ def evaluate_scripted_reds(
             "per_episode_seeds": seed_log,
             **bundle_metadata,
         }
+        from jaxborg.evaluation.reward_reporting import reward_fields
+
+        row.update(reward_report or reward_fields(rewards, [], steps=variant.num_steps, recipe=recipe))
         rows.append(row)
         print(f"  mean {reward_mean:.2f} +/- {reward_std:.2f} (n={len(rewards)})", flush=True)
     return rows
@@ -391,6 +399,9 @@ def attach_results_to_mlflow(rows: Sequence[Mapping[str, Any]]) -> None:
             if eval_name
             else f"eval.scripted_red.{row['eval_red']}.blue"
         )
+        from jaxborg.evaluation.reward_reporting import reward_mlflow_metrics
+
+        metrics.update(reward_mlflow_metrics(prefix, row))
         metrics[f"{prefix}.mean_reward"] = float(row["mean_reward"])
         metrics[f"{prefix}.std_reward"] = float(row["std_reward"])
         metrics[f"{prefix}.episodes"] = float(row["n_episodes"])

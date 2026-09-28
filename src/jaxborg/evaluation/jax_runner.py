@@ -30,6 +30,7 @@ from jaxborg.blue_observation_contract import (
 )
 from jaxborg.checkpoint import load_jax_policy
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.cyborg_reward import CyborgRewardTracker, native_reward_fields
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
 from jaxborg.policies import initial_carry, policy_from_arch, policy_step
@@ -141,8 +142,11 @@ def _raw_step(wrapper, actions):
     return observations, rewards, terminated, truncated
 
 
-def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, deterministic: bool, rng) -> float:
+def run_episode(
+    env, variant: GameVariant, ep_seed: int, policy, params, deterministic: bool, rng, *, cia_out=None
+) -> float:
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    tracker = CyborgRewardTracker(env, ep_seed, r.role_map) if cia_out is not None else None
     observations = r.obs
     inner = env.env
     const = build_const_from_cyborg(inner)
@@ -167,18 +171,23 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
 
         observations, rewards, terms, truncs = _raw_step(env, actions)
         total += mean(rewards.values())
+        if tracker is not None:
+            tracker.step()
         if terms.get("__all__", False) or truncs.get("__all__", False):
             break
+    if tracker is not None:
+        cia_out.append(tracker.cia_sum)
     return total
 
 
 def _jax_worker(args):
     """Pool worker: load checkpoint once, run a chunk of (idx, seed, rng_seed) episodes."""
-    checkpoint_path, deterministic, variant, items = args
+    checkpoint_path, deterministic, variant, items, paired = args
     policy, params, _ = load_jax_checkpoint(checkpoint_path)
     out = []
     for idx, seed, rng_seed in items:
         env = make_cyborg_env(variant, seed, wrapper_class=BlueFlatWrapper, wrapper_kwargs={"pad_spaces": True})
+        cia_out = [] if paired else None
         r = run_episode(
             env,
             variant,
@@ -187,8 +196,9 @@ def _jax_worker(args):
             params=params,
             deterministic=deterministic,
             rng=jax.random.PRNGKey(rng_seed),
+            **({"cia_out": cia_out} if cia_out is not None else {}),
         )
-        out.append((idx, seed, r))
+        out.append((idx, seed, r, cia_out[0] if cia_out else None))
     return out
 
 
@@ -201,6 +211,7 @@ def evaluate_jax_on_cyborg(
     deterministic: bool = False,
     workers: int = 1,
     progress: bool = True,
+    reward_report: dict | None = None,
 ) -> tuple[list[float], list[int], dict]:
     """Load a JAX `.safetensors`, evaluate against CybORG. Returns (rewards, seed_log, recipe).
 
@@ -212,6 +223,7 @@ def evaluate_jax_on_cyborg(
     items = [(idx, env_seed, env_seed) for idx, env_seed in enumerate(flat)]
     rewards: list[float] = [0.0] * total
     seed_log: list[int] = [0] * total
+    cia_sums = [None] * total
 
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
     if blue_obs_size(variant.cage4_enhanced_obs, variant.blue_observation_version) != recipe_blue_obs_size(recipe):
@@ -220,6 +232,7 @@ def evaluate_jax_on_cyborg(
     if workers <= 1:
         for idx, seed, rng_seed in items:
             env = make_cyborg_env(variant, seed, wrapper_class=BlueFlatWrapper, wrapper_kwargs={"pad_spaces": True})
+            cia_out = [] if reward_report is not None else None
             r = run_episode(
                 env,
                 variant,
@@ -228,24 +241,31 @@ def evaluate_jax_on_cyborg(
                 params=params,
                 deterministic=deterministic,
                 rng=jax.random.PRNGKey(rng_seed),
+                **({"cia_out": cia_out} if cia_out is not None else {}),
             )
+            cia_sums[idx] = cia_out[0] if cia_out else None
             rewards[idx] = r
             seed_log[idx] = seed
             if progress:
                 print(f"  ep {idx + 1}/{total} (seed={seed}): {r:.1f}", flush=True)
+        if reward_report is not None:
+            reward_report.update(native_reward_fields(rewards, cia_sums, recipe))
         return rewards, seed_log, recipe
 
     n_workers = min(workers, total)
     chunks = [items[i::n_workers] for i in range(n_workers)]
-    pargs = [(str(checkpoint_path), deterministic, variant, c) for c in chunks]
+    pargs = [(str(checkpoint_path), deterministic, variant, c, reward_report is not None) for c in chunks]
     completed = 0
     ctx = mp.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
         for chunk_results in ex.map(_jax_worker, pargs):
-            for idx, seed, r in chunk_results:
+            for idx, seed, r, cia_sum in chunk_results:
+                cia_sums[idx] = cia_sum
                 rewards[idx] = r
                 seed_log[idx] = seed
                 completed += 1
                 if progress:
                     print(f"  ep {completed}/{total} (seed={seed}): {r:.1f}", flush=True)
+    if reward_report is not None:
+        reward_report.update(native_reward_fields(rewards, cia_sums, recipe))
     return rewards, seed_log, recipe

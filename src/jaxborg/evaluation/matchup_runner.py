@@ -317,6 +317,9 @@ def _run_jax_matchup_episode_scan(
     else:
         obs, state = env.reset(reset_key)
 
+    if score_cia:
+        state = state.replace(state=state.state.replace(host_resilience_role=host_resilience_role))
+
     blue_agents = tuple(env.blue_agents)
     red_agents = tuple(env.red_agents)
     zero_cia = jnp.zeros(3, dtype=jnp.float32)
@@ -644,6 +647,8 @@ def run_matchup_episode(
         obs, state = env.reset(reset_key)
     else:
         obs, state = env.reset_at_topology(reset_key, topology_index)
+    if host_resilience_role is not None:
+        state = state.replace(state=state.state.replace(host_resilience_role=jnp.asarray(host_resilience_role)))
     team_agents = {"blue": tuple(env.blue_agents), "red": tuple(env.red_agents)}
     # Recurrent policies only; `initial_carry` is None for the feedforward
     # archs and threads through the loop untouched.

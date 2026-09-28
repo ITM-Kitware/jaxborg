@@ -112,6 +112,7 @@ def _learning_settings(recipe):
         "arch": recipe.get("arch"),
         "team_overrides": recipe["train"].get("team_overrides"),
         "episode_length": recipe["train"]["episode_length"],
+        "reward": recipe["train"].get("reward"),
         "jax": {k: v for k, v in recipe.get("jax", {}).items() if k != "checkpoint_every_updates"},
     }
 
@@ -228,6 +229,11 @@ def build_plan(
 def _scores(row):
     return {
         "reward": mean(row["blue_returns"]),
+        **{
+            f"reward_{name}": row[f"mean_reward_{name}"]
+            for name in ("default", "shaping")
+            if row.get(f"mean_reward_{name}") is not None
+        },
         **{axis: mean(ep[axis] for ep in row["per_episode_cia"]) for axis in ("c", "i", "a")},
     }
 
@@ -246,6 +252,11 @@ def summarize_comparison(plan, rows):
     indexed = {row["id"]: row for row in rows}
     if len(indexed) != len(rows) or set(indexed) != {m["id"] for m in plan["matchups"]}:
         raise ValueError("Summary needs exactly one result for every planned matchup")
+    metric_names = METRICS + tuple(
+        f"reward_{name}"
+        for name in ("default", "shaping")
+        if all(row.get(f"mean_reward_{name}") is not None for row in rows)
+    )
     pairs = []
     for matchup in plan["matchups"]:
         if matchup["blue_condition"] != "baseline":
@@ -261,7 +272,7 @@ def summarize_comparison(plan, rows):
                 "blue_seed": matchup["blue_seed"],
                 "red_condition": matchup["red_condition"],
                 "red_seed": matchup["red_seed"],
-                "metrics": {key: _difference(av[key], bv[key]) for key in METRICS},
+                "metrics": {key: _difference(av[key], bv[key]) for key in metric_names},
             }
         )
 
@@ -270,10 +281,11 @@ def summarize_comparison(plan, rows):
         for seed in plan["train_seeds"]:
             subset = [p for p in selected_pairs if p["blue_seed"] == seed]
             per_seed[str(seed)] = {
-                key: _difference(*(mean(p["metrics"][key][c] for p in subset) for c in CONDITIONS)) for key in METRICS
+                key: _difference(*(mean(p["metrics"][key][c] for p in subset) for c in CONDITIONS))
+                for key in metric_names
             }
         metrics = {}
-        for key in METRICS:
+        for key in metric_names:
             values = {c: [s[key][c] for s in per_seed.values()] for c in CONDITIONS}
             metrics[key] = {
                 **_difference(*(mean(values[c]) for c in CONDITIONS)),
@@ -314,6 +326,7 @@ def run_comparison(plan, output_dir, *, resume=False, evaluate_fn=None):
 
         evaluate_fn = partial(evaluate_matchup, context=MatchupEvaluationContext())
     rows = []
+    model_recipes = {model["path"]: model["recipe"] for model in plan["models"]}
     for index, matchup in enumerate(plan["matchups"], 1):
         path = output / f"{matchup['id']}.json"
         if resume and path.is_file():
@@ -350,6 +363,16 @@ def run_comparison(plan, output_dir, *, resume=False, evaluate_fn=None):
                     )
                 },
             }
+        from jaxborg.evaluation.reward_reporting import reward_fields
+
+        row.update(
+            reward_fields(
+                row["blue_returns"],
+                row["per_episode_cia"],
+                steps=settings["EVAL_VARIANT"].num_steps,
+                recipe=model_recipes[matchup["blue_path"]],
+            )
+        )
         if any(row.get(key) != value for key, value in matchup.items()):
             raise ValueError(f"Result provenance does not match the plan: {path}")
         expected = plan["episodes_per_matchup"]

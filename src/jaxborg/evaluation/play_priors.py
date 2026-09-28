@@ -20,6 +20,8 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
+from jaxborg.evaluation.reward_reporting import matchup_reward_fields, reward_mlflow_metrics
+
 _CHECKPOINT_PATTERN = re.compile(r"^checkpoint_(\d+)$")
 _ALLOWED_SETTINGS = {
     "enabled",
@@ -282,6 +284,7 @@ def _result_row(
             "topology_role_maps": getattr(evaluation, "topology_role_maps", []),
         }
     return {
+        **matchup_reward_fields(evaluation, recipe),
         "eval_id": f"{eval_id}_{current.steps}_{focal_team}",
         "eval_name": "play_priors",
         "suite": "play_priors",
@@ -436,6 +439,8 @@ def run_play_priors(
                     "eval.play_priors.red_vs_prior_blue.mean_reward": pair_rows["red"]["mean_reward"],
                     "eval.play_priors.prior_step": float(prior.steps),
                 }
+                for team, comparison in (("blue", "blue_vs_prior_red"), ("red", "red_vs_prior_blue")):
+                    metrics.update(reward_mlflow_metrics(f"eval.play_priors.{comparison}.blue", pair_rows[team]))
                 if cia_config["enabled"]:
                     from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
 

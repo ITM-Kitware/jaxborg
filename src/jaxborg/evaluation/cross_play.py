@@ -224,6 +224,9 @@ def _cell_row(
     if cia_summary is not None:
         row["cia_metric"] = getattr(evaluation, "cia_metric", None)
         row["cia_summary"] = cia_summary
+    from jaxborg.evaluation.reward_reporting import matchup_reward_fields
+
+    row.update(matchup_reward_fields(evaluation, recipe))
     return row
 
 
@@ -346,6 +349,13 @@ def run_cross_play(
                 attach(
                     train_run_id,
                     {
+                        **{
+                            f"eval.cross_play.blue.mean_reward_{name}": mean(
+                                row[f"mean_reward_{name}"] for row in rows[:-1] if row["blue_checkpoint_index"] == index
+                            )
+                            for name in ("default", "shaping")
+                            if all(row.get(f"mean_reward_{name}") is not None for row in rows[:-1])
+                        },
                         "eval.cross_play.blue.self_play": summary["blue_self_play"][index],
                         "eval.cross_play.blue.worst_vs_history": summary["blue_worst_vs_history"][index],
                         "eval.cross_play.blue.mean_vs_history": summary["blue_mean_vs_history"][index],

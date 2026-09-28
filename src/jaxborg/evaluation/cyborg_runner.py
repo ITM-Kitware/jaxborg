@@ -24,6 +24,7 @@ from jaxborg.blue_observation_contract import (
 )
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.cyborg_reward import CyborgRewardTracker, native_reward_fields
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.policies import make_torch_policy
 from jaxborg.scenarios.cc4.game_variant import GameVariant
@@ -48,10 +49,11 @@ def _pad_obs_mask(obs_dict, info_dict):
     return obs, mask
 
 
-def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool) -> float:
+def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool, cia_out=None) -> float:
     # Policy sampling must also be reproducible across worker counts and reruns.
     torch.manual_seed(ep_seed)
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    tracker = CyborgRewardTracker(env, ep_seed, r.role_map) if cia_out is not None else None
     obs_d, info_d = r.obs, r.info
     total = 0.0
     for _ in range(variant.num_steps):
@@ -67,8 +69,12 @@ def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, determini
         action_dict = {AGENT_IDS[i]: int(act[i]) for i in range(NUM_AGENTS)}
         obs_d, rew_d, term_d, trunc_d, info_d = env.step(action_dict)
         total += float(rew_d[AGENT_IDS[0]])
+        if tracker is not None:
+            tracker.step()
         if any(term_d.values()) or any(trunc_d.values()):
             break
+    if tracker is not None:
+        cia_out.append(tracker.cia_sum)
     return total
 
 
@@ -148,15 +154,23 @@ def load_torch_policy(model_path: str | Path):
 
 def _cyborg_worker(args):
     """Pool worker: load model once, run a chunk of (idx, seed) episodes."""
-    model_path, deterministic, variant, items = args
+    model_path, deterministic, variant, items, paired = args
     agent, recipe = load_torch_policy(model_path)
     if blue_obs_size(variant.cage4_enhanced_obs, variant.blue_observation_version) != recipe_blue_obs_size(recipe):
         raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
     out = []
     for idx, seed in items:
         env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
-        r = rollout_episode(env, variant, ep_seed=seed, agent=agent, deterministic=deterministic)
-        out.append((idx, seed, r))
+        cia_out = [] if paired else None
+        r = rollout_episode(
+            env,
+            variant,
+            ep_seed=seed,
+            agent=agent,
+            deterministic=deterministic,
+            **({"cia_out": cia_out} if cia_out is not None else {}),
+        )
+        out.append((idx, seed, r, cia_out[0] if cia_out else None))
     return out
 
 
@@ -169,6 +183,7 @@ def evaluate_on_cyborg(
     deterministic: bool = False,
     workers: int = 1,
     progress: bool = True,
+    reward_report: dict | None = None,
 ) -> tuple[list[float], list[int]]:
     """Run `episodes_per_seed` episodes per seed. Returns (rewards, seed_for_each_ep).
 
@@ -180,6 +195,7 @@ def evaluate_on_cyborg(
     items = list(enumerate(flat))
     rewards: list[float] = [0.0] * total
     seed_log: list[int] = [0] * total
+    cia_sums = [None] * total
 
     if workers <= 1:
         agent, recipe = load_torch_policy(model_path)
@@ -187,24 +203,40 @@ def evaluate_on_cyborg(
             raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
         for idx, seed in items:
             env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
-            r = rollout_episode(env, variant, ep_seed=seed, agent=agent, deterministic=deterministic)
+            cia_out = [] if reward_report is not None else None
+            r = rollout_episode(
+                env,
+                variant,
+                ep_seed=seed,
+                agent=agent,
+                deterministic=deterministic,
+                **({"cia_out": cia_out} if cia_out is not None else {}),
+            )
+            cia_sums[idx] = cia_out[0] if cia_out else None
             rewards[idx] = r
             seed_log[idx] = seed
             if progress:
                 print(f"  ep {idx + 1}/{total} (seed={seed}): {r:.1f}", flush=True)
+        if reward_report is not None:
+            reward_report.update(native_reward_fields(rewards, cia_sums, recipe))
         return rewards, seed_log
 
+    if reward_report is not None:
+        _, recipe = load_torch_policy(model_path)
     n_workers = min(workers, total)
     chunks = [items[i::n_workers] for i in range(n_workers)]
-    pargs = [(str(model_path), deterministic, variant, c) for c in chunks]
+    pargs = [(str(model_path), deterministic, variant, c, reward_report is not None) for c in chunks]
     completed = 0
     ctx = mp.get_context("spawn")
     with concurrent.futures.ProcessPoolExecutor(max_workers=n_workers, mp_context=ctx) as ex:
         for chunk_results in ex.map(_cyborg_worker, pargs):
-            for idx, seed, r in chunk_results:
+            for idx, seed, r, cia_sum in chunk_results:
+                cia_sums[idx] = cia_sum
                 rewards[idx] = r
                 seed_log[idx] = seed
                 completed += 1
                 if progress:
                     print(f"  ep {completed}/{total} (seed={seed}): {r:.1f}", flush=True)
+    if reward_report is not None:
+        reward_report.update(native_reward_fields(rewards, cia_sums, recipe))
     return rewards, seed_log
