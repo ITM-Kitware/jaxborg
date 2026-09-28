@@ -345,6 +345,7 @@ class ScenarioEnv(MultiAgentEnv):
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
         cage4_enhanced_obs: bool = False,
+        blue_observation_version: int = 2,
     ):
         if red_reward not in ("zero_sum", "damage"):
             raise ValueError(f"unknown red_reward {red_reward!r}")
@@ -355,6 +356,7 @@ class ScenarioEnv(MultiAgentEnv):
         self.red_reward = red_reward
         self.blue_block_policy = blue_block_policy
         self.cage4_enhanced_obs = cage4_enhanced_obs
+        self.blue_observation_version = blue_observation_version
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.training_mode = training_mode
@@ -449,7 +451,7 @@ class ScenarioEnv(MultiAgentEnv):
             self.observation_spaces[agent] = Box(
                 low=0.0,
                 high=2.0 if cage4_enhanced_obs else 1.0,
-                shape=(blue_obs_size(cage4_enhanced_obs),),
+                shape=(blue_obs_size(cage4_enhanced_obs, blue_observation_version),),
                 dtype=jnp.float32,
             )
         for agent in self.red_agents:
@@ -530,7 +532,9 @@ class ScenarioEnv(MultiAgentEnv):
         return const
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
-        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
+        const = self._select_const(key).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
+        )
         return self._reset_from_const(const)
 
     @property
@@ -552,7 +556,7 @@ class ScenarioEnv(MultiAgentEnv):
     ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         """Reset on one exact snapshot-bank entry while retaining dynamic RNG."""
         const = self._select_const(key, topology_index=topology_index).replace(
-            cage4_enhanced_obs=self.cage4_enhanced_obs
+            cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
         return self._reset_from_const(const)
 
@@ -563,6 +567,10 @@ class ScenarioEnv(MultiAgentEnv):
             host_max_pid=const.host_initial_max_pid,
         )
         state = _init_red_state(const, state)
+        if const.cage4_enhanced_obs and const.blue_observation_version >= 2:
+            from jaxborg.blue_ioc import initialize_blue_ioc
+
+            state = initialize_blue_ioc(state)
 
         env_state = ScenarioEnvState(state=state, const=const)
         obs = self.get_obs(env_state)
@@ -571,7 +579,9 @@ class ScenarioEnv(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
-        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
+        const = self._select_const(key).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
+        )
         return self._reset_state_from_const(const)
 
     @partial(jax.jit, static_argnums=[0])
@@ -583,7 +593,7 @@ class ScenarioEnv(MultiAgentEnv):
     ) -> ScenarioEnvState:
         """Auto-reset state on one exact topology while retaining dynamic RNG."""
         const = self._select_const(key, topology_index=topology_index).replace(
-            cage4_enhanced_obs=self.cage4_enhanced_obs
+            cage4_enhanced_obs=self.cage4_enhanced_obs, blue_observation_version=self.blue_observation_version
         )
         return self._reset_state_from_const(const)
 
@@ -594,6 +604,10 @@ class ScenarioEnv(MultiAgentEnv):
             host_max_pid=const.host_initial_max_pid,
         )
         state = _init_red_state(const, state)
+        if const.cage4_enhanced_obs and const.blue_observation_version >= 2:
+            from jaxborg.blue_ioc import initialize_blue_ioc
+
+            state = initialize_blue_ioc(state)
         return ScenarioEnvState(state=state, const=const)
 
     @partial(jax.jit, static_argnums=[0])

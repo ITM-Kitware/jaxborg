@@ -25,10 +25,16 @@ class _JaxRecurrentMAPPOActorCritic(RecurrentPolicy, CentralizedCriticPolicy):
     critic_input: str = "global_state"
     team: str = "blue"
     cage4_enhanced_obs: bool = False
+    blue_observation_version: int = 2
 
     @property
     def critic_obs_dim(self):
-        return critic_obs_size(self.critic_input, team=self.team, cage4_enhanced_obs=self.cage4_enhanced_obs)
+        return critic_obs_size(
+            self.critic_input,
+            team=self.team,
+            cage4_enhanced_obs=self.cage4_enhanced_obs,
+            blue_observation_version=self.blue_observation_version,
+        )
 
     @nn.nowrap
     def initialize_carry(self, batch_size: int):
@@ -68,6 +74,7 @@ def jax_factory(
     critic_input="global_state",
     team="blue",
     cage4_enhanced_obs=False,
+    blue_observation_version=2,
 ):
     critic_obs_size(critic_input, team=team)
     if cell not in CELLS:
@@ -83,6 +90,7 @@ def jax_factory(
         critic_input=critic_input,
         team=team,
         cage4_enhanced_obs=cage4_enhanced_obs,
+        blue_observation_version=blue_observation_version,
     )
 
 

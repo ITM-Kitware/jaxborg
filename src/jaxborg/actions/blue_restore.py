@@ -178,6 +178,15 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
         state.host_service_reliability.at[target_host].set(100),
         state.host_service_reliability,
     )
+    if state.blue_decoy_sources is not None:
+        state = state.replace(
+            blue_decoy_sources=state.blue_decoy_sources.at[target_host].set(
+                jnp.where(covers_host, -1, state.blue_decoy_sources[target_host])
+            ),
+            blue_old_decoy_sources=state.blue_old_decoy_sources.at[target_host].set(
+                jnp.where(covers_host, -1, state.blue_old_decoy_sources[target_host])
+            ),
+        )
     return state.replace(
         blue_file_evidence=state.blue_file_evidence.at[target_host].set(
             jnp.where(covers_host & const.cage4_enhanced_obs, 0, state.blue_file_evidence[target_host])

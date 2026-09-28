@@ -23,18 +23,20 @@ from jaxborg.state import SimulatorConst, SimulatorState
 CRITIC_INPUTS = ("joint_observations", "global_state")
 
 
-def _team_observation_spec(team: str, cage4_enhanced_obs: bool = False):
+def _team_observation_spec(team: str, cage4_enhanced_obs: bool = False, blue_observation_version: int = 2):
     if team == "blue":
-        return NUM_BLUE_AGENTS, blue_obs_size(cage4_enhanced_obs), get_blue_obs
+        return NUM_BLUE_AGENTS, blue_obs_size(cage4_enhanced_obs, blue_observation_version), get_blue_obs
     if team == "red":
         return NUM_RED_AGENTS, RED_OBS_SIZE, get_red_policy_obs
     raise ValueError(f"critic team must be 'blue' or 'red', got {team!r}")
 
 
-def critic_obs_size(critic_input: str, *, team: str = "blue", cage4_enhanced_obs: bool = False) -> int:
+def critic_obs_size(
+    critic_input: str, *, team: str = "blue", cage4_enhanced_obs: bool = False, blue_observation_version: int = 2
+) -> int:
     if critic_input not in CRITIC_INPUTS:
         raise ValueError(f"critic_input must be one of {CRITIC_INPUTS}, got {critic_input!r}")
-    num_agents, obs_size, _ = _team_observation_spec(team, cage4_enhanced_obs)
+    num_agents, obs_size, _ = _team_observation_spec(team, cage4_enhanced_obs, blue_observation_version)
     size = num_agents * obs_size + num_agents
     if critic_input == "global_state":
         size += (
@@ -58,7 +60,12 @@ def get_critic_obs(
     to that team's pooled policy observations. It excludes RNG keys and future information.
     Inactive hosts and reliability of absent services/decoys are zeroed.
     """
-    expected_size = critic_obs_size(critic_input, team=team, cage4_enhanced_obs=const.cage4_enhanced_obs)
+    expected_size = critic_obs_size(
+        critic_input,
+        team=team,
+        cage4_enhanced_obs=const.cage4_enhanced_obs,
+        blue_observation_version=const.blue_observation_version,
+    )
     num_agents, _, observe = _team_observation_spec(team)
     observations = jnp.stack([observe(state, const, i) for i in range(num_agents)])
     features = [observations.reshape(-1)]

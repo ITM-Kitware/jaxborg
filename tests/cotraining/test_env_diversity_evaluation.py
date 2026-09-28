@@ -9,6 +9,7 @@ import pytest
 import yaml
 from safetensors.numpy import save_file
 
+from jaxborg.blue_observation_contract import enhanced_obs_version
 from jaxborg.evaluation import env_diversity as comparison
 from jaxborg.recipe import load
 
@@ -30,7 +31,13 @@ def write_model(root, recipe, seed, *, tag=None, checkpoint_step=None, provenanc
     saved = copy.deepcopy(recipe)
     batch = saved["jax"]["num_envs"] * saved["train"]["episode_length"]
     steps = checkpoint_step or saved["train"]["total_timesteps"] // batch * batch
-    saved["run"] = {"seed": seed, "total_steps": steps, "train_run_id": f"run-{tag}", "backend": "jax"}
+    saved["run"] = {
+        "seed": seed,
+        "total_steps": steps,
+        "train_run_id": f"run-{tag}",
+        "backend": "jax",
+        "blue_observation_version": enhanced_obs_version(recipe),
+    }
     provenance = {"recipe": recipe["meta"]["name"], "seed": seed, "total_steps": steps, "train_run_id": f"run-{tag}"}
     provenance.update(provenance_override or {})
     metadata = {
@@ -220,3 +227,51 @@ def test_invalid_diversity_settings_fail_at_recipe_load(tmp_path, recipes, setti
     path.write_text(yaml.safe_dump(recipe))
     with pytest.raises(ValueError, match="eval.env_diversity"):
         load(str(path))
+
+
+def test_saved_50m_models_use_current_eval_recipe_without_changing_training_budget(tmp_path, recipes, monkeypatch):
+    from scripts.eval import eval_env_diversity as cli
+
+    current = copy.deepcopy(recipes[1])
+    current["eval"]["env_diversity"]["seeds"] = "1200-1201"
+    current["eval"]["env_diversity"]["episodes_per_seed"] = 2
+    # An evaluation-only override must not redefine the saved training budget.
+    current["train"]["total_timesteps"] = 70_000_000
+    old = copy.deepcopy(recipes)
+    for recipe in old:
+        recipe["train"]["total_timesteps"] = 50_000_000
+    populate(tmp_path, old)
+    saved_paths = [
+        tmp_path / "mappo_jax" / f"{r['meta']['name']}_seed42-40M" / f"recipe_{r['meta']['name']}_seed42-40M.yaml"
+        for r in old
+    ]
+    evaluation_recipe = tmp_path / "evaluation.yaml"
+    evaluation_recipe.write_text(yaml.safe_dump(current))
+    captured = []
+
+    def fake_run(plan, output, **kwargs):
+        captured.append(plan)
+        return {"overall": {"metrics": {}}}
+
+    monkeypatch.setattr(cli, "run_comparison", fake_run)
+    cli.main(
+        [
+            *map(str, saved_paths),
+            "--eval-recipe",
+            str(evaluation_recipe),
+            "--exp-dir",
+            str(tmp_path),
+            "--train-seeds",
+            "42,200",
+            "--output-dir",
+            str(tmp_path / "results"),
+        ]
+    )
+    (plan,) = captured
+    assert plan["seeds"] == [1200, 1201]
+    assert plan["episodes_per_seed"] == 2
+    assert plan["episodes_per_matchup"] == 4
+    assert len(plan["matchups"]) == 8
+    assert {model["steps"] for model in plan["models"]} == {49_968_000}
+    assert all(model["recipe"]["train"]["total_timesteps"] == 50_000_000 for model in plan["models"])
+    assert all(yaml.safe_load(path.read_text())["train"]["total_timesteps"] == 50_000_000 for path in saved_paths)
