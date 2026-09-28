@@ -176,6 +176,11 @@ def test_execute_paired_summary_and_resume_without_replaying(tmp_path, recipes, 
     assert len(calls) == 8
     assert all(call[2]["cia"]["enabled"] and call[2]["topology_sampling"] == "exhaustive" for call in calls)
     reward = summary["overall"]["metrics"]["reward"]
+    assert summary["overall"]["metrics"]["reward_default"] == reward
+    assert "reward_shaping" in summary["overall"]["metrics"]
+    row = json.loads((output / f"{plan['matchups'][0]['id']}.json").read_text())
+    assert row["per_episode_reward_default"] == row["blue_returns"]
+    assert row["mean_reward_shaping"] < row["mean_reward_default"]
     assert reward["baseline"] == -150
     assert reward["diverse"] == -100
     assert reward["delta"] == 50
@@ -275,3 +280,19 @@ def test_saved_50m_models_use_current_eval_recipe_without_changing_training_budg
     assert {model["steps"] for model in plan["models"]} == {49_968_000}
     assert all(model["recipe"]["train"]["total_timesteps"] == 50_000_000 for model in plan["models"])
     assert all(yaml.safe_load(path.read_text())["train"]["total_timesteps"] == 50_000_000 for path in saved_paths)
+
+
+def test_paired_scores_use_saved_training_weights_despite_eval_override(tmp_path, recipes, monkeypatch):
+    for recipe in recipes:
+        recipe["train"]["reward"] = {"name": "default", "lambda": 2, "weights": {"C": 1, "I": 0, "A": 0}}
+    populate(tmp_path, recipes)
+    override = copy.deepcopy(recipes[0])
+    override["train"]["reward"]["lambda"] = 999
+    plan = comparison.build_plan(*recipes, tmp_path, seeds=(1000,), eval_recipe=override)
+    original_project = comparison.project_eval
+    monkeypatch.setattr(comparison, "project_eval", lambda r, **kwargs: original_project(r))
+    output = tmp_path / "comparison"
+    comparison.run_comparison(plan, output, evaluate_fn=lambda *args, **kwargs: fake_result(plan, {}, -10))
+    row = json.loads((output / f"{plan['matchups'][0]['id']}.json").read_text())
+    assert row["reward_config"]["lambda"] == 2
+    assert row["mean_reward_shaping"] == -1010

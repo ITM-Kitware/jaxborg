@@ -88,6 +88,13 @@ class _TinyBlueEnv:
         dones["__all__"] = done
         zero = jnp.zeros((), dtype=jnp.float32)
         info = {
+            "reward_default": reward,
+            "reward_shaping": reward - 10.0,
+            "reward_selected": reward,
+            "reward_cia": jnp.float32(-10.0),
+            "reward_cia_c": jnp.float32(-10.0),
+            "reward_cia_i": zero,
+            "reward_cia_a": zero,
             "reward_ria": reward,
             "reward_lwf": zero,
             "reward_asf": zero,
@@ -204,6 +211,8 @@ def test_feedforward_path_is_untouched_by_the_recurrent_plumbing(tiny_blue):
 
     assert _changed(before, after.params)
     assert np.isfinite(float(metric["total_loss"]))
+    assert float(metric["reward_default"]) == pytest.approx(float(metric["raw_rollout_return"]))
+    assert float(metric["reward_shaping"] - metric["reward_default"]) == pytest.approx(-40)
 
 
 def test_standard_train_rejects_diversified_bank_smaller_than_parallel_batch(tiny_blue):

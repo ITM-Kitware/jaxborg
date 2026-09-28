@@ -12,6 +12,7 @@ from flax import struct
 from flax.training.train_state import TrainState
 
 from jaxborg.policies import make_jax_policy, policy_from_arch
+from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 from scripts.train.algorithms import ippo_jax_joint as joint
 
 
@@ -78,6 +79,15 @@ class _TinyJointEnv:
         dones = {**dict.fromkeys(self.blue_agents + self.red_agents, done), "__all__": done}
         zero = jnp.array(0.0, dtype=jnp.float32)
         infos = {
+            "reward_default": blue_reward,
+            "reward_shaping": blue_reward,
+            "reward_selected": blue_reward,
+            "red_reward_selected": -blue_reward,
+            "reward_cia": zero,
+            "reward_cia_c": zero,
+            "reward_cia_i": zero,
+            "reward_cia_a": zero,
+            "cia_valid": jnp.array(True),
             "reward_ria": blue_reward,
             "reward_lwf": zero,
             "reward_asf": zero,
@@ -97,7 +107,7 @@ def _config() -> dict:
         "TOTAL_TIMESTEPS": 2,
         "NUM_MINIBATCHES": 1,
         "UPDATE_EPOCHS": 1,
-        "TRAIN_VARIANT": object(),
+        "TRAIN_VARIANT": CC4_STOCK,
         "TOPOLOGY_MODE": "generative",
         "TRAINING_MODE": True,
         "LR": 1e-2,
@@ -336,6 +346,9 @@ def test_joint_metrics_expose_reward_components_and_absolute_game_counters(tiny_
     """
     _, _, metrics = _one_joint_update(tiny_joint, ("blue", "red"))
 
+    for team in joint.TEAMS:
+        assert metrics[team]["reward_default"] == metrics[team]["raw_rollout_return"]
+        assert metrics[team]["reward_shaping"] == metrics[team]["raw_rollout_return"]
     for counter in joint.GAME_COUNTERS:
         assert counter in metrics["game"]
         assert float(metrics["game"][counter]) >= 0.0
@@ -858,3 +871,45 @@ def test_enhanced_obs_joint_update(architecture, monkeypatch):
     for team in joint.TEAMS:
         assert _tree_changed(before[team], states[team].params)
         assert np.isfinite(float(metrics[team]["total_loss"]))
+
+
+@pytest.mark.parametrize("red_mode", ["zero_sum", "damage"])
+@pytest.mark.parametrize("normalize", [False, True])
+def test_joint_training_uses_selected_shaping_and_reports_both(tiny_joint, monkeypatch, red_mode, normalize):
+    from dataclasses import replace
+
+    from jaxborg.reward_config import RewardConfig
+
+    original = _TinyJointEnv.step
+
+    def shaped_step(self, key, state, actions):
+        obs, state, rewards, dones, info = original(self, key, state, actions)
+        default = info["reward_default"] - 3.0
+        shaped = default - 10.0
+        red = -shaped if red_mode == "zero_sum" else -(info["reward_ria"] - 10.0)
+        info.update(
+            reward_default=default,
+            reward_shaping=shaped,
+            reward_selected=shaped,
+            red_reward_selected=red,
+            reward_cia=jnp.float32(-10),
+            reward_cia_c=jnp.float32(-10),
+            action_cost=jnp.float32(-1),
+            reward_asf=jnp.float32(-2),
+        )
+        return obs, state, {"blue_0": shaped, "red_0": red}, dones, info
+
+    monkeypatch.setattr(_TinyJointEnv, "step", shaped_step)
+    for cfg in tiny_joint[1].values():
+        cfg["TRAIN_VARIANT"] = replace(CC4_STOCK, red_reward=red_mode)
+        cfg["REWARD_CONFIG"] = RewardConfig("shaping", 1, (1, 0, 0))
+        cfg["NORM_REWARDS"] = normalize
+    _, _, metrics = _one_joint_update(tiny_joint, ("blue", "red"))
+    blue, red = metrics["blue"], metrics["red"]
+    assert float(blue["reward_shaping"] - blue["reward_default"]) == pytest.approx(-20)
+    assert float(blue["raw_rollout_return"]) == pytest.approx(float(blue["reward_shaping"]))
+    assert float(red["raw_rollout_return"]) == pytest.approx(float(red["reward_shaping"]))
+    expected_sum = 0 if red_mode == "zero_sum" else -6
+    assert float(blue["raw_rollout_return"] + red["raw_rollout_return"]) == pytest.approx(expected_sum)
+    if normalize:
+        assert float(blue["mean_rollout_return"]) != pytest.approx(float(blue["raw_rollout_return"]))

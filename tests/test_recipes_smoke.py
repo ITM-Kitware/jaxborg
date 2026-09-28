@@ -78,6 +78,10 @@ def test_jax_projection(recipe):
 
 
 def test_cleanrl_projection(recipe):
+    if recipe.get("train", {}).get("reward", {}).get("name") == "shaping":
+        with pytest.raises(ValueError, match="JAX backend"):
+            project_cleanrl(recipe)
+        return
     cfg = project_cleanrl(recipe)
     for key in (
         "lr",
@@ -118,6 +122,10 @@ def test_minibatch_divides_batch(recipe):
     assert (j["NUM_ENVS"] * j["NUM_STEPS"]) % j["NUM_MINIBATCHES"] == 0, (
         "JAX: num_envs * num_steps not divisible by num_minibatches"
     )
+    if recipe.get("train", {}).get("reward", {}).get("name") == "shaping":
+        with pytest.raises(ValueError, match="JAX backend"):
+            project_cleanrl(recipe)
+        return
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
     assert batch % c["num_minibatches"] == 0, (
@@ -197,7 +205,11 @@ def test_rule_knobs_are_off_everywhere_except_the_harness(recipe):
     published CC4 result. They also propagate to evaluation through the
     resolved sidecar, so the mistake would follow the policy out of training.
     """
-    expected = ("damage", "mission_safe") if recipe["meta"]["name"] == RULE_KNOB_HARNESS else ("zero_sum", "cc4")
+    expected = (
+        ("damage", "mission_safe")
+        if recipe["meta"]["name"] in (RULE_KNOB_HARNESS, RULE_KNOB_HARNESS + "_alignment_c")
+        else ("zero_sum", "cc4")
+    )
     for resolved, where in ((train_variant(recipe), "train"), (eval_variant(recipe), "eval")):
         assert (resolved.red_reward, resolved.blue_block_policy) == expected, (
             f"{recipe['meta']['name']} {where} variant is not {expected}"
@@ -205,6 +217,6 @@ def test_rule_knobs_are_off_everywhere_except_the_harness(recipe):
 
 
 def test_the_rule_knob_harness_is_the_only_recipe_declaring_overrides():
-    """Names the one file to look at when a run's rules are in question."""
+    """Only the rule harness and its explicit alignment copy declare overrides."""
     declared = sorted(name for name in RECIPE_NAMES if (load(name).get("train") or {}).get("variant_overrides"))
-    assert declared == [RULE_KNOB_HARNESS]
+    assert declared == [RULE_KNOB_HARNESS, RULE_KNOB_HARNESS + "_alignment_c"]

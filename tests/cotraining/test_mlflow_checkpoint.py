@@ -193,7 +193,9 @@ def test_checkpoint_is_artifacted_evaluated_and_logged_for_both_teams(tmp_path):
         (
             {
                 "eval.checkpoint.blue.mean_reward": -20.0,
+                "eval.checkpoint.blue.mean_reward_default": -20.0,
                 "eval.checkpoint.red.mean_reward": 20.0,
+                "eval.checkpoint.red.mean_reward_default": 20.0,
             },
             120,
         )
@@ -224,7 +226,11 @@ def test_checkpoint_metrics_include_only_trained_teams(tmp_path, teams, expected
     )
 
     assert means == expected
-    expected_metrics = {f"eval.checkpoint.{team}.mean_reward": reward for team, reward in expected.items()}
+    expected_metrics = {
+        f"eval.checkpoint.{team}.{name}": reward
+        for team, reward in expected.items()
+        for name in ("mean_reward", "mean_reward_default")
+    }
     assert fake_mlflow.metrics == [(expected_metrics, 200)]
 
 
@@ -259,6 +265,12 @@ def test_checkpoint_structured_result_logs_global_cia_at_checkpoint_step(tmp_pat
         env_steps=300,
         evaluate_fn=lambda _: SimpleNamespace(
             mean_rewards={"blue": 2.0, "red": -2.0},
+            reward_scores={
+                "mean_reward_default": 2.0,
+                "std_reward_default": 1.0,
+                "mean_reward_shaping": -10.0,
+                "std_reward_shaping": 3.0,
+            },
             cia_summary={
                 "n": 3,
                 "c": {"mean": -1.0, "std": 1.5},
@@ -273,7 +285,12 @@ def test_checkpoint_structured_result_logs_global_cia_at_checkpoint_step(tmp_pat
         (
             {
                 "eval.checkpoint.blue.mean_reward": 2.0,
+                "eval.checkpoint.blue.mean_reward_default": 2.0,
+                "eval.checkpoint.blue.std_reward_default": 1.0,
+                "eval.checkpoint.blue.mean_reward_shaping": -10.0,
+                "eval.checkpoint.blue.std_reward_shaping": 3.0,
                 "eval.checkpoint.red.mean_reward": -2.0,
+                "eval.checkpoint.red.mean_reward_default": -2.0,
                 "eval.checkpoint.cia.c.mean": -1.0,
                 "eval.checkpoint.cia.c.std": 1.5,
                 "eval.checkpoint.cia.c.mean_minus_std": -2.5,

@@ -72,10 +72,12 @@ def test_joint_checkpoint_eval_uses_one_bundle_and_ten_episodes(
         seed=12,
     )
 
-    assert rewards == {
+    assert rewards.mean_rewards == {
         "blue": pytest.approx(4.0),
         "red": pytest.approx(-4.0),
     }
+    assert rewards.reward_scores["mean_reward_default"] == 4.0
+    assert rewards.reward_scores["per_episode_reward_shaping"] == [None, None, None]
     assert len(calls) == 1
     blue_model, red_model, kwargs = calls[0]
     assert blue_model == checkpoint
@@ -197,7 +199,7 @@ def test_learned_matchup_returns_only_trained_team(monkeypatch, teams, expected)
             backend="jax",
             recipe=recipe,
             seed=1,
-        )
+        ).mean_rewards
         == expected
     )
 
@@ -221,7 +223,7 @@ def test_legacy_jax_checkpoint_eval_dispatches_to_cyborg_contract(monkeypatch):
         seed=5,
     )
 
-    assert rewards == {"blue": pytest.approx(5.0)}
+    assert rewards.mean_rewards == {"blue": pytest.approx(5.0)}
     assert len(calls) == 1
     called_checkpoint, kwargs = calls[0]
     assert called_checkpoint == checkpoint
@@ -252,7 +254,7 @@ def test_legacy_cyborg_checkpoint_eval_dispatches_to_cyborg_runner(monkeypatch):
         seed=9,
     )
 
-    assert rewards == {"blue": pytest.approx(-4.0)}
+    assert rewards.mean_rewards == {"blue": pytest.approx(-4.0)}
     assert len(calls) == 1
     called_checkpoint, kwargs = calls[0]
     assert called_checkpoint == checkpoint
@@ -350,3 +352,24 @@ def test_cyborg_checkpoint_eval_restores_python_numpy_and_torch_rng(monkeypatch)
         random.setstate(original_python)
         np.random.set_state(original_numpy)
         torch.random.set_rng_state(original_torch)
+
+
+@pytest.mark.parametrize("backend", ["jax", "cyborg"])
+def test_omitted_reward_still_requests_paired_checkpoint_scores(monkeypatch, backend):
+    from jaxborg.evaluation import cyborg_runner, jax_runner
+    from jaxborg.evaluation.reward_reporting import reward_fields
+
+    recipe = _recipe()
+
+    def evaluate(*args, reward_report, **kwargs):
+        reward_report.update(reward_fields([-2.0], [{"c": -1, "i": 0, "a": 0}], steps=10, recipe=recipe))
+        result = ([-2.0], [1])
+        return (*result, recipe) if backend == "jax" else result
+
+    module = jax_runner if backend == "jax" else cyborg_runner
+    function = "evaluate_jax_on_cyborg" if backend == "jax" else "evaluate_on_cyborg"
+    monkeypatch.setattr(module, function, evaluate)
+    result = evaluate_training_checkpoint("model", backend=backend, recipe=recipe, seed=1)
+    assert result.mean_rewards == {"blue": -2.0}
+    assert result.reward_scores["mean_reward_shaping"] == -12.0
+    assert result.reward_scores["reward_config"]["name"] == "default"

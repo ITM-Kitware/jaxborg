@@ -30,17 +30,24 @@ def test_invalid_seed_requests_fail_before_rollout(seeds, episodes):
 
 @pytest.mark.parametrize("backend", ["jax", "cyborg"])
 @pytest.mark.parametrize("workers", [1, 2])
-def test_native_runners_use_the_same_episode_seeds_across_worker_counts(monkeypatch, backend, workers):
+@pytest.mark.parametrize("paired", [False, True])
+def test_native_runners_use_the_same_episode_seeds_across_worker_counts(monkeypatch, backend, workers, paired):
     module = jax_runner if backend == "jax" else cyborg_runner
     created = []
-    recipe = {"cage4_enhanced_obs": False}
+    recipe = {"cage4_enhanced_obs": False, "train": {"reward": {"weights": {"C": 1, "I": 0, "A": 0}}}}
+
+    def rollout(*args, ep_seed, cia_out=None, **kwargs):
+        if cia_out is not None:
+            cia_out.append([-10, -20, -30])
+        return float(ep_seed)
+
     if backend == "jax":
         monkeypatch.setattr(module, "load_jax_checkpoint", lambda _: (None, None, recipe))
-        monkeypatch.setattr(module, "run_episode", lambda *args, ep_seed, **kwargs: float(ep_seed))
+        monkeypatch.setattr(module, "run_episode", rollout)
         evaluate = module.evaluate_jax_on_cyborg
     else:
         monkeypatch.setattr(module, "load_torch_policy", lambda _: (None, recipe))
-        monkeypatch.setattr(module, "rollout_episode", lambda *args, ep_seed, **kwargs: float(ep_seed))
+        monkeypatch.setattr(module, "rollout_episode", rollout)
         evaluate = module.evaluate_on_cyborg
     monkeypatch.setattr(module, "make_cyborg_env", lambda variant, seed, **kwargs: created.append(seed))
 
@@ -58,6 +65,7 @@ def test_native_runners_use_the_same_episode_seeds_across_worker_counts(monkeypa
             return map(function, args)
 
     monkeypatch.setattr(module.concurrent.futures, "ProcessPoolExecutor", InlinePool)
+    report = {}
     rewards, seeds, *_ = evaluate(
         "model.safetensors" if backend == "jax" else "model.pt",
         variant=CC4_STOCK,
@@ -65,7 +73,11 @@ def test_native_runners_use_the_same_episode_seeds_across_worker_counts(monkeypa
         episodes_per_seed=6,
         workers=workers,
         progress=False,
+        **({"reward_report": report} if paired else {}),
     )
+    if paired:
+        assert report["per_episode_reward_default"] == rewards
+        assert report["per_episode_reward_shaping"] == [r - 10 for r in rewards]
     assert seeds == list(range(6000, 6012))
     assert rewards == [float(seed) for seed in seeds]
     assert sorted(created) == seeds

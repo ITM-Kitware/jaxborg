@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
@@ -20,6 +19,7 @@ from jaxborg.evaluation.jax_scripted_red import (
 from jaxborg.evaluation.matchup_runner import LoadedMatchupPolicy
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK, CIA_RESILIENCE
 from jaxborg.scenarios.cc4.topology_roles import ROLE_AUTH, ROLE_DB, ROLE_NONE, ROLE_WEB
+from jaxborg.state import create_initial_state
 
 _CIA_CONFIG = {
     "enabled": True,
@@ -51,7 +51,7 @@ class _OneStepEnv:
         assert topology_index == 4
         obs = {agent: jnp.zeros(2, dtype=jnp.float32) for agent in self.agents}
         state = _FakeState(
-            state=SimpleNamespace(blue_pending_ticks=jnp.zeros(len(self.agents), dtype=jnp.int32)),
+            state=create_initial_state().replace(blue_pending_ticks=jnp.zeros(len(self.agents), dtype=jnp.int32)),
             const=object(),
             extras={"host_resilience_role": jnp.zeros_like(jnp.asarray(self.expected_roles))},
         )
@@ -59,6 +59,7 @@ class _OneStepEnv:
 
     def get_avail_actions(self, state):
         roles = np.asarray(state.extras["host_resilience_role"])
+        np.testing.assert_array_equal(state.state.host_resilience_role, roles)
         self.mask_role_maps.append(roles)
         return {agent: jnp.ones(3, dtype=jnp.bool_) for agent in self.agents}
 
@@ -186,6 +187,7 @@ def test_sweep_supports_both_blue_bundle_backends_and_reuses_cases(
         deterministic=True,
         recipe={
             "meta": {"name": "co-train"},
+            "train": {"reward": {"name": "shaping", "lambda": 2, "weights": {"C": 1, "I": 0, "A": 0}}},
             "run": {"train_run_id": "run-1"},
             "eval": {"cia": _CIA_CONFIG},
         },
@@ -201,6 +203,13 @@ def test_sweep_supports_both_blue_bundle_backends_and_reuses_cases(
     assert [call[3] for call in episode_calls] == ["map-a", "map-b", "map-a", "map-b"]
     assert all(call[-1] is True for call in episode_calls)
     for row in rows:
+        assert row["per_episode_reward_default"] == [1, 2]
+        assert row["per_episode_reward_shaping"] == [
+            1 - 20 * CIA_RESILIENCE.num_steps,
+            2 - 40 * CIA_RESILIENCE.num_steps,
+        ]
+        assert row["mean_reward_default"] == row["mean_reward"]
+        assert row["mean_reward_shaping"] == 1.5 - 30 * CIA_RESILIENCE.num_steps
         assert row["eval_env"] == "jax_fsm"
         assert row["blue_busy_action_masking"] is True
         assert row["topology_sampling"] == "exhaustive"
@@ -253,6 +262,10 @@ def test_mlflow_metrics_preserve_rewards_and_add_cia(monkeypatch):
             "eval_name": "scripted-reds",
             "eval_red": "cia_a",
             "mean_reward": 4.0,
+            "mean_reward_default": 4.0,
+            "mean_reward_shaping": -6.0,
+            "std_reward_default": 0.5,
+            "std_reward_shaping": 1.5,
             "std_reward": 0.5,
             "n_episodes": 8,
             "train_run_id": "run-123",
@@ -276,6 +289,10 @@ def test_mlflow_metrics_preserve_rewards_and_add_cia(monkeypatch):
         "run_id": "run-123",
         "metrics": {
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.mean_reward": 4.0,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.mean_reward_default": 4.0,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.mean_reward_shaping": -6.0,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.std_reward_default": 0.5,
+            "eval.after_training.scripted-reds.scripted_red.cia_a.blue.std_reward_shaping": 1.5,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.std_reward": 0.5,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.episodes": 8.0,
             "eval.after_training.scripted-reds.scripted_red.cia_a.blue.cia.c.mean": -1.0,

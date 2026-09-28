@@ -37,6 +37,8 @@ class _SimState:
     ot_service_stopped: jnp.ndarray
     host_service_reliability: jnp.ndarray
     host_decoy_reliability: jnp.ndarray
+    host_resilience_role: jnp.ndarray
+    blue_pending_ticks: jnp.ndarray
 
 
 @struct.dataclass
@@ -57,6 +59,8 @@ def _initial_sim_state() -> _SimState:
         ot_service_stopped=jnp.zeros(3, dtype=jnp.bool_),
         host_service_reliability=jnp.full((3, 1), 100, dtype=jnp.int32),
         host_decoy_reliability=jnp.full((3, 1), 100, dtype=jnp.int32),
+        host_resilience_role=jnp.zeros(3, dtype=jnp.int32),
+        blue_pending_ticks=jnp.zeros(1, dtype=jnp.int32),
     )
 
 
@@ -441,3 +445,26 @@ def test_matchup_context_reuses_compilation_but_uses_each_checkpoints_weights(mo
     assert len(constructed) == 1
     assert len(loaded) == 3
     assert new.policies["blue"]["path"].endswith("new-blue")
+
+
+def test_matchup_fixed_roles_are_installed_in_reward_state():
+    from jaxborg.evaluation.cia.jax_resilience import score_resilience_state
+
+    class RewardRoleEnv(_JointScanEnv):
+        def step_env(self, key, state, actions):
+            obs, state, rewards, dones, info = super().step_env(key, state, actions)
+            reward = rewards["blue_0"] + score_resilience_state(state.state, state.state.host_resilience_role).sum()
+            return obs, state, {"blue_0": reward, "red_0": -reward}, dones, info
+
+    module = _PolicyModule()
+    reward, cia = run_matchup_episode(
+        {team: _jax_policy(team, module) for team in ("blue", "red")},
+        variant=replace(CIA_RESILIENCE, num_steps=2),
+        seed=7,
+        deterministic=True,
+        env=RewardRoleEnv(),
+        topology_index=0,
+        host_resilience_role=jnp.array([2, 1, 3]),
+    )
+    assert reward == -37  # Two steps of 1.5 CC4 minus 20 for the impacted DB.
+    assert cia == [-10, 0, -10]
