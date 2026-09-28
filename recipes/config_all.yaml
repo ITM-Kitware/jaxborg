@@ -74,6 +74,13 @@ train:
 
   episode_length: 500  # PPO rollout horizon; it does not change environment termination.
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
+  # Optional CIA payoff; omission preserves the default reward everywhere.
+  # Shaping requires a resilience_roles variant and >=3 op-zone servers.
+  # Both reward values are reported; unavailable CIA scores are null.
+  reward:
+    name: default  # default | shaping
+    lambda: 1.0
+    weights: {C: 1.0, I: 1.0, A: 1.0}
   variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
 
   # The only two rule knobs a recipe may change; everything else is a property
