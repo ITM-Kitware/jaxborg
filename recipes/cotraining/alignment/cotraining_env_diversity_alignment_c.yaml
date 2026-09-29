@@ -97,9 +97,9 @@ eval:
     deterministic: false
 
   # Built-in post-training history suites, scheduled before after_training.
-  # play_priors is a cheaper alternative to cross_play. With the identical
-  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
-  # Leave it disabled to avoid replaying those same games in a second suite.
+  # play_priors is a cheaper alternative to cross_play. It evaluates
+  # adjacent checkpoints rather than the full cross-play matrix below.
+  # Leave it disabled; cross_play is the enabled historical-opponent suite.
   play_priors:
     enabled: false
     seeds: 1000-1002
@@ -107,8 +107,8 @@ eval:
     deterministic: false
     max_checkpoints: 3
 
-  # First, middle and exact final bundle: every Blue vs every Red in this run.
-  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
+  # Ten checkpoints spread across training, including the exact final bundle.
+  # Ten checkpoints -> 100 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
@@ -116,7 +116,7 @@ eval:
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 3
+    max_checkpoints: 10
     include_final: true  # Final Blue is evaluated against the sampled prior Reds.
     required: true
 

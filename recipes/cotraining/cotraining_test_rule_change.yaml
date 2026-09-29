@@ -95,7 +95,7 @@ eval:
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 3
+    max_checkpoints: 10
     required: false
 
   # Exact final-model checks, following the built-in history suites above.
