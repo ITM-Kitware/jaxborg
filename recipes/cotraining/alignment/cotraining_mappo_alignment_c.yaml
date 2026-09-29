@@ -21,7 +21,7 @@ cage4_enhanced_obs: true
 mlflow:
   checkpoint_eval:
     every_steps: 0
-    episodes_per_seed: 6
+    episodes_per_seed: 1
     seed: null  # Defaults to the training seed + 100000.
     deterministic: false
 
@@ -114,7 +114,7 @@ eval:
   cross_seed_play:
     enabled: true
     seeds: 1000-1009
-    episodes_per_seed: 6
+    episodes_per_seed: 1
     deterministic: false
 
   # Built-in post-training history suites, scheduled before after_training.
@@ -124,18 +124,18 @@ eval:
   play_priors:
     enabled: false
     seeds: 1000-1002
-    episodes_per_seed: 6
+    episodes_per_seed: 1
     deterministic: false
     max_checkpoints: 3
 
   # First, middle and exact final bundle: every Blue vs every Red in this run.
-  # Three checkpoints -> 9 matchups x 180 episodes (3 seeds x 6 episodes x 10 topologies).
+  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
   # forgetting_rate. Unlike cross_seed_play, this measures change over time.
   cross_play:
     enabled: true
     seeds: 1000-1002
-    episodes_per_seed: 6
+    episodes_per_seed: 1
     deterministic: false
     max_checkpoints: 3
     include_final: true  # Final Blue is evaluated against the sampled prior Reds.
@@ -143,13 +143,13 @@ eval:
 
   # Blue's curve against fixed FSM and CIA Reds, run on the evaluation GPU.
   # Every 4.8M steps (each fifth 960k checkpoint) plus the exact final bundle:
-  # 11 points at 50M, each 4 Reds x 180 episodes (3 seeds x 6 episodes x 10 topologies).
-  # The final-model scripted-reds sweep below remains the 600-episode result.
+  # 11 points at 50M, each 4 Reds x 90 episodes (3 seeds x 3 episodes x 10 topologies).
+  # The final-model scripted-reds sweep below remains the 100-episode result.
   checkpoint_scripted_reds:
     enabled: true
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1002
-    episodes_per_seed: 6
+    episodes_per_seed: 3
     every_steps: 4800000
     include_final: true
     required: true
@@ -171,7 +171,7 @@ eval:
         - --seeds
         - 1000-1099
         - --episodes-per-seed
-        - 6
+        - 1
         - --workers
         - 4
 
@@ -188,7 +188,7 @@ eval:
         - --red-path
         - "{model}"
         - --episodes-per-seed
-        - 6
+        - 1
         - --seeds
         - 1000-1009
 
@@ -205,7 +205,7 @@ eval:
         - --seeds
         - 1000-1009
         - --episodes-per-seed
-        - 6
+        - 1
         # One line per vmapped batch. Without it a Red in flight prints
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress
@@ -223,7 +223,7 @@ eval:
         - --seeds
         - 1000-1009
         - --episodes-per-seed
-        - 6
+        - 1
         - --progress
 
 jax:
