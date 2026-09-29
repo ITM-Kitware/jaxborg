@@ -127,6 +127,8 @@ def test_cotraining_recipes_disable_checkpoint_curves_but_keep_final_scripted_re
         scripted = next(e for e in recipe["eval"]["after_training"] if e["name"] == "scripted-reds")
         assert scripted["args"][scripted["args"].index("--seeds") + 1] == "1000-1009"
         assert settings.seeds == tuple(range(1000, 1010))
+        assert settings.episodes_per_seed == 3
+        assert scripted["args"][scripted["args"].index("--episodes-per-seed") + 1] == 1
 
 
 def test_malformed_cia_summary_does_not_lose_the_reward_metrics(tmp_path, monkeypatch, capsys):
