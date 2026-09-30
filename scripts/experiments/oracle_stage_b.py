@@ -10,6 +10,11 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT), str(ROOT / "src")]
 if not os.environ.get("SLURM_JOB_ID"):
     os.environ.setdefault("JAX_PLATFORMS", "cpu")
+# Imported environment modules create JAX constants before checkpoint verification.
+# Keep this long-lived coordinator from reserving a large GPU pool. Restore the
+# caller's allocation setting for each real training/evaluation subprocess.
+CHILD_PREALLOCATE = os.environ.get("XLA_PYTHON_CLIENT_PREALLOCATE")
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "false"
 
 import argparse
 import copy
@@ -257,7 +262,12 @@ def load_protocol(path):
 def command(*arguments):
     argv = [sys.executable, *map(str, arguments)]
     print("Executing: " + shlex.join(argv), flush=True)
-    subprocess.run(argv, cwd=ROOT, check=True)
+    environment = dict(os.environ)
+    if CHILD_PREALLOCATE is None:
+        environment.pop("XLA_PYTHON_CLIENT_PREALLOCATE", None)
+    else:
+        environment["XLA_PYTHON_CLIENT_PREALLOCATE"] = CHILD_PREALLOCATE
+    subprocess.run(argv, cwd=ROOT, env=environment, check=True)
 
 
 def evaluate(manifest, candidate, split, seeds, *, recipe=None, reuse=False):

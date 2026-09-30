@@ -15,6 +15,19 @@ from jaxborg.tracking import Run, file_hash, git, input_artifact, resolve_artifa
 REPO = Path(__file__).resolve().parents[2]
 
 
+def test_controller_does_not_pass_its_gpu_pool_setting_to_children(monkeypatch):
+    monkeypatch.setenv("JAX_PLATFORMS", "cpu")
+    monkeypatch.delenv("XLA_PYTHON_CLIENT_PREALLOCATE", raising=False)
+    spec = importlib.util.spec_from_file_location("pilot_controller", REPO / "scripts/experiments/oracle_stage_b.py")
+    pilot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pilot)
+    assert pilot.os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] == "false"
+    observed = []
+    monkeypatch.setattr(pilot.subprocess, "run", lambda *args, **kwargs: observed.append(kwargs["env"]))
+    pilot.command("scripts/eval/eval_matchup.py")
+    assert "XLA_PYTHON_CLIENT_PREALLOCATE" not in observed[0]
+
+
 def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch):
     monkeypatch.setenv("JAXBORG_EXP_DIR", str(tmp_path / "experiments"))
     monkeypatch.setenv("JAXBORG_ALLOW_DIRTY", "1")
