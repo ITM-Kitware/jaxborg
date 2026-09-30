@@ -1,13 +1,36 @@
 # Run storage and reproducibility
 
-Set `JAXBORG_EXP_DIR` explicitly to an absolute directory outside every checkout.
-For example, use a new `/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/logging-smoke/`
-root for development; do not point smoke commands at the historical shared archive.
+Set `JAXBORG_EXP_DIR` explicitly to one persistent shared project directory outside
+every checkout for production runs. Reuse that root across studies, methods,
+seeds and launch checkouts; do not create a new database for each study or run.
+Set `JAXBORG_MLFLOW_EXPERIMENT` to the study's name to group its runs in MLflow,
+and use `JAXBORG_CAMPAIGN` for a particular campaign. Model, evaluation and log
+files have distinct run IDs beneath the common artifact store.
+
+Development smoke checks and tests use separate disposable roots. Existing
+databases and active jobs retain their original root until a separately verified
+import or migration preserves their run IDs and artifact references. Changing
+`JAXBORG_EXP_DIR` does not merge databases or make another store's runs visible.
 The SQLite database is `<root>/mlflow.db`. New MLflow experiments explicitly use
 `<root>/artifacts`; actual run locations come from MLflow's artifact URI. Repeated
 names/recipes/seeds create different run IDs. An incompatible old experiment's
 artifact location produces an error: choose a new root or explicitly set
 `JAXBORG_MLFLOW_EXPERIMENT`. Existing locations are never rewritten.
+
+For this workspace, the persistent project store is
+`/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/shared/`. Load its reusable
+`store.env` before future launches and set the study name:
+
+```bash
+source /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/shared/store.env
+export JAXBORG_MLFLOW_EXPERIMENT=study-name
+export JAXBORG_CAMPAIGN=campaign-name
+```
+
+The already running Stage B pilot keeps `jaxborg-exp/oracle-stage-b/`; its database
+has not been moved, merged or redirected. Its reports identify that original
+store. The shared store is ready for future launches, without changing the
+running pilot's pinned source or isolated environment.
 
 Each run starts before outputs are written. Its `manifest.json` contains schema,
 source, configuration, environment, inputs, status and verified output identities.
@@ -43,7 +66,8 @@ launch_sha=$(git rev-parse HEAD)
 git worktree add --detach /absolute/launch-checkout "$launch_sha"
 cd /absolute/launch-checkout
 uv sync --frozen --extra cuda     # use --extra cpu for a CPU smoke
-export JAXBORG_EXP_DIR=/absolute/new-experiment-root
+export JAXBORG_EXP_DIR=/absolute/shared-project-root
+export JAXBORG_MLFLOW_EXPERIMENT=study-name
 ./scripts/train/run.sh jax default 42
 # Or submit a batch job (recipe plus ordinary trainer options):
 ./scripts/sbatch/run_ippo.sh default --seed 42
