@@ -19,7 +19,6 @@ Outputs (to `$JAXBORG_EXP_DIR/ippo_cyborg/<tag>/`):
 import argparse
 import copy
 import json
-import os
 import signal
 import sys
 import time
@@ -53,9 +52,10 @@ from jaxborg.recipe import (
     team_recipe,
     training_teams,
 )
+from jaxborg.research_tracking import publish_checkpoint, training_inputs
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.tracking import current_run, experiment_root, serializable, tracked_entrypoint
 
-EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 OBS_DIM = BLUE_OBS_SIZE
@@ -271,12 +271,13 @@ def train_legacy(args, recipe, cfg):
     np.random.seed(args.seed)
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_cyborg" / tag
-    save_dir.mkdir(parents=True, exist_ok=True)
+    run = current_run()
+    save_dir = run.path("checkpoints/model.placeholder").parent
 
     variant: GameVariant = cfg["TRAIN_VARIANT"]
     print(f"Creating {cfg['num_envs']} parallel CybORG environments (variant={variant.name})...", flush=True)
     envs = ParallelEnvs(cfg["num_envs"], variant=variant)
+    run.on_close(envs.close)
 
     agent = make_torch_policy(
         recipe["arch"]["name"],
@@ -300,11 +301,11 @@ def train_legacy(args, recipe, cfg):
     actor_active_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS), dtype=torch.bool)
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
-    run = start_run(recipe, backend="cyborg", seed=args.seed)
     train_run_id = run.info.run_id
 
-    metrics_path = save_dir / "metrics.jsonl"
+    metrics_path = run.path("logs/metrics.jsonl")
     metrics_file = open(metrics_path, "w")
+    run.on_close(metrics_file.close)
 
     all_obs, all_info = envs.reset()
     episode_rewards = np.zeros(num_envs)
@@ -539,6 +540,8 @@ def train_legacy(args, recipe, cfg):
             )
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+            run.update(actual_steps=total_steps)
 
             try:
                 safe = {k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
@@ -586,6 +589,7 @@ def train_legacy(args, recipe, cfg):
                     train_run_id=train_run_id,
                     extra={"train_teams": ["blue"], "model": f"checkpoint_{total_steps}.pt"},
                 )
+                publish_checkpoint(run, checkpoint_path, sidecar_path, total_steps)
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {total_steps:,}; "
@@ -606,12 +610,10 @@ def train_legacy(args, recipe, cfg):
                             ),
                         )
                     finally:
-                        if not periodic_checkpoint:
-                            checkpoint_path.unlink(missing_ok=True)
-                            sidecar_path.unlink(missing_ok=True)
+                        pass  # Completed checkpoints remain published.
 
-    except KeyboardInterrupt:
-        print("\nInterrupted", flush=True)
+    except BaseException:
+        raise
 
     elapsed = time.perf_counter() - start_time
     sps = total_steps / elapsed if elapsed > 0 else 0
@@ -629,7 +631,9 @@ def train_legacy(args, recipe, cfg):
             "var": reward_scaler.var,
             "count": reward_scaler.count,
         }
-    torch.save(ckpt, save_dir / f"checkpoint_{tag}.pt")
+    training_state = save_dir / f"training_state_{tag}.pt"
+    torch.save(ckpt, training_state)
+    run.publish(training_state, f"checkpoints/{training_state.name}", step=total_steps)
     model_path = save_torch_bundle(
         save_dir / f"model_{tag}.pt",
         {
@@ -651,7 +655,7 @@ def train_legacy(args, recipe, cfg):
             "train_run_id": train_run_id,
         },
     )
-    write_sidecar(
+    sidecar = write_sidecar(
         save_dir / f"recipe_{tag}.yaml",
         recipe,
         seed=args.seed,
@@ -667,17 +671,16 @@ def train_legacy(args, recipe, cfg):
             finals["final_episode_reward_mean"] = final_reward
         finals["total_episodes"] = len(completed_rewards)
         mlflow.log_metrics(finals)
-        mlflow.log_artifact(str(metrics_path))
-        mlflow.log_artifact(str(save_dir / f"recipe_{tag}.yaml"))
-        mlflow.log_artifact(str(model_path))
-        mlflow.end_run()
+        run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+        publish_checkpoint(run, model_path, sidecar, total_steps)
     except Exception as e:
-        print(f"MLflow finalize warning: {e}")
+        raise RuntimeError("MLflow final publication failed") from e
 
     metrics_file.close()
-    envs.close()
     print(f"\nDone in {elapsed:.1f}s ({elapsed / 3600:.1f}h). Final ep reward: {final_reward:.1f}")
-    print(f"Saved to: {save_dir}")
+    print(f"Saved to: {run.info.artifact_uri}")
+    model_path = run.root / f"checkpoints/model_{tag}.pt"
+    run.finish()
     if total_steps >= cfg["total_timesteps"]:
         from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
@@ -1024,7 +1027,7 @@ def _make_joint_runtimes(
     num_steps: int,
 ) -> dict[str, TorchTeamRuntime]:
     trainable_teams = set(training_teams(recipe))
-    opponent_paths = resolve_train_opponents(recipe, backend="cyborg", exp_dir=EXP_DIR)
+    opponent_paths = resolve_train_opponents(recipe, backend="cyborg", exp_dir=experiment_root())
     runtimes: dict[str, TorchTeamRuntime] = {}
     for team in ("blue", "red"):
         spec = TEAM_SPECS[team]
@@ -1101,8 +1104,8 @@ def train_joint(args, recipe, cfg):
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_cyborg" / tag
-    save_dir.mkdir(parents=True, exist_ok=True)
+    run = current_run()
+    save_dir = run.path("checkpoints/model.placeholder").parent
 
     num_envs = cfg["num_envs"]
     num_steps = cfg["rollout_length"]
@@ -1116,12 +1119,13 @@ def train_joint(args, recipe, cfg):
     )
     trainable = {team: runtime for team, runtime in runtimes.items() if runtime.trainable}
     envs = ParallelJointEnvs(num_envs, args.seed, variant)
+    run.on_close(envs.close)
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
-    run = start_run(recipe, backend="cyborg", seed=args.seed)
     train_run_id = run.info.run_id
-    metrics_path = save_dir / "metrics.jsonl"
+    metrics_path = run.path("logs/metrics.jsonl")
     metrics_file = open(metrics_path, "w")
+    run.on_close(metrics_file.close)
     all_obs, all_info = envs.reset()
     episode_lengths = np.zeros(num_envs, dtype=int)
     completed_lengths: list[int] = []
@@ -1212,6 +1216,8 @@ def train_joint(args, recipe, cfg):
                 add_team_metrics(row, team, team_metrics)
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+            run.update(actual_steps=total_steps)
             try:
                 mlflow.log_metrics(
                     {key: float(value) for key, value in row.items() if isinstance(value, (int, float))},
@@ -1254,6 +1260,7 @@ def train_joint(args, recipe, cfg):
                         "model": checkpoint_path.name,
                     },
                 )
+                publish_checkpoint(run, checkpoint_path, sidecar_path, total_steps)
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {total_steps:,}; "
@@ -1274,11 +1281,9 @@ def train_joint(args, recipe, cfg):
                             ),
                         )
                     finally:
-                        if not periodic_checkpoint:
-                            checkpoint_path.unlink(missing_ok=True)
-                            sidecar_path.unlink(missing_ok=True)
-    except KeyboardInterrupt:
-        print("\nInterrupted", flush=True)
+                        pass  # Completed checkpoints remain published.
+    except BaseException:
+        raise
     finally:
         envs.close()
 
@@ -1314,7 +1319,9 @@ def train_joint(args, recipe, cfg):
             if runtime.reward_scaler is not None
         },
     }
-    torch.save(full_checkpoint, save_dir / f"checkpoint_{tag}.pt")
+    training_state = save_dir / f"training_state_{tag}.pt"
+    torch.save(full_checkpoint, training_state)
+    run.publish(training_state, f"checkpoints/{training_state.name}", step=total_steps)
     sidecar = write_sidecar(
         save_dir / f"recipe_{tag}.yaml",
         recipe,
@@ -1326,13 +1333,14 @@ def train_joint(args, recipe, cfg):
     )
     try:
         mlflow.log_metrics({"final_wall_time_sec": elapsed, "final_steps_per_second": total_steps / max(elapsed, 1e-8)})
-        for artifact in (metrics_path, sidecar, model_path):
-            mlflow.log_artifact(str(artifact))
-        mlflow.end_run()
+        run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+        publish_checkpoint(run, model_path, sidecar, total_steps)
     except Exception as exc:
-        print(f"MLflow finalize warning: {exc}")
+        raise RuntimeError("MLflow final publication failed") from exc
     metrics_file.close()
     print(f"\nDone in {elapsed:.1f}s. Saved joint bundle to: {model_path}")
+    model_path = run.root / f"checkpoints/model_{tag}.pt"
+    run.finish()
     if total_steps >= cfg["total_timesteps"]:
         from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
@@ -1342,6 +1350,17 @@ def train_joint(args, recipe, cfg):
 def train(args, recipe, cfg):
     """Preserve the legacy Blue-vs-FSM path unless a learned matchup is requested."""
 
+    opponent_paths = resolve_train_opponents(recipe, backend="cyborg", exp_dir=experiment_root())
+    run = start_run(
+        recipe,
+        backend="cyborg",
+        seed=args.seed,
+        effective_config=serializable(cfg),
+        inputs=training_inputs(recipe, cfg, opponent_paths),
+    )
+    run.update(requested_steps=cfg["total_timesteps"], trainable_teams=list(training_teams(recipe)))
+    for i, team in enumerate(opponent_paths):
+        recipe["train"]["opponents"][team] = {"path": str(run.input_path(i))}
     teams = training_teams(recipe)
     opponents = recipe.get("train", {}).get("opponents") or {}
     if teams == ("blue",) and "red" not in opponents:
@@ -1349,6 +1368,7 @@ def train(args, recipe, cfg):
     return train_joint(args, recipe, cfg)
 
 
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="IPPO on CybORG, recipe-driven")
     parser.add_argument("--recipe", required=True)
@@ -1356,6 +1376,7 @@ def main():
     parser.add_argument("--tag", type=str, default=None)
     parser.add_argument("--total-timesteps", type=int, default=None)
     parser.add_argument("--num-envs", type=int, default=None)
+    parser.add_argument("--checkpoint-every-updates", type=int, default=None)
     parser.add_argument(
         "--num-rollouts-per-update",
         type=int,
@@ -1372,6 +1393,8 @@ def main():
     if args.num_rollouts_per_update is not None:
         recipe.setdefault("cleanrl", {})["num_rollouts_per_update"] = int(args.num_rollouts_per_update)
 
+    if args.checkpoint_every_updates is not None:
+        recipe.setdefault("cleanrl", {})["checkpoint_every_updates"] = args.checkpoint_every_updates
     cfg = project_cleanrl(recipe)
     if args.num_envs is not None and args.num_rollouts_per_update is None:
         per_rollout = cfg["num_envs"] * cfg["rollout_length"]

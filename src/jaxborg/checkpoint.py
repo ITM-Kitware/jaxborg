@@ -254,7 +254,7 @@ def load_jax_params(path: str | Path) -> tuple[dict, int]:
     evaluation and transfer scripts can read both legacy single-policy files
     and versioned bundles unchanged.
     """
-    path = Path(path)
+    path = _model_path(path)
     with safe_open(str(path), framework="flax") as f:
         meta = f.metadata() or {}
     if _JAX_BUNDLE_METADATA_KEY in meta:
@@ -292,7 +292,7 @@ def save_jax_bundle(
 
 def load_jax_bundle(path: str | Path) -> ModelBundle:
     """Load a versioned Flax bundle, or adapt a legacy file as Blue-only."""
-    path = Path(path)
+    path = _model_path(path)
     flat = load_file(str(path))
     with safe_open(str(path), framework="flax") as f:
         metadata = f.metadata() or {}
@@ -455,7 +455,7 @@ def load_torch_policy(
 
 def read_sidecar(model_path: str | Path) -> dict[str, Any]:
     """Load `recipe_<tag>.{yaml|yml}` adjacent to `model_path`."""
-    model_path = Path(model_path)
+    model_path = _model_path(model_path)
     name = model_path.name
     if name.startswith("model_"):
         stem = name[len("model_") :]
@@ -470,3 +470,11 @@ def read_sidecar(model_path: str | Path) -> dict[str, Any]:
         if c.exists():
             return yaml.safe_load(c.read_text())
     raise FileNotFoundError(f"No recipe sidecar found next to {model_path} (looked for {[str(c) for c in candidates]})")
+
+
+def _model_path(path: str | Path) -> Path:
+    if str(path).startswith("runs:/"):
+        from jaxborg.tracking import resolve_artifact
+
+        return resolve_artifact(path)
+    return Path(path)

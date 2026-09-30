@@ -51,6 +51,7 @@ from jaxborg.tracking import (
     resolve_artifact,
     tracked_entrypoint,
 )
+
 _EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -149,22 +150,26 @@ def main():
         assigned_devices()
     seeds = _parse_seeds(args.seeds)
     eval_name = _normalise_eval_name(args.name)
-    if not seeds or args.episodes < 1:
+    if not seeds or args.episodes_per_seed < 1:
         parser.error("At least one seed and one episode per seed are required")
     from jaxborg.recipe import eval_variant
 
     recipe = read_sidecar(model_path)
+    if args.eval_red is not None:
+        recipe.setdefault("eval", {})["red"] = args.eval_red
     variant = eval_variant(recipe)
+    from jaxborg.evaluation.episode_seeds import EPISODE_SEED_SCHEME, expand_episode_seeds
+
     inputs = [input_artifact(args.model, role="Blue policy")]
     effective = {
         "variant": variant,
         "seeds": seeds,
-        "episodes_per_seed": args.episodes,
+        "episodes_per_seed": args.episodes_per_seed,
         "deterministic": args.deterministic,
         "workers": args.workers,
         "eval_env": "cyborg",
-        "episode_seed_spec": "base_seed + replica for each seed, replica in range(episodes_per_seed)",
-        "episode_seeds": [seed + ep for seed in seeds for ep in range(args.episodes)],
+        "episode_seed_spec": EPISODE_SEED_SCHEME,
+        "episode_seeds": expand_episode_seeds(seeds, args.episodes_per_seed),
         "policy_rng_contract": (
             "CybORG torch sampling uses process RNG; no per-episode torch seed is assigned by this runner"
             if trained_backend == "cyborg"

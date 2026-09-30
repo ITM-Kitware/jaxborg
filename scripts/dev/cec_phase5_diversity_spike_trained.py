@@ -27,8 +27,7 @@ from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 from jaxborg.parity.fsm_red_env import make_fsm_red_env
 
 DEFAULT_CKPT = (
-    "/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/ippo_jax/"
-    "default_seed42/model_default_seed42.safetensors"
+    "/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/ippo_jax/default_seed42/model_default_seed42.safetensors"
 )
 
 N_EPISODES = int(os.environ.get("CEC_SPIKE_EPISODES", "128"))
@@ -64,16 +63,14 @@ def make_rollout_fn(env, policy, params):
             return (new_st, new_obs, new_mask, total + r["blue_0"]), None
 
         step_keys = jax.random.split(rollout_key, N_STEPS)
-        (_, _, _, total), _ = jax.lax.scan(
-            step_fn, (state0, obs0, mask0, jnp.float32(0.0)), step_keys
-        )
+        (_, _, _, total), _ = jax.lax.scan(step_fn, (state0, obs0, mask0, jnp.float32(0.0)), step_keys)
         return total
 
     return rollout
 
 
 def main() -> int:
-    print(f"=== CEC Phase 5 Test 1 — diversity spike (TRAINED policy) ===")
+    print("=== CEC Phase 5 Test 1 — diversity spike (TRAINED policy) ===")
     print(f"Checkpoint: {CKPT}")
     print(f"N_EPISODES={N_EPISODES}, N_STEPS={N_STEPS}")
     print(f"JAX backend: {jax.default_backend()} ({jax.devices()})")
@@ -126,7 +123,9 @@ def main() -> int:
 
     THRESHOLD = 1.5
     if ratio >= THRESHOLD:
-        print(f"VERDICT: PASS  (ratio {ratio:.2f} >= {THRESHOLD})  — env-diverse has real spread under a trained policy.")
+        print(
+            f"VERDICT: PASS  (ratio {ratio:.2f} >= {THRESHOLD})  — env-diverse has real spread under a trained policy."
+        )
         return 0
     print(f"VERDICT: FAIL  (ratio {ratio:.2f} < {THRESHOLD})  — even a trained policy doesn't see meaningful spread.")
     return 1

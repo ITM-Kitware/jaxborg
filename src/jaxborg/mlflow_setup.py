@@ -18,9 +18,6 @@ metrics that MLflow renders as time-series curves.
 
 from __future__ import annotations
 
-import fcntl
-import os
-import subprocess
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from numbers import Real
@@ -187,8 +184,10 @@ class MlflowCheckpointEvaluator:
         return trained_means
 
 
-def start_run(recipe, *, backend, seed, effective_config=None, extra_tags=None, extra_params=None, name=None):
-    run = Run(recipe, backend=backend, seed=seed, config=effective_config, tags=extra_tags, name=name)
+def start_run(
+    recipe, *, backend, seed, effective_config=None, extra_tags=None, extra_params=None, name=None, inputs=()
+):
+    run = Run(recipe, backend=backend, seed=seed, config=effective_config, tags=extra_tags, name=name, inputs=inputs)
     import mlflow
 
     params = {f"recipe.{k}": str(v)[:500] for k, v in flatten_for_logging(recipe).items() if v is not None}

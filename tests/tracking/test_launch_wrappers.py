@@ -19,6 +19,7 @@ def launch_checkout(tmp_path):
     shutil.copytree(REPO / "src", repo / "src", ignore=shutil.ignore_patterns("__pycache__"))
     shutil.copytree(REPO / "recipes", repo / "recipes")
     for name in (
+        "scripts/jax_env.sh",
         "scripts/train/run.sh",
         "scripts/train/run_seeds.sh",
         "scripts/train/allocated.sh",

@@ -338,6 +338,10 @@ def resolve_model_ref(
     raw_ref: dict[str, Any] = {"path": str(ref)} if isinstance(ref, (str, Path)) else ref
 
     if raw_ref.get("path"):
+        if str(raw_ref["path"]).startswith("runs:/"):
+            from jaxborg.tracking import resolve_artifact
+
+            return resolve_artifact(raw_ref["path"])
         path = Path(raw_ref["path"]).expanduser()
         if not path.is_absolute():
             source_path = (recipe or {}).get("__source_path__") or (recipe or {}).get("meta", {}).get("source_path")

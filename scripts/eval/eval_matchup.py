@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import argparse
 import copy
-import json
 import os
 import re
 import subprocess
@@ -27,14 +26,25 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+import mlflow
+
 from jaxborg.evaluation.cia.config import CIAEvalSettings
 from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
+from jaxborg.evaluation.episode_seeds import EPISODE_SEED_SCHEME, expand_episode_seeds
 from jaxborg.evaluation.matchup_runner import evaluate_matchup
-from jaxborg.mlflow_setup import attach_eval_metrics
 from jaxborg.recipe import eval_variant, load, project_eval, resolve_eval_policies
 from jaxborg.topology_banks import validate_eval_topology_override
+from jaxborg.tracking import (
+    Run,
+    assigned_devices,
+    evaluation_fingerprint,
+    experiment_root,
+    export_artifact,
+    find_reusable,
+    input_artifact,
+    tracked_entrypoint,
+)
 
-EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 _EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
@@ -77,7 +87,8 @@ def _policy_override(path: str | None, experiment: str | None):
     return None
 
 
-def main() -> None:
+@tracked_entrypoint
+def main() -> str:
     parser = argparse.ArgumentParser(description="Evaluate learned Blue vs learned Red in JAX CC4")
     parser.add_argument("--recipe", required=True, help="Recipe name or YAML path; its eval.variant is authoritative")
     parser.add_argument("--policy-backend", choices=("jax", "cyborg"), default=None)
@@ -108,11 +119,14 @@ def main() -> None:
         help="Bank assignment (default: recipe value or exhaustive)",
     )
     parser.add_argument("--output", default=None)
+    parser.add_argument("--reuse", action="store_true", help="Reuse a fingerprint-validated completed evaluation")
+    parser.add_argument("--supersedes-eval-run-id", default=None)
+    parser.add_argument("--bug-reference", default=None)
     parser.add_argument(
         "--mlflow-source-team",
         choices=("blue", "red"),
         default=None,
-        help="Attach metrics only to this team's source run (default: both source runs)",
+        help="Legacy source-team label; evaluations now own their metrics independently",
     )
     parser.add_argument(
         "--name",
@@ -121,6 +135,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    devices = assigned_devices()
     recipe = copy.deepcopy(load(args.recipe))
     eval_cfg = recipe.setdefault("eval", {})
     if args.policy_backend:
@@ -139,7 +154,7 @@ def main() -> None:
     missing = {"blue", "red"} - set(policies_cfg)
     if missing:
         raise ValueError(f"learned matchup requires both eval policies; missing {sorted(missing)}")
-    model_paths = resolve_eval_policies(recipe, exp_dir=EXP_DIR)
+    model_paths = resolve_eval_policies(recipe, exp_dir=experiment_root())
     variant = eval_variant(recipe)
     seeds = _parse_seeds(args.seeds)
     eval_name = _normalise_eval_name(args.name)
@@ -150,6 +165,55 @@ def main() -> None:
         topology_paths = list(project_eval(recipe, materialize_topologies=True)["TOPOLOGY_BANK"]) or None
     topology_sampling = args.topology_sampling or eval_cfg.get("topology_sampling", "exhaustive")
     cia_config = CIAEvalSettings.from_recipe(recipe).as_dict()
+
+    expanded = expand_episode_seeds(seeds, args.episodes_per_seed)
+    inputs = [
+        input_artifact(
+            policies_cfg[team].get("path", model_paths[team])
+            if isinstance(policies_cfg[team], dict)
+            else policies_cfg[team],
+            role=f"{team} policy",
+        )
+        for team in ("blue", "red")
+    ]
+    inputs.extend(input_artifact(path, role="evaluation topology") for path in topology_paths or ())
+    effective = {
+        "variant": variant,
+        "seeds": seeds,
+        "episodes_per_seed": args.episodes_per_seed,
+        "episode_seed_scheme": EPISODE_SEED_SCHEME,
+        "episode_seeds": expanded,
+        "topology_paths": topology_paths,
+        "topology_sampling": topology_sampling,
+        "deterministic": args.deterministic,
+        "cia": cia_config,
+        "policy_rng_contract": "PRNGKey(episode_seed); split for reset, per-step policies and environment",
+        "policy_backend": backend,
+        "accelerator": devices,
+    }
+    fingerprint = evaluation_fingerprint(inputs, recipe, effective)
+    if args.reuse and not args.supersedes_eval_run_id:
+        reused = find_reusable(fingerprint, ["evaluations/result.json"])
+        if reused:
+            reference = f"runs:/{reused}/evaluations/result.json"
+            if args.output:
+                export_artifact(reference, args.output)
+            print(f"Reused evaluation run: {reused}\nCanonical: {reference}", flush=True)
+            return reused
+    run = Run(
+        recipe,
+        backend="jax",
+        kind="evaluation",
+        name=eval_name,
+        config=effective,
+        inputs=inputs,
+        fingerprint=fingerprint,
+        supersedes=args.supersedes_eval_run_id,
+        bug_reference=args.bug_reference,
+    )
+    model_paths = {team: run.input_path(i) for i, team in enumerate(("blue", "red"))}
+    if topology_paths:
+        topology_paths = [run.input_path(i + 2) for i in range(len(topology_paths))]
 
     print(
         f"JAX matchup: backend={backend} variant={variant.name} seeds={seeds} episodes/seed={args.episodes_per_seed}",
@@ -185,7 +249,7 @@ def main() -> None:
     blue_std = stdev(result.blue_returns) if len(result.blue_returns) > 1 else 0.0
     red_mean = -blue_mean
     red_std = blue_std
-    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{time.time_ns() % 1_000_000_000:09d}_{seeds[0]}"
+    eval_id = run.run_id
     row = {
         "eval_id": eval_id,
         "eval_name": eval_name,
@@ -236,40 +300,22 @@ def main() -> None:
             }
         )
 
-    name = f"_{eval_name}" if eval_name else ""
-    output = (
-        Path(args.output).expanduser()
-        if args.output
-        else EXP_DIR / "eval" / f"{row['recipe_name']}_matchup{name}_{eval_id}.jsonl"
-    )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps(row, indent=2) + "\n")
+    reference = run.write_json("evaluations/result.json", row)
+    metrics = {
+        "eval.matchup.blue_mean": blue_mean,
+        "eval.matchup.blue_std": blue_std,
+        "eval.matchup.red_mean": red_mean,
+        "eval.matchup.episodes": len(result.blue_returns),
+    }
+    if cia_summary is not None:
+        metrics.update(cia_mlflow_metrics("eval.matchup.cia", cia_summary))
+    mlflow.log_metrics(metrics)
+    if args.output:
+        run.export("evaluations/result.json", args.output)
     print(f"\nBlue: {blue_mean:.2f} ± {blue_std:.2f}", flush=True)
     print(f"Red:  {red_mean:.2f} ± {red_std:.2f}", flush=True)
-    print(f"wrote: {output}", flush=True)
-
-    # Cross-seed play attaches only to Blue's run: each run also supplies Red
-    # to another game, whose result must not overwrite its own Blue metrics.
-    run_ids = {
-        source["train_run_id"]
-        for team, source in result.policies.items()
-        if source.get("train_run_id") and (args.mlflow_source_team is None or team == args.mlflow_source_team)
-    }
-    for run_id in run_ids:
-        try:
-            prefix = f"eval.after_training.{eval_name}.jax_matchup" if eval_name else "eval.jax_matchup"
-            metrics = {
-                f"{prefix}.blue_mean": blue_mean,
-                f"{prefix}.blue_std": blue_std,
-                f"{prefix}.red_mean": red_mean,
-                f"{prefix}.red_std": red_std,
-                f"{prefix}.episodes": len(result.blue_returns),
-            }
-            if cia_summary is not None:
-                metrics.update(cia_mlflow_metrics(f"{prefix}.cia", cia_summary))
-            attach_eval_metrics(run_id, metrics)
-        except Exception as exc:
-            print(f"MLflow attach warning for {run_id}: {exc}", flush=True)
+    print(f"Executed evaluation run: {run.run_id}\nCanonical: {reference}", flush=True)
+    return run.run_id
 
 
 if __name__ == "__main__":

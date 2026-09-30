@@ -157,7 +157,7 @@ def test_baseline_callers_own_evaluations(consumer, monkeypatch, backend):
     module = script(f"eval/baselines_{backend}.py")
     monkeypatch.setattr(module, "run_sleep_episode", lambda *args: -1)
     if backend == "jax":
-        monkeypatch.setattr(module, "make_jax_env", lambda *args: None)
+        monkeypatch.setattr(module, "make_jax_env", lambda *args, **kwargs: None)
         module.evaluate("sleep", 42, 2)
     else:
         monkeypatch.setattr(module, "make_env", lambda *args: None)

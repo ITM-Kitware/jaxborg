@@ -215,6 +215,13 @@ def validate_topology_split(recipe: Mapping[str, Any], *, repo_root: Path) -> No
     """Validate topology declarations and reject train/eval leakage."""
     train = recipe.get("train") or {}
     evaluation = recipe.get("eval") or {}
+    allow_training_topologies = evaluation.get("allow_training_topologies", False)
+    if not isinstance(allow_training_topologies, bool):
+        raise ValueError("eval.allow_training_topologies must be a boolean")
+    # A frozen-opponent response measures one explicitly fixed game. Episode
+    # randomness remains held out; its training network is the evaluation target.
+    if allow_training_topologies:
+        return
     train_paths = set(expand_topology_bank(train, scope="train", repo_root=repo_root))
     eval_paths = set(expand_topology_bank(evaluation, scope="eval", repo_root=repo_root))
 
@@ -248,7 +255,10 @@ def validate_eval_topology_override(
     """Reject a CLI evaluation bank that leaks into the recipe's train pool."""
     candidate = {
         "train": recipe.get("train") or {},
-        "eval": {"topology_bank": tuple(topology_paths)},
+        "eval": {
+            "topology_bank": tuple(topology_paths),
+            "allow_training_topologies": (recipe.get("eval") or {}).get("allow_training_topologies", False),
+        },
     }
     validate_topology_split(candidate, repo_root=repo_root)
 

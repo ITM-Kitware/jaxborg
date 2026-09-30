@@ -213,6 +213,12 @@ def game_contract(config):
         "src/jaxborg/constants.py",
         "src/jaxborg/env.py",
         "src/jaxborg/observations.py",
+        "src/jaxborg/blue_observation_contract.py",
+        "src/jaxborg/blue_ioc.py",
+        "src/jaxborg/learned_red.py",
+        "src/jaxborg/joint_env.py",
+        "src/jaxborg/scenarios/cc4/game_variant.py",
+        "src/jaxborg/evaluation/episode_seeds.py",
         "src/jaxborg/actions/encoding.py",
         "src/jaxborg/scenarios/cc4/topology.py",
     )

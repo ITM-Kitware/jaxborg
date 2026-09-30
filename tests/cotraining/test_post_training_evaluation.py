@@ -180,10 +180,7 @@ def test_resume_retries_failed_and_missing_suites_and_preserves_successes(tmp_pa
     script.touch()
     names = ["cross-seed", "cross-play", "checkpoint-reds", "final-reds"]
     recipe = _recipe(
-        [
-            {"name": name, "script": str(script), "args": ["--name", name, "--recipe", "{recipe}"]}
-            for name in names
-        ]
+        [{"name": name, "script": str(script), "args": ["--name", name, "--recipe", "{recipe}"]} for name in names]
     )
     calls = []
 
@@ -223,7 +220,9 @@ def test_resume_retries_failed_and_missing_suites_and_preserves_successes(tmp_pa
     assert calls == []
 
 
-@pytest.mark.parametrize("change", ["recipe", "command", "platform", "model", "running", "failed", "nonzero", "corrupt"])
+@pytest.mark.parametrize(
+    "change", ["recipe", "command", "platform", "model", "running", "failed", "nonzero", "corrupt"]
+)
 def test_resume_does_not_skip_changed_or_unfinished_jobs(tmp_path, monkeypatch, change):
     monkeypatch.setenv("JAX_PLATFORMS", "cuda")
     nonces = iter((1, 2))
