@@ -21,6 +21,7 @@ import subprocess
 import time
 import uuid
 
+import jax
 import numpy as np
 import yaml
 
@@ -321,7 +322,10 @@ def train(manifest, seed, recipe, *, label=None):
     owner = read_manifest(result["run_id"])[0]
     if owner["status"] != "FINISHED":
         raise ValueError("training did not finish")
-    saved = load_jax_bundle(resolve_artifact(result["final_checkpoint"]))
+    # The controller remains alive between GPU subprocesses. Verify weights on
+    # CPU so its JAX allocator does not reserve most of the next child's GPU.
+    with jax.default_device(jax.devices("cpu")[0]):
+        saved = load_jax_bundle(resolve_artifact(result["final_checkpoint"]))
     if parameter_hash(saved.policies["blue"].weights) != manifest["source"]["policies"]["blue"]["parameter_sha256"]:
         raise ValueError("saved Blue is not the original frozen source")
     checks = owner["parameter_checks"]
