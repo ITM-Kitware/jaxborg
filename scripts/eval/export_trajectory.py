@@ -31,9 +31,11 @@ from torch.distributions import Categorical
 
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.evaluation.cyborg_red_dispatch import cyborg_red_class
+from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import resolve_eval_variant
 from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+from jaxborg.tracking import Run, input_artifact, resolve_artifact, tracked_entrypoint
 
 
 def _variant_red_agent_class_name(variant) -> str:
@@ -651,12 +653,13 @@ def load_model(model_path: str) -> PPOAgent:
     return model
 
 
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="Export CybORG CC4 trajectories as JSON for cynex")
     parser.add_argument("--seed", type=int, default=42, help="Starting random seed")
     parser.add_argument("--num-episodes", type=int, default=1, help="Number of episodes to export")
     parser.add_argument("--steps", type=int, default=EPISODE_LENGTH, help="Steps per episode")
-    parser.add_argument("--output-dir", type=str, default=".", help="Output directory for JSON files")
+    parser.add_argument("--output-dir", type=str, default=None, help="Explicit export directory for JSON files")
     parser.add_argument("--model", type=str, default=None, help="Path to trained PPO model .pt file")
     parser.add_argument("--deterministic", action="store_true", help="Use deterministic (argmax) actions")
     parser.add_argument("--tag", type=str, default=None, help="Custom tag for output filename")
@@ -668,12 +671,27 @@ def main():
     )
     args = parser.parse_args()
 
+    original_model = args.model
+    if args.model:
+        args.model = str(resolve_artifact(args.model))
     variant = resolve_eval_variant(recipe_name=args.recipe)
 
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    model = load_model(args.model) if args.model else None
+    run = Run(
+        load_recipe(args.recipe) if args.recipe else {"meta": {"name": args.tag or "trajectory"}},
+        backend="cyborg",
+        kind="trajectory",
+        seed=args.seed,
+        config={
+            **vars(args),
+            "variant": variant,
+            "actual_episode_length": args.steps,
+            "wrapped_policy_num_steps": args.steps + 1,
+            "episode_seeds": list(range(args.seed, args.seed + args.num_episodes)),
+        },
+        inputs=[input_artifact(original_model, role="Blue policy")] if original_model else [],
+    )
+    output_dir = run.path("trajectories/placeholder").parent
+    model = load_model(str(run.input_path(0))) if args.model else None
 
     # Determine filename tag
     if args.tag:
@@ -697,6 +715,10 @@ def main():
         with open(filepath, "w") as f:
             json.dump(trajectory, f, indent=2, default=str)
 
+        reference = run.publish(filepath, f"trajectories/{filename}")
+        if args.output_dir:
+            run.export(f"trajectories/{filename}", Path(args.output_dir) / filename)
+        print(f"  Canonical: {reference}")
         size_kb = filepath.stat().st_size / 1024
         print(f"  Saved: {filepath} ({size_kb:.0f} KB)")
 

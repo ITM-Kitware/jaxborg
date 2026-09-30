@@ -25,6 +25,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from jaxborg.evaluation.cia import get_cia_scorer
 from jaxborg.recipe import load, project_eval
+from jaxborg.tracking import Run, input_artifact, resolve_directory, tracked_entrypoint
 
 
 def _stats(xs):
@@ -33,6 +34,7 @@ def _stats(xs):
     return mean(xs), (stdev(xs) if len(xs) > 1 else 0.0)
 
 
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="Score CC4 trajectory files with CIA + resilience")
     parser.add_argument("traj_dir", help="Directory containing *.jsonl trajectories")
@@ -45,15 +47,23 @@ def main():
     eval_cfg = project_eval(load(args.recipe)) if args.recipe is not None else {}
     scorer = get_cia_scorer(eval_cfg)
 
-    traj_dir = Path(args.traj_dir)
+    traj_dir = resolve_directory(args.traj_dir)
     files = sorted(traj_dir.glob(args.glob))
     if not files:
         print(f"no files matching {args.glob} in {traj_dir}", file=sys.stderr)
         sys.exit(1)
 
+    recipe = load(args.recipe) if args.recipe else {"meta": {"name": "trajectory-scoring"}}
+    run = Run(
+        recipe,
+        backend="cpu",
+        kind="comparison",
+        config={"scorer": eval_cfg, "glob": args.glob},
+        inputs=[input_artifact(str(p), role="trajectory") for p in files],
+    )
     rows = []
-    for p in files:
-        s = scorer(p)
+    for i, p in enumerate(files):
+        s = scorer(run.input_path(i))
         rows.append(
             {
                 "file": p.name,
@@ -94,29 +104,31 @@ def main():
     for k, v in sorted(impact_total.items(), key=lambda kv: -kv[1]):
         print(f"  {k:35s}  {v}")
 
-    if args.summary_json:
-        out = Path(args.summary_json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(
-            json.dumps(
-                {
-                    "n": len(rows),
-                    "reward_mean": rew_m,
-                    "reward_stdev": rew_s,
-                    "cia_means": {k: _stats([r[k] for r in rows])[0] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
-                    "cia_stdev": {k: _stats([r[k] for r in rows])[1] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
-                    "impact_counts": impact_total,
-                },
-                indent=2,
-            )
-            + "\n"
+    out = run.path("evaluations/summary.json")
+    out.write_text(
+        json.dumps(
+            {
+                "n": len(rows),
+                "reward_mean": rew_m,
+                "reward_stdev": rew_s,
+                "cia_means": {k: _stats([r[k] for r in rows])[0] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
+                "cia_stdev": {k: _stats([r[k] for r in rows])[1] for k in ("C_mean", "I_mean", "A_mean", "R_mean")},
+                "impact_counts": impact_total,
+            },
+            indent=2,
         )
-        print(f"\nwrote summary: {out}")
+        + "\n"
+    )
+    reference = run.publish(out, "evaluations/summary.json")
+    print(f"\nCanonical summary: {reference}")
+    if args.summary_json:
+        run.export("evaluations/summary.json", args.summary_json)
+    out = run.path("evaluations/per_episode.json")
+    out.write_text(json.dumps(rows, indent=2) + "\n")
+    reference = run.publish(out, "evaluations/per_episode.json")
+    print(f"Canonical per-episode: {reference}")
     if args.per_episode_json:
-        out = Path(args.per_episode_json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(rows, indent=2) + "\n")
-        print(f"wrote per-episode: {out}")
+        run.export("evaluations/per_episode.json", args.per_episode_json)
 
 
 if __name__ == "__main__":

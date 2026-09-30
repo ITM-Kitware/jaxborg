@@ -9,7 +9,9 @@ import jax.numpy as jnp
 
 from jaxborg.constants import NUM_BLUE_AGENTS
 from jaxborg.evaluation.jax_env_factory import make_jax_env
+from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import resolve_eval_variant
+from jaxborg.tracking import Run, assigned_devices, input_artifact, resolve_artifact, tracked_entrypoint
 
 EPISODE_LENGTH = 500
 
@@ -46,10 +48,29 @@ def run_random_episode(env, key):
     return total
 
 
+@tracked_entrypoint
 def evaluate(policy, seed, max_eps, recipe_name=None, checkpoint=None):
+    assigned_devices()
+    original_checkpoint = checkpoint
+    if checkpoint:
+        checkpoint = str(resolve_artifact(checkpoint))
     variant = resolve_eval_variant(recipe_name=recipe_name, checkpoint=checkpoint)
     if variant.num_steps != EPISODE_LENGTH:
         variant = replace(variant, num_steps=EPISODE_LENGTH)
+    run = Run(
+        load_recipe(recipe_name) if recipe_name else {"meta": {"name": f"baseline-{policy}"}},
+        backend="jax",
+        kind="evaluation",
+        seed=seed,
+        config={
+            "variant": variant,
+            "policy": policy,
+            "episodes": max_eps,
+            "episode_seeds": list(range(seed or 0, (seed or 0) + max_eps)),
+            "episode_length": EPISODE_LENGTH,
+        },
+        inputs=[input_artifact(original_checkpoint, role="variant sidecar source")] if original_checkpoint else [],
+    )
     env = make_jax_env(variant)
     run_fn = run_sleep_episode if policy == "sleep" else run_random_episode
 
@@ -66,6 +87,18 @@ def evaluate(policy, seed, max_eps, recipe_name=None, checkpoint=None):
         print(f"stdev:     {stdev(episode_rewards):.4f}")
     print(f"min:       {min(episode_rewards):.4f}")
     print(f"max:       {max(episode_rewards):.4f}")
+
+    reference = run.write_json(
+        "evaluations/result.json",
+        {
+            "policy": policy,
+            "per_episode": episode_rewards,
+            "mean": mean(episode_rewards),
+            "seed": seed,
+            "episodes": max_eps,
+        },
+    )
+    print(f"Executed evaluation run: {run.run_id}\nCanonical: {reference}")
 
 
 if __name__ == "__main__":

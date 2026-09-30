@@ -2,9 +2,9 @@
 
 Loads a model + sibling `recipe_<tag>.yaml`, instantiates the right policy
 from `recipe.arch`, and rolls out N episodes per seed against CybORG.
-Writes a standardized result row under `$JAXBORG_EXP_DIR/eval/` and
-attaches eval metrics to the train MLflow run when one is named in the
-sidecar.
+Each independent evaluation owns an MLflow run and a verified result artifact.
+Use --reuse explicitly to reuse a matching complete evaluation; --output exports
+that artifact. Corrected evaluations link back via --supersedes-eval-run-id.
 
 Single entrypoint for both trained backends:
 - `.pt`  → torch state_dict from `algorithms/ippo_cyborg.py` (loaded via
@@ -26,7 +26,6 @@ Usage:
 # ruff: noqa: E402
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -38,10 +37,19 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from jaxborg.checkpoint import read_sidecar
-from jaxborg.mlflow_setup import attach_eval_metrics
+import mlflow
 
-EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
+from jaxborg.checkpoint import read_sidecar
+from jaxborg.tracking import (
+    Run,
+    assigned_devices,
+    evaluation_fingerprint,
+    export_artifact,
+    find_reusable,
+    input_artifact,
+    resolve_artifact,
+    tracked_entrypoint,
+)
 
 
 def _parse_seeds(spec: str) -> list[int]:
@@ -76,6 +84,7 @@ def _detect_trained_backend(model_path: Path) -> str:
     raise ValueError(f"Cannot detect trained backend from suffix: {model_path}")
 
 
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="Evaluate a recipe-trained policy on CybORG")
     parser.add_argument(
@@ -93,14 +102,56 @@ def main():
         help="Parallel rollout workers (1 = single process). Default: cpu_count() - 2.",
     )
     parser.add_argument("--output", type=str, default=None, help="Override result jsonl path")
+    parser.add_argument("--reuse", action="store_true", help="Reuse a fully validated completed evaluation")
+    parser.add_argument("--supersedes-eval-run-id", default=None, help="Original evaluation corrected by this new run")
+    parser.add_argument("--bug-reference", default=None)
     args = parser.parse_args()
 
-    model_path = Path(args.model).resolve()
+    model_path = resolve_artifact(args.model)
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
     trained_backend = _detect_trained_backend(model_path)
+    if trained_backend == "jax":
+        assigned_devices()
     seeds = _parse_seeds(args.seeds)
+    if not seeds or args.episodes < 1:
+        parser.error("At least one seed and one episode per seed are required")
+    from jaxborg.recipe import eval_variant
+
+    recipe = read_sidecar(model_path)
+    variant = eval_variant(recipe)
+    inputs = [input_artifact(args.model, role="Blue policy")]
+    effective = {
+        "variant": variant,
+        "seeds": seeds,
+        "episodes_per_seed": args.episodes,
+        "deterministic": args.deterministic,
+        "workers": args.workers,
+        "eval_env": "cyborg",
+        "episode_seed_spec": "base_seed * episodes_per_seed + replica (runner implementation archived)",
+    }
+    fingerprint = evaluation_fingerprint(inputs, recipe, effective)
+    if args.reuse and args.supersedes_eval_run_id is None:
+        reused = find_reusable(fingerprint, ["evaluations/result.json"])
+        if reused:
+            reference = f"runs:/{reused}/evaluations/result.json"
+            if args.output:
+                export_artifact(reference, args.output)
+            print(f"Reused evaluation run: {reused}\nCanonical: {reference}")
+            return reused
+    run = Run(
+        recipe,
+        backend="cyborg",
+        kind="evaluation",
+        config=effective,
+        inputs=inputs,
+        fingerprint=fingerprint,
+        supersedes=args.supersedes_eval_run_id,
+        bug_reference=args.bug_reference,
+    )
+
+    model_path = run.input_path(0)
 
     if trained_backend == "cyborg":
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
@@ -152,7 +203,7 @@ def main():
     m = mean(rewards)
     s = stdev(rewards) if len(rewards) > 1 else 0.0
 
-    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{seeds[0]}"
+    eval_id = run.run_id
     train_run_id = recipe.get("run", {}).get("train_run_id")
     row = {
         "eval_id": eval_id,
@@ -176,29 +227,13 @@ def main():
         "per_episode_seeds": seed_log,
     }
 
-    out_dir = EXP_DIR / "eval"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    reference = run.write_json("evaluations/result.json", row)
+    mlflow.log_metrics({"eval.cyborg.mean": m, "eval.cyborg.std": s, "eval.cyborg.episodes": len(rewards)})
     if args.output:
-        out_path = Path(args.output)
-    else:
-        out_path = out_dir / f"{row['recipe_name']}_{model_path.stem}_{eval_id}.jsonl"
-    out_path.write_text(json.dumps(row, indent=2) + "\n")
+        run.export("evaluations/result.json", args.output)
     print(f"\nmean: {m:.2f} ± {s:.2f} (n={len(rewards)})", flush=True)
-    print(f"wrote: {out_path}", flush=True)
-
-    if train_run_id:
-        try:
-            attach_eval_metrics(
-                train_run_id,
-                {
-                    "eval.cyborg.mean": m,
-                    "eval.cyborg.std": s,
-                    "eval.cyborg.episodes": len(rewards),
-                },
-            )
-            print(f"attached eval metrics to MLflow run {train_run_id}", flush=True)
-        except Exception as e:
-            print(f"MLflow attach warning: {e}", flush=True)
+    print(f"Executed evaluation run: {run.run_id}\nCanonical: {reference}", flush=True)
+    return run.run_id
 
 
 if __name__ == "__main__":

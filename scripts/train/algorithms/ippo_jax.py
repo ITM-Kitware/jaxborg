@@ -7,11 +7,9 @@ network architecture is selected by `recipe.arch.name` and instantiated via
 Launch:
     uv run python scripts/train/algorithms/ippo_jax.py --recipe singh --seed 42
 
-Outputs (to `$JAXBORG_EXP_DIR/ippo_jax/<tag>/`):
-    metrics.jsonl              (standardized schema, see jaxborg.metrics_schema)
-    recipe_<tag>.yaml          (resolved recipe sidecar)
-    model_<tag>.safetensors    (params, safetensors format)
-    checkpoint_*.safetensors   (periodic full checkpoints)
+Outputs belong to the MLflow run under explicit JAXBORG_EXP_DIR.
+The configured checkpoint cadence is preserved; every completed checkpoint has
+a compatible recipe sidecar, and metrics/logs are published during execution.
 """
 
 # ruff: noqa: E402
@@ -54,6 +52,7 @@ from jaxborg.policies import make_jax_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_jax
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.tracking import assigned_devices, serializable, tracked_entrypoint
 
 
 class Transition(NamedTuple):
@@ -304,9 +303,7 @@ def make_train(config, network):
     return env, init_obs, init_env_state, _init_train_state, _collect_and_update
 
 
-EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
-
-
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="IPPO-FF on JAX, recipe-driven")
     parser.add_argument("--recipe", required=True, help="Recipe name (e.g. 'singh') or path to YAML")
@@ -316,17 +313,28 @@ def main():
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
     args = parser.parse_args()
 
+    devices = assigned_devices()
     recipe = load_recipe(args.recipe)
     config = project_jax(recipe)
     config["SEED"] = args.seed
     if args.total_timesteps is not None:
         config["TOTAL_TIMESTEPS"] = args.total_timesteps
+        recipe["train"]["total_timesteps"] = args.total_timesteps
     if args.num_envs is not None:
         config["NUM_ENVS"] = args.num_envs
+        recipe.setdefault("jax", {})["num_envs"] = args.num_envs
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_jax" / tag
-    save_dir.mkdir(parents=True, exist_ok=True)
+    run = start_run(recipe, backend="jax", seed=args.seed, effective_config=config, name=tag)
+    train_run_id = run.run_id
+    save_dir = run.path("checkpoints/model.placeholder").parent
+    config["TOPOLOGY_GENERATION_SPEC"] = {
+        "factory": "make_train: make_jax_env(training_mode=True), env.reset split(PRNGKey(seed), num_envs)",
+        "training_seed": args.seed,
+        "policy_and_rollout_seed": args.seed + 1,
+        "reset_and_autoreset_implementation": "archived src/jaxborg/parity/fsm_red_env.py",
+    }
+    run.update(effective_config=serializable(config))
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "")
     if cache_dir:
@@ -356,11 +364,16 @@ def main():
     print(f"  arch={recipe['arch']['name']} hidden_dim={config['HIDDEN_DIM']}")
     print("=" * 60, flush=True)
 
-    run = start_run(recipe, backend="jax", seed=args.seed)
-    train_run_id = run.info.run_id
-
     t0 = time.perf_counter()
     env, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config, network)
+    run.update(
+        effective_config=serializable(config),
+        accelerator=devices,
+        policy_contract={"obs_shape": inner_env.observation_space(inner_env.agents[0]).shape, "action_dim": action_dim},
+        requested_steps=config["TOTAL_TIMESTEPS"],
+        trainable_teams=["Blue"],
+        frozen_teams=["scripted Red"],
+    )
     print(f"  env+network setup: {time.perf_counter() - t0:.1f}s", flush=True)
 
     rng = jax.random.PRNGKey(config["SEED"] + 1)
@@ -378,8 +391,9 @@ def main():
 
     num_updates = int(config["NUM_UPDATES"])
     num_steps = int(config["NUM_STEPS"])
-    metrics_path = save_dir / "metrics.jsonl"
+    metrics_path = run.path("logs/metrics.jsonl")
     metrics_file = open(metrics_path, "w")
+    run.on_close(metrics_file.close)
 
     print(f"Starting training ({num_updates} updates)...", flush=True)
     start = time.perf_counter()
@@ -418,6 +432,8 @@ def main():
         )
         metrics_file.write(json.dumps(row) + "\n")
         metrics_file.flush()
+        run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+        run.update(actual_steps=env_steps)
         mlflow.log_metrics(
             {k: v for k, v in row.items() if isinstance(v, (int, float)) and k != "update_idx"},
             step=env_steps,
@@ -435,29 +451,32 @@ def main():
             is_final = update_idx == num_updates - 1
             ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
             save_jax_params(ckpt_path, train_state.params, action_dim=action_dim)
-            if is_final:
-                write_sidecar(
-                    save_dir / f"recipe_{tag}.yaml",
-                    recipe,
-                    seed=args.seed,
-                    total_steps=env_steps,
-                    backend="jax",
-                    train_run_id=train_run_id,
-                )
+            sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+            sidecar_path = save_dir / sidecar_name
+            write_sidecar(
+                sidecar_path,
+                recipe,
+                seed=args.seed,
+                total_steps=env_steps,
+                backend="jax",
+                train_run_id=train_run_id,
+                extra={"effective_config": serializable(config), "policy_team": "Blue"},
+            )
+            run.publish(sidecar_path, f"checkpoints/{sidecar_name}", step=env_steps)
+            reference = run.publish(
+                ckpt_path, f"checkpoints/{ckpt_path.name}", sidecar=f"checkpoints/{sidecar_name}", step=env_steps
+            )
+            ckpt_path.unlink()
+            sidecar_path.unlink()
+            print(f"Checkpoint: {reference}", flush=True)
 
     metrics_file.close()
     elapsed = time.perf_counter() - start
     sps = int(config["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
     final_reward = float(final_metric["raw_rollout_return"]) if final_metric is not None else float("nan")
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
-    mlflow.log_artifact(str(metrics_path))
-    sidecar = save_dir / f"recipe_{tag}.yaml"
-    if sidecar.exists():
-        mlflow.log_artifact(str(sidecar))
-    mlflow.end_run()
-
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Final reward: {final_reward:.1f}")
-    print(f"Saved to: {save_dir}")
+    print(f"Saved to: {run.info.artifact_uri}")
 
 
 if __name__ == "__main__":

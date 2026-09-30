@@ -7,18 +7,15 @@ arch is selected by `recipe.arch.name` and instantiated via
 Launch:
     uv run python scripts/train/algorithms/ippo_cyborg.py --recipe singh --seed 42
 
-Outputs (to `$JAXBORG_EXP_DIR/ippo_cyborg/<tag>/`):
-    metrics.jsonl       (standardized schema)
-    recipe_<tag>.yaml   (resolved recipe sidecar)
-    model_<tag>.pt      (bare state_dict)
-    checkpoint_<tag>.pt (full optimizer + scaler state)
+Outputs belong to the MLflow run under the explicit JAXBORG_EXP_DIR.
+Completed policy checkpoints and matching recipe sidecars are published at
+completed update boundaries; console logs and metrics are retained on failure.
 """
 
 # ruff: noqa: E402
 
 import argparse
 import json
-import os
 import signal
 import sys
 import time
@@ -43,8 +40,8 @@ from jaxborg.policies import make_torch_policy
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_cleanrl
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.tracking import serializable, tracked_entrypoint
 
-EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
 OBS_DIM = BLUE_OBS_SIZE
@@ -162,18 +159,35 @@ class RewardScaler:
         return scaled
 
 
+@tracked_entrypoint
 def train(args, recipe, cfg):
     device = torch.device("cpu")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_cyborg" / tag
-    save_dir.mkdir(parents=True, exist_ok=True)
+    cfg["seed"] = args.seed
+    cfg["topology_generation_spec"] = {
+        "worker_seeds": "Random(env_id), env_id in range(num_envs)",
+        "construction_and_episode_seeds": "successive randrange(2**31); archived env_worker implementation",
+    }
+    cfg["steps_per_update"] = cfg["num_envs"] * cfg["rollout_length"] * cfg["num_rollouts_per_update"]
+    cfg["checkpoint_every_updates"] = args.checkpoint_every_updates
+    run = start_run(recipe, backend="cyborg", seed=args.seed, effective_config=cfg, name=tag)
+    train_run_id = run.run_id
+    save_dir = run.path("checkpoints/model.placeholder").parent
+    run.update(
+        requested_steps=cfg["total_timesteps"],
+        accelerator="cpu",
+        policy_contract={"observation_dim": OBS_DIM, "action_dim": ACT_DIM},
+        trainable_teams=["Blue"],
+        frozen_teams=["scripted Red"],
+    )
 
     variant: GameVariant = cfg["TRAIN_VARIANT"]
     print(f"Creating {cfg['num_envs']} parallel CybORG environments (variant={variant.name})...", flush=True)
     envs = ParallelEnvs(cfg["num_envs"], variant=variant)
+    run.on_close(envs.close)
 
     agent = make_torch_policy(
         recipe["arch"]["name"],
@@ -195,11 +209,9 @@ def train(args, recipe, cfg):
     values_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS))
     masks_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, ACT_DIM))
 
-    run = start_run(recipe, backend="cyborg", seed=args.seed)
-    train_run_id = run.info.run_id
-
-    metrics_path = save_dir / "metrics.jsonl"
+    metrics_path = run.path("logs/metrics.jsonl")
     metrics_file = open(metrics_path, "w")
+    run.on_close(metrics_file.close)
 
     all_obs, all_info = envs.reset()
     episode_rewards = np.zeros(num_envs)
@@ -230,6 +242,29 @@ def train(args, recipe, cfg):
         f"epochs={cfg['num_epochs']} mb={cfg['num_minibatches']}"
     )
     print(f"{'=' * 70}\n", flush=True)
+
+    def save_policy(*, final=False):
+        model_name = f"model_{tag}.pt" if final else f"checkpoint_{total_steps}.pt"
+        recipe_name = f"recipe_{tag}.yaml" if final else f"recipe_checkpoint_{total_steps}.yaml"
+        model_path = save_dir / model_name
+        torch.save(agent.state_dict(), model_path)
+        sidecar = save_dir / recipe_name
+        write_sidecar(
+            sidecar,
+            recipe,
+            seed=args.seed,
+            total_steps=total_steps,
+            backend="cyborg",
+            train_run_id=train_run_id,
+            extra={"effective_config": serializable(cfg), "policy_team": "Blue", "completed_updates": num_updates},
+        )
+        run.publish(sidecar, f"checkpoints/{recipe_name}", step=total_steps)
+        ref = run.publish(
+            model_path, f"checkpoints/{model_name}", sidecar=f"checkpoints/{recipe_name}", step=total_steps
+        )
+        model_path.unlink()
+        sidecar.unlink()
+        print(f"Checkpoint: {ref}", flush=True)
 
     try:
         while total_steps < cfg["total_timesteps"]:
@@ -423,12 +458,13 @@ def train(args, recipe, cfg):
             )
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            run.publish(metrics_path, "logs/metrics.jsonl", mutable=True)
+            run.update(actual_steps=total_steps, completed_updates=num_updates)
+            if num_updates % args.checkpoint_every_updates == 0:
+                save_policy()
 
-            try:
-                safe = {k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
-                mlflow.log_metrics(safe, step=total_steps)
-            except Exception:
-                pass
+            safe = {k: float(v) for k, v in row.items() if isinstance(v, (int, float))}
+            mlflow.log_metrics(safe, step=total_steps)
 
             print(
                 f"  upd {num_updates:4d} | steps {total_steps:>9,} | ep_rew {ep_rew:>8.1f} | "
@@ -437,8 +473,10 @@ def train(args, recipe, cfg):
                 flush=True,
             )
 
-    except KeyboardInterrupt:
-        print("\nInterrupted", flush=True)
+    except BaseException:
+        metrics_file.close()
+        envs.close()
+        raise
 
     elapsed = time.perf_counter() - start_time
     sps = total_steps / elapsed if elapsed > 0 else 0
@@ -456,16 +494,11 @@ def train(args, recipe, cfg):
             "var": reward_scaler.var,
             "count": reward_scaler.count,
         }
-    torch.save(ckpt, save_dir / f"checkpoint_{tag}.pt")
-    torch.save(agent.state_dict(), save_dir / f"model_{tag}.pt")
-    write_sidecar(
-        save_dir / f"recipe_{tag}.yaml",
-        recipe,
-        seed=args.seed,
-        total_steps=total_steps,
-        backend="cyborg",
-        train_run_id=train_run_id,
-    )
+    training_state = save_dir / f"training_state_{tag}.pt"
+    torch.save(ckpt, training_state)
+    run.publish(training_state, f"checkpoints/{training_state.name}", step=total_steps)
+    training_state.unlink()
+    save_policy(final=True)
 
     final_reward = float(np.mean(completed_rewards[-50:])) if completed_rewards else float("nan")
     try:
@@ -474,16 +507,14 @@ def train(args, recipe, cfg):
             finals["final_episode_reward_mean"] = final_reward
         finals["total_episodes"] = len(completed_rewards)
         mlflow.log_metrics(finals)
-        mlflow.log_artifact(str(metrics_path))
-        mlflow.log_artifact(str(save_dir / f"recipe_{tag}.yaml"))
-        mlflow.end_run()
+
     except Exception as e:
-        print(f"MLflow finalize warning: {e}")
+        raise RuntimeError("MLflow final metrics failed") from e
 
     metrics_file.close()
     envs.close()
     print(f"\nDone in {elapsed:.1f}s ({elapsed / 3600:.1f}h). Final ep reward: {final_reward:.1f}")
-    print(f"Saved to: {save_dir}")
+    print(f"Saved to: {run.info.artifact_uri}")
 
 
 def main():
@@ -499,19 +530,34 @@ def main():
         default=None,
         help="Override the buffer_size-derived value (mainly for smoke tests)",
     )
+    parser.add_argument(
+        "--checkpoint-every-updates",
+        type=int,
+        default=None,
+        help="Periodic policy saves at completed updates (default cleanrl.checkpoint_every_updates or 50)",
+    )
     args = parser.parse_args()
 
     recipe = load_recipe(args.recipe)
     cfg = project_cleanrl(recipe)
     if args.total_timesteps is not None:
         cfg["total_timesteps"] = args.total_timesteps
+        recipe["train"]["total_timesteps"] = args.total_timesteps
     if args.num_envs is not None:
         cfg["num_envs"] = args.num_envs
+        recipe.setdefault("cleanrl", {})["num_envs"] = args.num_envs
         per_rollout = cfg["num_envs"] * cfg["rollout_length"]
         cfg["num_rollouts_per_update"] = max(1, (recipe["train"]["buffer_size"] + per_rollout - 1) // per_rollout)
     if args.num_rollouts_per_update is not None:
         cfg["num_rollouts_per_update"] = args.num_rollouts_per_update
+        recipe.setdefault("cleanrl", {})["num_rollouts_per_update"] = args.num_rollouts_per_update
 
+    if args.checkpoint_every_updates is None:
+        args.checkpoint_every_updates = recipe.get("cleanrl", {}).get("checkpoint_every_updates", 50)
+    if args.checkpoint_every_updates < 1:
+        parser.error("--checkpoint-every-updates must be positive")
+    recipe.setdefault("cleanrl", {})["checkpoint_every_updates"] = args.checkpoint_every_updates
+    recipe["cleanrl"]["num_rollouts_per_update"] = cfg["num_rollouts_per_update"]
     train(args, recipe, cfg)
 
 

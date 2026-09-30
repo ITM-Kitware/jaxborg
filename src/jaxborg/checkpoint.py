@@ -1,22 +1,14 @@
 """Checkpoint sidecar — recipe travels with model weights.
 
-Each training run writes:
-
-    $JAXBORG_EXP_DIR/<algo>_<backend>/
-        model_<tag>.pt              (or .safetensors for jax)
-        recipe_<tag>.yaml           ← this module writes it
-        checkpoint_<tag>.pt         (full optimizer state, optional)
-
-`recipe_<tag>.yaml` is the **resolved** recipe: the recipe dict that the
-trainer actually consumed (post CLI overrides), plus a `run` block with
-seed, commit, timestamp, total_steps, and (when known) the MLflow run id.
-
-The eval script reads it back to instantiate the right architecture and to
-attach eval metrics to the same MLflow run.
+Every completed policy checkpoint has an adjacent recipe sidecar with the
+resolved recipe and its producing run ID/step. MLflow storage is authoritative;
+legacy filesystem checkpoint/sidecar pairs remain loadable. Policy weights are
+portable inference artifacts, not complete resumable training state.
 """
 
 from __future__ import annotations
 
+import copy
 import subprocess
 import time
 from pathlib import Path
@@ -66,7 +58,7 @@ def write_sidecar(
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    payload = {k: v for k, v in recipe.items() if not str(k).startswith("__")}
+    payload = copy.deepcopy({k: v for k, v in recipe.items() if not str(k).startswith("__")})
     src = recipe.get("__source_path__")
     if src:
         payload.setdefault("meta", {})["source_path"] = src
@@ -77,13 +69,15 @@ def write_sidecar(
         "backend": backend,
         "git_commit": _git_commit(),
         "git_branch": _git_branch(),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "train_run_id": train_run_id,
     }
     if extra:
         payload["run"].update(extra)
 
-    path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(yaml.safe_dump(payload, sort_keys=False))
+    temporary.replace(path)
     return path
 
 
@@ -92,7 +86,9 @@ def save_jax_params(path: str | Path, params: Any, *, action_dim: int) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     flat = flatten_dict(jax.device_get(params), sep=_FLAX_KEY_SEP)
-    save_file(flat, str(path), metadata={"action_dim": str(int(action_dim))})
+    temporary = path.with_name(path.name + ".tmp")
+    save_file(flat, str(temporary), metadata={"action_dim": str(int(action_dim))})
+    temporary.replace(path)
     return path
 
 

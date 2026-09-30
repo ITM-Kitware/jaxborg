@@ -41,9 +41,11 @@ from export_trajectory import (
 )
 
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env as _factory_make_cyborg_env
+from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import resolve_eval_variant
 from jaxborg.scenarios.cc4.cyborg_resilience_agents import inject_role_map
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+from jaxborg.tracking import Run, assigned_devices, input_artifact, resolve_artifact, tracked_entrypoint
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -417,12 +419,13 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+@tracked_entrypoint
 def main():
     parser = argparse.ArgumentParser(description="Generate cynex V2 trajectory JSON from JAXborg or CybORG policies")
     parser.add_argument("--seed", type=int, default=42, help="Starting random seed")
     parser.add_argument("--num-episodes", type=int, default=2, help="Number of episodes")
     parser.add_argument("--steps", type=int, default=EPISODE_LENGTH, help="Steps per episode")
-    parser.add_argument("--output-dir", type=str, default=".", help="Output directory")
+    parser.add_argument("--output-dir", type=str, default=None, help="Explicit export directory")
     parser.add_argument("--tag", type=str, required=True, help="Filename tag (e.g., jaxborg-g99)")
     parser.add_argument("--deterministic", action="store_true", help="Deterministic (argmax) actions")
     parser.add_argument(
@@ -437,12 +440,35 @@ def main():
     group.add_argument("--model-jax", type=str, help="Path to JAXborg JAX/Flax checkpoint .safetensors file")
 
     args = parser.parse_args()
-    output_dir = Path(args.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
 
+    if args.model_jax:
+        assigned_devices()
+    original_model = args.model_pt or args.model_jax
+    if args.model_pt:
+        args.model_pt = str(resolve_artifact(args.model_pt))
+    if args.model_jax:
+        args.model_jax = str(resolve_artifact(args.model_jax))
     variant = resolve_eval_variant(recipe_name=args.recipe, checkpoint=args.model_jax)
     print(f"Variant: {variant.name} (red_agent={variant.red_agent})")
 
+    run = Run(
+        load_recipe(args.recipe) if args.recipe else {"meta": {"name": args.tag}},
+        backend="jax" if args.model_jax else "cyborg",
+        kind="trajectory",
+        seed=args.seed,
+        config={
+            **vars(args),
+            "variant": variant,
+            "actual_episode_length": args.steps,
+            "episode_seeds": list(range(args.seed, args.seed + args.num_episodes)),
+        },
+        inputs=[input_artifact(original_model, role="Blue policy")],
+    )
+    output_dir = run.path("trajectories/placeholder").parent
+    if args.model_pt:
+        args.model_pt = str(run.input_path(0))
+    else:
+        args.model_jax = str(run.input_path(0))
     # Load the appropriate model
     if args.model_pt:
         torch_model = _load_torch_model(args.model_pt)
@@ -467,6 +493,10 @@ def main():
         with open(filepath, "w") as f:
             json.dump(trajectory, f, indent=2, default=str)
 
+        reference = run.publish(filepath, f"trajectories/{filename}")
+        if args.output_dir:
+            run.export(f"trajectories/{filename}", Path(args.output_dir) / filename)
+        print(f"  Canonical: {reference}")
         size_mb = filepath.stat().st_size / (1024 * 1024)
         cum_reward = trajectory["step_states"][-1]["cumulative_reward"]
         first_blue = list(cum_reward.values())[0]

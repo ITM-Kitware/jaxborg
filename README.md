@@ -164,3 +164,5 @@ uv run python scripts/eval/score_trajectories.py trajs/resilience_seed42 \
 
 ```
 
+
+Experiment storage, pinned launches, independent evaluation and bug investigations: [reproducibility guide](docs/reproducibility.md).

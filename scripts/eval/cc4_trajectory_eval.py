@@ -38,6 +38,7 @@ from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_
 from jaxborg.evaluation.cyborg_runner import load_torch_policy
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+from jaxborg.tracking import Run, input_artifact, resolve_artifact, tracked_entrypoint
 
 NUM_AGENTS = 5
 AGENT_IDS = [f"blue_agent_{i}" for i in range(NUM_AGENTS)]
@@ -172,7 +173,10 @@ def rollout_episode(env, variant, agent, device, deterministic, episode_seed, mo
     return total, steps_run
 
 
+@tracked_entrypoint
 def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_path=None):
+    original_model = model_path
+    model_path = str(resolve_artifact(model_path))
     device = torch.device("cpu")
     agent, _recipe = load_torch_policy(model_path)
 
@@ -185,7 +189,23 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    output_dir = Path(output_dir)
+    export_dir = Path(output_dir)
+    run = Run(
+        _recipe,
+        backend="cyborg",
+        kind="trajectory",
+        seed=seed,
+        config={
+            "variant": variant,
+            "episodes": episodes,
+            "episode_seeds": list(range(seed, seed + episodes)),
+            "deterministic": deterministic,
+            "episode_length": EPISODE_LENGTH,
+        },
+        inputs=[input_artifact(original_model, role="Blue policy")],
+    )
+    model_path = str(run.input_path(0))
+    output_dir = run.path("trajectories/placeholder").parent
     tag = tag or Path(model_path).stem.replace("model_", "")
 
     print(f"variant: {variant.name} (red_agent={variant.red_agent})", flush=True)
@@ -195,6 +215,9 @@ def evaluate(model_path, episodes, seed, deterministic, output_dir, tag, recipe_
         env = make_cyborg_env(variant, ep_seed, wrapper_class=EnterpriseMAE)
         out_path = output_dir / f"{tag}_seed{ep_seed}.jsonl"
         r, n = rollout_episode(env, variant, agent, device, deterministic, ep_seed, model_path, out_path)
+        reference = run.publish(out_path, f"trajectories/{out_path.name}")
+        run.export(f"trajectories/{out_path.name}", export_dir / out_path.name)
+        print(f"Canonical: {reference}")
         rewards.append(r)
         print(f"  ep {ep + 1}/{episodes}: reward={r:+9.1f} steps={n}  → {out_path.name}", flush=True)
 

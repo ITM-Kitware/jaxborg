@@ -1,16 +1,16 @@
 """Evaluate sleep and random baselines on CybORG."""
 
 import argparse
-import json
 from dataclasses import replace
-from pathlib import Path
 from statistics import mean, stdev
 
 import numpy as np
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import resolve_eval_variant
+from jaxborg.tracking import Run, input_artifact, resolve_artifact, tracked_entrypoint
 
 EPISODE_LENGTH = 500
 
@@ -42,10 +42,28 @@ def run_random_episode(env, variant, ep_seed, rng):
     return total
 
 
+@tracked_entrypoint
 def evaluate(policy, seed, max_eps, output_json=None, recipe_name=None, checkpoint=None):
+    original_checkpoint = checkpoint
+    if checkpoint:
+        checkpoint = str(resolve_artifact(checkpoint))
     variant = resolve_eval_variant(recipe_name=recipe_name, checkpoint=checkpoint)
     if variant.num_steps != EPISODE_LENGTH:
         variant = replace(variant, num_steps=EPISODE_LENGTH)
+    run = Run(
+        load_recipe(recipe_name) if recipe_name else {"meta": {"name": f"baseline-{policy}"}},
+        backend="cyborg",
+        kind="evaluation",
+        seed=seed,
+        config={
+            "variant": variant,
+            "policy": policy,
+            "episodes": max_eps,
+            "episode_seeds": list(range(seed or 0, (seed or 0) + max_eps)),
+            "episode_length": EPISODE_LENGTH,
+        },
+        inputs=[input_artifact(original_checkpoint, role="variant sidecar source")] if original_checkpoint else [],
+    )
     base_seed = 0 if seed is None else seed
     rng = np.random.default_rng(base_seed)
     run_fn = run_sleep_episode if policy == "sleep" else run_random_episode
@@ -63,20 +81,19 @@ def evaluate(policy, seed, max_eps, output_json=None, recipe_name=None, checkpoi
     if len(episode_rewards) > 1:
         print(f"stdev:     {stdev(episode_rewards):.4f}")
 
+    payload = {
+        "variant": variant.name,
+        "policy": policy,
+        "seed": seed,
+        "episodes": max_eps,
+        "mean": mean(episode_rewards),
+        "stdev": stdev(episode_rewards) if len(episode_rewards) > 1 else 0.0,
+        "per_episode": [float(x) for x in episode_rewards],
+    }
+    reference = run.write_json("evaluations/result.json", payload)
     if output_json:
-        payload = {
-            "variant": variant.name,
-            "policy": policy,
-            "seed": seed,
-            "episodes": max_eps,
-            "mean": mean(episode_rewards),
-            "stdev": stdev(episode_rewards) if len(episode_rewards) > 1 else 0.0,
-            "per_episode": [float(x) for x in episode_rewards],
-        }
-        out = Path(output_json)
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(payload, indent=2) + "\n")
-        print(f"wrote:     {out}")
+        run.export("evaluations/result.json", output_json)
+    print(f"Executed evaluation run: {run.run_id}\nCanonical: {reference}")
 
 
 if __name__ == "__main__":
