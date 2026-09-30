@@ -10,7 +10,9 @@ RECIPE="$1"
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
     ROOT="$(git rev-parse --show-toplevel)"
     cd "$ROOT"
-    JAXBORG_EXPECTED_SHA="$(git rev-parse HEAD)"
+    if [[ -z "${JAXBORG_EXPECTED_SHA:-}" ]]; then
+        JAXBORG_EXPECTED_SHA="$(git rev-parse HEAD)"
+    fi
     export JAXBORG_EXPECTED_SHA
     JAXBORG_LAUNCH_RECORD="$("$ROOT/.venv/bin/python" -m jaxborg.launch pin)"
     export JAXBORG_LAUNCH_RECORD

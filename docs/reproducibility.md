@@ -70,7 +70,13 @@ Python entrypoints also reject dirty source and a mismatched
 and the dirty label. Production wrappers always require clean source.
 
 The workflow and snapshots support replay of inputs/configuration/code and
-statistical replication. GPU training across different hardware/software is not
+statistical replication. Main policy evaluation retains its existing `base_seed +
+replica` expansion (overlapping base seeds can repeat episode seeds). Its torch
+stochastic evaluator uses process RNG without a per-episode torch seed; this is
+recorded as a replay limitation, not silently changed. Single-worker evaluation
+retains its pre-model-load CPU RNG state; spawned worker sampling states remain
+explicitly unknown. JAX policy sampling uses the first base seed times 100003
+plus the flattened episode index, as in the existing runner. GPU training across different hardware/software is not
 guaranteed bit identical. Portable policy weights do not save the optimizer,
 PRNG, normalization, recurrent/environment state needed for full resume. The
 CybORG final training-state artifact saves some state, but no full resume is

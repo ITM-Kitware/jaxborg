@@ -14,9 +14,15 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "$ROOT"
 PYTHON="$ROOT/.venv/bin/python"
 # Resolve and retain the revision/environment before entering the allocation.
-JAXBORG_EXPECTED_SHA="$(git rev-parse HEAD)"
+if [[ -z "${JAXBORG_EXPECTED_SHA:-}" ]]; then
+    JAXBORG_EXPECTED_SHA="$(git rev-parse HEAD)"
+fi
 export JAXBORG_EXPECTED_SHA
-JAXBORG_LAUNCH_RECORD="$("$PYTHON" -m jaxborg.launch pin)"
+if [[ -z "${JAXBORG_LAUNCH_RECORD:-}" ]]; then
+    JAXBORG_LAUNCH_RECORD="$("$PYTHON" -m jaxborg.launch pin)"
+else
+    "$PYTHON" -m jaxborg.launch verify "$JAXBORG_LAUNCH_RECORD"
+fi
 export JAXBORG_LAUNCH_RECORD
 ALGORITHM="$("$PYTHON" -c 'import sys; from jaxborg.recipe import load; print(load(sys.argv[1])["algorithm"])' "$RECIPE")"
 SCRIPT_BACKEND="${BACKEND/cleanrl/cyborg}"

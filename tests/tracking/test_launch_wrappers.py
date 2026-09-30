@@ -105,3 +105,32 @@ def test_interactive_gpu_preflight_is_inside_srun(launch_checkout, tmp_path):
     assert "--gres=gpu:1" in args
     assert any(a.endswith("/scripts/train/allocated.sh") for a in args)
     assert (Path(env["JAXBORG_EXP_DIR"]) / "launches").is_dir()
+
+
+def test_wrong_expected_sha_stops_batch_submission(launch_checkout, tmp_path):
+    repo, bins, env = launch_checkout
+    marker = tmp_path / "submitted"
+    sbatch = bins / "sbatch"
+    sbatch.write_text(f'#!/usr/bin/env bash\ntouch "{marker}"\n')
+    sbatch.chmod(0o755)
+    env["JAXBORG_EXPECTED_SHA"] = "0" * 40
+    result = subprocess.run(
+        ["scripts/sbatch/run_ippo.sh", "default"], cwd=repo, env=env, capture_output=True, text=True
+    )
+    assert result.returncode != 0 and "Wrong launch SHA" in result.stderr
+    assert not marker.exists()
+
+
+def test_seed_launches_share_submission_identity(launch_checkout, tmp_path):
+    repo, bins, env = launch_checkout
+    log = tmp_path / "seeds.jsonl"
+    srun = bins / "srun"
+    srun.write_text(
+        f"#!{sys.executable}\nimport json, os\n"
+        f'with open({str(log)!r},"a") as f: f.write(json.dumps({{"sha":os.environ["JAXBORG_EXPECTED_SHA"],'
+        '"record":os.environ["JAXBORG_LAUNCH_RECORD"]})+"\\n")\n'
+    )
+    srun.chmod(0o755)
+    subprocess.run(["scripts/train/run_seeds.sh", "jax", "default", "2", "42"], cwd=repo, env=env, check=True)
+    rows = [json.loads(line) for line in log.read_text().splitlines()]
+    assert len(rows) == 2 and rows[0] == rows[1]

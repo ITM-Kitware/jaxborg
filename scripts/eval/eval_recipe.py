@@ -129,7 +129,13 @@ def main():
         "deterministic": args.deterministic,
         "workers": args.workers,
         "eval_env": "cyborg",
-        "episode_seed_spec": "base_seed * episodes_per_seed + replica (runner implementation archived)",
+        "episode_seed_spec": "base_seed + replica for each seed, replica in range(episodes_per_seed)",
+        "episode_seeds": [seed + ep for seed in seeds for ep in range(args.episodes)],
+        "policy_rng_contract": (
+            "CybORG torch sampling uses process RNG; no per-episode torch seed is assigned by this runner"
+            if trained_backend == "cyborg"
+            else "JAX sampling key: PRNGKey(seeds[0] * 100003 + flattened episode index)"
+        ),
     }
     fingerprint = evaluation_fingerprint(inputs, recipe, effective)
     if args.reuse and args.supersedes_eval_run_id is None:
@@ -166,6 +172,18 @@ def main():
             flush=True,
         )
 
+        if args.workers == 1:
+            import torch
+
+            run.write_json(
+                "environment/torch_cpu_rng.json",
+                {
+                    "state_before_model_load": torch.get_rng_state().tolist(),
+                    "contract": "restore before evaluate_on_cyborg for CPU replay",
+                },
+            )
+        else:
+            run.update(policy_rng_replay="unknown per-worker torch RNG; existing sampling behavior preserved")
         t0 = time.perf_counter()
         rewards, seed_log = evaluate_on_cyborg(
             model_path,
@@ -207,6 +225,7 @@ def main():
     train_run_id = recipe.get("run", {}).get("train_run_id")
     row = {
         "eval_id": eval_id,
+        "evaluator_source_sha": run.manifest["source"]["git_commit"],
         "model": str(model_path),
         "recipe_name": recipe.get("meta", {}).get("name", ""),
         "recipe_path": recipe.get("meta", {}).get("source_path") or recipe.get("__source_path__", ""),

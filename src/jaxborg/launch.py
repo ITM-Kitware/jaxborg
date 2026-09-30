@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,7 +22,7 @@ from jaxborg.tracking import (
 
 def pin():
     repo = Path(git("rev-parse", "--show-toplevel")).resolve()
-    sha, _ = verify_launch(repo=repo)
+    sha, _ = verify_launch(os.environ.get("JAXBORG_EXPECTED_SHA"), repo=repo)
     root = experiment_root()
     record = {
         "schema_version": 1,
@@ -45,7 +46,10 @@ def verify(record_path, *, gpu=False):
     repo = Path(git("rev-parse", "--show-toplevel")).resolve()
     if record["checkout"] != str(repo):
         raise ValueError("Launch checkout differs from the checkout pinned at submission")
-    verify_launch(record["sha"], repo=repo)
+    expected = os.environ.get("JAXBORG_EXPECTED_SHA", record["sha"])
+    if expected != record["sha"]:
+        raise ValueError("Launch record SHA differs from the expected submission SHA")
+    verify_launch(expected, repo=repo)
     if record["dependencies"] != dependency_snapshot() or record["lockfile_hash"] != file_hash(repo / "uv.lock"):
         raise ValueError("Launch dependencies or lockfile changed after submission")
     if record["python"] != sys.executable:
