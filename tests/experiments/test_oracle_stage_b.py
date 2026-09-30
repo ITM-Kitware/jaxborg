@@ -1,4 +1,5 @@
 import copy
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from jaxborg.oracle_stage_b import (
     TRAIN_SEEDS,
     assert_recipe_contract,
     budget,
+    gpu_lock_provenance,
     paired_gap,
     seed_protocol,
     select_candidate,
@@ -84,3 +86,13 @@ def test_paired_bootstrap_retains_negative_gain_and_checks_alignment():
     assert gap["ci95"] == [-5, -5]
     with pytest.raises(ValueError, match="aligned"):
         paired_gap([-10, -20], [-5, -15], [1, 2], [2, 1])
+
+
+def test_gpu_lock_repair_preserves_source_versions_and_backend_matches():
+    original = subprocess.check_output(["git", "show", "5c44cd7a69e91293ed3203ef82a9eb53bbf09749:uv.lock"])
+    current = Path("uv.lock").read_bytes()
+    proof = gpu_lock_provenance(original, current)
+    assert proof["existing_distribution_versions_and_sources_unchanged"]
+    assert "jax-cuda12-plugin" in proof["added_gpu_distributions"]
+    with pytest.raises(ValueError, match="distributions changed"):
+        gpu_lock_provenance(original, current.replace(b'version = "0.10.2"', b'version = "0.10.3"'))

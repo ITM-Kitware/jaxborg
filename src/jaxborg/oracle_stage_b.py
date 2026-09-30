@@ -1,6 +1,8 @@
 """The prespecified singleton frozen-Blue response-oracle protocol."""
 
 import copy
+import hashlib
+import tomllib
 
 import numpy as np
 
@@ -14,6 +16,38 @@ SMOKE_SEEDS = tuple(range(9000000, 9000004))
 REQUESTED_STEPS = 10000000
 BOOTSTRAP_SEED = 3000001
 BOOTSTRAP_SAMPLES = 10000
+
+
+def gpu_lock_provenance(original_bytes, current_bytes):
+    """Permit missing CUDA backend additions, with every existing distribution unchanged."""
+
+    def packages(raw):
+        result = {}
+        for package in tomllib.loads(raw.decode())["package"]:
+            identity = (package["version"], tuple(sorted(package["source"].items())))
+            result.setdefault(package["name"], set()).add(identity)
+        return result
+
+    original, current = packages(original_bytes), packages(current_bytes)
+    changed = [name for name, identities in original.items() if current.get(name) != identities]
+    if changed:
+        raise ValueError(f"source environment distributions changed: {sorted(changed)}")
+    added = sorted(set(current) - set(original))
+    if any(
+        not (name.startswith("jax-cuda12-") or (name.startswith("nvidia-") and name.endswith("-cu12")))
+        for name in added
+    ):
+        raise ValueError(f"unexpected environment additions: {added}")
+    for name in ("jax-cuda12-plugin", "jax-cuda12-pjrt"):
+        if name in current and {version for version, _ in current[name]} != {version for version, _ in current["jax"]}:
+            raise ValueError(f"{name} versions must match the locked JAX versions")
+    return {
+        "source_lockfile_sha256": hashlib.sha256(original_bytes).hexdigest(),
+        "current_lockfile_sha256": hashlib.sha256(current_bytes).hexdigest(),
+        "identical_lockfile": original_bytes == current_bytes,
+        "existing_distribution_versions_and_sources_unchanged": True,
+        "added_gpu_distributions": added,
+    }
 
 
 def seed_protocol():

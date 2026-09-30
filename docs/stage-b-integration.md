@@ -60,9 +60,19 @@ Use the checkout's `.venv/bin/python`; do not sync inside an allocation.
 JAX_PLATFORMS=cpu .venv/bin/python scripts/experiments/oracle_stage_b.py aggregate --manifest /absolute/results/stage-b/manifest.json
 ```
 
+The inherited global JAX override stripped the CUDA extra from `uv.lock`; smoke
+job 3851 failed at GPU discovery before any rollout. The CUDA extra now explicitly
+requests the plugin at the existing locked JAX versions. The repaired lock adds
+only CUDA backend distributions and retains every existing distribution's version
+and source. The first failed checkout/environment remains unchanged for provenance.
+See [uv override semantics](https://docs.astral.sh/uv/reference/settings/#override-dependencies).
+
 `prepare` verifies the exact paired source, archives its sidecar/hashes, regenerates
-the original singleton using source-identical generator bytes/lock, publishes
+the original singleton using source-identical generator bytes and unchanged existing
+dependency versions, publishes
 canonical `runs:/...` inputs and writes recipes/seed splits before test outcomes.
+The manifest records original/current lock hashes and the explicit GPU additions;
+the updated lock is not represented as identical to the historical lock.
 `dry-run` prints resolved settings and planned commands without scheduling.
 `smoke` performs a four-episode original baseline, two real Red updates and four
 saved/reloaded trained episodes. `run` trains three attempts sequentially, evaluates

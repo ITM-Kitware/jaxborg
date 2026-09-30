@@ -35,6 +35,7 @@ from jaxborg.oracle_stage_b import (
     VALIDATION_SEEDS,
     assert_recipe_contract,
     budget,
+    gpu_lock_provenance,
     paired_gap,
     seed_protocol,
     select_candidate,
@@ -102,10 +103,14 @@ def prepare(args):
     study = experiment_root() / "campaigns" / campaign
     study.mkdir(parents=True, exist_ok=False)
     original_sha = sidecar["run"]["git_commit"]
-    generator_files = ["src/jaxborg/scenarios/cc4/topology.py", "src/jaxborg/scenarios/cc4/topology_cli.py", "uv.lock"]
+    generator_files = ["src/jaxborg/scenarios/cc4/topology.py", "src/jaxborg/scenarios/cc4/topology_cli.py"]
     for name in generator_files:
         if subprocess.check_output(["git", "show", f"{original_sha}:{name}"], cwd=ROOT) != (ROOT / name).read_bytes():
-            raise ValueError(f"source generator/environment lock differs: {name}")
+            raise ValueError(f"source generator differs: {name}")
+    environment = gpu_lock_provenance(
+        subprocess.check_output(["git", "show", f"{original_sha}:uv.lock"], cwd=ROOT),
+        (ROOT / "uv.lock").read_bytes(),
+    )
     topology = study / "topology-seed0.npz"
     export_generated(0, topology)
     fingerprint = canonical_topology_fingerprint(topology)
@@ -182,9 +187,12 @@ def prepare(args):
             "topology_fingerprint": fingerprint,
             "topology_generator": "jax",
             "topology_generator_seed": 0,
-            "source_generator_and_uv_lock_match": True,
+            "source_generator_matches": True,
+            "source_generator_and_uv_lock_match": environment["identical_lockfile"],
             "layout_count": 1,
-            "topology_reconstruction": "regenerated with identical generator and uv.lock; snapshot unavailable",
+            "topology_reconstruction": (
+                "regenerated with identical generator and unchanged existing dependencies; snapshot unavailable"
+            ),
         },
         "randomness": seed_protocol(),
         "oracle_budget_per_attempt": budget(recipe),
@@ -207,6 +215,7 @@ def prepare(args):
         "research_base_revision": "2367e284d6e54ebadc277c692660c80219cbdc93",
         "logging_base_revision": "55ee8bd878bce4261aa24f3e199ed277bdcdda50",
         "dependencies": dependency_identity(),
+        "source_environment_comparison": environment,
         "protocol_owner_run_id": owner.run_id,
         "study_dir": str(study),
         "report_dir": str(report_dir),
