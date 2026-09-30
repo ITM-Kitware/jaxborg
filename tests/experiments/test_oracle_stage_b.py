@@ -3,6 +3,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 from jaxborg.oracle_stage_b import (
     TRAIN_SEEDS,
@@ -36,6 +37,16 @@ def test_source_recipe_keeps_stock_contract_and_actual_rounded_budget(recipe):
     assert recipe["train"]["opponents"]["blue"]["path"].startswith("/")
     assert recipe["arch"]["name"] == "shared"
     assert recipe["eval"]["allow_training_topologies"] is True
+
+
+def test_generated_recipe_loads_through_production_parser(recipe, tmp_path):
+    path = tmp_path / "generated.yaml"
+    path.write_text(yaml.safe_dump(recipe))
+    resolved = load(path)
+    assert_recipe_contract(resolved)
+    resolved["eval"]["scripted_red"]["after_training"] = True
+    with pytest.raises(ValueError, match="scripted evaluation"):
+        assert_recipe_contract(resolved)
 
 
 @pytest.mark.parametrize("mutation", ["cia", "topology", "suite"])

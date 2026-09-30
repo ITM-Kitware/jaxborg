@@ -42,6 +42,7 @@ from jaxborg.oracle_stage_b import (
     select_candidate,
     source_specific_recipe,
 )
+from jaxborg.recipe import load as load_recipe
 from jaxborg.research_tracking import parameter_hash
 from jaxborg.scenarios.cc4.topology_cli import export_generated
 from jaxborg.tracking import (
@@ -147,10 +148,12 @@ def prepare(args):
         variant = copy.deepcopy(recipe)
         variant["meta"]["name"] = f"{campaign}-red-seed{seed}"
         path.write_text(yaml.safe_dump(serializable(variant), sort_keys=False))
+        load_recipe(path)
         recipe_paths[str(seed)] = str(path)
         owner.publish(path, f"protocol/{path.name}")
     eval_recipe = study / "recipe-evaluation.yaml"
     eval_recipe.write_text(yaml.safe_dump(serializable(recipe), sort_keys=False))
+    load_recipe(eval_recipe)
     owner.publish(eval_recipe, "protocol/recipe-evaluation.yaml")
     manifest = {
         "schema_version": 1,

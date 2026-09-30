@@ -101,7 +101,7 @@ def source_specific_recipe(source, source_path, topology_path, *, name="stage-b-
         "allow_training_topologies": True,
         "policy_backend": "jax",
         "after_training": [],
-        "scripted_red": {"enabled": False},
+        "scripted_red": {"after_training": False},
         **{
             suite: {"enabled": False}
             for suite in ("play_priors", "cross_play", "cross_seed_play", "checkpoint_scripted_reds")
@@ -130,7 +130,9 @@ def assert_recipe_contract(recipe):
         raise ValueError("CIA evaluation is outside the Stage B target game")
     if recipe["eval"].get("after_training"):
         raise ValueError("Stage B evaluations must run independently")
-    for suite in ("play_priors", "cross_play", "cross_seed_play", "checkpoint_scripted_reds", "scripted_red"):
+    if recipe["eval"].get("scripted_red", {}).get("after_training"):
+        raise ValueError("unplanned scripted evaluation suite")
+    for suite in ("play_priors", "cross_play", "cross_seed_play", "checkpoint_scripted_reds"):
         if recipe["eval"].get(suite, {}).get("enabled"):
             raise ValueError(f"unplanned evaluation suite {suite}")
 
