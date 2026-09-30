@@ -1,0 +1,60 @@
+# Two user-selected checkpoints; all fresh Red settings come from the same IPPO recipe.
+schema_version: 1
+name: stage-b-mappo
+collection_readme: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/README.md
+tracking:
+  root: /home/local/KHQ/paul.elliott/jaxborg-exp/shared
+  experiment: stage-b-mappo
+game:
+  rules: cc4_stock
+  episode_length: 500
+  enhanced_observations: true
+  blue_observation_version: 2
+  reward: zero_sum
+  topology: {generator: jax, seed: 0, count: 1}
+challenger:
+  algorithm: ippo
+  architecture: shared
+  template_model: /data/shared/jaxborg/jaxborg-harml-comparison/ippo_jax/cotraining_seed42_hmarl_comparison_50m/checkpoint_9600000.safetensors
+training:
+  seeds: [11001, 22001, 33001]
+  requested_steps: 10000000
+evaluation:
+  stochastic: true
+  validation: {seed_start: 1000000, episodes: 100}
+  test: {seed_start: 2000000, episodes: 600}
+  smoke: {seed_start: 9000000, episodes: 4}
+smoke:
+  training_seed: 880001
+  requested_steps: 4000
+  num_envs: 4
+  num_minibatches: 4
+  update_epochs: 1
+selection:
+  rule: lowest_validation_blue_mean
+  checkpoint: final
+  original_fallback: true
+  tie_break: original_then_training_seed_order
+bootstrap:
+  method: paired_percentile_95
+  resamples: 10000
+  seed: 3000001
+resources:
+  partition: community
+  gpus_per_job: 1
+  memory_gb: 64
+  cpus_per_task: 8
+  time_limit: '12:00:00'
+  smoke_time_limit: '01:00:00'
+  max_concurrent_jobs: 2
+defenders:
+  - name: mappo-49968000
+    checkpoint: /data/shared/jaxborg/jaxborg-harml-comparison/mappo_jax/cotraining_mappo_seed42_hmarl_comparison_50m/model_cotraining_mappo_seed42_hmarl_comparison_50m.safetensors
+    steps: 49968000
+    seed: 42
+    report_dir: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-b/mappo-source-49968000
+  - name: mappo-9600000
+    checkpoint: /data/shared/jaxborg/jaxborg-harml-comparison/mappo_jax/cotraining_mappo_seed42_hmarl_comparison_50m/checkpoint_9600000.safetensors
+    steps: 9600000
+    seed: 42
+    report_dir: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-b/mappo-source-9600000

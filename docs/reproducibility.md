@@ -18,11 +18,11 @@ artifact location produces an error: choose a new root or explicitly set
 `JAXBORG_MLFLOW_EXPERIMENT`. Existing locations are never rewritten.
 
 For this workspace, the persistent project store is
-`/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/shared/`. Load its reusable
+`/home/local/KHQ/paul.elliott/jaxborg-exp/shared/`. Load its reusable
 `store.env` before future launches and set the study name:
 
 ```bash
-source /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/shared/store.env
+source /home/local/KHQ/paul.elliott/jaxborg-exp/shared/store.env
 export JAXBORG_MLFLOW_EXPERIMENT=study-name
 export JAXBORG_CAMPAIGN=campaign-name
 ```

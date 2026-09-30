@@ -8,4 +8,4 @@ cd "$ROOT"
 unset JAX_PLATFORMS
 source scripts/jax_env.sh
 "$ROOT/.venv/bin/python" -m jaxborg.launch verify --gpu "$JAXBORG_LAUNCH_RECORD"
-exec "$ROOT/.venv/bin/python" scripts/experiments/oracle_stage_b.py "$@"
+exec "$ROOT/.venv/bin/python" scripts/experiments/response_oracle.py "$@"

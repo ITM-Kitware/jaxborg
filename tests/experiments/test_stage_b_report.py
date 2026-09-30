@@ -8,8 +8,9 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import pytest
 
-from jaxborg.oracle_stage_b import TEST_SEEDS, TRAIN_SEEDS, VALIDATION_SEEDS
+from jaxborg.response_oracle import TEST_SEEDS, TRAIN_SEEDS, VALIDATION_SEEDS
 from jaxborg.tracking import Run, file_hash, git, input_artifact, resolve_artifact
 
 REPO = Path(__file__).resolve().parents[2]
@@ -18,7 +19,7 @@ REPO = Path(__file__).resolve().parents[2]
 def test_controller_does_not_pass_its_gpu_pool_setting_to_children(monkeypatch):
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     monkeypatch.delenv("XLA_PYTHON_CLIENT_PREALLOCATE", raising=False)
-    spec = importlib.util.spec_from_file_location("pilot_controller", REPO / "scripts/experiments/oracle_stage_b.py")
+    spec = importlib.util.spec_from_file_location("pilot_controller", REPO / "scripts/experiments/response_oracle.py")
     pilot = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(pilot)
     assert pilot.os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] == "false"
@@ -28,13 +29,14 @@ def test_controller_does_not_pass_its_gpu_pool_setting_to_children(monkeypatch):
     assert "XLA_PYTHON_CLIENT_PREALLOCATE" not in observed[0]
 
 
-def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch):
+@pytest.mark.parametrize("source_steps", [9600000, 49968000])
+def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, source_steps):
     monkeypatch.setenv("JAXBORG_EXP_DIR", str(tmp_path / "experiments"))
     monkeypatch.setenv("JAXBORG_ALLOW_DIRTY", "1")
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     monkeypatch.delenv("JAXBORG_EXPECTED_SHA", raising=False)
     monkeypatch.delenv("JAXBORG_MLFLOW_EXPERIMENT", raising=False)
-    spec = importlib.util.spec_from_file_location("pilot_report", REPO / "scripts/experiments/oracle_stage_b.py")
+    spec = importlib.util.spec_from_file_location("pilot_report", REPO / "scripts/experiments/response_oracle.py")
     pilot = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = pilot
     spec.loader.exec_module(pilot)
@@ -49,10 +51,32 @@ def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch):
     report_dir.mkdir(parents=True)
     collection = report_dir.parent.parent / "README.md"
     collection.write_text("Existing collection\n")
+    if source_steps == 49968000:
+        report_dir = report_dir / "mappo-source-49968000"
+        report_dir.mkdir()
     manifest = {
         "campaign": "test-stage-b",
         "source_revision": git("rev-parse", "HEAD"),
-        "source": {"checkpoint": source_ref, "sha256": file_hash(resolve_artifact(source_ref))},
+        "source": {
+            "checkpoint": source_ref,
+            "sha256": file_hash(resolve_artifact(source_ref)),
+            "algorithm": "mappo",
+            "original_training_steps": source_steps,
+            "original_training_seed": 42,
+        },
+        "training_seeds": list(TRAIN_SEEDS),
+        "randomness": {
+            "validation_episode_roots": list(VALIDATION_SEEDS),
+            "final_test_episode_roots": list(TEST_SEEDS),
+        },
+        "confidence_interval": {"resamples": 10000, "seed": 3000001},
+        "oracle_budget_per_attempt": {
+            "requested_steps": 10000000,
+            "completed_steps": 9984000,
+            "updates": 208,
+            "steps_per_update": 48000,
+        },
+        "collection_readme": str(collection),
         "game": {"topology_sha256": file_hash(resolve_artifact(topology_ref))},
         "report_dir": str(report_dir),
     }
@@ -131,8 +155,34 @@ def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch):
     assert [float(row["mean_blue_return"]) for row in rows] == bars[0]
     readme = (report_dir / "README.md").read_text()
     assert "**12.00 points**" in readme
+    assert f"{source_steps:,} source steps" in readme
     for link in re.findall(r"\]\(([^)]+)\)", readme):
         assert (report_dir / link).is_file(), link
     assert (report_dir / "comparison.png").stat().st_size > 1000
     assert (report_dir / "handoff.md").is_file()
     assert "Completed Stage B pilot:" in collection.read_text()
+    assert f"[{'MAPPO'} Blue at {source_steps:,} source steps]" in collection.read_text()
+
+
+@pytest.mark.parametrize("smoke_fails", [False, True])
+def test_combined_pilot_executes_only_after_its_own_smoke(monkeypatch, smoke_fails):
+    spec = importlib.util.spec_from_file_location("response_pilot", REPO / "scripts/experiments/response_oracle.py")
+    pilot = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pilot)
+    observed = []
+
+    def smoke(args):
+        observed.append("smoke")
+        if smoke_fails:
+            raise ValueError("failed actual defender smoke")
+
+    monkeypatch.setattr(pilot, "smoke", smoke)
+    monkeypatch.setattr(pilot, "execute", lambda args: observed.append("run"))
+    monkeypatch.setattr(sys, "argv", ["response_oracle", "pilot", "--manifest", "campaign-manifest.json"])
+    if smoke_fails:
+        with pytest.raises(ValueError, match="actual defender"):
+            pilot.main()
+        assert observed == ["smoke"]
+    else:
+        pilot.main()
+        assert observed == ["smoke", "run"]

@@ -1,4 +1,4 @@
-"""Prepare, dry-run, smoke, execute, validate and report the bounded Stage B pilot."""
+"""Execute a YAML-configured frozen-defender response campaign using existing trainers/evaluators."""
 
 # ruff: noqa: E402
 
@@ -32,23 +32,17 @@ import yaml
 
 from jaxborg.checkpoint import load_jax_bundle, read_sidecar
 from jaxborg.evaluation.cia.fixed_topology import canonical_topology_fingerprint
-from jaxborg.oracle_stage_b import (
-    BOOTSTRAP_SAMPLES,
-    BOOTSTRAP_SEED,
-    SMOKE_SEEDS,
-    TEST_SEEDS,
-    TRAIN_SEEDS,
-    VALIDATION_SEEDS,
+from jaxborg.recipe import load as load_recipe
+from jaxborg.research_tracking import parameter_hash
+from jaxborg.response_campaign import load_campaign
+from jaxborg.response_oracle import (
     assert_recipe_contract,
     budget,
     gpu_lock_provenance,
     paired_gap,
-    seed_protocol,
     select_candidate,
     source_specific_recipe,
 )
-from jaxborg.recipe import load as load_recipe
-from jaxborg.research_tracking import parameter_hash
 from jaxborg.scenarios.cc4.topology_cli import export_generated
 from jaxborg.tracking import (
     Run,
@@ -65,12 +59,6 @@ from jaxborg.tracking import (
     tracked_entrypoint,
 )
 
-DEFAULT_SOURCE = Path(
-    "/data/shared/jaxborg/jaxborg-harml-comparison/ippo_jax/"
-    "cotraining_seed42_hmarl_comparison_50m/checkpoint_9600000.safetensors"
-)
-DEFAULT_REPORT = Path("/home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-b")
-
 
 def write_json(path, value):
     path = Path(path)
@@ -84,7 +72,16 @@ def dependency_identity():
     return dict(lockfile_sha256=file_hash(ROOT / "uv.lock"), installed_sha256=digest(dependency_snapshot()))
 
 
-def source_check(source):
+def sidecar_path(source):
+    stem = source.stem.removeprefix("model_")
+    return next(
+        source.with_name(f"recipe_{stem}.{suffix}")
+        for suffix in ("yaml", "yml")
+        if source.with_name(f"recipe_{stem}.{suffix}").is_file()
+    )
+
+
+def source_check(source, *, expected_steps=9600000, expected_seed=42):
     sidecar = read_sidecar(source)
     bundle = load_jax_bundle(source)
     if set(bundle.policies) != {"blue", "red"}:
@@ -93,20 +90,31 @@ def source_check(source):
         entry = bundle.policies[team]
         if (entry.obs_dim, entry.action_dim) != dims:
             raise ValueError(f"incompatible {team} source contract")
-    if bundle.provenance.get("total_steps") != 9600000 or bundle.provenance.get("seed") != 42:
-        raise ValueError("wrong original paired source provenance")
+    for provenance in (bundle.provenance, sidecar.get("run", {})):
+        if provenance.get("total_steps") != expected_steps or provenance.get("seed") != expected_seed:
+            raise ValueError("wrong original paired source provenance")
     return bundle, sidecar
 
 
 @tracked_entrypoint
 def prepare(args):
     # Input generation and import are CPU operations; research rollouts happen only in Slurm.
+    config, defender, randomness = load_campaign(args.campaign, args.defender)
+    if experiment_root() != Path(config["tracking"]["root"]).resolve():
+        raise ValueError("configured campaign store differs from JAXBORG_EXP_DIR")
+    os.environ["JAXBORG_MLFLOW_EXPERIMENT"] = config["tracking"]["experiment"]
+    args.source = defender["checkpoint"]
+    args.source_steps, args.source_seed = defender["steps"], defender["seed"]
+    args.report_dir = defender["report_dir"]
+    args.challenger_template_model = config["challenger"]["template_model"]
     source = Path(args.source).resolve()
-    bundle, sidecar = source_check(source)
+    bundle, sidecar = source_check(source, expected_steps=args.source_steps, expected_seed=args.source_seed)
+    template_model = Path(args.challenger_template_model).resolve() if args.challenger_template_model else None
+    challenger_source = source_check(template_model)[1] if template_model else None
     report_dir = Path(args.report_dir).resolve()
     if (report_dir / "manifest.json").exists():
         raise ValueError("report already has a campaign manifest; use it or choose a new --report-dir")
-    campaign = f"stage-b-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
+    campaign = f"{config['name']}-{args.defender}-{time.strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
     study = experiment_root() / "campaigns" / campaign
     study.mkdir(parents=True, exist_ok=False)
     original_sha = sidecar["run"]["git_commit"]
@@ -128,27 +136,48 @@ def prepare(args):
         inputs=[
             input_artifact(source, role="original Blue/Red pair"),
             input_artifact(topology, role="target topology"),
-        ],
+        ]
+        + ([input_artifact(template_model, role="fixed IPPO challenger recipe source")] if template_model else []),
         config={
             "source_sha": original_sha,
             "topology_generation": {"generator": "jax", "seed": 0},
             "topology_fingerprint": fingerprint,
         },
     )
-    owner.publish(
-        owner.input_path(0).with_name("recipe_checkpoint_9600000.yaml"), "source/recipe_checkpoint_9600000.yaml"
-    )
+    source_sidecar_name = sidecar_path(source).name
+    owner.publish(owner.input_path(0).with_name(source_sidecar_name), f"source/{source_sidecar_name}")
     source_ref = owner.publish(
         owner.input_path(0),
-        "source/checkpoint_9600000.safetensors",
-        sidecar="source/recipe_checkpoint_9600000.yaml",
-        step=9600000,
+        f"source/{source.name}",
+        sidecar=f"source/{source_sidecar_name}",
+        step=args.source_steps,
     )
     topology_ref = owner.publish(topology, "topologies/topology-seed0.npz")
     source_path, topology_path = resolve_artifact(source_ref), resolve_artifact(topology_ref)
-    recipe = source_specific_recipe(sidecar, source_path, topology_path)
+    campaign_reference = owner.publish(Path(args.campaign), "protocol/campaign.yaml")
+    challenger_reference = None
+    if template_model:
+        template_sidecar_name = sidecar_path(template_model).name
+        owner.publish(
+            owner.input_path(2).with_name(template_sidecar_name), f"challenger-source/{template_sidecar_name}"
+        )
+        challenger_reference = owner.publish(
+            owner.input_path(2),
+            f"challenger-source/{template_model.name}",
+            sidecar=f"challenger-source/{template_sidecar_name}",
+            step=9600000,
+        )
+    recipe = source_specific_recipe(
+        sidecar,
+        source_path,
+        topology_path,
+        expected_source_steps=args.source_steps,
+        expected_source_seed=args.source_seed,
+        challenger_source=challenger_source,
+        requested_steps=config["training"]["requested_steps"],
+    )
     recipe_paths = {}
-    for seed in TRAIN_SEEDS:
+    for seed in config["training"]["seeds"]:
         path = study / f"recipe-red-seed{seed}.yaml"
         variant = copy.deepcopy(recipe)
         variant["meta"]["name"] = f"{campaign}-red-seed{seed}"
@@ -162,18 +191,24 @@ def prepare(args):
     owner.publish(eval_recipe, "protocol/recipe-evaluation.yaml")
     manifest = {
         "schema_version": 1,
+        "campaign_configuration": config,
+        "campaign_configuration_reference": campaign_reference,
+        "tracking": config["tracking"],
+        "resources": config["resources"],
+        "smoke_configuration": config["smoke"],
         "campaign": campaign,
         "status": "prepared; research adapter GPU smoke unmet",
         "question": "Can a fresh attacker reduce frozen Blue score more than its original training opponent?",
         "source": {
             "original_path": str(source),
+            "algorithm": sidecar["algorithm"],
             "checkpoint": source_ref,
             "sidecar": read_sidecar(source_path)["run"],
             "sha256": file_hash(source),
-            "sidecar_sha256": file_hash(source.with_name("recipe_checkpoint_9600000.yaml")),
-            "sidecar_reference": f"runs:/{owner.run_id}/source/recipe_checkpoint_9600000.yaml",
-            "original_training_seed": 42,
-            "original_training_steps": 9600000,
+            "sidecar_sha256": file_hash(sidecar_path(source)),
+            "sidecar_reference": f"runs:/{owner.run_id}/source/{source_sidecar_name}",
+            "original_training_seed": args.source_seed,
+            "original_training_steps": args.source_steps,
             "policies": {
                 team: {
                     "architecture": entry.arch,
@@ -183,6 +218,13 @@ def prepare(args):
                 }
                 for team, entry in bundle.policies.items()
             },
+        },
+        "challenger": {
+            "algorithm": "ippo",
+            "architecture": recipe["arch"],
+            "recipe_source": challenger_reference or source_ref,
+            "recipe_source_sha256": file_hash(template_model or source),
+            "initialization": "fresh weights for every training seed; source Red weights are never loaded",
         },
         "game": {
             "rules": "cc4_stock",
@@ -203,22 +245,22 @@ def prepare(args):
                 "regenerated with identical generator and unchanged existing dependencies; snapshot unavailable"
             ),
         },
-        "randomness": seed_protocol(),
+        "randomness": randomness,
         "oracle_budget_per_attempt": budget(recipe),
-        "training_seeds": list(TRAIN_SEEDS),
-        "validation_episodes": 100,
-        "final_test_episodes": 600,
+        "training_seeds": list(config["training"]["seeds"]),
+        "validation_episodes": len(randomness["validation_episode_roots"]),
+        "final_test_episodes": len(randomness["final_test_episode_roots"]),
         "selection": {
             "rule": "lowest validation mean Blue episode return; original Red is fallback",
-            "candidates": ["original", *[f"seed-{seed}" for seed in TRAIN_SEEDS]],
-            "tie_break": ["original", *[f"seed-{seed}" for seed in TRAIN_SEEDS]],
+            "candidates": ["original", *[f"seed-{seed}" for seed in config["training"]["seeds"]]],
+            "tie_break": ["original", *[f"seed-{seed}" for seed in config["training"]["seeds"]]],
             "checkpoints_per_attempt": "final only; no test scores inspected during selection",
         },
         "confidence_interval": {
             "method": "paired episode bootstrap percentile 95%",
             "unit": "aligned test episode",
-            "resamples": BOOTSTRAP_SAMPLES,
-            "seed": BOOTSTRAP_SEED,
+            "resamples": config["bootstrap"]["resamples"],
+            "seed": config["bootstrap"]["seed"],
         },
         "source_revision": git("rev-parse", "HEAD"),
         "research_base_revision": "2367e284d6e54ebadc277c692660c80219cbdc93",
@@ -228,6 +270,7 @@ def prepare(args):
         "protocol_owner_run_id": owner.run_id,
         "study_dir": str(study),
         "report_dir": str(report_dir),
+        "collection_readme": config["collection_readme"],
         "recipes": recipe_paths,
         "recipe_hashes": {seed: file_hash(path) for seed, path in recipe_paths.items()},
         "eval_recipe": str(eval_recipe),
@@ -353,17 +396,21 @@ def train(manifest, seed, recipe, *, label=None):
 def smoke(args):
     manifest = load_protocol(args.manifest)
     devices = assigned_devices()
+    smoke_seeds = manifest["randomness"]["smoke_episode_roots"]
+    config = manifest["smoke_configuration"]
     baseline, baseline_ref = evaluate(
-        manifest, ("original", manifest["source"]["checkpoint"]), "smoke-baseline", SMOKE_SEEDS
+        manifest, ("original", manifest["source"]["checkpoint"]), "smoke-baseline", smoke_seeds
     )
-    recipe = yaml.safe_load(Path(manifest["recipes"][str(TRAIN_SEEDS[0])]).read_text())
-    recipe["train"]["total_timesteps"] = 4000
-    recipe["jax"].update(num_envs=4, num_minibatches=4, update_epochs=1, checkpoint_every_updates=1)
+    recipe = yaml.safe_load(Path(manifest["recipes"][str(manifest["training_seeds"][0])]).read_text())
+    recipe["train"]["total_timesteps"] = config["requested_steps"]
+    recipe["jax"].update(
+        {key: config[key] for key in ("num_envs", "num_minibatches", "update_epochs")}, checkpoint_every_updates=1
+    )
     recipe["meta"]["name"] = manifest["campaign"] + "-smoke"
     path = Path(manifest["study_dir"]) / "recipe-smoke.yaml"
     path.write_text(yaml.safe_dump(recipe, sort_keys=False))
-    result = train(manifest, 880001, path, label="smoke")
-    trained, trained_ref = evaluate(manifest, ("trained", result["final_checkpoint"]), "smoke-trained", SMOKE_SEEDS)
+    result = train(manifest, config["training_seed"], path, label="smoke")
+    trained, trained_ref = evaluate(manifest, ("trained", result["final_checkpoint"]), "smoke-trained", smoke_seeds)
     owner = Run(
         {"meta": {"name": manifest["campaign"] + "-smoke-check"}},
         backend="jax",
@@ -387,7 +434,7 @@ def smoke(args):
         "trained_evaluation": trained_ref,
         "original_blue_mean": baseline["blue_mean_return"],
         "trained_blue_mean": trained["blue_mean_return"],
-        "checks": "actual enhanced-v2 GPU rollout; two Red updates; exact Blue; both policies saved/reloaded",
+        "checks": "actual enhanced-v2 GPU rollout; exact Blue; changed Red; both policies saved/reloaded",
     }
     owner.write_json("verification/smoke.json", verification)
     owner.export("verification/smoke.json", Path(manifest["report_dir"]) / "smoke.json")
@@ -419,9 +466,14 @@ def require_smoke(manifest, manifest_path):
 def dry_run(args):
     manifest = load_protocol(args.manifest)
     print(json.dumps(serializable(manifest), indent=2))
-    print("Sequential GPU jobs: smoke, then 3 training attempts, validation and paired tests in one pipeline.")
     print(
-        "Community partition; one GPU; no stage C. Each attempt: " + json.dumps(manifest["oracle_budget_per_attempt"])
+        f"GPU campaign: smoke, then {len(manifest['training_seeds'])} training attempts, validation and paired tests."
+    )
+    print(
+        "Resources: "
+        + json.dumps(manifest["resources"])
+        + "; each attempt: "
+        + json.dumps(manifest["oracle_budget_per_attempt"])
     )
     print("Smoke: " + shlex.join([sys.executable, str(Path(__file__).resolve()), "smoke", "--manifest", args.manifest]))
     print("Pilot: " + shlex.join([sys.executable, str(Path(__file__).resolve()), "run", "--manifest", args.manifest]))
@@ -430,6 +482,9 @@ def dry_run(args):
 @tracked_entrypoint
 def execute(args):
     manifest = load_protocol(args.manifest)
+    training_seeds = manifest["training_seeds"]
+    validation_seeds = manifest["randomness"]["validation_episode_roots"]
+    test_seeds = manifest["randomness"]["final_test_episode_roots"]
     require_smoke(manifest, args.manifest)
     assigned_devices()
     lock = (Path(manifest["study_dir"]) / "pipeline.lock").open("a")
@@ -454,7 +509,7 @@ def execute(args):
     state["slurm_job_ids"].append(os.environ["SLURM_JOB_ID"])
     write_json(path, state)
     candidates = {"original": manifest["source"]["checkpoint"]}
-    for seed in TRAIN_SEEDS:
+    for seed in training_seeds:
         candidate = f"seed-{seed}"
         if candidate not in state["training"]:
             result = train(manifest, seed, manifest["recipes"][str(seed)])
@@ -468,12 +523,12 @@ def execute(args):
     scores = {}
     for candidate, reference in candidates.items():
         if candidate not in state["validation"]:
-            row, evaluation = evaluate(manifest, (candidate, reference), "validation", VALIDATION_SEEDS, reuse=True)
+            row, evaluation = evaluate(manifest, (candidate, reference), "validation", validation_seeds, reuse=True)
             state["validation"][candidate] = evaluation
             write_json(path, state)
-        row = checked_evaluation(state["validation"][candidate], VALIDATION_SEEDS)
+        row = checked_evaluation(state["validation"][candidate], validation_seeds)
         scores[candidate] = row["blue_mean_return"]
-    selected = select_candidate(scores)
+    selected = select_candidate(scores, training_seeds)
     if "selection" not in state:
         state["selection"] = {
             "candidate": selected,
@@ -488,7 +543,7 @@ def execute(args):
     # Final-test outcomes are accessed only after the selected candidate is persisted.
     for name, reference in [("original", candidates["original"]), ("selected", state["selection"]["checkpoint"])]:
         if name not in state["test"]:
-            _, evaluation = evaluate(manifest, (name, reference), "final-test", TEST_SEEDS, reuse=True)
+            _, evaluation = evaluate(manifest, (name, reference), "final-test", test_seeds, reuse=True)
             state["test"][name] = evaluation
             write_json(path, state)
     state["status"] = "evaluations_finished"
@@ -509,8 +564,14 @@ def csv_file(path, rows):
 
 @tracked_entrypoint
 def aggregate(manifest, state):
-    baseline = checked_evaluation(state["test"]["original"], TEST_SEEDS)
-    selected = checked_evaluation(state["test"]["selected"], TEST_SEEDS)
+    training_seeds = manifest["training_seeds"]
+    validation_seeds = manifest["randomness"]["validation_episode_roots"]
+    test_seeds = manifest["randomness"]["final_test_episode_roots"]
+    bootstrap_samples = manifest["confidence_interval"]["resamples"]
+    bootstrap_seed = manifest["confidence_interval"]["seed"]
+    attempt_budget = manifest["oracle_budget_per_attempt"]
+    baseline = checked_evaluation(state["test"]["original"], test_seeds)
+    selected = checked_evaluation(state["test"]["selected"], test_seeds)
     # Policy/topology/contract evidence is checked independently from return alignment.
     for key in ("original", "selected"):
         evidence = read_manifest(json.loads(resolve_artifact(state["test"][key]).read_text())["eval_id"])[0]
@@ -521,13 +582,13 @@ def aggregate(manifest, state):
         if evidence["source"]["git_commit"] != manifest["source_revision"]:
             raise ValueError("final evaluator revision differs")
     scores = {
-        name: checked_evaluation(reference, VALIDATION_SEEDS)["blue_mean_return"]
+        name: checked_evaluation(reference, validation_seeds)["blue_mean_return"]
         for name, reference in state["validation"].items()
     }
-    if select_candidate(scores) != state["selection"]["candidate"]:
+    if select_candidate(scores, training_seeds) != state["selection"]["candidate"]:
         raise ValueError("report selection disagrees with validation-only rule")
-    if len(state["training"]) != 3:
-        raise ValueError("report requires all three training attempts")
+    if set(state["training"]) != {f"seed-{seed}" for seed in training_seeds}:
+        raise ValueError("report requires every prespecified training attempt")
     expected_red = {
         "original": manifest["source"]["sha256"],
         "selected": file_hash(resolve_artifact(state["selection"]["checkpoint"])),
@@ -542,6 +603,8 @@ def aggregate(manifest, state):
         selected["per_episode_blue_returns"],
         baseline["per_episode_seeds"],
         selected["per_episode_seeds"],
+        samples=bootstrap_samples,
+        seed=bootstrap_seed,
     )
     inputs = [input_artifact(reference, role=f"final {name} matchup") for name, reference in state["test"].items()]
     inputs += [input_artifact(reference, role=f"validation {name}") for name, reference in state["validation"].items()]
@@ -558,24 +621,32 @@ def aggregate(manifest, state):
     report.write_json("results/state.json", state)
     rows = [
         {"episode_seed": seed, "baseline_blue_return": b, "selected_blue_return": r, "red_improvement": b - r}
-        for seed, b, r in zip(TEST_SEEDS, baseline["per_episode_blue_returns"], selected["per_episode_blue_returns"])
+        for seed, b, r in zip(test_seeds, baseline["per_episode_blue_returns"], selected["per_episode_blue_returns"])
     ]
     csv_file(report.path("results/per-episode.csv"), rows)
     csv_file(
         report.path("results/summary.csv"),
         [
-            dict(matchup="Original Blue vs Original Red", mean_blue_return=gap["baseline_blue_mean"], episodes=600),
-            dict(matchup="Original Blue vs selected Red", mean_blue_return=gap["selected_blue_mean"], episodes=600),
+            dict(
+                matchup="Original Blue vs Original Red",
+                mean_blue_return=gap["baseline_blue_mean"],
+                episodes=len(test_seeds),
+            ),
+            dict(
+                matchup="Original Blue vs selected Red",
+                mean_blue_return=gap["selected_blue_mean"],
+                episodes=len(test_seeds),
+            ),
         ],
     )
     validation_rows = []
     for name, reference in state["validation"].items():
-        row = checked_evaluation(reference, VALIDATION_SEEDS)
+        row = checked_evaluation(reference, validation_seeds)
         validation_rows.append(
             dict(
                 candidate=name,
                 mean_blue_return=row["blue_mean_return"],
-                episodes=100,
+                episodes=len(validation_seeds),
                 evaluation=reference,
                 selected=name == state["selection"]["candidate"],
             )
@@ -608,7 +679,7 @@ def aggregate(manifest, state):
         color=["#577590", "#b64a3b"],
     )
     axis.set_ylabel("Mean raw Blue episode return")
-    axis.set_title("One frozen Blue, 600 paired test episodes")
+    axis.set_title(f"One frozen Blue, {len(test_seeds)} paired test episodes")
     figure.tight_layout()
     figure.savefig(report.path("plots/comparison.png"), dpi=160)
     plt.close(figure)
@@ -665,7 +736,7 @@ def aggregate(manifest, state):
     )
     if gap["ci95"][0] <= 0 <= gap["ci95"][1] and gap["red_improvement"] != 0:
         interpretation += " The interval includes zero, so the observed change remains uncertain."
-    text = f"""# Stage B: one frozen Blue and three fresh Red challengers
+    text = f"""# Frozen Blue and {len(training_seeds)} fresh Red challengers
 
 {interpretation} The observed Red improvement is **{gap["red_improvement"]:.2f} points**,
 with a paired 95% bootstrap interval of **[{gap["ci95"][0]:.2f}, {gap["ci95"][1]:.2f}]**.
@@ -673,24 +744,27 @@ Higher Blue return is better for the defender.
 
 | Matchup | Mean raw Blue return | Test episodes |
 | --- | ---: | ---: |
-| Original Blue vs Original Red | {gap["baseline_blue_mean"]:.2f} | 600 |
-| Same Blue vs selected Red (`{state["selection"]["candidate"]}`) | {gap["selected_blue_mean"]:.2f} | 600 |
+| Original Blue vs Original Red | {gap["baseline_blue_mean"]:.2f} | {len(test_seeds)} |
+| Blue vs selected Red (`{state["selection"]["candidate"]}`) | {gap["selected_blue_mean"]:.2f} | {len(test_seeds)} |
 
 ![Final paired comparison](comparison.png)
 
-Original training used seed 42 and 9,600,000 source steps. Each new Red requested
-10,000,000 extra steps and completed 9,984,000 (208 updates of 48,000 steps).
+Original {manifest["source"].get("algorithm", "ippo").upper()} training used seed
+{manifest["source"]["original_training_seed"]} and
+{manifest["source"]["original_training_steps"]:,} source steps. Each fresh IPPO Red requested
+{attempt_budget["requested_steps"]:,} extra steps and completed {attempt_budget["completed_steps"]:,}
+({attempt_budget["updates"]} updates of {attempt_budget["steps_per_update"]:,} steps).
 Blue stayed exactly unchanged. The source and every challenger use the same
 stock CC4 game, enhanced-v2 observations, one JAX-generated topology (seed 0),
 500-step episodes, zero-sum rewards and stochastic policy actions. This is
-600 fresh episodes on one network. It is a different target game from Stage A's CIA/resilience evaluation.
+{len(test_seeds)} fresh episodes on one network. It is a different target game from Stage A's CIA/resilience evaluation.
 
-Selection compared Original Red and three final Red checkpoints on 100 distinct
+Selection compared Original Red and {len(training_seeds)} final Red checkpoints on {len(validation_seeds)} distinct
 validation episodes per candidate. The lowest mean Blue return won, with exact
 ties favoring Original Red then the recorded seed order. The identity was saved
-before testing. Final matchups share the 600 episode roots, although differing
+before testing. Final matchups share the {len(test_seeds)} episode roots, although differing
 actions can produce different trajectories. The 95% percentile bootstrap samples
-aligned episode differences {BOOTSTRAP_SAMPLES:,} times (seed {BOOTSTRAP_SEED}).
+aligned episode differences {bootstrap_samples:,} times (seed {bootstrap_seed}).
 It measures evaluation uncertainty conditional on these selected models from
 one original training run. Negative observed gains are retained. This is a
 one-sided response search and does not prove equilibrium or measure two-sided NashConv.
@@ -703,13 +777,14 @@ were {tail_text} Red return points; [the exact tail table](learning-tail.csv)
 records those descriptive comparisons. Continuing positive changes suggest the
 search may still be improving; noisy flat tails cannot prove convergence.
 If further improvement is plausible from those curves, the concrete
-next experiment is another 10M requested steps per fresh attempt against this
+next experiment is another {attempt_budget["requested_steps"]:,} requested steps per fresh attempt against this
 same Blue under a newly prespecified protocol; it is not included in this pilot.
 Portable weights omit optimizer/PRNG/environment state, so a new launch is a
 new attempt, not an optimizer resume.
 
 Training update loops measured {training_seconds / 3600:.2f} hours including
-first-update compilation; six planned evaluation matchups measured {evaluation_seconds / 3600:.2f} hours including
+first-update compilation; {len(state["validation"]) + len(state["test"])} planned
+evaluation matchups measured {evaluation_seconds / 3600:.2f} hours including
 compilation in their processes. Pipeline elapsed time was
 {(state["finished_epoch"] - state["started_epoch"]) / 3600:.2f} hours; queue delay and
 smoke are separate. No dollar tariff is available. Slurm job IDs: {state["slurm_job_ids"]}.
@@ -737,7 +812,7 @@ the reverse Blue-response direction and a separate manifest/budget. It has not b
 Stage B report: [README.md](README.md).
 
 Reuse the pinned implementation `{manifest["source_revision"]}`,
-`src/jaxborg/oracle_stage_b.py`, the source-specific generator and serial controller,
+`src/jaxborg/response_oracle.py`, the source-specific generator and serial controller,
 canonical frozen-opponent loading, checkpoint completion and freezing assertions,
 independent matchup lineage, explicit fingerprint reuse, and paired episode aggregation.
 The exact Stage B protocol and seed domains are in [manifest.json](manifest.json).
@@ -752,7 +827,7 @@ No Stage C execution is started.
 Rerun report from the same checkout:
 
 ```bash
-.venv/bin/python scripts/experiments/oracle_stage_b.py aggregate \
+.venv/bin/python scripts/experiments/response_oracle.py aggregate \
   --manifest {report_dir / "manifest.json"}
 ```
 from the unchanged clean launch checkout with the explicit experiment root and `JAX_PLATFORMS=cpu`.
@@ -760,11 +835,16 @@ from the unchanged clean launch checkout with the explicit experiment root and `
     report.publish(handoff, "reports/handoff.md")
     report.export("reports/handoff.md", report_dir / "handoff.md")
     # This collection is outside the source checkout and was explicitly requested by the task.
-    collection = report_dir.parent.parent / "README.md"
+    collection = Path(manifest.get("collection_readme", report_dir.parent.parent / "README.md"))
     if collection.exists():
         current = collection.read_text()
-        link = "\nCompleted Stage B pilot: [one frozen Blue and three Red challengers](results/stage-b/README.md).\n"
-        if "Completed Stage B pilot:" not in current:
+        target = os.path.relpath(report_dir / "README.md", collection.parent)
+        label = (
+            f"{manifest['source'].get('algorithm', 'ippo').upper()} Blue at "
+            f"{manifest['source']['original_training_steps']:,} source steps"
+        )
+        link = f"\nCompleted Stage B pilot: [{label}]({target}).\n"
+        if f"]({target})" not in current:
             collection.write_text(current + link)
     print(f"Completed pilot report: {report_dir / 'README.md'}", flush=True)
     return gap
@@ -774,9 +854,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="action", required=True)
     prep = sub.add_parser("prepare")
-    prep.add_argument("--source", default=str(DEFAULT_SOURCE))
-    prep.add_argument("--report-dir", default=str(DEFAULT_REPORT))
-    for action in ("dry-run", "smoke", "run", "aggregate"):
+    prep.add_argument("--campaign", required=True, help="declarative response campaign YAML")
+    prep.add_argument("--defender", required=True, help="checkpoint name within the campaign")
+    for action in ("dry-run", "smoke", "run", "pilot", "aggregate"):
         command_parser = sub.add_parser(action)
         command_parser.add_argument("--manifest", required=True)
     args = parser.parse_args()
@@ -787,6 +867,9 @@ def main():
     elif args.action == "smoke":
         smoke(args)
     elif args.action == "run":
+        execute(args)
+    elif args.action == "pilot":
+        smoke(args)
         execute(args)
     else:
         manifest = load_protocol(args.manifest)

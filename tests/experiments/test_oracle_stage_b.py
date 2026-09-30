@@ -5,7 +5,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from jaxborg.oracle_stage_b import (
+from jaxborg.recipe import load, team_recipe
+from jaxborg.response_campaign import load_campaign
+from jaxborg.response_oracle import (
     TRAIN_SEEDS,
     assert_recipe_contract,
     budget,
@@ -15,7 +17,6 @@ from jaxborg.oracle_stage_b import (
     select_candidate,
     source_specific_recipe,
 )
-from jaxborg.recipe import load
 from jaxborg.topology_banks import validate_topology_split
 
 
@@ -47,6 +48,68 @@ def test_generated_recipe_loads_through_production_parser(recipe, tmp_path):
     resolved["eval"]["scripted_red"]["after_training"] = True
     with pytest.raises(ValueError, match="scripted evaluation"):
         assert_recipe_contract(resolved)
+
+
+def test_mappo_source_requires_explicit_checkpoint_and_fixed_ippo_challenger(recipe, tmp_path):
+    template = copy.deepcopy(recipe)
+    template["run"] = dict(total_steps=9600000, seed=42, blue_observation_version=2)
+    template["train"]["topology_generation"] = dict(generator="jax", seed_start=0, count=1)
+    source = copy.deepcopy(template)
+    source["algorithm"] = "mappo"
+    source["run"]["total_steps"] = 49968000
+    source["train"]["team_overrides"] = {
+        team: {
+            "arch": {
+                "name": "mappo",
+                "hidden_dim": 256,
+                "hidden_layers": 2,
+                "activation": "tanh",
+                "critic_input": "global_state",
+            }
+        }
+        for team in ("blue", "red")
+    }
+    with pytest.raises(ValueError, match="specified steps"):
+        source_specific_recipe(source, "blue", "topology", challenger_source=template)
+    with pytest.raises(ValueError, match="explicit fixed IPPO"):
+        source_specific_recipe(source, "blue", "topology", expected_source_steps=49968000)
+    generated = source_specific_recipe(
+        source, "blue", "topology", expected_source_steps=49968000, challenger_source=template
+    )
+    assert generated["algorithm"] == "ippo"
+    assert team_recipe(generated, "red")["arch"] == template["arch"]
+    assert "team_overrides" not in generated["train"]
+    assert generated["core"] == template["core"]
+    assert budget(generated) == budget(recipe)
+    shorter = source_specific_recipe(
+        source, "blue", "topology", expected_source_steps=49968000, challenger_source=template, requested_steps=96000
+    )
+    assert budget(shorter)["completed_steps"] == 96000
+    assert budget(shorter)["updates"] == 2
+
+
+def test_campaign_yaml_drives_seeds_budget_and_rejects_leakage(tmp_path):
+    path = Path("campaigns/response-oracles/mappo-seed42.yaml")
+    config, defender, randomness = load_campaign(path, "mappo-49968000")
+    assert defender["steps"] == 49968000
+    assert config["training"]["requested_steps"] == 10000000
+    assert randomness["training_environment_roots"] == [11001, 22001, 33001]
+    assert len(randomness["final_test_episode_roots"]) == 600
+    config["training"]["seeds"] = [17, 29]
+    config["evaluation"]["test"] = dict(seed_start=77, episodes=5)
+    changed = tmp_path / "campaign.yaml"
+    changed.write_text(yaml.safe_dump(config))
+    _, _, randomness = load_campaign(changed, "mappo-9600000")
+    assert randomness["training_environment_roots"] == [17, 29]
+    assert randomness["final_test_episode_roots"] == [77, 78, 79, 80, 81]
+    config["evaluation"]["validation"]["seed_start"] = 17
+    changed.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="overlap"):
+        load_campaign(changed, "mappo-9600000")
+
+
+def test_selection_respects_configured_attempts_and_tie_order():
+    assert select_candidate({"original": -3, "seed-29": -4, "seed-17": -4}, [29, 17]) == "seed-29"
 
 
 @pytest.mark.parametrize("mutation", ["cia", "topology", "suite"])

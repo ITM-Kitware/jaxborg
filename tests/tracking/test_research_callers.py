@@ -32,7 +32,7 @@ def module_at(name, path):
 
 
 @pytest.fixture
-def source(tmp_path, monkeypatch):
+def source(tmp_path, monkeypatch, request):
     monkeypatch.setenv("JAXBORG_EXP_DIR", str(tmp_path / "experiments"))
     monkeypatch.setenv("JAXBORG_ALLOW_DIRTY", "1")
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
@@ -49,9 +49,12 @@ def source(tmp_path, monkeypatch):
     recipe["mlflow"] = dict(checkpoint_eval=dict(every_steps=0))
     policies = {}
     for team, obs_dim, actions in [("blue", 450, 242), ("red", 706, 1106)]:
-        network = policy_from_arch(recipe["arch"], action_dim=actions)
+        arch = copy.deepcopy(recipe["arch"])
+        if team == "blue" and getattr(request, "param", "shared") == "mappo":
+            arch.update(name="mappo", critic_input="global_state", cage4_enhanced_obs=True, blue_observation_version=2)
+        network = policy_from_arch(arch, action_dim=actions)
         weights = init_policy_params(network, jax.random.PRNGKey(3), obs_dim)
-        policies[team] = PolicyBundleEntry(weights, team, obs_dim, actions, recipe["arch"])
+        policies[team] = PolicyBundleEntry(weights, team, obs_dim, actions, arch)
     model = tmp_path / "source/model_test.safetensors"
     save_jax_bundle(model, policies)
     write_sidecar(model.with_name("recipe_test.yaml"), recipe, seed=42, total_steps=9600000, backend="jax")
@@ -69,6 +72,7 @@ def runs(kind):
 
 
 @pytest.mark.parametrize("cancel", [False, True])
+@pytest.mark.parametrize("source", ["shared", "mappo"], indirect=True)
 def test_frozen_enhanced_blue_and_changed_red_survive_publication_and_cancel(source, tmp_path, monkeypatch, cancel):
     model, recipe = source
     tiny = module_at("research_tiny_env", REPO / "tests/cotraining/test_jax_joint_trainer.py")
@@ -115,6 +119,8 @@ def test_frozen_enhanced_blue_and_changed_red_survive_publication_and_cancel(sou
     assert owner["inputs"][0]["retained_reference"].startswith("runs:/")
     assert saved.policies["blue"].trainable is False
     assert saved.policies["red"].trainable is True
+    assert saved.policies["blue"].arch == load_jax_bundle(model).policies["blue"].arch
+    assert saved.policies["red"].arch["name"] == "shared"
 
 
 def test_matchup_owns_both_inputs_and_only_reuses_validated_fingerprint(source, tmp_path, monkeypatch):

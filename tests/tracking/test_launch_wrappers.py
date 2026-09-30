@@ -24,6 +24,8 @@ def launch_checkout(tmp_path):
         "scripts/train/run_seeds.sh",
         "scripts/train/allocated.sh",
         "scripts/sbatch/run_ippo.sh",
+        "scripts/experiments/submit_response_oracle.sh",
+        "scripts/experiments/allocated_response_oracle.sh",
         "uv.lock",
     ):
         dest = repo / name
@@ -135,3 +137,47 @@ def test_seed_launches_share_submission_identity(launch_checkout, tmp_path):
     subprocess.run(["scripts/train/run_seeds.sh", "jax", "default", "2", "42"], cwd=repo, env=env, check=True)
     rows = [json.loads(line) for line in log.read_text().splitlines()]
     assert len(rows) == 2 and rows[0] == rows[1]
+
+
+def test_response_submission_uses_configured_resources_and_dependency(launch_checkout, tmp_path):
+    repo, bins, env = launch_checkout
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "campaign": "configured-response",
+                "tracking": {"experiment": "shared-response"},
+                "resources": {
+                    "partition": "community",
+                    "gpus_per_job": 1,
+                    "memory_gb": 32,
+                    "cpus_per_task": 4,
+                    "time_limit": "03:00:00",
+                    "smoke_time_limit": "00:15:00",
+                },
+            }
+        )
+    )
+    log = tmp_path / "response-submission.json"
+    sbatch = bins / "sbatch"
+    sbatch.write_text(
+        f"#!{sys.executable}\nimport json,os,sys\n"
+        f'json.dump({{"args":sys.argv[1:],"experiment":os.environ["JAXBORG_MLFLOW_EXPERIMENT"]}},open({str(log)!r},"w"))\n'
+    )
+    sbatch.chmod(0o755)
+    env["JAXBORG_SLURM_DEPENDENCY"] = "afterany:123"
+    subprocess.run(
+        ["scripts/experiments/submit_response_oracle.sh", "pilot", str(manifest)], cwd=repo, env=env, check=True
+    )
+    record = json.loads(log.read_text())
+    for argument in (
+        "--partition=community",
+        "--gres=gpu:1",
+        "--mem=32G",
+        "--cpus-per-task=4",
+        "--time=03:00:00",
+        "--dependency=afterany:123",
+    ):
+        assert argument in record["args"]
+    assert record["experiment"] == "shared-response"
+    assert record["args"][-3:] == ["pilot", "--manifest", str(manifest)]
