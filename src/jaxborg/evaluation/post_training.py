@@ -279,8 +279,10 @@ def _successful_evaluations(
                 if record["status"] != "succeeded" or record.get("returncode") != 0:
                     continue
                 command = record["command"]
-                if not isinstance(command, list) or len(command) < 2 or not all(
-                    isinstance(arg, str) for arg in command
+                if (
+                    not isinstance(command, list)
+                    or len(command) < 2
+                    or not all(isinstance(arg, str) for arg in command)
                 ):
                     continue
                 key = _evaluation_resume_key(record["name"], command, record["jax_platforms"], saved_recipe)
@@ -369,8 +371,14 @@ def run_configured_evaluations_after_training(
     else:
         raise ValueError(f"cannot detect trained backend from model suffix: {resolved_model}")
     jax_platforms = _evaluation_jax_platforms(backend)
-    # Match the canonical $EXP_DIR/<algorithm>_<backend>/<tag>/model layout.
-    exp_dir = resolved_model.parents[2]
+    # Preserve the producing store for canonical Run artifact paths. The old
+    # directory heuristic remains available to legacy callers without a root.
+    if os.environ.get("JAXBORG_EXP_DIR"):
+        from jaxborg.tracking import experiment_root
+
+        exp_dir = experiment_root()
+    else:
+        exp_dir = resolved_model.parents[2]
     eval_dir = exp_dir / "eval"
     eval_dir.mkdir(parents=True, exist_ok=True)
     timestamp = time.strftime("%Y%m%d_%H%M%S")

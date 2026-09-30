@@ -1,0 +1,82 @@
+meta:
+  name: stage-c-blue-smoke
+  source: Fresh Blue vs the original frozen seed-42 Red; reverse-direction GPU preflight
+algorithm: ippo
+cage4_enhanced_obs: true
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+core:
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+train:
+  teams: blue
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 4000
+  variant: cc4_stock
+  opponents:
+    red:
+      path: /data/shared/jaxborg/jaxborg-harml-comparison/ippo_jax/cotraining_seed42_hmarl_comparison_50m/checkpoint_9600000.safetensors
+  topology_bank:
+  - /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/oracle-stage-b/artifacts/3557cf7c4d3f40b0961a9bd91d4ac537/artifacts/topologies/topology-seed0.npz
+eval:
+  variant: cc4_stock
+  cia:
+    enabled: false
+  topology_bank:
+  - /home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/oracle-stage-b/artifacts/3557cf7c4d3f40b0961a9bd91d4ac537/artifacts/topologies/topology-seed0.npz
+  topology_sampling: exhaustive
+  allow_training_topologies: true
+  policy_backend: jax
+  scripted_red:
+    after_training: false
+  play_priors:
+    enabled: false
+  cross_play:
+    enabled: false
+  cross_seed_play:
+    enabled: false
+  checkpoint_scripted_reds:
+    enabled: false
+  after_training:
+  - name: stage-c-blue-smoke-reloaded
+    script: scripts/eval/eval_matchup.py
+    model_arg: null
+    required: true
+    jax_platforms: cuda
+    args:
+    - --recipe
+    - '{recipe}'
+    - --policy-backend
+    - jax
+    - --blue-path
+    - '{model}'
+    - --red-path
+    - /data/shared/jaxborg/jaxborg-harml-comparison/ippo_jax/cotraining_seed42_hmarl_comparison_50m/checkpoint_9600000.safetensors
+    - --episodes-per-seed
+    - '1'
+    - --seeds
+    - 9100000-9100003
+    - --name
+    - stage-c-blue-smoke-reloaded
+    - --output
+    - /home/local/KHQ/paul.elliott/jaxborg-exp/shared/verification/stage-c-blue-smoke-evaluation.json
+jax:
+  num_envs: 4
+  num_minibatches: 4
+  update_epochs: 1
+  checkpoint_every_updates: 1

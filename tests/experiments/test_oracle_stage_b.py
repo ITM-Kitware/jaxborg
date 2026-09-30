@@ -112,6 +112,25 @@ def test_selection_respects_configured_attempts_and_tie_order():
     assert select_candidate({"original": -3, "seed-29": -4, "seed-17": -4}, [29, 17]) == "seed-29"
 
 
+def test_overnight_curve_keeps_red_protocol_and_blue_smoke_uses_original_red():
+    path = Path("campaigns/response-oracles/ippo-seed42-red-curve.yaml")
+    config = yaml.safe_load(path.read_text())
+    assert sorted(entry["steps"] for entry in config["defenders"]) == [20160000, 29760000, 40320000, 49968000]
+    assert config["existing_points"][0]["source_steps"] == 9600000
+    reference, _, reference_roots = load_campaign("campaigns/response-oracles/mappo-seed42.yaml", "mappo-49968000")
+    for entry in config["defenders"]:
+        _, _, roots = load_campaign(path, entry["name"])
+        assert roots == reference_roots
+    assert config["training"] == reference["training"]
+    smoke = load("verification/stage_c_blue_smoke")
+    assert smoke["train"]["teams"] == "blue"
+    assert set(smoke["train"]["opponents"]) == {"red"}
+    assert smoke["train"]["opponents"]["red"]["path"].endswith("checkpoint_9600000.safetensors")
+    assert smoke["train"]["total_timesteps"] == 4000
+    assert smoke["eval"]["after_training"][0]["required"] is True
+    assert "9100000-9100003" in smoke["eval"]["after_training"][0]["args"]
+
+
 @pytest.mark.parametrize("mutation", ["cia", "topology", "suite"])
 def test_rejects_protocol_drift(recipe, mutation):
     if mutation == "cia":

@@ -134,3 +134,27 @@ Each manifest archives the campaign YAML, resolved recipes and canonical source
 inputs. The two MAPPO studies share one database and artifact store; their
 campaign IDs and report directories are distinct. Completed collection links
 include the actual defender algorithm and source steps. No Stage C is launched.
+
+## Overnight Stage C preparation
+
+`campaigns/response-oracles/ippo-seed42-red-curve.yaml` adds the four remaining
+IPPO seed-42 snapshots, reusing the fixed Red template and protocol. The original
+9.6M Stage B point stays in its producing store and retains its original source
+revision. Verify the source/game/budget/seed contracts and executable science
+file identities before treating these points as one curve; a full Git SHA is
+not represented as identical across the later config/logging changes.
+
+The user authorized free additional GPUs for the 13-hour overnight window. The
+new campaign requests 48G per GPU job so four jobs can fit the node's 254000M
+memory reservation limit. Existing 64G MAPPO allocations are retained. Slurm
+community scheduling reserves the GPUs and respects other users' allocations.
+The Red curve jobs depend on successful IPPO Stage B completion and on the
+already queued MAPPO 9.6M job starting.
+
+`recipes/verification/stage_c_blue_smoke.yaml` uses the ordinary trainer with
+`train.teams: blue`, original frozen Red, two 2000-step updates and a required
+four-episode saved/reloaded matchup. Its post-training hook preserves explicit
+`JAXBORG_EXP_DIR`; canonical Run checkpoint paths must not redirect evaluation
+into a new run-local MLflow store. This smoke does not authorize the 15 full
+Blue-response attempts by itself. The complete Stage C table and approximate
+NashConv remain pending both response directions.

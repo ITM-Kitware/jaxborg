@@ -71,16 +71,29 @@ def runs(kind):
     return [t.read_manifest(owner.info.run_id)[0] for owner in owners]
 
 
-@pytest.mark.parametrize("cancel", [False, True])
-@pytest.mark.parametrize("source", ["shared", "mappo"], indirect=True)
-def test_frozen_enhanced_blue_and_changed_red_survive_publication_and_cancel(source, tmp_path, monkeypatch, cancel):
+@pytest.mark.parametrize(
+    "source,cancel,trainable",
+    [
+        ("shared", False, "red"),
+        ("shared", True, "red"),
+        ("mappo", False, "red"),
+        ("mappo", True, "red"),
+        ("shared", False, "blue"),
+        ("shared", True, "blue"),
+    ],
+    indirect=["source"],
+)
+def test_frozen_opponent_and_changed_challenger_survive_publication_and_cancel(
+    source, tmp_path, monkeypatch, cancel, trainable
+):
     model, recipe = source
     tiny = module_at("research_tiny_env", REPO / "tests/cotraining/test_jax_joint_trainer.py")
     env = tiny._TinyJointEnv(blue_obs_dim=450, red_obs_dim=706, blue_actions=242, red_actions=1106)
     monkeypatch.setattr(joint, "make_joint_jax_env", lambda *a, **kw: env)
     trainer = module_at("research_trainer", REPO / "scripts/train/algorithms/ippo_jax.py")
-    recipe["train"].update(teams="red", opponents=dict(blue=dict(path=str(model))))
-    path = tmp_path / "red.yaml"
+    frozen = "blue" if trainable == "red" else "red"
+    recipe["train"].update(teams=trainable, opponents={frozen: {"path": str(model)}})
+    path = tmp_path / f"{trainable}.yaml"
     path.write_text(yaml.safe_dump(t.serializable(recipe)))
     real_make = trainer.make_joint_train
 
@@ -107,20 +120,20 @@ def test_frozen_enhanced_blue_and_changed_red_survive_publication_and_cancel(sou
     owner = runs("training")[0]
     assert owner["status"] == ("KILLED" if cancel else "FINISHED")
     assert owner["actual_steps"] == (2 if cancel else 4)
-    assert owner["parameter_checks"]["blue"]["changed"] is False
-    assert owner["parameter_checks"]["red"]["changed"] is True
+    assert owner["parameter_checks"][frozen]["changed"] is False
+    assert owner["parameter_checks"][trainable]["changed"] is True
     assert owner["policy_contract"]["blue"]["obs_dim"] == 450
     checkpoint = t.resolve_artifact(f"runs:/{owner['run_id']}/checkpoints/checkpoint_2.safetensors")
     saved = load_jax_bundle(checkpoint)
-    assert parameter_hash(saved.policies["blue"].weights) == parameter_hash(
-        load_jax_bundle(model).policies["blue"].weights
+    assert parameter_hash(saved.policies[frozen].weights) == parameter_hash(
+        load_jax_bundle(model).policies[frozen].weights
     )
     assert owner["inputs"][0]["sha256"] == t.file_hash(model)
     assert owner["inputs"][0]["retained_reference"].startswith("runs:/")
-    assert saved.policies["blue"].trainable is False
-    assert saved.policies["red"].trainable is True
-    assert saved.policies["blue"].arch == load_jax_bundle(model).policies["blue"].arch
-    assert saved.policies["red"].arch["name"] == "shared"
+    assert saved.policies[frozen].trainable is False
+    assert saved.policies[trainable].trainable is True
+    assert saved.policies[frozen].arch == load_jax_bundle(model).policies[frozen].arch
+    assert saved.policies[trainable].arch["name"] == "shared"
 
 
 def test_matchup_owns_both_inputs_and_only_reuses_validated_fingerprint(source, tmp_path, monkeypatch):

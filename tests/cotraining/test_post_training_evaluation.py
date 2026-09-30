@@ -17,6 +17,11 @@ from jaxborg.evaluation.post_training import (
 from jaxborg.recipe import RECIPES_DIR, load
 
 
+@pytest.fixture(autouse=True)
+def isolated_store_environment(monkeypatch):
+    monkeypatch.delenv("JAXBORG_EXP_DIR", raising=False)
+
+
 def _recipe(evaluations=None) -> dict:
     return {
         "meta": {"name": "multi-eval-test"},
@@ -169,6 +174,28 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
     assert manifest["jax_platforms"] == "cuda"
     assert [entry["name"] for entry in manifest["evaluations"]] == ["first-way", "second-way"]
     assert [entry["status"] for entry in manifest["evaluations"]] == ["succeeded", "succeeded"]
+
+
+def test_canonical_post_training_evaluation_keeps_shared_store(tmp_path, monkeypatch):
+    store = tmp_path / "shared"
+    model = store / "artifacts/run-id/artifacts/checkpoints/model_run.safetensors"
+    model.parent.mkdir(parents=True)
+    model.write_bytes(b"model")
+    model.with_name("recipe_run.yaml").write_text("meta:\n  name: shared-store\n")
+    script = tmp_path / "evaluate.py"
+    script.touch()
+    recipe = _recipe([{"name": "shared-store", "script": str(script), "args": ["--output", "{eval_dir}/result.json"]}])
+    monkeypatch.setenv("JAXBORG_EXP_DIR", str(store))
+    monkeypatch.delenv("JAXBORG_SKIP_POST_TRAINING_EVAL", raising=False)
+    calls = []
+    manifest = run_configured_evaluations_after_training(
+        model, recipe, run_subprocess=lambda *args, **kwargs: calls.append((args, kwargs))
+    )
+    assert manifest.is_relative_to(store / "eval")
+    assert calls[0][1]["env"]["JAXBORG_EXP_DIR"] == str(store)
+    assert calls[0][1]["env"]["JAXBORG_EVAL_DIR"] == str(store / "eval")
+    assert calls[0][0][0][-1] == str(store / "eval/result.json")
+    assert not (store / "artifacts/run-id/eval").exists()
 
 
 def test_resume_retries_failed_and_missing_suites_and_preserves_successes(tmp_path, monkeypatch):

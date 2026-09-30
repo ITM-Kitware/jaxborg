@@ -34,6 +34,6 @@ if [[ -n "${JAXBORG_SLURM_DEPENDENCY:-}" ]]; then
 fi
 exec sbatch --parsable --partition="$PARTITION" --gres="gpu:$GPUS" --mem="${MEMORY}G" --cpus-per-task="$CPUS" \
     "${DEPENDENCY[@]}" \
-    --time="$LIMIT" --job-name="stage-b-$1" --chdir="$ROOT" \
+    --time="$LIMIT" --job-name="$JAXBORG_CAMPAIGN" --chdir="$ROOT" \
     --output="$JAXBORG_EXP_DIR/launches/slurm/%j.out" --error="$JAXBORG_EXP_DIR/launches/slurm/%j.err" \
     "$ROOT/scripts/experiments/allocated_response_oracle.sh" "$1" --manifest "$2"
