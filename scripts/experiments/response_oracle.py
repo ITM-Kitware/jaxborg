@@ -760,11 +760,18 @@ def aggregate(manifest, state):
         json.loads(resolve_artifact(ref).read_text())["wall_time_s"]
         for ref in list(state["validation"].values()) + list(state["test"].values())
     )
-    interpretation = (
-        f"Fresh {team_label} improved against the original frozen {frozen_label}."
-        if gap[gain_key] > 0
-        else f"Fresh {team_label} did not improve against the original frozen {frozen_label} on the test episodes."
-    )
+    if state["selection"]["candidate"] == "original":
+        interpretation = (
+            f"No fresh {team_label} candidate beat Original {team_label} on validation. "
+            f"Original {team_label} was selected for the paired final test, so the zero gap compares "
+            "the original policy with itself. Fresh candidates were not evaluated on final-test episodes."
+        )
+    else:
+        interpretation = (
+            f"Selected fresh {team_label} improved against the original frozen {frozen_label}."
+            if gap[gain_key] > 0
+            else f"Selected fresh {team_label} did not improve on the final-test episodes."
+        )
     if gap["ci95"][0] <= 0 <= gap["ci95"][1] and gap[gain_key] != 0:
         interpretation += " The interval includes zero, so the observed change remains uncertain."
     text = f"""# Frozen {frozen_label} and {len(training_seeds)} fresh {team_label} challengers

@@ -31,9 +31,18 @@ def test_controller_does_not_pass_its_gpu_pool_setting_to_children(monkeypatch):
     assert "XLA_PYTHON_CLIENT_PREALLOCATE" not in observed[0]
 
 
-@pytest.mark.parametrize("source_steps", [9600000, 49968000])
-@pytest.mark.parametrize("team", ["blue", "red"])
-def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, source_steps, team):
+@pytest.mark.parametrize(
+    "source_steps,team,fallback",
+    [
+        (9600000, "blue", False),
+        (49968000, "blue", False),
+        (9600000, "red", False),
+        (49968000, "red", False),
+        (9600000, "blue", True),
+        (49968000, "red", True),
+    ],
+)
+def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, source_steps, team, fallback):
     monkeypatch.setenv("JAXBORG_EXP_DIR", str(tmp_path / "experiments"))
     monkeypatch.setenv("JAXBORG_ALLOW_DIRTY", "1")
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
@@ -95,7 +104,10 @@ def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, s
         "finished_epoch": 3600,
         "slurm_job_ids": ["test"],
         "status": "evaluations_finished",
-        "selection": {"candidate": "seed-11001", "checkpoint": challenger_ref},
+        "selection": {
+            "candidate": "original" if fallback else "seed-11001",
+            "checkpoint": source_ref if fallback else challenger_ref,
+        },
     }
     for seed in TRAIN_SEEDS:
         with Run({"meta": {"name": str(seed)}}, backend="cpu") as owner:
@@ -139,12 +151,12 @@ def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, s
             )
 
     for name in ["original", *[f"seed-{seed}" for seed in TRAIN_SEEDS]]:
-        value = (-8 if team == "blue" else -12) if name == "seed-11001" else -10
+        value = (-8 if team == "blue" else -12) if name == "seed-11001" and not fallback else -10
         state["validation"][name] = evaluation(VALIDATION_SEEDS, [value] * 100, challenger=name != "original")
     state["test"]["original"] = evaluation(TEST_SEEDS, [-10] * 600)
-    selected_value = -4 if team == "blue" else -22
-    improvement = 6 if team == "blue" else 12
-    state["test"]["selected"] = evaluation(TEST_SEEDS, [selected_value] * 600, challenger=True)
+    selected_value = -10 if fallback else -4 if team == "blue" else -22
+    improvement = 0 if fallback else 6 if team == "blue" else 12
+    state["test"]["selected"] = evaluation(TEST_SEEDS, [selected_value] * 600, challenger=not fallback)
     (report_dir / "manifest.json").write_text(json.dumps(manifest))
     (report_dir / "smoke.json").write_text("{}\n")
     bars = []
@@ -168,6 +180,10 @@ def test_report_matches_episode_records_and_plot_inputs(tmp_path, monkeypatch, s
     assert f"**{improvement:.2f} points**" in readme
     assert f"{'Red' if team == 'blue' else 'Blue'} stayed exactly unchanged" in readme
     assert f"The {'highest' if team == 'blue' else 'lowest'} mean Blue return won" in readme
+    if fallback:
+        assert f"Original {team.title()} was selected for the paired final test" in readme
+        assert "Fresh candidates were not evaluated on final-test episodes" in readme
+        assert "did not improve" not in readme
     assert f"{source_steps:,} source steps" in readme
     for link in re.findall(r"\]\(([^)]+)\)", readme):
         assert (report_dir / link).is_file(), link
