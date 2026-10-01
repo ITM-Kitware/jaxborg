@@ -31,8 +31,11 @@ def load_campaign(path, defender_name):
     ):
         if not Path(value).is_absolute():
             raise ValueError(f"{name} must be absolute")
+    team = config["challenger"].get("team", "red")
+    if team not in ("blue", "red"):
+        raise ValueError("challenger team must be blue or red")
     if config["challenger"]["algorithm"] != "ippo" or config["challenger"]["architecture"] != "shared":
-        raise ValueError("supported challengers are shared IPPO Reds")
+        raise ValueError("supported challengers are shared IPPO policies")
     if config["game"] != {
         "rules": "cc4_stock",
         "episode_length": 500,
@@ -43,7 +46,7 @@ def load_campaign(path, defender_name):
     }:
         raise ValueError("supported target is enhanced-v2 singleton stock CC4 with zero-sum rewards")
     if config["selection"] != {
-        "rule": "lowest_validation_blue_mean",
+        "rule": "highest_validation_blue_mean" if team == "blue" else "lowest_validation_blue_mean",
         "checkpoint": "final",
         "original_fallback": True,
         "tie_break": "original_then_training_seed_order",

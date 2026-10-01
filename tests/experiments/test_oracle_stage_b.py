@@ -112,6 +112,54 @@ def test_selection_respects_configured_attempts_and_tie_order():
     assert select_candidate({"original": -3, "seed-29": -4, "seed-17": -4}, [29, 17]) == "seed-29"
 
 
+def test_blue_campaign_preserves_budget_and_selects_the_opposite_payoff_direction(tmp_path):
+    path = Path("campaigns/response-oracles/ippo-seed42-blue-response.yaml")
+    config, _, roots = load_campaign(path, "ippo-9600000")
+    red, _, red_roots = load_campaign("campaigns/response-oracles/ippo-seed42-red-curve.yaml", "ippo-49968000")
+    assert config["training"] == red["training"]
+    assert roots == red_roots
+    assert sorted(d["steps"] for d in config["defenders"]) == [9600000, 49968000]
+    assert (
+        select_candidate({"original": -3, "seed-29": -2, "seed-17": -2}, [29, 17], trainable_team="blue") == "seed-29"
+    )
+    assert (
+        select_candidate({"original": -2, "seed-29": -2, "seed-17": -3}, [29, 17], trainable_team="blue") == "original"
+    )
+    config["selection"]["rule"] = "lowest_validation_blue_mean"
+    changed = tmp_path / "wrong-direction.yaml"
+    changed.write_text(yaml.safe_dump(config))
+    with pytest.raises(ValueError, match="selection"):
+        load_campaign(changed, "ippo-9600000")
+
+
+def test_blue_recipe_uses_original_red_and_source_blue_optimizer(recipe, tmp_path):
+    source = copy.deepcopy(recipe)
+    source["run"] = dict(total_steps=9600000, seed=42, blue_observation_version=2)
+    source["train"]["topology_generation"] = dict(generator="jax", seed_start=0, count=1)
+    result = source_specific_recipe(source, "original-pair", "topology", trainable_team="blue")
+    assert result["train"]["teams"] == "blue"
+    assert result["train"]["opponents"] == {"red": {"path": "original-pair"}}
+    assert team_recipe(result, "blue")["core"] == team_recipe(source, "blue")["core"]
+    assert team_recipe(result, "blue")["arch"] == team_recipe(source, "blue")["arch"]
+    assert budget(result) == budget(recipe)
+    path = tmp_path / "blue.yaml"
+    path.write_text(yaml.safe_dump(result))
+    assert_recipe_contract(load(path))
+    template = copy.deepcopy(source)
+    template["core"]["vf_coef"] = 9.0
+    with pytest.raises(ValueError, match="source Blue architecture and optimizer"):
+        source_specific_recipe(source, "original-pair", "topology", challenger_source=template, trainable_team="blue")
+
+
+def test_blue_paired_gap_has_the_correct_sign_and_retains_negative_values():
+    gap = paired_gap([-10, -20, -30], [-5, -15, -25], [1, 2, 3], [1, 2, 3], trainable_team="blue")
+    assert gap["blue_improvement"] == 5
+    assert gap["ci95"] == [5, 5]
+    negative = paired_gap([-5, -15, -25], [-10, -20, -30], [1, 2, 3], [1, 2, 3], trainable_team="blue")
+    assert negative["blue_improvement"] == -5
+    assert negative["ci95"] == [-5, -5]
+
+
 def test_overnight_curve_keeps_red_protocol_and_blue_smoke_uses_original_red():
     path = Path("campaigns/response-oracles/ippo-seed42-red-curve.yaml")
     config = yaml.safe_load(path.read_text())

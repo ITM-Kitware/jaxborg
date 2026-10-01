@@ -33,6 +33,7 @@ import yaml
 from jaxborg.checkpoint import load_jax_bundle, read_sidecar
 from jaxborg.evaluation.cia.fixed_topology import canonical_topology_fingerprint
 from jaxborg.recipe import load as load_recipe
+from jaxborg.recipe import team_recipe
 from jaxborg.research_tracking import parameter_hash
 from jaxborg.response_campaign import load_campaign
 from jaxborg.response_oracle import (
@@ -72,6 +73,13 @@ def dependency_identity():
     return dict(lockfile_sha256=file_hash(ROOT / "uv.lock"), installed_sha256=digest(dependency_snapshot()))
 
 
+def response_teams(manifest):
+    team = manifest.get("trainable_team", "red")
+    if team not in ("blue", "red"):
+        raise ValueError("trainable team must be blue or red")
+    return team, "red" if team == "blue" else "blue"
+
+
 def sidecar_path(source):
     stem = source.stem.removeprefix("model_")
     return next(
@@ -100,6 +108,8 @@ def source_check(source, *, expected_steps=9600000, expected_seed=42):
 def prepare(args):
     # Input generation and import are CPU operations; research rollouts happen only in Slurm.
     config, defender, randomness = load_campaign(args.campaign, args.defender)
+    team = config["challenger"].get("team", "red")
+    frozen_team = "red" if team == "blue" else "blue"
     if experiment_root() != Path(config["tracking"]["root"]).resolve():
         raise ValueError("configured campaign store differs from JAXBORG_EXP_DIR")
     os.environ["JAXBORG_MLFLOW_EXPERIMENT"] = config["tracking"]["experiment"]
@@ -175,12 +185,13 @@ def prepare(args):
         expected_source_seed=args.source_seed,
         challenger_source=challenger_source,
         requested_steps=config["training"]["requested_steps"],
+        trainable_team=team,
     )
     recipe_paths = {}
     for seed in config["training"]["seeds"]:
-        path = study / f"recipe-red-seed{seed}.yaml"
+        path = study / f"recipe-{team}-seed{seed}.yaml"
         variant = copy.deepcopy(recipe)
-        variant["meta"]["name"] = f"{campaign}-red-seed{seed}"
+        variant["meta"]["name"] = f"{campaign}-{team}-seed{seed}"
         path.write_text(yaml.safe_dump(serializable(variant), sort_keys=False))
         load_recipe(path)
         recipe_paths[str(seed)] = str(path)
@@ -198,7 +209,9 @@ def prepare(args):
         "smoke_configuration": config["smoke"],
         "campaign": campaign,
         "status": "prepared; research adapter GPU smoke unmet",
-        "question": "Can a fresh attacker reduce frozen Blue score more than its original training opponent?",
+        "trainable_team": team,
+        "frozen_team": frozen_team,
+        "question": f"Can fresh {team} improve against original frozen {frozen_team}?",
         "source": {
             "original_path": str(source),
             "algorithm": sidecar["algorithm"],
@@ -221,10 +234,11 @@ def prepare(args):
         },
         "challenger": {
             "algorithm": "ippo",
-            "architecture": recipe["arch"],
+            "architecture": team_recipe(recipe, team)["arch"],
+            "optimizer": team_recipe(recipe, team)["core"],
             "recipe_source": challenger_reference or source_ref,
             "recipe_source_sha256": file_hash(template_model or source),
-            "initialization": "fresh weights for every training seed; source Red weights are never loaded",
+            "initialization": f"fresh weights for every training seed; source {team} weights are never loaded",
         },
         "game": {
             "rules": "cc4_stock",
@@ -251,7 +265,9 @@ def prepare(args):
         "validation_episodes": len(randomness["validation_episode_roots"]),
         "final_test_episodes": len(randomness["final_test_episode_roots"]),
         "selection": {
-            "rule": "lowest validation mean Blue episode return; original Red is fallback",
+            "rule": (
+                f"{'highest' if team == 'blue' else 'lowest'} validation mean Blue return; original {team} fallback"
+            ),
             "candidates": ["original", *[f"seed-{seed}" for seed in config["training"]["seeds"]]],
             "tie_break": ["original", *[f"seed-{seed}" for seed in config["training"]["seeds"]]],
             "checkpoints_per_attempt": "final only; no test scores inspected during selection",
@@ -296,7 +312,10 @@ def load_protocol(path):
     for seed, path in manifest["recipes"].items():
         if file_hash(path) != manifest["recipe_hashes"][seed]:
             raise ValueError("prespecified training recipe changed")
-        assert_recipe_contract(yaml.safe_load(Path(path).read_text()))
+        recipe = yaml.safe_load(Path(path).read_text())
+        assert_recipe_contract(recipe)
+        if recipe["train"]["teams"] != response_teams(manifest)[0]:
+            raise ValueError("recipe response direction differs from manifest")
     if file_hash(manifest["eval_recipe"]) != manifest["eval_recipe_sha256"]:
         raise ValueError("evaluation recipe changed")
     return manifest
@@ -314,6 +333,7 @@ def command(*arguments):
 
 
 def evaluate(manifest, candidate, split, seeds, *, recipe=None, reuse=False):
+    team, _ = response_teams(manifest)
     destination = Path(manifest["study_dir"]) / f"{split}-{candidate[0]}.json"
     argv = [
         "scripts/eval/eval_matchup.py",
@@ -322,9 +342,9 @@ def evaluate(manifest, candidate, split, seeds, *, recipe=None, reuse=False):
         "--policy-backend",
         "jax",
         "--blue-path",
-        manifest["source"]["checkpoint"],
+        candidate[1] if team == "blue" else manifest["source"]["checkpoint"],
         "--red-path",
-        candidate[1],
+        manifest["source"]["checkpoint"] if team == "blue" else candidate[1],
         "--episodes-per-seed",
         "1",
         "--seeds",
@@ -361,6 +381,7 @@ def checked_evaluation(reference, seeds):
 
 
 def train(manifest, seed, recipe, *, label=None):
+    team, frozen_team = response_teams(manifest)
     name = label or f"seed-{seed}"
     destination = Path(manifest["study_dir"]) / f"training-{name}.json"
     command(
@@ -382,19 +403,21 @@ def train(manifest, seed, recipe, *, label=None):
     # CPU so its JAX allocator does not reserve most of the next child's GPU.
     with jax.default_device(jax.devices("cpu")[0]):
         saved = load_jax_bundle(resolve_artifact(result["final_checkpoint"]))
-    if parameter_hash(saved.policies["blue"].weights) != manifest["source"]["policies"]["blue"]["parameter_sha256"]:
-        raise ValueError("saved Blue is not the original frozen source")
+    expected_frozen = manifest["source"]["policies"][frozen_team]["parameter_sha256"]
+    if parameter_hash(saved.policies[frozen_team].weights) != expected_frozen:
+        raise ValueError(f"saved {frozen_team} is not the original frozen source")
     checks = owner["parameter_checks"]
-    if checks["blue"]["changed"] or not checks["red"]["changed"]:
-        raise ValueError("expected frozen Blue and updated Red")
-    if parameter_hash(saved.policies["red"].weights) != checks["red"]["current_sha256"]:
-        raise ValueError("saved Red differs from trained Red")
+    if checks[frozen_team]["changed"] or not checks[team]["changed"]:
+        raise ValueError(f"expected frozen {frozen_team} and updated {team}")
+    if parameter_hash(saved.policies[team].weights) != checks[team]["current_sha256"]:
+        raise ValueError(f"saved {team} differs from trained {team}")
     return result
 
 
 @tracked_entrypoint
 def smoke(args):
     manifest = load_protocol(args.manifest)
+    team, frozen_team = response_teams(manifest)
     devices = assigned_devices()
     smoke_seeds = manifest["randomness"]["smoke_episode_roots"]
     config = manifest["smoke_configuration"]
@@ -417,7 +440,7 @@ def smoke(args):
         kind="comparison",
         inputs=[
             input_artifact(baseline_ref, role="original baseline smoke"),
-            input_artifact(result["final_checkpoint"], role="saved/reloaded frozen-Blue training smoke"),
+            input_artifact(result["final_checkpoint"], role=f"saved/reloaded frozen-{frozen_team} training smoke"),
             input_artifact(trained_ref, role="saved/reloaded trained matchup smoke"),
         ],
     )
@@ -434,7 +457,9 @@ def smoke(args):
         "trained_evaluation": trained_ref,
         "original_blue_mean": baseline["blue_mean_return"],
         "trained_blue_mean": trained["blue_mean_return"],
-        "checks": "actual enhanced-v2 GPU rollout; exact Blue; changed Red; both policies saved/reloaded",
+        "checks": f"actual enhanced-v2 GPU rollout; exact {frozen_team}; changed {team}; both policies saved/reloaded",
+        "trainable_team": team,
+        "frozen_team": frozen_team,
     }
     owner.write_json("verification/smoke.json", verification)
     owner.export("verification/smoke.json", Path(manifest["report_dir"]) / "smoke.json")
@@ -482,6 +507,7 @@ def dry_run(args):
 @tracked_entrypoint
 def execute(args):
     manifest = load_protocol(args.manifest)
+    team, _ = response_teams(manifest)
     training_seeds = manifest["training_seeds"]
     validation_seeds = manifest["randomness"]["validation_episode_roots"]
     test_seeds = manifest["randomness"]["final_test_episode_roots"]
@@ -528,7 +554,7 @@ def execute(args):
             write_json(path, state)
         row = checked_evaluation(state["validation"][candidate], validation_seeds)
         scores[candidate] = row["blue_mean_return"]
-    selected = select_candidate(scores, training_seeds)
+    selected = select_candidate(scores, training_seeds, trainable_team=team)
     if "selection" not in state:
         state["selection"] = {
             "candidate": selected,
@@ -564,6 +590,10 @@ def csv_file(path, rows):
 
 @tracked_entrypoint
 def aggregate(manifest, state):
+    team, frozen_team = response_teams(manifest)
+    team_label, frozen_label = team.title(), frozen_team.title()
+    gain_key = f"{team}_improvement"
+    direction = 1 if team == "blue" else -1
     training_seeds = manifest["training_seeds"]
     validation_seeds = manifest["randomness"]["validation_episode_roots"]
     test_seeds = manifest["randomness"]["final_test_episode_roots"]
@@ -575,8 +605,8 @@ def aggregate(manifest, state):
     # Policy/topology/contract evidence is checked independently from return alignment.
     for key in ("original", "selected"):
         evidence = read_manifest(json.loads(resolve_artifact(state["test"][key]).read_text())["eval_id"])[0]
-        if evidence["inputs"][0]["sha256"] != manifest["source"]["sha256"]:
-            raise ValueError("final evaluation Blue source differs")
+        if evidence["inputs"][1 if team == "blue" else 0]["sha256"] != manifest["source"]["sha256"]:
+            raise ValueError(f"final evaluation frozen {frozen_team} source differs")
         if evidence["inputs"][2]["sha256"] != manifest["game"]["topology_sha256"]:
             raise ValueError("final evaluation topology differs")
         if evidence["source"]["git_commit"] != manifest["source_revision"]:
@@ -585,19 +615,19 @@ def aggregate(manifest, state):
         name: checked_evaluation(reference, validation_seeds)["blue_mean_return"]
         for name, reference in state["validation"].items()
     }
-    if select_candidate(scores, training_seeds) != state["selection"]["candidate"]:
+    if select_candidate(scores, training_seeds, trainable_team=team) != state["selection"]["candidate"]:
         raise ValueError("report selection disagrees with validation-only rule")
     if set(state["training"]) != {f"seed-{seed}" for seed in training_seeds}:
         raise ValueError("report requires every prespecified training attempt")
-    expected_red = {
+    expected_challenger = {
         "original": manifest["source"]["sha256"],
         "selected": file_hash(resolve_artifact(state["selection"]["checkpoint"])),
     }
     for key in ("original", "selected"):
         row = json.loads(resolve_artifact(state["test"][key]).read_text())
         owner = read_manifest(row["eval_id"])[0]
-        if owner["inputs"][1]["sha256"] != expected_red[key]:
-            raise ValueError("final evaluated Red differs from its frozen selected identity")
+        if owner["inputs"][0 if team == "blue" else 1]["sha256"] != expected_challenger[key]:
+            raise ValueError(f"final evaluated {team} differs from its frozen selected identity")
     gap = paired_gap(
         baseline["per_episode_blue_returns"],
         selected["per_episode_blue_returns"],
@@ -605,6 +635,7 @@ def aggregate(manifest, state):
         selected["per_episode_seeds"],
         samples=bootstrap_samples,
         seed=bootstrap_seed,
+        trainable_team=team,
     )
     inputs = [input_artifact(reference, role=f"final {name} matchup") for name, reference in state["test"].items()]
     inputs += [input_artifact(reference, role=f"validation {name}") for name, reference in state["validation"].items()]
@@ -620,7 +651,7 @@ def aggregate(manifest, state):
     report.write_json("results/summary.json", gap)
     report.write_json("results/state.json", state)
     rows = [
-        {"episode_seed": seed, "baseline_blue_return": b, "selected_blue_return": r, "red_improvement": b - r}
+        {"episode_seed": seed, "baseline_blue_return": b, "selected_blue_return": r, gain_key: direction * (r - b)}
         for seed, b, r in zip(test_seeds, baseline["per_episode_blue_returns"], selected["per_episode_blue_returns"])
     ]
     csv_file(report.path("results/per-episode.csv"), rows)
@@ -633,7 +664,7 @@ def aggregate(manifest, state):
                 episodes=len(test_seeds),
             ),
             dict(
-                matchup="Original Blue vs selected Red",
+                matchup="Selected Blue vs Original Red" if team == "blue" else "Original Blue vs selected Red",
                 mean_blue_return=gap["selected_blue_mean"],
                 episodes=len(test_seeds),
             ),
@@ -674,21 +705,21 @@ def aggregate(manifest, state):
 
     figure, axis = plt.subplots(figsize=(6.4, 3.6))
     axis.bar(
-        ["Original Red", "Selected Red"],
+        [f"Original {team_label}", f"Selected {team_label}"],
         [gap["baseline_blue_mean"], gap["selected_blue_mean"]],
         color=["#577590", "#b64a3b"],
     )
     axis.set_ylabel("Mean raw Blue episode return")
-    axis.set_title(f"One frozen Blue, {len(test_seeds)} paired test episodes")
+    axis.set_title(f"One frozen {frozen_label}, {len(test_seeds)} paired test episodes")
     figure.tight_layout()
     figure.savefig(report.path("plots/comparison.png"), dpi=160)
     plt.close(figure)
     figure, axis = plt.subplots(figsize=(6.4, 3.6))
     for name in state["training"]:
         curve = [row for row in learning_rows if row["candidate"] == name]
-        axis.plot([row["env_steps"] / 1e6 for row in curve], [row["team.red.return"] for row in curve], label=name)
-    axis.set_xlabel("Extra Red training steps (millions)")
-    axis.set_ylabel("Raw Red rollout return (500 steps)")
+        axis.plot([row["env_steps"] / 1e6 for row in curve], [row[f"team.{team}.return"] for row in curve], label=name)
+    axis.set_xlabel(f"Extra {team_label} training steps (millions)")
+    axis.set_ylabel(f"Raw {team_label} rollout return (500 steps)")
     axis.legend()
     figure.tight_layout()
     figure.savefig(report.path("plots/learning-curves.png"), dpi=160)
@@ -704,13 +735,13 @@ def aggregate(manifest, state):
     tail_rows = []
     for name in state["training"]:
         curve = [row for row in learning_rows if row["candidate"] == name]
-        previous = float(np.mean([row["team.red.return"] for row in curve[-40:-20]]))
-        final = float(np.mean([row["team.red.return"] for row in curve[-20:]]))
+        previous = float(np.mean([row[f"team.{team}.return"] for row in curve[-40:-20]]))
+        final = float(np.mean([row[f"team.{team}.return"] for row in curve[-20:]]))
         tail_rows.append(
             {
                 "candidate": name,
-                "preceding_20_update_mean_red_return": previous,
-                "final_20_update_mean_red_return": final,
+                f"preceding_20_update_mean_{team}_return": previous,
+                f"final_20_update_mean_{team}_return": final,
                 "change": final - previous,
             }
         )
@@ -730,38 +761,39 @@ def aggregate(manifest, state):
         for ref in list(state["validation"].values()) + list(state["test"].values())
     )
     interpretation = (
-        "The search found an additional weakness in this defender."
-        if gap["red_improvement"] > 0
-        else "The search did not show additional exploitation on the final test episodes."
+        f"Fresh {team_label} improved against the original frozen {frozen_label}."
+        if gap[gain_key] > 0
+        else f"Fresh {team_label} did not improve against the original frozen {frozen_label} on the test episodes."
     )
-    if gap["ci95"][0] <= 0 <= gap["ci95"][1] and gap["red_improvement"] != 0:
+    if gap["ci95"][0] <= 0 <= gap["ci95"][1] and gap[gain_key] != 0:
         interpretation += " The interval includes zero, so the observed change remains uncertain."
-    text = f"""# Frozen Blue and {len(training_seeds)} fresh Red challengers
+    text = f"""# Frozen {frozen_label} and {len(training_seeds)} fresh {team_label} challengers
 
-{interpretation} The observed Red improvement is **{gap["red_improvement"]:.2f} points**,
+{interpretation} The observed {team_label} improvement is **{gap[gain_key]:.2f} points**,
 with a paired 95% bootstrap interval of **[{gap["ci95"][0]:.2f}, {gap["ci95"][1]:.2f}]**.
 Higher Blue return is better for the defender.
 
 | Matchup | Mean raw Blue return | Test episodes |
 | --- | ---: | ---: |
 | Original Blue vs Original Red | {gap["baseline_blue_mean"]:.2f} | {len(test_seeds)} |
-| Blue vs selected Red (`{state["selection"]["candidate"]}`) | {gap["selected_blue_mean"]:.2f} | {len(test_seeds)} |
+| Selected {team_label} vs original {frozen_label} | {gap["selected_blue_mean"]:.2f} | {len(test_seeds)} |
 
 ![Final paired comparison](comparison.png)
 
 Original {manifest["source"].get("algorithm", "ippo").upper()} training used seed
 {manifest["source"]["original_training_seed"]} and
-{manifest["source"]["original_training_steps"]:,} source steps. Each fresh IPPO Red requested
+{manifest["source"]["original_training_steps"]:,} source steps. Each fresh IPPO {team_label} requested
 {attempt_budget["requested_steps"]:,} extra steps and completed {attempt_budget["completed_steps"]:,}
 ({attempt_budget["updates"]} updates of {attempt_budget["steps_per_update"]:,} steps).
-Blue stayed exactly unchanged. The source and every challenger use the same
+{frozen_label} stayed exactly unchanged. The source and every challenger use the same
 stock CC4 game, enhanced-v2 observations, one JAX-generated topology (seed 0),
 500-step episodes, zero-sum rewards and stochastic policy actions. This is
 {len(test_seeds)} fresh episodes on one network. It is a different target game from Stage A's CIA/resilience evaluation.
 
-Selection compared Original Red and {len(training_seeds)} final Red checkpoints on {len(validation_seeds)} distinct
-validation episodes per candidate. The lowest mean Blue return won, with exact
-ties favoring Original Red then the recorded seed order. The identity was saved
+Selection compared Original {team_label} and {len(training_seeds)} final {team_label} checkpoints
+on {len(validation_seeds)} distinct validation episodes per candidate.
+The {"highest" if team == "blue" else "lowest"} mean Blue return won, with exact
+ties favoring Original {team_label} then the recorded seed order. The identity was saved
 before testing. Final matchups share the {len(test_seeds)} episode roots, although differing
 actions can produce different trajectories. The 95% percentile bootstrap samples
 aligned episode differences {bootstrap_samples:,} times (seed {bootstrap_seed}).
@@ -773,12 +805,12 @@ one-sided response search and does not prove equilibrium or measure two-sided Na
 
 The budget bounds the search. Learning curves report actual raw 500-step rollout
 returns. Changes from the preceding 20-update mean to the final 20-update mean
-were {tail_text} Red return points; [the exact tail table](learning-tail.csv)
+were {tail_text} {team_label} return points; [the exact tail table](learning-tail.csv)
 records those descriptive comparisons. Continuing positive changes suggest the
 search may still be improving; noisy flat tails cannot prove convergence.
 If further improvement is plausible from those curves, the concrete
 next experiment is another {attempt_budget["requested_steps"]:,} requested steps per fresh attempt against this
-same Blue under a newly prespecified protocol; it is not included in this pilot.
+same {frozen_label} under a newly prespecified protocol; it is not included in this pilot.
 Portable weights omit optimizer/PRNG/environment state, so a new launch is a
 new attempt, not an optimizer resume.
 
@@ -795,34 +827,32 @@ Code SHA: `{manifest["source_revision"]}`. [Resolved manifest](manifest.json),
 
 Large models and logs remain under the explicit external experiment root.
 Report owner: `runs:/{report.run_id}`. Source: `{manifest["source"]["checkpoint"]}`.
-Selected Red: `{state["selection"]["checkpoint"]}`.
+Selected {team_label}: `{state["selection"]["checkpoint"]}`.
 
-Stage C can reuse source-specific recipe generation, canonical policy loading,
-freezing checks, launch pinning, disjoint stream roots, independent evaluation,
-validation-only selection and paired aggregation. It needs new source checkpoints,
-the reverse Blue-response direction and a separate manifest/budget. It has not been launched.
+This report covers one response direction at one source snapshot. A two-sided
+response gap additionally needs the independently selected opposite direction
+against the original source pair, on identical paired episode roots.
 """
     readme = report.path("reports/README.md")
     readme.write_text(text)
     report.publish(readme, "reports/README.md")
     report.export("reports/README.md", report_dir / "README.md")
     handoff = report.path("reports/handoff.md")
-    handoff.write_text(f"""# Stage C handoff
+    handoff.write_text(f"""# Response search handoff
 
-Stage B report: [README.md](README.md).
+Response report: [README.md](README.md).
 
 Reuse the pinned implementation `{manifest["source_revision"]}`,
 `src/jaxborg/response_oracle.py`, the source-specific generator and serial controller,
 canonical frozen-opponent loading, checkpoint completion and freezing assertions,
 independent matchup lineage, explicit fingerprint reuse, and paired episode aggregation.
-The exact Stage B protocol and seed domains are in [manifest.json](manifest.json).
-The selected Stage B Red is `{state["selection"]["checkpoint"]}`.
+The exact protocol and seed domains are in [manifest.json](manifest.json).
+The selected {team_label} is `{state["selection"]["checkpoint"]}`.
 
-Stage C needs a separately prespecified manifest, five new source pairs and
-the reverse Blue response; do not reuse Stage B final seeds for candidate selection.
-Re-estimate budgets from Stage B timings and learning tails before expansion.
+Stage C needs both independent response directions for each reported source pair;
+do not use final-test seeds for candidate selection. Compare equal requested and
+actual search budgets and preserve original source identities when combining results.
 Only completed artifacts can be reused; portable weights do not provide optimizer resume.
-No Stage C execution is started.
 
 Rerun report from the same checkout:
 
@@ -840,10 +870,11 @@ from the unchanged clean launch checkout with the explicit experiment root and `
         current = collection.read_text()
         target = os.path.relpath(report_dir / "README.md", collection.parent)
         label = (
-            f"{manifest['source'].get('algorithm', 'ippo').upper()} Blue at "
+            f"{manifest['source'].get('algorithm', 'ippo').upper()} {frozen_label} at "
             f"{manifest['source']['original_training_steps']:,} source steps"
         )
-        link = f"\nCompleted Stage B pilot: [{label}]({target}).\n"
+        prefix = "Completed Blue response" if team == "blue" else "Completed Stage B pilot"
+        link = f"\n{prefix}: [{label}]({target}).\n"
         if f"]({target})" not in current:
             collection.write_text(current + link)
     print(f"Completed pilot report: {report_dir / 'README.md'}", flush=True)

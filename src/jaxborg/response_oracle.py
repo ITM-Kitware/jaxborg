@@ -1,4 +1,4 @@
-"""Contract checks, selection and paired statistics for frozen-Blue response searches."""
+"""Contract checks, selection and paired statistics for either response direction."""
 
 import copy
 import hashlib
@@ -83,12 +83,16 @@ def source_specific_recipe(
     source_path,
     topology_path,
     *,
-    name="red-response-oracle",
+    name="response-oracle",
     expected_source_steps=9600000,
     expected_source_seed=42,
     challenger_source=None,
     requested_steps=REQUESTED_STEPS,
+    trainable_team="red",
 ):
+    if trainable_team not in ("blue", "red"):
+        raise ValueError("trainable team must be blue or red")
+    frozen_team = "red" if trainable_team == "blue" else "blue"
     if (
         source.get("run", {}).get("total_steps") != expected_source_steps
         or source["run"].get("seed") != expected_source_seed
@@ -108,20 +112,27 @@ def source_specific_recipe(
     template = challenger_source if challenger_source is not None else source
     if (
         template.get("algorithm") != "ippo"
-        or team_recipe(template, "red")["arch"]["name"] != "shared"
+        or team_recipe(template, trainable_team)["arch"]["name"] != "shared"
         or recipe_blue_obs_size(template) != 450
         or train_variant(template) != train_variant(source)
         or {k: v for k, v in template["train"].get("topology_generation", {}).items() if k != "cache_dir"}
         != {k: v for k, v in generation.items() if k != "cache_dir"}
     ):
         raise ValueError("challenger template must use shared IPPO and the same enhanced singleton stock game")
+    if trainable_team == "blue" and any(
+        team_recipe(template, "blue")[key] != team_recipe(source, "blue")[key] for key in ("arch", "core")
+    ):
+        raise ValueError("Blue response must preserve the source Blue architecture and optimizer settings")
     recipe = copy.deepcopy(template)
     recipe.pop("run", None)
     recipe.pop("__source_path__", None)
-    recipe["meta"] = {"name": name, "source": "Fresh Red against original frozen Blue"}
+    recipe["meta"] = {
+        "name": name,
+        "source": f"Fresh {trainable_team.title()} against original frozen {frozen_team.title()}",
+    }
     recipe["train"].update(
-        teams="red",
-        opponents={"blue": {"path": str(source_path)}},
+        teams=trainable_team,
+        opponents={frozen_team: {"path": str(source_path)}},
         total_timesteps=requested_steps,
         topology_bank=[str(topology_path)],
     )
@@ -146,10 +157,14 @@ def source_specific_recipe(
 
 
 def assert_recipe_contract(recipe):
-    if recipe.get("algorithm") != "ippo" or team_recipe(recipe, "red")["arch"]["name"] != "shared":
-        raise ValueError("response search requires fresh shared IPPO Red challengers")
-    if recipe["train"]["teams"] != "red" or set(recipe["train"].get("opponents", {})) != {"blue"}:
-        raise ValueError("fresh Red requires exactly one frozen Blue opponent")
+    team = recipe["train"]["teams"]
+    if team not in ("blue", "red"):
+        raise ValueError("response search requires exactly one trainable team")
+    frozen_team = "red" if team == "blue" else "blue"
+    if recipe.get("algorithm") != "ippo" or team_recipe(recipe, team)["arch"]["name"] != "shared":
+        raise ValueError("response search requires fresh shared IPPO challengers")
+    if set(recipe["train"].get("opponents", {})) != {frozen_team}:
+        raise ValueError(f"fresh {team} requires exactly one frozen {frozen_team} opponent")
     if recipe_blue_obs_size(recipe) != 450:
         raise ValueError("Stage B requires 450-wide enhanced Blue observations")
     training, evaluation = train_variant(recipe), eval_variant(recipe)
@@ -173,7 +188,7 @@ def assert_recipe_contract(recipe):
 
 
 def budget(recipe):
-    config = project_jax(recipe, team="red")
+    config = project_jax(recipe, team=recipe["train"]["teams"])
     stride = config["NUM_STEPS"] * config["NUM_ENVS"]
     updates = config["TOTAL_TIMESTEPS"] // stride
     return {
@@ -184,21 +199,33 @@ def budget(recipe):
     }
 
 
-def select_candidate(scores, training_seeds=TRAIN_SEEDS):
+def select_candidate(scores, training_seeds=TRAIN_SEEDS, *, trainable_team="red"):
+    if trainable_team not in ("blue", "red"):
+        raise ValueError("trainable team must be blue or red")
     if "original" not in scores or len(scores) != len(training_seeds) + 1:
-        raise ValueError("selection requires Original Red and every prespecified oracle attempt")
+        raise ValueError("selection requires the original policy and every prespecified oracle attempt")
     if any(not np.isfinite(value) for value in scores.values()):
         raise ValueError("validation scores must be finite")
-    # Exact ties favor Original Red, then the prespecified seed order.
+    # Exact ties favor the original policy, then the prespecified seed order.
     order = ["original", *[f"seed-{seed}" for seed in training_seeds]]
     if set(scores) != set(order):
         raise ValueError("unexpected candidate identities")
-    return min(order, key=lambda name: (scores[name], order.index(name)))
+    direction = -1 if trainable_team == "blue" else 1
+    return min(order, key=lambda name: (direction * scores[name], order.index(name)))
 
 
 def paired_gap(
-    baseline, challenger, baseline_seeds, challenger_seeds, *, samples=BOOTSTRAP_SAMPLES, seed=BOOTSTRAP_SEED
+    baseline,
+    challenger,
+    baseline_seeds,
+    challenger_seeds,
+    *,
+    samples=BOOTSTRAP_SAMPLES,
+    seed=BOOTSTRAP_SEED,
+    trainable_team="red",
 ):
+    if trainable_team not in ("blue", "red"):
+        raise ValueError("trainable team must be blue or red")
     if list(baseline_seeds) != list(challenger_seeds) or len(set(baseline_seeds)) != len(baseline_seeds):
         raise ValueError("paired evaluation requires aligned distinct episode seeds")
     baseline, challenger = np.asarray(baseline, dtype=float), np.asarray(challenger, dtype=float)
@@ -206,14 +233,14 @@ def paired_gap(
         raise ValueError("paired evaluation lengths differ")
     if len(baseline) < 2 or not np.all(np.isfinite(baseline)) or not np.all(np.isfinite(challenger)):
         raise ValueError("paired evaluation requires at least two finite episode returns")
-    differences = baseline - challenger
+    differences = challenger - baseline if trainable_team == "blue" else baseline - challenger
     rng = np.random.default_rng(seed)
     bootstrap = differences[rng.integers(len(differences), size=(samples, len(differences)))].mean(axis=1)
     lower, upper = np.quantile(bootstrap, [0.025, 0.975])
     return {
         "baseline_blue_mean": float(baseline.mean()),
         "selected_blue_mean": float(challenger.mean()),
-        "red_improvement": float(differences.mean()),
+        f"{trainable_team}_improvement": float(differences.mean()),
         "ci95": [float(lower), float(upper)],
         "episodes": len(differences),
         "method": "paired episode bootstrap, percentile 95% interval",
