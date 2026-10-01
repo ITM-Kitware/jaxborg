@@ -211,7 +211,6 @@ def main():
         inputs=recorded_inputs,
     ) as owner:
         (out / "config.yaml").write_text(yaml.safe_dump(config))
-        owner.publish(out / "config.yaml", "signal-forks/config.yaml")
         sanity = reproduce_saved_forks(fn, params, variance, root, captures)
         write_json(
             out / "runtime.json",

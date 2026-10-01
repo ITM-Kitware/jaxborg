@@ -1,0 +1,28 @@
+name: blue-learning-credit-lambda1
+source_steps: 9600000
+training_seed: 11001
+warm_updates: 20
+normalization_calibration_updates: 4
+capture_updates:
+- 1
+- 20
+probe_envs: 4
+eval_every_updates: 20
+validation_episodes: 32
+confirmation_episodes: 128
+fork_capture_update: -1
+fork_states_per_group: 0
+fork_futures: 32
+seeds:
+  warm_rollout: 6100001
+  validation_start: 6200000
+  fork_future_start: 6300000
+  confirmation_start: 7200000
+resources:
+  partition: community
+  gpus: 1
+  cpus: 8
+  memory_gb: 64
+  time_limit: 01:00:00
+core_override:
+  gae_lambda: 1.0

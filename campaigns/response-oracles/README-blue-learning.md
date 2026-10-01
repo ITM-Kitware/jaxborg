@@ -39,3 +39,14 @@ The summary script needs NumPy and Matplotlib. Capture probes additionally need 
 Action labels in raw exports are selection strata: `harmful_new_block` means a newly set own-direction bit on a mission-permitted pair; `useful_allow` means clearing that bit. Neither label establishes measured benefit. Reverse-direction blocking, other simultaneous actions, and future policy behavior can change the outcome. The fork intervals are conditional on twelve saved states from four rollout environments and must not be treated as independent topology or training-seed replications.
 
 Actor, critic, and entropy comparisons use the same minibatch and optimizer state, with a zero-gradient Adam momentum control. Action-stratum attribution preserves the original global actor denominator and globally normalized advantages. Observation perturbations establish input aliasing; they do not establish a learning defect by themselves. Keep implementation defects, objective differences, credit-estimation errors, and representation limits separate when interpreting the results.
+
+A single controlled training ablation is provided in `blue-learning-credit-lambda1.yaml`. It changes only core GAE lambda to 1, runs twenty updates, and loads the first protocol's calibrated policy, Adam, normalizers, environment and RNG state. The guard rejects unmatched settings, incomplete controls and a nonfresh optimizer. Reused validation baselines must share the original validation seeds. A new confirmation cohort compares the initial policy and both twenty-update endpoints, including the Block-exclusion control.
+
+```bash
+bash scripts/experiments/submit_blue_learning_mechanism.sh \
+  campaigns/response-oracles/blue-learning-credit-lambda1.yaml \
+  /path/to/equilibrium-stage-c /path/to/new-lambda1-output /path/to/original-execution-checkout \
+  --controlled-from /path/to/finished-lambda095-warm-output
+```
+
+This ablation is an experiment-specific config, with no change to training defaults. Correct conditional credit rankings alone do not establish improved policy training or performance across other sources, seeds or topologies.

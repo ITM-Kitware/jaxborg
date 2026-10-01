@@ -26,7 +26,7 @@ if [[ "${1:-}" == --signal-forks ]]; then
     [[ $# == 4 ]] || { echo "Usage: $0 --signal-forks config.yaml input-run output" >&2; exit 1; }
     CONFIG="$2"
 else
-    [[ $# == 4 || $# == 6 ]] || { echo "Usage: $0 config.yaml data-root output reference-repository [--resume-from directory]" >&2; exit 1; }
+    [[ $# == 4 || $# == 6 ]] || { echo "Usage: $0 config.yaml data-root output reference-repository [--resume-from|--controlled-from directory]" >&2; exit 1; }
     CONFIG="$1"
 fi
 [[ -z "$(git status --porcelain)" ]] || exit 1

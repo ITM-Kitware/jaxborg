@@ -13,6 +13,7 @@ from pathlib import Path
 
 import jax
 import jax.numpy as jnp
+import mlflow
 import numpy as np
 import yaml
 from flax.training.train_state import TrainState
@@ -35,7 +36,7 @@ from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.policies import policy_from_arch
 from jaxborg.recipe import load, project_jax
 from jaxborg.research_tracking import parameter_hash
-from jaxborg.tracking import Run, assigned_devices, file_hash, serializable
+from jaxborg.tracking import Run, assigned_devices, file_hash, input_artifact, serializable
 from scripts.train.algorithms import ippo_jax_joint as trainer
 
 
@@ -115,6 +116,35 @@ def inputs(config, data_root):
     return out
 
 
+def controlled_override(recipe, configs, protocol, previous, *, resume=False):
+    """Validate the one-variable credit ablation before reusing any evidence."""
+    override = protocol.get("core_override", {})
+    if not override:
+        if previous:
+            raise ValueError("controlled-from requires the explicit credit override")
+        return None
+    if override != {"gae_lambda": 1.0} or not previous or resume:
+        raise ValueError("only the controlled lambda-one ablation is supported")
+    previous = Path(previous)
+    if json.loads((previous / "manifest.json").read_text())["status"] != "FINISHED":
+        raise ValueError("control must be completed")
+    original = json.loads((previous / "effective-config.json").read_text())
+    if serializable(configs) != original or any(configs[t]["GAE_LAMBDA"] != 0.95 for t in configs):
+        raise ValueError("the control has different settings")
+    old_protocol = yaml.safe_load((previous / "config.yaml").read_text())
+    for key in ("source_steps", "training_seed", "warm_updates", "validation_episodes"):
+        if protocol[key] != old_protocol[key]:
+            raise ValueError(f"control differs in {key}")
+    if protocol["seeds"]["validation_start"] != old_protocol["seeds"]["validation_start"]:
+        raise ValueError("cached validation episodes use different seeds")
+    if protocol["seeds"]["warm_rollout"] != old_protocol["seeds"]["warm_rollout"]:
+        raise ValueError("control uses different rollout randomness")
+    recipe["core"].update(override)
+    for team in configs:
+        configs[team]["GAE_LAMBDA"] = 1.0
+    return previous
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
@@ -122,6 +152,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--reference-repository", required=True)
     parser.add_argument("--resume-from", help="Trusted previous attempt with calibrated state and minibatch captures")
+    parser.add_argument("--controlled-from", help="Completed matching lambda-0.95 warm start; reuse its initial state")
     args = parser.parse_args()
     devices = assigned_devices()
     if not devices or any(d.platform != "gpu" for d in jax.devices()):
@@ -145,6 +176,8 @@ def main():
     for cfg in configs.values():
         cfg["SEED"] = int(config["training_seed"])
         cfg["TOTAL_TIMESTEPS"] = config["warm_updates"] * cfg["NUM_ENVS"] * cfg["NUM_STEPS"]
+    control = controlled_override(recipe, configs, config, args.controlled_from, resume=bool(args.resume_from))
+    recipe["train"]["total_timesteps"] = configs["blue"]["TOTAL_TIMESTEPS"]
     original = load_jax_bundle(data["original"]["model"])
     warm = load_jax_bundle(data["warm"]["model"])
     final = load_jax_bundle(data["final"]["model"])
@@ -153,17 +186,31 @@ def main():
     entries = {"blue": warm.policies["blue"], "red": original.policies["red"]}
     networks = {team: policy_from_arch(entry.arch, action_dim=entry.action_dim) for team, entry in entries.items()}
     params = {team: entry.weights for team, entry in entries.items()}
+    controlled_inputs = []
+    if control:
+        control_owner = json.loads((control / "runtime.json").read_text())["owner"]
+        controlled_inputs = [
+            input_artifact(f"runs:/{control_owner}/diagnostic/{p}", role=p)
+            for p in (
+                "captures/calibrated-state.npz",
+                "captures/calibrated-state.tree.pkl",
+                "checkpoints/warm-20.safetensors",
+            )
+        ]
     eval_env = make_joint_jax_env(configs["blue"]["EVAL_VARIANT"], topology_path=[topology], training_mode=False)
     evaluate = make_evaluator(eval_env, networks)
     reference_path = Path(args.reference_repository) / "scripts/train/algorithms/ippo_jax_joint.py"
     reference = load_reference(reference_path)
     with Run(
-        {"meta": {"name": config["name"]}},
+        recipe,
+        name=config["name"],
         backend="jax",
         kind="training",
-        config=config,
-        inputs=[{"role": k, "path": str(v["model"]), "sha256": v["sha256"]} for k, v in data.items()],
+        config=configs,
+        inputs=[{"role": k, "path": str(v["model"]), "sha256": v["sha256"]} for k, v in data.items()]
+        + controlled_inputs,
     ) as owner:
+        owner.update(diagnostic_protocol=config)
         write_json(
             output / "runtime.json",
             {
@@ -210,6 +257,12 @@ def main():
             ("archived-final", final.policies["blue"].weights),
             ("original", original.policies["blue"].weights),
         )
+        if control:
+            old = json.loads((control / "validation-episodes.json").read_text())
+            evaluations = {
+                label + suffix: old[label + suffix] for label, _ in baseline_policies for suffix in ("", "-no-block")
+            }
+            baseline_policies = ()
         if args.resume_from:
             evaluations = json.loads((Path(args.resume_from) / "validation-episodes.json").read_text())
             baseline_policies = ()
@@ -238,8 +291,32 @@ def main():
         norms = {team: trainer.initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
         rng = jax.random.PRNGKey(config["seeds"]["warm_rollout"])
         # Re-estimate normalization from fixed warm policies before any update.
-        for _ in range(0 if args.resume_from else config["normalization_calibration_updates"]):
+        for _ in range(0 if args.resume_from or control else config["normalization_calibration_updates"]):
             states, env_state, obs, rng, norms, _ = calibrate(states, env_state, obs, rng, norms)
+        if control:
+            initial, env_state, obs, rng, norms = restore_tree(control / "captures/calibrated-state")
+            for team in states:
+                if parameter_hash(initial[team]["params"]) != parameter_hash(params[team]):
+                    raise ValueError("calibrated control has different initial policies")
+                expected = {
+                    "params": states[team].params,
+                    "opt_state": states[team].opt_state,
+                    "step": states[team].step,
+                }
+                if jax.tree.structure(expected) != jax.tree.structure(initial[team]) or any(
+                    not np.array_equal(a, b) for a, b in zip(jax.tree.leaves(expected), jax.tree.leaves(initial[team]))
+                ):
+                    raise ValueError("control is not the same fresh Adam state")
+            states = {team: state.replace(**initial[team]) for team, state in states.items()}
+            write_json(
+                output / "controlled-start.json",
+                {
+                    "control_owner": control_owner,
+                    "initial_policies_and_adam_exact": True,
+                    "environment_rng_normalizers": "restored calibrated control",
+                    "changed_core_setting": config["core_override"],
+                },
+            )
         metrics_rows, gradient_rows, signals, forks = [], [], [], []
         resume_update = 0
         expected_resume_mini = None
@@ -298,6 +375,15 @@ def main():
                 **native(jax.device_get(metrics)),
             }
             metrics_rows.append(row)
+            owner.update(
+                actual_steps=row["warm_steps"],
+                completed_updates=update,
+                executed_training_steps=(update - resume_update) * configs["blue"]["NUM_ENVS"] * 500,
+            )
+            mlflow.log_metrics(
+                {f"{team}/{key}": value for team in ("blue", "red", "game") for key, value in row[team].items()},
+                step=row["warm_steps"],
+            )
             write_json(output / "training-metrics.json", metrics_rows)
             print("warm", update, row["blue"]["raw_rollout_return"], flush=True)
             if update in config["capture_updates"]:
@@ -410,6 +496,7 @@ def main():
                     seed=config["training_seed"],
                     total_steps=row["warm_steps"],
                     backend="jax",
+                    train_run_id=owner.run_id,
                 )
                 save_tree(output / f"captures/warm-{update}-full-state", (states, env_state, obs, rng, norms))
         if parameter_hash(states["red"].params) != baseline_hash:
@@ -422,7 +509,15 @@ def main():
             )
         )
         confirmation = {}
-        for label, blue_params in (("warm-0", params["blue"]), ("warm-final", states["blue"].params)):
+        confirmation_policies = [("warm-0", params["blue"]), ("warm-final", states["blue"].params)]
+        if control:
+            confirmation_policies.append(
+                (
+                    "lambda095-final",
+                    load_jax_bundle(control / "checkpoints/warm-20.safetensors").policies["blue"].weights,
+                )
+            )
+        for label, blue_params in confirmation_policies:
             confirmation[label] = evaluate(blue_params, states["red"].params, confirmation_seeds)
             confirmation[label + "-no-block"] = evaluate(
                 blue_params, states["red"].params, confirmation_seeds, no_block=True
@@ -436,6 +531,13 @@ def main():
                 for a, b in zip(confirmation["warm-0" + suffix], confirmation["warm-final" + suffix])
             ]
             comparisons["warm-final-minus-initial" + suffix] = bootstrap(delta)
+            if control:
+                comparisons["lambda1-minus-lambda095" + suffix] = bootstrap(
+                    [
+                        b["blue_return"] - a["blue_return"]
+                        for a, b in zip(confirmation["lambda095-final" + suffix], confirmation["warm-final" + suffix])
+                    ]
+                )
         write_json(output / "confirmation-summary.json", comparisons)
         for path in sorted(output.rglob("*")):
             if path.is_file():

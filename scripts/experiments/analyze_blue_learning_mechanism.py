@@ -169,6 +169,10 @@ def analyze(root, out=None):
             result["confirmation"]["warm-final-minus-initial" + s] = paired(
                 confirmation["warm-0" + s], confirmation["warm-final" + s]
             )
+            if "lambda095-final" + s in confirmation:
+                result["confirmation"]["lambda1-minus-lambda095" + s] = paired(
+                    confirmation["lambda095-final" + s], confirmation["warm-final" + s]
+                )
     if (root / "fork-results.json").exists():
         forks = read(root / "fork-results.json")
         forkrows = []
