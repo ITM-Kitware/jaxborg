@@ -217,6 +217,9 @@ def actor_strata(root):
 
 
 def observation_audit(root):
+    forks = sorted((root / "captures").glob("fork-*.npz"))
+    if not forks:
+        return
     recipe = load(str(root / "resolved-recipe.yaml"))
     cfg = project_jax(recipe, team="blue")
     env = make_joint_jax_env(cfg["EVAL_VARIANT"], topology_path=cfg["TOPOLOGY_BANK"], training_mode=False)
@@ -225,7 +228,7 @@ def observation_audit(root):
         {"name": "shared", "hidden_dim": 256, "hidden_layers": 2, "activation": "tanh"}, action_dim=242
     )
     rows = []
-    for p in sorted((root / "captures").glob("fork-*.npz")):
+    for p in forks:
         state, actions, _ = restore_tree(p.with_suffix(""))
         for b in range(5):
             typ, _, _, src, dst = decode_blue_action(actions[f"blue_{b}"], b, state.const)
