@@ -1,0 +1,25 @@
+schema_version: 1
+name: stage-c-blue-checkpoint-diagnostic-20261001
+evaluation_checkout: /home/local/KHQ/paul.elliott/src/cyber/jaxborg/stage-c-blue-launch-v1
+evaluation_revision: 0d577faab9ac3e0a06376e99e9592aadf128c130
+experiment_root: /home/local/KHQ/paul.elliott/jaxborg-exp/shared
+report_dir: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-c/blue-diagnosis
+checkpoint_steps: [1920000, 4800000, final]
+episodes:
+  validation: {seed_start: 4100000, count: 100}
+  confirmation: {seed_start: 4200000, count: 200}
+bootstrap: {samples: 10000, seed: 4300001}
+behavior_trace_episodes: 10
+resources:
+  partition: community
+  gpus_per_job: 1
+  memory_gb: 48
+  cpus_per_task: 4
+  time_limit: '02:00:00'
+points:
+  ippo-9600000:
+    manifest: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-c/blue-source-9600000/manifest.json
+    state: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-c/blue-source-9600000/state.json
+  ippo-49968000:
+    manifest: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-c/blue-source-49968000/manifest.json
+    state: /home/local/KHQ/paul.elliott/src/cyber/plans/jax/cc4/equilibrium-experiments/results/stage-c/blue-source-49968000/state.json
