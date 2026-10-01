@@ -1,15 +1,33 @@
 """Scientific controls for loss attribution and paired trajectory forks."""
 
+import pickle
 from types import SimpleNamespace
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import optax
 from flax import struct
+from flax.training.train_state import TrainState
 
 from jaxborg.blue_learning_probe import make_fork
 from jaxborg.policies.categorical import Categorical
+from scripts.experiments.blue_learning_mechanism import save_tree
 from scripts.train.algorithms import ippo_jax_joint as trainer
+
+
+def test_capture_roundtrips_numeric_optimizer_state_without_unpicklable_functions(tmp_path):
+    params = {"weights": jnp.array([0.1, 0.2])}
+    state = TrainState.create(apply_fn=lambda: None, params=params, tx=optax.adam(0.0003))
+    state = state.apply_gradients(grads={"weights": jnp.array([0.3, -0.4])})
+    save_tree(tmp_path / "optimizer", state)
+    arrays = np.load(tmp_path / "optimizer.npz")
+    structure = pickle.loads((tmp_path / "optimizer.tree.pkl").read_bytes())
+    restored = jax.tree.unflatten(structure, [arrays[f"leaf{i}"] for i in range(len(arrays))])
+    expected = {"params": state.params, "opt_state": state.opt_state, "step": state.step}
+    assert jax.tree.structure(restored) == jax.tree.structure(expected)
+    for actual, value in zip(jax.tree.leaves(restored), jax.tree.leaves(expected)):
+        np.testing.assert_array_equal(actual, value)
 
 
 def test_full_ppo_gradient_equals_actor_value_entropy_sum_with_masked_rows():

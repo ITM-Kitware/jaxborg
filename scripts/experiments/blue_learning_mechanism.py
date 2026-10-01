@@ -15,6 +15,7 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 import yaml
+from flax.training.train_state import TrainState
 
 from jaxborg.actions import action_defs as action
 from jaxborg.blue_learning_probe import (
@@ -54,7 +55,13 @@ def write_json(path, data):
 
 def save_tree(path, tree):
     """Numeric leaves plus a version-pinned tree definition; no device buffers."""
+    tree = jax.tree.map(
+        lambda x: {"params": x.params, "opt_state": x.opt_state, "step": x.step} if isinstance(x, TrainState) else x,
+        tree,
+        is_leaf=lambda x: isinstance(x, TrainState),
+    )
     leaves, structure = jax.tree.flatten(tree)
+    leaves = [np.asarray(x) for x in leaves]
     path.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(path.with_suffix(".npz"), **{f"leaf{i}": np.asarray(x) for i, x in enumerate(leaves)})
     # This local trusted file only rebuilds the archived JAX/Flax tree structure.
@@ -350,8 +357,8 @@ def main():
         for path in sorted(output.rglob("*")):
             if path.is_file():
                 owner.publish(path, "diagnostic/" + path.relative_to(output).as_posix())
-        owner.export("manifest.json", output / "manifest.json")
         print("completed", comparisons, flush=True)
+    write_json(output / "manifest.json", owner.manifest)
 
 
 def capture_forks(config, output, env, networks, states, traj, observed, raw_adv, norm_adv, targets):
