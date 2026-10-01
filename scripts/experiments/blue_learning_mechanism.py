@@ -22,6 +22,7 @@ from jaxborg.blue_learning_probe import (
     bootstrap,
     component_replay,
     first_minibatch,
+    fork_coordinates,
     make_evaluator,
     make_fork,
     make_hook,
@@ -72,6 +73,23 @@ def save_tree(path, tree):
     )
 
 
+def restore_tree(path):
+    """Read a trusted local capture with this revision's pinned JAX/Flax types."""
+    arrays = np.load(path.with_suffix(".npz"))
+    structure = pickle.loads(path.with_suffix(".tree.pkl").read_bytes())
+    return jax.tree.unflatten(structure, [jnp.asarray(arrays[f"leaf{i}"]) for i in range(len(arrays))])
+
+
+def advance_rollout_rng(rng, updates, steps):
+    """Recover the trainer's parameter-independent split schedule at episode boundaries."""
+
+    def episode(key, _):
+        key, _ = jax.lax.scan(lambda k, _: (jax.random.split(k, 4)[0], None), key, None, length=steps)
+        return jax.random.split(key)[0], None
+
+    return jax.lax.scan(episode, rng, None, length=updates)[0]
+
+
 def load_reference(path):
     spec = importlib.util.spec_from_file_location("reference_joint_ppo", path)
     module = importlib.util.module_from_spec(spec)
@@ -103,6 +121,7 @@ def main():
     parser.add_argument("--data-root", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--reference-repository", required=True)
+    parser.add_argument("--resume-from", help="Trusted previous attempt with calibrated state and minibatch captures")
     args = parser.parse_args()
     devices = assigned_devices()
     if not devices or any(d.platform != "gpu" for d in jax.devices()):
@@ -186,11 +205,15 @@ def main():
             )
         )
         evaluations = {}
-        for label, blue_params in (
+        baseline_policies = (
             ("warm-0", params["blue"]),
             ("archived-final", final.policies["blue"].weights),
             ("original", original.policies["blue"].weights),
-        ):
+        )
+        if args.resume_from:
+            evaluations = json.loads((Path(args.resume_from) / "validation-episodes.json").read_text())
+            baseline_policies = ()
+        for label, blue_params in baseline_policies:
             for restricted in (False, True):
                 key = label + ("-no-block" if restricted else "")
                 evaluations[key] = evaluate(blue_params, params["red"], eval_seeds, no_block=restricted)
@@ -215,14 +238,58 @@ def main():
         norms = {team: trainer.initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
         rng = jax.random.PRNGKey(config["seeds"]["warm_rollout"])
         # Re-estimate normalization from fixed warm policies before any update.
-        for _ in range(config["normalization_calibration_updates"]):
+        for _ in range(0 if args.resume_from else config["normalization_calibration_updates"]):
             states, env_state, obs, rng, norms, _ = calibrate(states, env_state, obs, rng, norms)
-        save_tree(output / "captures/calibrated-state", (states, env_state, obs, rng, norms))
         metrics_rows, gradient_rows, signals, forks = [], [], [], []
+        resume_update = 0
+        expected_resume_mini = None
+        if args.resume_from:
+            previous = Path(args.resume_from).resolve()
+            capture_files = list((previous / "captures").glob("update-*-minibatch.npz"))
+            capture_update = max(int(p.stem.split("-")[1]) for p in capture_files)
+            resume_update = capture_update - 1
+            calibrated, env_state, obs, calibrated_rng, _ = restore_tree(previous / "captures/calibrated-state")
+            blue, old_mini, old_adv, old_targets, old_indices, norms = restore_tree(
+                previous / f"captures/update-{capture_update}-minibatch"
+            )
+            states = {
+                team: state.replace(**(blue if team == "blue" else calibrated[team])) for team, state in states.items()
+            }
+            # Stock singleton topology resets deterministically after every full
+            # 500-step rollout. Verify the replayed minibatch before continuing.
+            if len(configs["blue"]["TOPOLOGY_BANK"]) != 1 or configs["blue"]["NUM_STEPS"] != 500:
+                raise ValueError("boundary recovery requires one fixed topology and full episodes")
+            rng = jax.jit(partial(advance_rollout_rng, updates=resume_update, steps=500))(calibrated_rng)
+            expected_resume_mini = (old_mini, old_adv, old_targets, old_indices)
+            for filename, destination in (
+                ("training-metrics.json", metrics_rows),
+                ("gradient-components.json", gradient_rows),
+                ("learning-signals.json", signals),
+            ):
+                destination.extend(
+                    r for r in json.loads((previous / filename).read_text()) if r["update"] <= resume_update
+                )
+            import shutil
+
+            shutil.copytree(previous / "captures", output / "captures", dirs_exist_ok=True)
+            write_json(
+                output / "resume.json",
+                {
+                    "previous_attempt": str(previous),
+                    "before_update": capture_update,
+                    "policy_optimizer_normalizers": "restored numeric capture",
+                    "environment": "singleton-topology full-episode reset state",
+                    "rng": "recovered canonical split schedule; checked by replay",
+                },
+            )
+        else:
+            save_tree(output / "captures/calibrated-state", (states, env_state, obs, rng, norms))
         baseline_hash = parameter_hash(states["red"].params)
-        for update in range(1, config["warm_updates"] + 1):
+        for update in range(resume_update + 1, config["warm_updates"] + 1):
             before = states
             before_norms = norms
+            if update in config["capture_updates"]:
+                save_tree(output / f"captures/update-{update}-before-full-state", (states, env_state, obs, rng, norms))
             states, env_state, obs, rng, norms, metrics = collect(states, env_state, obs, rng, norms)
             diagnostic = metrics.pop("diagnostic")
             row = {
@@ -239,6 +306,22 @@ def main():
                 mini, adv, target, raw_adv, norm_adv, targets, indices = first_minibatch(
                     trainer, traj, last_value, key, configs["blue"]
                 )
+                if expected_resume_mini is not None:
+                    replay_error = max(
+                        float(jnp.max(jnp.abs(a.astype(jnp.float32) - b.astype(jnp.float32))))
+                        for a, b in zip(
+                            jax.tree.leaves((mini, adv, target, indices)), jax.tree.leaves(expected_resume_mini)
+                        )
+                    )
+                    if replay_error > 2e-6:
+                        raise ValueError(
+                            f"recovered warm-start trajectory differs from saved minibatch: {replay_error}"
+                        )
+                    write_json(
+                        output / "resume-reproduction.json",
+                        {"all_minibatch_leaves_max_error": replay_error, "checked_update": update},
+                    )
+                    expected_resume_mini = None
                 save_tree(
                     output / f"captures/update-{update}-minibatch",
                     (before["blue"], mini, adv, target, indices, before_norms),
@@ -365,17 +448,11 @@ def capture_forks(config, output, env, networks, states, traj, observed, raw_adv
     groups = traffic_groups(traj, observed)
     rows = []
     for name in ("harmful_new_block", "useful_allow"):
-        eligible = np.asarray(groups[name][:, : config["probe_envs"]])
-        phases = np.asarray(observed["phase"][:, : config["probe_envs"]])
-        eligible &= phases[..., None] == 2
-        coords = np.argwhere(eligible)
-        # Prespecified stratified sample spanning agents and ticks. No outcome selection.
-        if len(coords):
-            chosen = coords[
-                np.linspace(0, len(coords) - 1, min(config["fork_states_per_group"], len(coords))).astype(int)
-            ]
-        else:
-            chosen = []
+        chosen = fork_coordinates(
+            groups[name][:, : config["probe_envs"]],
+            observed["phase"][:, : config["probe_envs"]],
+            config["fork_states_per_group"],
+        )
         for tick, env_index, agent in chosen:
             state = jax.tree.map(lambda x: x[tick, env_index], observed["states"])
             actions = jax.tree.map(lambda x: x[tick, env_index], observed["actions"])

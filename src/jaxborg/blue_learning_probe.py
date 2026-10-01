@@ -268,6 +268,15 @@ def make_fork(env, networks):
     return fork
 
 
+def fork_coordinates(group, phases, maximum):
+    """Prespecified phase-2 strata; never mutate a JAX-backed read-only array."""
+    eligible = np.asarray(group) & (np.asarray(phases)[..., None] == 2)
+    coords = np.argwhere(eligible)
+    if not len(coords):
+        return coords
+    return coords[np.linspace(0, len(coords) - 1, min(maximum, len(coords))).astype(int)]
+
+
 def bootstrap(differences, *, seed=6500001):
     values = np.asarray(differences, dtype=float)
     rng = np.random.default_rng(seed)

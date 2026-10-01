@@ -10,9 +10,9 @@ import optax
 from flax import struct
 from flax.training.train_state import TrainState
 
-from jaxborg.blue_learning_probe import make_fork
+from jaxborg.blue_learning_probe import fork_coordinates, make_fork
 from jaxborg.policies.categorical import Categorical
-from scripts.experiments.blue_learning_mechanism import save_tree
+from scripts.experiments.blue_learning_mechanism import advance_rollout_rng, restore_tree, save_tree
 from scripts.train.algorithms import ippo_jax_joint as trainer
 
 
@@ -28,6 +28,28 @@ def test_capture_roundtrips_numeric_optimizer_state_without_unpicklable_function
     assert jax.tree.structure(restored) == jax.tree.structure(expected)
     for actual, value in zip(jax.tree.leaves(restored), jax.tree.leaves(expected)):
         np.testing.assert_array_equal(actual, value)
+    for actual, value in zip(jax.tree.leaves(restore_tree(tmp_path / "optimizer")), jax.tree.leaves(expected)):
+        np.testing.assert_array_equal(actual, value)
+
+
+def test_rng_recovery_matches_canonical_blue_only_rollout_split_schedule():
+    original = jax.random.PRNGKey(6100001)
+    expected = original
+    for _ in range(4):
+        for _ in range(7):
+            expected, _, _, _ = jax.random.split(expected, 4)
+        expected, _ = jax.random.split(expected)
+    np.testing.assert_array_equal(advance_rollout_rng(original, 4, 7), expected)
+
+
+def test_fork_selection_accepts_read_only_arrays_and_preserves_phase_strata():
+    group = np.ones((8, 2, 3), dtype=bool)
+    group.flags.writeable = False
+    phases = np.repeat(np.array([0, 0, 1, 1, 1, 2, 2, 2])[:, None], 2, axis=1)
+    selected = fork_coordinates(group, phases, 6)
+    assert len(selected) == 6
+    assert all(phases[t, e] == 2 for t, e, _ in selected)
+    assert group.all()
 
 
 def test_full_ppo_gradient_equals_actor_value_entropy_sum_with_masked_rows():

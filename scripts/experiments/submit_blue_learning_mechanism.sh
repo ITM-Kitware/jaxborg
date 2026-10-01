@@ -15,9 +15,9 @@ if [[ "${1:-}" == --allocated ]]; then
     source scripts/jax_env.sh
     export JAX_PLATFORMS=cuda
     exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_learning_mechanism \
-        --config "$1" --data-root "$2" --output "$3" --reference-repository "$4"
+        --config "$1" --data-root "$2" --output "$3" --reference-repository "$4" "${@:5}"
 fi
-[[ $# == 4 ]] || { echo "Usage: $0 config.yaml data-root output reference-repository" >&2; exit 1; }
+[[ $# == 4 || $# == 6 ]] || { echo "Usage: $0 config.yaml data-root output reference-repository" >&2; exit 1; }
 [[ -z "$(git status --porcelain)" ]] || exit 1
 export JAXBORG_EXPECTED_SHA="$(git rev-parse HEAD)"
 export JAXBORG_MLFLOW_EXPERIMENT=stage-c-blue-learning-mechanism
