@@ -169,6 +169,45 @@ def _one_joint_update(tiny_joint, trainable_teams):
     return before, states, metrics
 
 
+def test_diagnostic_capture_preserves_original_training_update(tiny_joint):
+    networks, configs = tiny_joint
+
+    def hook(env, before, after, actions, parts, distributions, keys, infos, norms):
+        del env, after, actions, parts, distributions, keys, norms
+        return {"time": before.state.time, "payoff": infos["reward_ria"]}
+
+    args = dict(trainable_teams=("blue",))
+    _, obs, env_state, init, ordinary = joint.make_joint_train(configs, networks, **args)
+    _, _, _, _, instrumented = joint.make_joint_train(
+        configs, networks, **args, diagnostic_hook=hook, capture_rollout=True
+    )
+    states = init(jax.random.PRNGKey(8))
+    norms = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    inputs = (states, env_state, obs, jax.random.PRNGKey(10), norms)
+    expected = ordinary(*inputs)
+    actual = instrumented(*inputs)
+    diagnostic = actual[-1].pop("diagnostic")
+    _assert_tree_exact(expected, actual)
+    np.testing.assert_array_equal(diagnostic["observed"]["time"].ravel(), [0, 1])
+    np.testing.assert_array_equal(
+        diagnostic["trajectories"]["blue"].reward[:, 0, 0], diagnostic["observed"]["payoff"].ravel()
+    )
+
+
+def test_diagnostic_calibration_changes_norms_without_updating_weights(tiny_joint):
+    networks, configs = tiny_joint
+    for config in configs.values():
+        config["NORM_REWARDS"] = True
+    _, obs, env_state, init, collect = joint.make_joint_train(
+        configs, networks, trainable_teams=("blue",), perform_updates=False
+    )
+    states = init(jax.random.PRNGKey(8))
+    norms = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    result = collect(states, env_state, obs, jax.random.PRNGKey(10), norms)
+    _assert_tree_exact(states, result[0])
+    assert float(result[4]["blue"].count) > float(norms["blue"].count)
+
+
 def test_both_mode_updates_both_independent_policy_trees(tiny_joint):
     before, after, metrics = _one_joint_update(tiny_joint, ("blue", "red"))
 

@@ -209,63 +209,74 @@ def compute_gae(
     return advantages, advantages + traj.value
 
 
-def _make_team_updater(network, config: Mapping[str, Any]):
-    """Create one PPO update function for one homogeneous team batch."""
-
-    gamma = float(config["GAMMA"])
-    gae_lambda = float(config["GAE_LAMBDA"])
+def ppo_objective(pi, value, transitions, gae, targets, config, *, loss_component="full"):
+    """Shared masked PPO loss, with isolated components for counterfactual replay."""
     clip_eps = float(config["CLIP_EPS"])
     vf_coef = float(config["VF_COEF"])
     ent_coef = float(config["ENT_COEF"])
-    max_grad_norm = float(config["MAX_GRAD_NORM"])
     clip_value_loss = bool(config.get("CLIP_VALUE_LOSS", False))
+    log_prob = pi.log_prob(transitions.action)
+    ratio = jnp.exp(log_prob - transitions.log_prob)
+    log_ratio = log_prob - transitions.log_prob
+    actor_mask = transitions.actor_mask
+    actor_loss = -_masked_mean(
+        jnp.minimum(
+            ratio * gae,
+            jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * gae,
+        ),
+        actor_mask,
+    )
+    entropy = _masked_mean(pi.entropy(), actor_mask)
+    value_loss = _masked_value_loss(
+        value,
+        transitions.value,
+        targets,
+        transitions.critic_mask,
+        clip_eps,
+        clip_value_loss,
+    )
+    approx_kl = _masked_mean((ratio - 1.0) - log_ratio, actor_mask)
+    clip_frac = _masked_mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32), actor_mask)
+    target_mean = _masked_mean(targets, transitions.critic_mask)
+    target_var = _masked_mean(jnp.square(targets - target_mean), transitions.critic_mask)
+    residual = targets - value
+    residual_mean = _masked_mean(residual, transitions.critic_mask)
+    residual_var = _masked_mean(jnp.square(residual - residual_mean), transitions.critic_mask)
+    explained_var = jnp.where(target_var > 0, 1.0 - residual_var / target_var, 0.0)
+    total = actor_loss + vf_coef * value_loss - ent_coef * entropy
+    # Counterfactual loss replays retain the original optimizer and batch.
+    if loss_component == "actor":
+        total = actor_loss
+    elif loss_component == "critic":
+        total = vf_coef * value_loss
+    elif loss_component == "entropy":
+        total = -ent_coef * entropy
+    elif loss_component == "zero":
+        total = 0.0 * total
+    aux = {
+        "total_loss": total,
+        "actor_loss": actor_loss,
+        "critic_loss": value_loss,
+        "entropy": entropy,
+        "approx_kl": approx_kl,
+        "clip_frac": clip_frac,
+        "explained_var": explained_var,
+    }
+    return total, aux
+
+
+def _make_team_updater(network, config: Mapping[str, Any], *, loss_component: str = "full"):
+    """Create one PPO update function for one homogeneous team batch."""
+    if loss_component not in ("full", "actor", "critic", "entropy", "zero"):
+        raise ValueError(f"unknown diagnostic loss component: {loss_component}")
+
+    gamma = float(config["GAMMA"])
+    gae_lambda = float(config["GAE_LAMBDA"])
+    max_grad_norm = float(config["MAX_GRAD_NORM"])
     num_minibatches = int(config["NUM_MINIBATCHES"])
     update_epochs = int(config["UPDATE_EPOCHS"])
     recurrent = is_recurrent(network)
     centralized = has_centralized_critic(network)
-
-    def ppo_objective(pi, value, transitions, gae, targets):
-        """Shared loss body. Every reduction is a mask-weighted mean, so it is
-        indifferent to whether the batch is flat rows or (time, sequence)."""
-        log_prob = pi.log_prob(transitions.action)
-        ratio = jnp.exp(log_prob - transitions.log_prob)
-        log_ratio = log_prob - transitions.log_prob
-        actor_mask = transitions.actor_mask
-        actor_loss = -_masked_mean(
-            jnp.minimum(
-                ratio * gae,
-                jnp.clip(ratio, 1.0 - clip_eps, 1.0 + clip_eps) * gae,
-            ),
-            actor_mask,
-        )
-        entropy = _masked_mean(pi.entropy(), actor_mask)
-        value_loss = _masked_value_loss(
-            value,
-            transitions.value,
-            targets,
-            transitions.critic_mask,
-            clip_eps,
-            clip_value_loss,
-        )
-        approx_kl = _masked_mean((ratio - 1.0) - log_ratio, actor_mask)
-        clip_frac = _masked_mean((jnp.abs(ratio - 1.0) > clip_eps).astype(jnp.float32), actor_mask)
-        target_mean = _masked_mean(targets, transitions.critic_mask)
-        target_var = _masked_mean(jnp.square(targets - target_mean), transitions.critic_mask)
-        residual = targets - value
-        residual_mean = _masked_mean(residual, transitions.critic_mask)
-        residual_var = _masked_mean(jnp.square(residual - residual_mean), transitions.critic_mask)
-        explained_var = jnp.where(target_var > 0, 1.0 - residual_var / target_var, 0.0)
-        total = actor_loss + vf_coef * value_loss - ent_coef * entropy
-        aux = {
-            "total_loss": total,
-            "actor_loss": actor_loss,
-            "critic_loss": value_loss,
-            "entropy": entropy,
-            "approx_kl": approx_kl,
-            "clip_frac": clip_frac,
-            "explained_var": explained_var,
-        }
-        return total, aux
 
     def apply_gradients(train_state, loss_fn, params):
         (loss, metrics), grads = jax.value_and_grad(loss_fn, has_aux=True)(params)
@@ -311,7 +322,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
                 pi, value, _ = policy_step(
                     network, params, transitions.obs, transitions.avail_actions, critic_obs=transitions.critic_obs
                 )
-                return ppo_objective(pi, value, transitions, gae, batch_targets)
+                return ppo_objective(pi, value, transitions, gae, batch_targets, config, loss_component=loss_component)
 
             return apply_gradients(train_state, loss_fn, train_state.params)
 
@@ -354,7 +365,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
                     reset=transitions.reset,
                     critic_obs=transitions.critic_obs,
                 )
-                return ppo_objective(pi, value, transitions, gae, batch_targets)
+                return ppo_objective(pi, value, transitions, gae, batch_targets, config, loss_component=loss_component)
 
             return apply_gradients(train_state, loss_fn, train_state.params)
 
@@ -417,6 +428,9 @@ def make_joint_train(
     trainable_teams: tuple[str, ...],
     initial_params: Mapping[str, Any] | None = None,
     use_batched_reset: bool = True,
+    diagnostic_hook=None,
+    capture_rollout: bool = False,
+    perform_updates: bool = True,
 ):
     """Build the joint environment and a JIT'd rollout/update function.
 
@@ -527,6 +541,7 @@ def make_joint_train(
             rng, blue_key, red_key, step_key = jax.random.split(rng, 4)
             actions = {}
             transition_parts = {}
+            distributions = {}
 
             # Both teams consume the same pre-step state before any action is
             # applied.  Keeping these forward passes together is intentional.
@@ -546,6 +561,7 @@ def make_joint_train(
                     reset=resets[team].reshape(-1),
                     critic_obs=None if critic_obs is None else critic_obs.reshape((-1, critic_obs.shape[-1])),
                 )
+                distributions[team] = pi
                 flat_action = pi.sample(seed=action_key)
                 flat_log_prob = pi.log_prob(flat_action)
                 shape = (num_envs, num_agents[team])
@@ -613,6 +629,19 @@ def make_joint_train(
                     reset=resets[team] if recurrent[team] else None,
                     critic_obs=critic_obs,
                 )
+            if diagnostic_hook is not None:
+                observed = diagnostic_hook(
+                    env,
+                    env_state,
+                    new_env_state,
+                    actions,
+                    transition_parts,
+                    distributions,
+                    step_keys,
+                    infos,
+                    norm_states,
+                )
+                transitions = (transitions, observed)
             return (new_env_state, new_obs, rng, norm_states, info_sums, carries, next_resets), transitions
 
         (env_state, obs, rng, reward_norm_states, info_sums, carries, resets), trajectories = jax.lax.scan(
@@ -622,7 +651,17 @@ def make_joint_train(
             num_steps,
         )
 
+        diagnostics = None
+        if diagnostic_hook is not None:
+            trajectories, diagnostics = trajectories
         metrics = {}
+        if capture_rollout:
+            metrics["diagnostic"] = {
+                "trajectories": trajectories,
+                "observed": diagnostics,
+                "last_values": {},
+                "update_keys": {},
+            }
         for team in TEAMS:
             names = agents[team]
             obs_batch = jnp.stack([obs[name] for name in names], axis=1)
@@ -640,8 +679,12 @@ def make_joint_train(
             if team == "red":
                 last_value = last_value * env_state.state.red_agent_active.astype(jnp.float32)
 
-            if team in trainable_teams:
+            if capture_rollout:
+                metrics["diagnostic"]["last_values"][team] = last_value
+            if team in trainable_teams and perform_updates:
                 rng, update_key = jax.random.split(rng)
+                if capture_rollout:
+                    metrics["diagnostic"]["update_keys"][team] = update_key
                 state, _, team_metrics = updaters[team](
                     train_states[team],
                     trajectories[team],
