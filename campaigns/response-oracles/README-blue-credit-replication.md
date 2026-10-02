@@ -75,9 +75,10 @@ conditional estimate from raw arrays, including the multiplicity correction.
 It uses NumPy, PyYAML and Matplotlib; it does not require JAX or MLflow for analysis.
 
 Proceed to a controlled actor-advantage lambda × critic-target lambda 2×2 only
-after examining this new replication. The current trainer still uses one
-lambda for both: do not label these two arms as that factorial experiment.
-Mixed-lambda implementation and its separation checks remain a subsequent step.
+after examining this new replication. These diagonal arms use one lambda for
+both; they are not the full factorial experiment. The opt-in mixed-lambda
+implementation, separation checks and bounded launch protocol are documented
+in [README-blue-credit-factorial.md](README-blue-credit-factorial.md).
 Preserve failed attempts, use a newly reserved confirmation cohort for that
 step, and keep fresh starts, original-Blue warm starts and Block exclusion as
 distinct conditions. No default lambda or stock environment rule is changed.
