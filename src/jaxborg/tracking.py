@@ -78,6 +78,12 @@ def experiment_root():
     # Catch this worktree, other worktrees, and roots inside unrelated checkouts.
     for parent in (root, *root.parents):
         if (parent / ".git").exists():
+            try:
+                git("rev-parse", "--show-toplevel", repo=parent)
+            except subprocess.CalledProcessError:
+                # Some filesystem sandboxes add empty, read-only .git guards.
+                # A marker alone does not make this directory a checkout.
+                continue
             raise ValueError(f"JAXBORG_EXP_DIR is inside a Git checkout: {parent}")
     try:
         worktrees = git("worktree", "list", "--porcelain").splitlines()

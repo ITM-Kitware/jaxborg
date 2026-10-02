@@ -98,6 +98,27 @@ def test_incompatible_experiment_fails(repo):
     assert not (repo / "mlruns").exists()
 
 
+def test_experiment_root_ignores_empty_read_only_git_marker(repo):
+    root = repo.parent / "experiments"
+    marker = root / ".git"
+    marker.mkdir(parents=True)
+    marker.chmod(0o555)
+    try:
+        assert t.experiment_root() == root.resolve()
+        assert not (root / "mlflow.db").exists()
+    finally:
+        marker.chmod(0o755)
+
+
+def test_experiment_root_rejects_linked_worktree(repo, monkeypatch):
+    worktree = repo.parent / "other-checkout"
+    subprocess.run(["git", "-C", str(repo), "worktree", "add", "--detach", str(worktree), "HEAD"], check=True)
+    monkeypatch.setenv("JAXBORG_EXP_DIR", str(worktree / "results"))
+    with pytest.raises(ValueError, match="inside a Git checkout"):
+        t.experiment_root()
+    assert not (worktree / "results").exists()
+
+
 def test_dirty_and_wrong_sha_rejected_and_override_archived(repo, monkeypatch):
     sha = t.git("rev-parse", "HEAD")
     with pytest.raises(ValueError, match="Wrong launch SHA"):
