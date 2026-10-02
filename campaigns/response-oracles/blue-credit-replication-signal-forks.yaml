@@ -1,0 +1,14 @@
+futures: 32
+batch_size: 64
+discovery_start: 11300000
+confirmation_start: 11500000
+gamma: 0.99
+gae_lambda: 0.95
+max_states: 12
+normalization: frozen_original_rollout_variance
+resources:
+  partition: community
+  gpus: 1
+  cpus: 8
+  memory_gb: 64
+  time_limit: 01:00:00

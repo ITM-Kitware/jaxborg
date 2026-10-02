@@ -1,0 +1,13 @@
+name: blue-credit-factorial-confirmation-source9600000-seed22001
+source_steps: 9600000
+training_seed: 22001
+confirmation_episodes: 128
+seeds:
+  confirmation_start: 11200000
+  bootstrap: 11400001
+resources:
+  partition: community
+  gpus: 1
+  cpus: 8
+  memory_gb: 64
+  time_limit: 01:00:00

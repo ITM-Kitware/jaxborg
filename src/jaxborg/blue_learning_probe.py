@@ -149,7 +149,7 @@ def probability_scores(network, params, traj, observed):
 
 
 def first_minibatch(trainer, traj, last_value, key, config):
-    advantages, targets = trainer.compute_gae(traj, last_value, gamma=config["GAMMA"], gae_lambda=config["GAE_LAMBDA"])
+    advantages, targets = trainer.compute_actor_credit_and_value_targets(traj, last_value, config)
     normalized = trainer._masked_normalize(advantages, traj.actor_mask)
     _, permutation_key = jax.random.split(key)
     size = traj.action.size

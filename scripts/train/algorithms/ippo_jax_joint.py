@@ -209,6 +209,22 @@ def compute_gae(
     return advantages, advantages + traj.value
 
 
+def compute_actor_credit_and_value_targets(traj, last_value, config):
+    """Opt-in separation of actor GAE and critic targets; preserve legacy defaults.
+
+    Both estimates use the same rollout rewards and OLD critic values. The
+    critic target is its own lambda-return, never the normalized actor GAE.
+    """
+    actor_lambda = float(config.get("ACTOR_GAE_LAMBDA", config["GAE_LAMBDA"]))
+    critic_lambda = float(config.get("CRITIC_TARGET_LAMBDA", config["GAE_LAMBDA"]))
+    if not (0 <= actor_lambda <= 1 and 0 <= critic_lambda <= 1):
+        raise ValueError("actor and critic lambdas must be in [0, 1]")
+    advantages, targets = compute_gae(traj, last_value, gamma=float(config["GAMMA"]), gae_lambda=actor_lambda)
+    if critic_lambda != actor_lambda:
+        _, targets = compute_gae(traj, last_value, gamma=float(config["GAMMA"]), gae_lambda=critic_lambda)
+    return advantages, targets
+
+
 def ppo_objective(pi, value, transitions, gae, targets, config, *, loss_component="full"):
     """Shared masked PPO loss, with isolated components for counterfactual replay."""
     clip_eps = float(config["CLIP_EPS"])
@@ -270,8 +286,6 @@ def _make_team_updater(network, config: Mapping[str, Any], *, loss_component: st
     if loss_component not in ("full", "actor", "critic", "entropy", "zero"):
         raise ValueError(f"unknown diagnostic loss component: {loss_component}")
 
-    gamma = float(config["GAMMA"])
-    gae_lambda = float(config["GAE_LAMBDA"])
     max_grad_norm = float(config["MAX_GRAD_NORM"])
     num_minibatches = int(config["NUM_MINIBATCHES"])
     update_epochs = int(config["UPDATE_EPOCHS"])
@@ -377,7 +391,7 @@ def _make_team_updater(network, config: Mapping[str, Any], *, loss_component: st
             raise ValueError("MAPPO updates require stored critic_obs; actor-only inference is for evaluation")
         if recurrent and init_carry is None:
             raise ValueError("a recurrent team updater needs the hidden state the rollout window started from")
-        advantages, targets = compute_gae(traj, last_value, gamma=gamma, gae_lambda=gae_lambda)
+        advantages, targets = compute_actor_credit_and_value_targets(traj, last_value, config)
         advantages = _masked_normalize(advantages, traj.actor_mask)
 
         if recurrent:

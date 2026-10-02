@@ -101,6 +101,33 @@ def load_reference(path):
     return module
 
 
+def reference_update(reference, network, config, state, traj, last_value, key):
+    """Replay the original PPO with independently composed lambda estimates.
+
+    Mixed arms deliberately change the original GAE call: actor advantages
+    come from one original call, value targets from the other. Everything
+    else is the unchanged execution-revision updater. Restore its module
+    global immediately after JIT tracing/execution; no source file is edited.
+    """
+    actor_lambda = float(config.get("ACTOR_GAE_LAMBDA", config["GAE_LAMBDA"]))
+    critic_lambda = float(config.get("CRITIC_TARGET_LAMBDA", config["GAE_LAMBDA"]))
+    original_gae = reference.compute_gae
+
+    def composed(traj, last_value, *, gamma, gae_lambda):
+        del gae_lambda
+        advantages, targets = original_gae(traj, last_value, gamma=gamma, gae_lambda=actor_lambda)
+        if critic_lambda != actor_lambda:
+            _, targets = original_gae(traj, last_value, gamma=gamma, gae_lambda=critic_lambda)
+        return advantages, targets
+
+    try:
+        if actor_lambda != config["GAE_LAMBDA"] or critic_lambda != config["GAE_LAMBDA"]:
+            reference.compute_gae = composed
+        return jax.jit(reference._make_team_updater(network, config))(state, traj, last_value, key)
+    finally:
+        reference.compute_gae = original_gae
+
+
 def inputs(config, data_root):
     rows = list(csv.DictReader((data_root / "eval/blue_diagnosis/checkpoints.csv").open()))
     step, seed = int(config["source_steps"]), int(config["training_seed"])
@@ -131,6 +158,8 @@ def confirmation_comparisons(confirmation, *, seed=6500001):
     pairs = [("warm-final-minus-initial", "warm-0", "warm-final")]
     if "lambda095-final" in confirmation:
         pairs.append(("lambda1-minus-lambda095", "lambda095-final", "warm-final"))
+    if "control-final" in confirmation:
+        pairs.append(("variant-minus-control", "control-final", "warm-final"))
     if "original" in confirmation:
         pairs.extend(
             [("initial-minus-original", "original", "warm-0"), ("warm-final-minus-original", "original", "warm-final")]
@@ -150,14 +179,19 @@ def confirmation_comparisons(confirmation, *, seed=6500001):
 
 
 def controlled_override(recipe, configs, protocol, previous, *, resume=False):
-    """Validate the one-variable credit ablation before reusing any evidence."""
+    """Validate a bounded credit ablation before reusing any evidence."""
     override = protocol.get("core_override", {})
     if not override:
         if previous:
             raise ValueError("controlled-from requires the explicit credit override")
         return None
-    if override != {"gae_lambda": 1.0} or not previous or resume:
-        raise ValueError("only the controlled lambda-one ablation is supported")
+    supported = (
+        {"gae_lambda": 1.0},
+        {"actor_gae_lambda": 0.95, "critic_target_lambda": 1.0},
+        {"actor_gae_lambda": 1.0, "critic_target_lambda": 0.95},
+    )
+    if override not in supported or not previous or resume:
+        raise ValueError("only controlled lambda-one or mixed factorial arms are supported")
     previous = Path(previous)
     if json.loads((previous / "manifest.json").read_text())["status"] != "FINISHED":
         raise ValueError("control must be completed")
@@ -165,7 +199,13 @@ def controlled_override(recipe, configs, protocol, previous, *, resume=False):
     if serializable(configs) != original or any(configs[t]["GAE_LAMBDA"] != 0.95 for t in configs):
         raise ValueError("the control has different settings")
     old_protocol = yaml.safe_load((previous / "config.yaml").read_text())
-    for key in ("source_steps", "training_seed", "warm_updates", "validation_episodes"):
+    for key in (
+        "source_steps",
+        "training_seed",
+        "warm_updates",
+        "validation_episodes",
+        "normalization_calibration_updates",
+    ):
         if protocol[key] != old_protocol[key]:
             raise ValueError(f"control differs in {key}")
     if protocol["seeds"]["validation_start"] != old_protocol["seeds"]["validation_start"]:
@@ -173,8 +213,13 @@ def controlled_override(recipe, configs, protocol, previous, *, resume=False):
     if protocol["seeds"]["warm_rollout"] != old_protocol["seeds"]["warm_rollout"]:
         raise ValueError("control uses different rollout randomness")
     recipe["core"].update(override)
+    keys = {
+        "gae_lambda": "GAE_LAMBDA",
+        "actor_gae_lambda": "ACTOR_GAE_LAMBDA",
+        "critic_target_lambda": "CRITIC_TARGET_LAMBDA",
+    }
     for team in configs:
-        configs[team]["GAE_LAMBDA"] = 1.0
+        configs[team].update({keys[k]: v for k, v in override.items()})
     return previous
 
 
@@ -449,7 +494,10 @@ def main():
                     native(jax.device_get(observed["normalizer"])),
                 )
                 # Exact updater equivalence, all 4 epochs x 16 minibatches.
-                reference_state, _, _ = jax.jit(reference._make_team_updater(networks["blue"], configs["blue"]))(
+                reference_state, _, _ = reference_update(
+                    reference,
+                    networks["blue"],
+                    configs["blue"],
                     before["blue"],
                     traj,
                     last_value,
@@ -476,6 +524,9 @@ def main():
                     {
                         "update": update,
                         "reference_max_parameter_error": max_error,
+                        "reference_credit_composition": "original GAE calls composed independently"
+                        if "ACTOR_GAE_LAMBDA" in configs["blue"]
+                        else "unchanged original updater",
                         "gradient_additivity_error": residual,
                         "components": native(jax.device_get(component_rows)),
                     }
@@ -547,7 +598,7 @@ def main():
         if control:
             confirmation_policies.append(
                 (
-                    "lambda095-final",
+                    config.get("control_policy_label", "lambda095-final"),
                     load_jax_bundle(control / "checkpoints/warm-20.safetensors").policies["blue"].weights,
                 )
             )

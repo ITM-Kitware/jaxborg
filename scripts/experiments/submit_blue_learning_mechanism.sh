@@ -15,6 +15,11 @@ if [[ "${1:-}" == --allocated ]]; then
     [[ -z "$(git status --porcelain)" ]] || exit 1
     source scripts/jax_env.sh
     export JAX_PLATFORMS=cuda
+    if [[ "${1:-}" == --factorial-eval ]]; then
+        shift
+        exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_credit_factorial_eval \
+            --config "$1" --study-root "$2" --data-root "$3" --output "$4"
+    fi
     if [[ "${1:-}" == --signal-forks ]]; then
         shift
         exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_learning_signal_forks \
@@ -23,7 +28,10 @@ if [[ "${1:-}" == --allocated ]]; then
     exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_learning_mechanism \
         --config "$1" --data-root "$2" --output "$3" --reference-repository "$4" "${@:5}"
 fi
-if [[ "${1:-}" == --signal-forks ]]; then
+if [[ "${1:-}" == --factorial-eval ]]; then
+    [[ $# == 5 ]] || { echo "Usage: $0 --factorial-eval config.yaml study-root data-root output" >&2; exit 1; }
+    CONFIG="$2"
+elif [[ "${1:-}" == --signal-forks ]]; then
     [[ $# == 4 ]] || { echo "Usage: $0 --signal-forks config.yaml input-run output" >&2; exit 1; }
     CONFIG="$2"
 else
@@ -40,7 +48,7 @@ read -r PARTITION GPUS MEMORY CPUS LIMIT < <(
 mkdir -p "$JAXBORG_EXP_DIR/launches/slurm"
 DEPENDENCY_FLAGS=()
 if [[ -n "${JAXBORG_SLURM_AFTEROK:-}" ]]; then
-    [[ "$JAXBORG_SLURM_AFTEROK" =~ ^[0-9]+$ ]] || { echo "JAXBORG_SLURM_AFTEROK must be a numeric job ID" >&2; exit 1; }
+    [[ "$JAXBORG_SLURM_AFTEROK" =~ ^[0-9]+(:[0-9]+)*$ ]] || { echo "JAXBORG_SLURM_AFTEROK must list numeric job IDs separated by colons" >&2; exit 1; }
     DEPENDENCY_FLAGS=(--dependency="afterok:$JAXBORG_SLURM_AFTEROK")
 fi
 exec sbatch --parsable --partition="$PARTITION" --gres="gpu:$GPUS" --mem="${MEMORY}G" \
