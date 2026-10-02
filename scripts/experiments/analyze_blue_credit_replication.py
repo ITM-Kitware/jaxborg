@@ -226,6 +226,105 @@ def plot(result, control, variant, output):
     plt.close(fig)
 
 
+def plot_credit_decomposition(directory, corrected, output):
+    """Display every prespecified state, with Allow-minus-Block orientation.
+
+    Primary return/GAE intervals retain the registered family correction.
+    Decomposition and next-value panels are explanatory; their target intervals
+    are pointwise. Predicted next values are deterministic at intervention.
+    """
+    records = [r for r in read(directory / "results.json") if r["cohort"] == "confirmation"]
+    if not records or "critic_bootstrap_contribution" not in records[0]["summaries"]["opposite-minus-natural"]:
+        return  # Older bundles retain primary credit evidence without decomposition.
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    primary = {(r["fork"], r["metric"]): r for r in corrected}
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5.2), constrained_layout=True)
+    labels, confirmed = [], []
+    for i, record in enumerate(records):
+        sign = 1 if record["group"] == "harmful_new_block" else -1
+        measures = record["summaries"]["opposite-minus-natural"]
+
+        def oriented(metric, *, corrected_interval=False):
+            r = primary[record["fork"], metric] if corrected_interval else measures[metric]
+            bounds = (r["familywise_low"], r["familywise_high"]) if corrected_interval else r["ci95"]
+            lo, hi = sorted(sign * x for x in bounds)
+            return sign * r["mean"], lo, hi
+
+        mc = oriented("normalized_mc_advantage", corrected_interval=True)
+        gae = oriented("gae_advantage", corrected_interval=True)
+        robust = mc[1] > 0 and gae[2] < 0
+        if robust:
+            confirmed.append(record["fork"])
+            for ax in axes:
+                ax.axvspan(i - 0.42, i + 0.42, color="gold", alpha=0.18)
+        reverse = bool(record["results"]["natural"]["initial_reverse_blocked"][0])
+        labels.append(f"{record['fork']}:{record['tick']}" + ("†" if reverse else ""))
+        for offset, measure, label, color, fmt in (
+            (-0.12, mc, "Measured future return", "tab:blue", "o"),
+            (0.12, gae, "GAE lambda .95", "tab:red", "x"),
+        ):
+            mean, low, high = measure
+            axes[0].errorbar(
+                i + offset,
+                mean,
+                yerr=[[mean - low], [high - mean]],
+                color=color,
+                fmt=fmt,
+                capsize=2,
+                label=label if i == 0 else None,
+            )
+        reward = sign * measures["normalized_lambda095_reward_return"]["mean"]
+        critic = sign * measures["critic_bootstrap_contribution"]["mean"]
+        axes[1].bar(i - 0.15, reward, width=0.3, color="tab:green", label="Weighted rewards" if i == 0 else None)
+        axes[1].bar(i + 0.15, critic, width=0.3, color="tab:orange", label="Critic bootstrap term" if i == 0 else None)
+        axes[1].plot(i, gae[0], "kx", label="Sum: GAE" if i == 0 else None)
+        value = sign * measures["first_next_value"]["mean"]
+        target = oriented("normalized_mc_return_after_first_action")
+        axes[2].plot(i - 0.12, value, "x", color="tab:red", label="Predicted next value" if i == 0 else None)
+        axes[2].errorbar(
+            i + 0.12,
+            target[0],
+            yerr=[[target[0] - target[1]], [target[2] - target[0]]],
+            color="tab:blue",
+            fmt="o",
+            capsize=2,
+            label="Measured remaining return" if i == 0 else None,
+        )
+    for ax in axes:
+        ax.axhline(0, color="black", linewidth=0.6)
+        ax.set(
+            xticks=range(len(labels)), xticklabels=labels, xlabel="Saved state: index:tick; † reverse direction blocked"
+        )
+        ax.tick_params(axis="x", labelrotation=65, labelsize=8)
+        ax.legend(fontsize=8)
+    axes[0].set(title="Ranking reversals: family-corrected intervals", ylabel="Allow minus Block, normalized credit")
+    axes[1].set(title="Why the GAE ranking reverses", ylabel="Allow minus Block, normalized contribution")
+    axes[2].set(title="First next-state value versus measured future", ylabel="Allow minus Block, normalized value")
+    fig.suptitle(
+        "Frozen-policy conditional futures; shaded states pass both corrected sign tests; not training replications"
+    )
+    fig.savefig(output / "credit-decomposition.png", dpi=180)
+    fig.savefig(output / "credit-decomposition.pdf")
+    plt.close(fig)
+    (output / "credit-decomposition.json").write_text(
+        json.dumps(
+            {
+                "orientation": "Allow minus Block",
+                "corrected_reversal_states": confirmed,
+                "primary_family_size": corrected[0]["family_size"],
+                "next_target_intervals": "pointwise 95%",
+                "scope": "one frozen-policy snapshot; future seeds are not independent training seeds",
+            },
+            indent=2,
+        )
+        + "\n"
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--control", required=True, type=Path)
@@ -241,6 +340,7 @@ def main():
         write_csv(args.output / "credit-multiplicity.csv", corrected)
         result["conditional_estimates_reproduced"] = len(rows)
         result["lambda1_credit_identity_max_error"] = error
+        plot_credit_decomposition(args.credit, corrected, args.output)
     write_csv(
         args.output / "paired-comparisons.csv", [{"comparison": k, **v} for k, v in result["comparisons"].items()]
     )
