@@ -23,7 +23,7 @@ if [[ "${1:-}" == --allocated ]]; then
     if [[ "${1:-}" == --signal-forks ]]; then
         shift
         exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_learning_signal_forks \
-            --config "$1" --input-run "$2" --output "$3"
+            --config "$1" --input-run "$2" --output "$3" "${@:4}"
     fi
     exec "$JAXBORG_DIAGNOSTIC_PYTHON" -m scripts.experiments.blue_learning_mechanism \
         --config "$1" --data-root "$2" --output "$3" --reference-repository "$4" "${@:5}"
@@ -32,7 +32,7 @@ if [[ "${1:-}" == --factorial-eval ]]; then
     [[ $# == 5 ]] || { echo "Usage: $0 --factorial-eval config.yaml study-root data-root output" >&2; exit 1; }
     CONFIG="$2"
 elif [[ "${1:-}" == --signal-forks ]]; then
-    [[ $# == 4 ]] || { echo "Usage: $0 --signal-forks config.yaml input-run output" >&2; exit 1; }
+    [[ $# == 4 || $# == 6 ]] || { echo "Usage: $0 --signal-forks config.yaml input-run output [--data-root directory]" >&2; exit 1; }
     CONFIG="$2"
 else
     [[ $# == 4 || $# == 6 ]] || { echo "Usage: $0 config.yaml data-root output reference-repository [--resume-from|--controlled-from directory]" >&2; exit 1; }

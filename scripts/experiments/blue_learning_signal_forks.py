@@ -54,10 +54,22 @@ def learning_fork(env, networks, state, actions, intervention_key, agent, forced
     v1 = jnp.where(done["__all__"], 0, v1)
     td = normalized + 0.99 * v1 - v0
     open_now = ~(state.state.blocked_zones[destination, source] | state.state.blocked_zones[source, destination])
-    carry = (key, obs, state, ~done["__all__"], reward, reward, normalized, td, open_now.astype(jnp.float32), td)
+    carry = (
+        key,
+        obs,
+        state,
+        ~done["__all__"],
+        reward,
+        reward,
+        normalized,
+        td,
+        open_now.astype(jnp.float32),
+        td,
+        normalized,
+    )
 
     def step(carry, t):
-        key, obs, state, alive, raw, discounted, normalized_mc, gae, open_ticks, lambda1 = carry
+        key, obs, state, alive, raw, discounted, normalized_mc, gae, open_ticks, lambda1, lambda095_reward = carry
 
         def advance(_):
             masks = env.get_avail_actions(state)
@@ -99,6 +111,7 @@ def learning_fork(env, networks, state, actions, intervention_key, agent, forced
                     )
                 ).astype(jnp.float32),
                 lambda1 + 0.99**t * delta,
+                lambda095_reward + (0.99 * 0.95) ** t * nr,
             )
 
         return jax.lax.cond(alive, advance, lambda _: carry, None), None
@@ -111,6 +124,11 @@ def learning_fork(env, networks, state, actions, intervention_key, agent, forced
         "gae_advantage": final[7],
         "gae_lambda1_advantage": final[9],
         "initial_value": v0,
+        "normalized_lambda095_reward_return": final[10],
+        "critic_bootstrap_contribution": final[7] - final[10] + v0,
+        "first_normalized_reward": normalized,
+        "first_next_value": v1,
+        "normalized_mc_return_after_first_action": (final[6] - normalized) / 0.99,
         "first_action": chosen,
         "route_open_ticks": final[8],
         "initial_forward_blocked": initially_forward,
@@ -150,6 +168,9 @@ def main():
     p.add_argument("--input-run", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--config", type=Path, required=True)
+    p.add_argument(
+        "--data-root", type=Path, help="Remap archived topology/opponent paths to a transferred input bundle"
+    )
     a = p.parse_args()
     assigned_devices()
     if any(d.platform != "gpu" for d in jax.devices()):
@@ -174,6 +195,14 @@ def main():
     state_data, _, _, _, _ = restore_tree(root / "captures/update-5-before-full-state")
     params = {t: state_data[t]["params"] for t in ("blue", "red")}
     recipe = load(str(root / "resolved-recipe.yaml"))
+    if a.data_root:
+        from scripts.experiments.blue_learning_mechanism import inputs
+
+        protocol = yaml.safe_load((root / "config.yaml").read_text())
+        data = inputs(protocol, a.data_root.resolve())
+        topology = a.data_root.resolve() / "recipes" / f"blue_source{protocol['source_steps']}" / "topology-seed0.npz"
+        recipe["train"]["topology_bank"] = recipe["eval"]["topology_bank"] = [str(topology)]
+        recipe["train"]["opponents"]["red"]["path"] = str(data["original"]["model"])
     cfg = project_jax(recipe, team="blue")
     if cfg["GAMMA"] != 0.99 or cfg["GAE_LAMBDA"] != 0.95 or not cfg["NORM_REWARDS"]:
         raise ValueError("unsupported credit protocol")
@@ -225,6 +254,7 @@ def main():
                 "normalization": (
                     "frozen original 96-env rollout variance profile; not a counterfactual normalizer replay"
                 ),
+                "data_root_override": str(a.data_root.resolve()) if a.data_root else None,
             },
         )
         for cohort, start in (("discovery", config["discovery_start"]), ("confirmation", config["confirmation_start"])):
@@ -269,6 +299,10 @@ def main():
                         "gae_advantage",
                         "gae_lambda1_advantage",
                         "route_open_ticks",
+                        "normalized_lambda095_reward_return",
+                        "critic_bootstrap_contribution",
+                        "first_next_value",
+                        "normalized_mc_return_after_first_action",
                     ):
                         delta = by_condition[alternative][metric] - by_condition["natural"][metric]
                         if delta.ndim > 1:

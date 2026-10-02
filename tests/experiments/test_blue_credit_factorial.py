@@ -191,3 +191,75 @@ def test_factorial_analysis_recovers_known_conditional_effects_and_checks_state(
     np.savez(root / "a095-c100/captures/calibrated-state.npz", leaf0=np.array([0, 1, 99]))
     with pytest.raises(ValueError, match="starting state"):
         analyze(root, evaluation, tmp_path / "bad")
+
+
+def test_conditional_credit_decomposition_matches_known_terminal_returns(monkeypatch):
+    from flax import struct
+
+    from jaxborg.policies.categorical import Categorical
+    from scripts.experiments import blue_learning_signal_forks as forks
+
+    @struct.dataclass
+    class State:
+        time: jax.Array
+        blocked_zones: jax.Array
+
+    @struct.dataclass
+    class World:
+        state: State
+        const: object = None
+
+    class Network:
+        def apply(self, params, obs, masks):
+            del params, masks
+            value = jnp.array([0.2, -3.0, 5.0, 99.0])[obs[..., 0].astype(jnp.int32)]
+            return Categorical(logits=jnp.zeros(obs.shape[:-1] + (2,))), value
+
+    class Env:
+        blue_agents = ("blue_0",)
+        red_agents = ("red_0",)
+
+        def get_obs(self, state):
+            return {n: jnp.array([state.state.time], dtype=jnp.float32) for n in ("blue_0", "red_0")}
+
+        def get_avail_actions(self, state):
+            del state
+            return {n: jnp.ones(2, dtype=bool) for n in ("blue_0", "red_0")}
+
+        def step_env(self, key, world, actions):
+            del key, actions
+            reward = jnp.array([1.0, -2.0, 4.0])[world.state.time]
+            updated = world.replace(state=world.state.replace(time=world.state.time + 1))
+            info = {name: reward if name == "reward_ria" else jnp.array(0.0) for name in forks.COMPONENTS}
+            return self.get_obs(updated), updated, {}, {"__all__": updated.state.time >= 3}, info
+
+    monkeypatch.setattr(forks, "decode_blue_action", lambda *_: (0, 0, 0, 0, 1))
+    world = World(State(jnp.array(0), jnp.zeros((2, 2), dtype=bool)))
+    networks = {t: Network() for t in ("blue", "red")}
+    result = jax.jit(
+        lambda: forks.learning_fork(
+            Env(),
+            networks,
+            world,
+            {"blue_0": jnp.array(0), "red_0": jnp.array(0)},
+            jax.random.PRNGKey(1),
+            0,
+            0,
+            jax.random.PRNGKey(2),
+            {"blue": None, "red": None},
+            jnp.full(500, 4.0),
+        )
+    )()
+    rewards = np.array([0.5, -1.0, 2.0])
+    values = np.array([0.2, -3.0, 5.0, 0.0])
+    td = rewards + 0.99 * values[1:] - values[:-1]
+    gae = np.dot(td, (0.99 * 0.95) ** np.arange(3))
+    weighted_reward = np.dot(rewards, (0.99 * 0.95) ** np.arange(3))
+    mc = np.dot(rewards, 0.99 ** np.arange(3))
+    np.testing.assert_allclose(result["gae_advantage"], gae, atol=2e-6)
+    np.testing.assert_allclose(result["normalized_lambda095_reward_return"], weighted_reward, atol=2e-6)
+    np.testing.assert_allclose(result["critic_bootstrap_contribution"], gae - weighted_reward + values[0], atol=2e-6)
+    np.testing.assert_allclose(result["normalized_mc_advantage"], mc - values[0], atol=2e-6)
+    np.testing.assert_allclose(result["gae_lambda1_advantage"], mc - values[0], atol=2e-6)
+    np.testing.assert_allclose(result["first_next_value"], -3.0, atol=2e-6)
+    np.testing.assert_allclose(result["normalized_mc_return_after_first_action"], 0.98, atol=2e-6)
