@@ -92,6 +92,9 @@ def advance_rollout_rng(rng, updates, steps):
 
 
 def load_reference(path):
+    revision = subprocess.check_output(["git", "-C", str(path.parents[3]), "rev-parse", "HEAD"]).decode().strip()
+    if revision != "0d577faab9ac3e0a06376e99e9592aadf128c130":
+        raise ValueError("reference checkout must pin the original fresh-Blue execution revision")
     spec = importlib.util.spec_from_file_location("reference_joint_ppo", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -114,6 +117,36 @@ def inputs(config, data_root):
             raise ValueError(f"checkpoint hash mismatch: {model}")
         out[key] = {"model": model, "recipe": data_root / row["recipe"], "sha256": row["sha256"]}
     return out
+
+
+def archived_baseline(config, data_root):
+    """Select the archived backend check for the actual source and fresh seed."""
+    path = data_root / f"eval/blue_diagnosis/ippo-{int(config['source_steps'])}/evaluations.json"
+    label = f"seed-{int(config['training_seed'])}-step-1920000"
+    return json.loads(path.read_text())["confirmation"][label]
+
+
+def confirmation_comparisons(confirmation, *, seed=6500001):
+    """Keep the original defender and trained-policy differences paired by episode."""
+    pairs = [("warm-final-minus-initial", "warm-0", "warm-final")]
+    if "lambda095-final" in confirmation:
+        pairs.append(("lambda1-minus-lambda095", "lambda095-final", "warm-final"))
+    if "original" in confirmation:
+        pairs.extend(
+            [("initial-minus-original", "original", "warm-0"), ("warm-final-minus-original", "original", "warm-final")]
+        )
+        if "lambda095-final" in confirmation:
+            pairs.append(("lambda095-minus-original", "original", "lambda095-final"))
+    comparisons = {}
+    for suffix in ("", "-no-block"):
+        for label, baseline, candidate in pairs:
+            a, b = confirmation[baseline + suffix], confirmation[candidate + suffix]
+            if not a or [r["seed"] for r in a] != [r["seed"] for r in b]:
+                raise ValueError(f"unpaired confirmation episodes: {label}{suffix}")
+            comparisons[label + suffix] = bootstrap(
+                [y["blue_return"] - x["blue_return"] for x, y in zip(a, b)], seed=seed
+            )
+    return comparisons
 
 
 def controlled_override(recipe, configs, protocol, previous, *, resume=False):
@@ -234,8 +267,7 @@ def main():
         (output / "resolved-recipe.yaml").write_text(yaml.safe_dump(recipe))
         write_json(output / "effective-config.json", serializable(configs))
         # Old cohort is only a backend/score reproduction check, not new evidence.
-        archived = json.loads((Path(args.data_root) / "eval/blue_diagnosis/ippo-9600000/evaluations.json").read_text())
-        expected = archived["confirmation"]["seed-11001-step-1920000"]
+        expected = archived_baseline(config, Path(args.data_root))
         reproduced = evaluate(params["blue"], params["red"], expected["per_episode_seeds"][:8])
         actual = [x["blue_return"] for x in reproduced]
         if actual != expected["per_episode_blue_returns"][:8]:
@@ -434,7 +466,7 @@ def main():
                 probe_observed = {
                     k: v[:, : config["probe_envs"]]
                     for k, v in observed.items()
-                    if k in ("phase", "permitted", "blocked")
+                    if k in ("phase", "permitted", "blocked", "reverse_blocked")
                 }
                 replay = partial(component_replay, trainer, networks["blue"], config=configs["blue"])
                 component_rows, _, residual = replay(
@@ -510,6 +542,8 @@ def main():
         )
         confirmation = {}
         confirmation_policies = [("warm-0", params["blue"]), ("warm-final", states["blue"].params)]
+        if config.get("include_original_confirmation", False):
+            confirmation_policies.append(("original", original.policies["blue"].weights))
         if control:
             confirmation_policies.append(
                 (
@@ -523,21 +557,7 @@ def main():
                 blue_params, states["red"].params, confirmation_seeds, no_block=True
             )
         write_json(output / "confirmation-episodes.json", confirmation)
-        comparisons = {}
-        for restricted in (False, True):
-            suffix = "-no-block" if restricted else ""
-            delta = [
-                b["blue_return"] - a["blue_return"]
-                for a, b in zip(confirmation["warm-0" + suffix], confirmation["warm-final" + suffix])
-            ]
-            comparisons["warm-final-minus-initial" + suffix] = bootstrap(delta)
-            if control:
-                comparisons["lambda1-minus-lambda095" + suffix] = bootstrap(
-                    [
-                        b["blue_return"] - a["blue_return"]
-                        for a, b in zip(confirmation["lambda095-final" + suffix], confirmation["warm-final" + suffix])
-                    ]
-                )
+        comparisons = confirmation_comparisons(confirmation, seed=config["seeds"].get("bootstrap", 6500001))
         write_json(output / "confirmation-summary.json", comparisons)
         for path in sorted(output.rglob("*")):
             if path.is_file():

@@ -164,15 +164,28 @@ def analyze(root, out=None):
     result["validation"] = evalrows
     if (root / "confirmation-episodes.json").exists():
         confirmation = read(root / "confirmation-episodes.json")
+        bootstrap_seed = 6500001
+        if (root / "config.yaml").exists():
+            import yaml
+
+            bootstrap_seed = yaml.safe_load((root / "config.yaml").read_text())["seeds"].get(
+                "bootstrap", bootstrap_seed
+            )
         result["confirmation"] = {}
         for s in ("", "-no-block"):
             result["confirmation"]["warm-final-minus-initial" + s] = paired(
-                confirmation["warm-0" + s], confirmation["warm-final" + s]
+                confirmation["warm-0" + s], confirmation["warm-final" + s], seed=bootstrap_seed
             )
             if "lambda095-final" + s in confirmation:
                 result["confirmation"]["lambda1-minus-lambda095" + s] = paired(
-                    confirmation["lambda095-final" + s], confirmation["warm-final" + s]
+                    confirmation["lambda095-final" + s], confirmation["warm-final" + s], seed=bootstrap_seed
                 )
+            if "original" + s in confirmation:
+                for name in ("warm-0", "warm-final", "lambda095-final"):
+                    if name + s in confirmation:
+                        result["confirmation"][name + "-minus-original" + s] = paired(
+                            confirmation["original" + s], confirmation[name + s], seed=bootstrap_seed
+                        )
     if (root / "fork-results.json").exists():
         forks = read(root / "fork-results.json")
         forkrows = []

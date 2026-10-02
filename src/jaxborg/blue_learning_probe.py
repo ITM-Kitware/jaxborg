@@ -68,13 +68,18 @@ def traffic_groups(traj, observed):
 
     idle = traj.actor_mask > 0
     permitted, blocked = take(observed["permitted"]), take(observed["blocked"])
-    return {
+    groups = {
         "harmful_new_block": idle & is_block & permitted & ~blocked,
         "redundant_block": idle & is_block & blocked,
         "useful_allow": idle & is_allow & blocked,
         "redundant_allow": idle & is_allow & ~blocked,
         "other": idle & ~is_block & ~is_allow,
     }
+    if "reverse_blocked" in observed:
+        reverse = take(observed["reverse_blocked"])
+        groups["new_open_mission_block"] = groups["harmful_new_block"] & ~reverse
+        groups["mission_route_reopening_allow"] = groups["useful_allow"] & permitted & ~reverse
+    return groups
 
 
 def signal_summary(traj, observed, raw_advantages, normalized_advantages, targets):
@@ -112,14 +117,32 @@ def probability_scores(network, params, traj, observed):
     idle = traj.actor_mask
     harmful = observed["permitted"] & ~observed["blocked"]
     useful = observed["blocked"]
+    route_groups = [
+        ("block", action.BLUE_BLOCK_TRAFFIC_START, action.BLUE_BLOCK_TRAFFIC_END, jnp.ones_like(harmful)),
+        ("harmful_new_block", action.BLUE_BLOCK_TRAFFIC_START, action.BLUE_BLOCK_TRAFFIC_END, harmful),
+        ("useful_allow", action.BLUE_ALLOW_TRAFFIC_START, action.BLUE_ALLOW_TRAFFIC_END, useful),
+    ]
+    if "reverse_blocked" in observed:
+        route_groups.extend(
+            [
+                (
+                    "new_open_mission_block",
+                    action.BLUE_BLOCK_TRAFFIC_START,
+                    action.BLUE_BLOCK_TRAFFIC_END,
+                    harmful & ~observed["reverse_blocked"],
+                ),
+                (
+                    "mission_route_reopening_allow",
+                    action.BLUE_ALLOW_TRAFFIC_START,
+                    action.BLUE_ALLOW_TRAFFIC_END,
+                    useful & observed["permitted"] & ~observed["reverse_blocked"],
+                ),
+            ]
+        )
     out = {}
     for phase in range(3):
         weight = idle * (observed["phase"][..., None] == phase)
-        for name, start, end, route_mask in (
-            ("block", action.BLUE_BLOCK_TRAFFIC_START, action.BLUE_BLOCK_TRAFFIC_END, jnp.ones_like(harmful)),
-            ("harmful_new_block", action.BLUE_BLOCK_TRAFFIC_START, action.BLUE_BLOCK_TRAFFIC_END, harmful),
-            ("useful_allow", action.BLUE_ALLOW_TRAFFIC_START, action.BLUE_ALLOW_TRAFFIC_END, useful),
-        ):
+        for name, start, end, route_mask in route_groups:
             mass = (probs[..., start:end] * route_mask).sum(-1)
             out[f"phase{phase}/{name}"] = (mass * weight).sum() / jnp.maximum(weight.sum(), 1)
     return out

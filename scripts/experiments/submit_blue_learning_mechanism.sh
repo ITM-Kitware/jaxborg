@@ -6,6 +6,7 @@ cd "$ROOT"
 : "${JAXBORG_DIAGNOSTIC_PYTHON:?Set the compatible GPU Python executable}"
 : "${JAXBORG_EXP_DIR:?Set the existing shared MLflow root}"
 export PYTHONPATH="$ROOT/src:$ROOT"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$JAXBORG_EXP_DIR/cache/xla}"
 if [[ "${1:-}" == --allocated ]]; then
     shift
     : "${SLURM_JOB_ID:?Use Slurm}"
@@ -37,7 +38,13 @@ read -r PARTITION GPUS MEMORY CPUS LIMIT < <(
 )
 [[ "$PARTITION" == community && "$GPUS" == 1 ]] || exit 1
 mkdir -p "$JAXBORG_EXP_DIR/launches/slurm"
+DEPENDENCY_FLAGS=()
+if [[ -n "${JAXBORG_SLURM_AFTEROK:-}" ]]; then
+    [[ "$JAXBORG_SLURM_AFTEROK" =~ ^[0-9]+$ ]] || { echo "JAXBORG_SLURM_AFTEROK must be a numeric job ID" >&2; exit 1; }
+    DEPENDENCY_FLAGS=(--dependency="afterok:$JAXBORG_SLURM_AFTEROK")
+fi
 exec sbatch --parsable --partition="$PARTITION" --gres="gpu:$GPUS" --mem="${MEMORY}G" \
+    "${DEPENDENCY_FLAGS[@]}" \
     --cpus-per-task="$CPUS" --time="$LIMIT" --job-name=blue-learning-mechanism \
     --chdir="$ROOT" --output="$JAXBORG_EXP_DIR/launches/slurm/%j.out" \
     --error="$JAXBORG_EXP_DIR/launches/slurm/%j.err" "$ROOT/scripts/experiments/submit_blue_learning_mechanism.sh" --allocated "$@"
