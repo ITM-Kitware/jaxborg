@@ -26,5 +26,7 @@ exp/
 logs/
 .codex
 remote/
+.vscode/
 
 scripts/temp
+
