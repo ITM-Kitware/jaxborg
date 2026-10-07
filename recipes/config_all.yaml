@@ -71,6 +71,10 @@ train:
   opponents: {}  # For one-team runs only: map the frozen opposing team to a model ref.
   initial_weights: {}  # Reserved model-weight sources; must remain empty for both.
   team_overrides: {}  # Optional blue/red maps that deep-merge core and arch settings.
+  # PPO update interval per team (teams: both); omitted teams default to 1.
+  # {blue: 1, red: 2} updates Red on cycles 2, 4, ... using only that cycle's data.
+  # Skipped cycles leave parameters and optimizer state unchanged, including Adam moments.
+  update_every: {blue: 1, red: 1}
 
   episode_length: 500  # PPO rollout horizon; it does not change environment termination.
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.

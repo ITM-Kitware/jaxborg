@@ -147,7 +147,7 @@ def _normalize_reward(
 
 def _make_optimizer(config: Mapping[str, Any]):
     if bool(config.get("ANNEAL_LR", False)):
-        num_updates = max(1, int(config["NUM_UPDATES"]))
+        num_updates = max(1, int(config["NUM_UPDATES"]) // int(config.get("UPDATE_EVERY", 1)))
         steps_per_update = int(config["NUM_MINIBATCHES"]) * int(config["UPDATE_EPOCHS"])
 
         def schedule(count):
@@ -423,6 +423,9 @@ def make_joint_train(
     Both network forward passes happen before the single call to ``env.step``.
     Frozen policies still participate in inference, but their PPO updater is
     omitted and their parameters therefore remain byte-identical.
+    UPDATE_EVERY schedules a team's PPO update on every Nth joint rollout;
+    skipped trajectories are discarded. Pass a zero-based update_idx to the
+    returned function when using an interval greater than one.
     """
 
     if set(team_configs) != set(TEAMS) or set(networks) != set(TEAMS):
@@ -439,7 +442,12 @@ def make_joint_train(
     topology_bank = tuple(base.get("TOPOLOGY_BANK") or ())
     if topology_bank:
         validate_training_topology_coverage(len(topology_bank), num_envs)
+    update_intervals = {}
     for team, cfg in team_configs.items():
+        interval = cfg.get("UPDATE_EVERY", 1)
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+            raise ValueError(f"{team} UPDATE_EVERY must be a positive integer")
+        update_intervals[team] = interval
         if int(cfg["NUM_ENVS"]) != num_envs or int(cfg["NUM_STEPS"]) != num_steps:
             raise ValueError(f"{team} must share NUM_ENVS and NUM_STEPS in a joint rollout")
         if tuple(cfg.get("TOPOLOGY_BANK") or ()) != topology_bank:
@@ -510,7 +518,10 @@ def make_joint_train(
     # reward-normalizer pytrees may alias after construction, and XLA rejects
     # donating one physical buffer through two flattened arguments.
     @jax.jit
-    def collect_and_update(train_states, env_state, obs, rng, reward_norm_states):
+    def collect_and_update(train_states, env_state, obs, rng, reward_norm_states, update_idx=None):
+        if update_idx is None and any(update_intervals[team] > 1 for team in trainable_teams):
+            raise ValueError("update_idx is required when UPDATE_EVERY is greater than 1")
+        rollout_number = 1 if update_idx is None else update_idx + 1
         info_init = {key: jnp.zeros(num_envs, dtype=jnp.float32) for key in info_keys}
         # Truncated BPTT with the window set to the rollout. NUM_STEPS is the
         # recipe's episode_length and every env resets on the same tick, so a
@@ -640,29 +651,44 @@ def make_joint_train(
             if team == "red":
                 last_value = last_value * env_state.state.red_agent_active.astype(jnp.float32)
 
+            zero = jnp.zeros((), dtype=jnp.float32)
+            empty_metrics = {
+                "total_loss": zero,
+                "actor_loss": zero,
+                "critic_loss": zero,
+                "entropy": zero,
+                "approx_kl": zero,
+                "clip_frac": zero,
+                "explained_var": zero,
+                "pre_clip_grad_norm": zero,
+                "grad_norm": zero,
+            }
+            did_update = jnp.asarray(False)
+            team_metrics = empty_metrics
             if team in trainable_teams:
                 rng, update_key = jax.random.split(rng)
-                state, _, team_metrics = updaters[team](
-                    train_states[team],
-                    trajectories[team],
-                    last_value,
-                    update_key,
-                    init_carry=window_carries[team],
-                )
-                train_states[team] = state
-            else:
-                zero = jnp.zeros((), dtype=jnp.float32)
-                team_metrics = {
-                    "total_loss": zero,
-                    "actor_loss": zero,
-                    "critic_loss": zero,
-                    "entropy": zero,
-                    "approx_kl": zero,
-                    "clip_frac": zero,
-                    "explained_var": zero,
-                    "pre_clip_grad_norm": zero,
-                    "grad_norm": zero,
-                }
+
+                def update_team(state):
+                    state, _, result = updaters[team](
+                        state,
+                        trajectories[team],
+                        last_value,
+                        update_key,
+                        init_carry=window_carries[team],
+                    )
+                    return state, result
+
+                did_update = jnp.asarray(rollout_number % update_intervals[team] == 0)
+                if update_intervals[team] == 1:
+                    train_states[team], team_metrics = update_team(train_states[team])
+                else:
+                    train_states[team], team_metrics = jax.lax.cond(
+                        did_update,
+                        update_team,
+                        lambda state: (state, empty_metrics),
+                        train_states[team],
+                    )
+            team_metrics["updated"] = did_update.astype(jnp.float32)
             sign = 1.0 if team == "blue" else -1.0
             # Signed so the four components still sum to raw_rollout_return.
             # Logging them apart separates "Red landed impacts" from "Blue

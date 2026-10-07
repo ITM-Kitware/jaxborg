@@ -530,6 +530,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         print(
             f"  {team}: arch={arches[team]['name']} hidden_dim={arches[team].get('hidden_dim', 256)} "
             f"critic={getattr(networks[team], 'critic_input', 'local')} "
+            f"update_every={configs[team]['UPDATE_EVERY']} "
             f"status={'trainable' if team in trainable_teams else 'frozen'}",
             flush=True,
         )
@@ -594,6 +595,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 obs,
                 rng,
                 reward_norm_states,
+                update_idx=update_idx,
             )
             metrics = jax.device_get(metrics)
             final_metrics = metrics
@@ -641,6 +643,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 "mean_rollout_return": "normalized_return",
                 "actor_fraction": "actor_fraction",
                 "critic_fraction": "critic_fraction",
+                "updated": "updated",
                 **{component: component for component in joint_reward_components},
             }
             for team in ("blue", "red"):

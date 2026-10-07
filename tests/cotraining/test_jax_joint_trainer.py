@@ -189,6 +189,63 @@ def test_single_team_mode_keeps_frozen_opponent_byte_identical(tiny_joint):
     assert float(metrics["red"]["total_loss"]) == 0.0
 
 
+@pytest.mark.parametrize("architecture", ["feedforward", "lstm"])
+def test_red_half_rate_skips_complete_optimizer_updates(tiny_joint, architecture):
+    networks, configs = tiny_joint
+    if architecture == "lstm":
+        networks = _recurrent_networks(3, 5, cell="lstm")
+    for config in configs.values():
+        config.update(TOTAL_TIMESTEPS=8, UPDATE_EPOCHS=2, NORM_REWARDS=True)
+    configs["red"]["UPDATE_EVERY"] = 2
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    rng = jax.random.PRNGKey(7)
+
+    # Exercise both JIT branches, including a skipped update after Adam has
+    # acquired nonzero moments. No production environment or training run.
+    for update_idx in range(4):
+        before = dict(states)
+        previous_norm_count = float(norm["red"].count)
+        states, env_state, obs, rng, norm, metrics = update(states, env_state, obs, rng, norm, update_idx=update_idx)
+        jax.block_until_ready(metrics)
+        red_updated = (update_idx + 1) % 2 == 0
+        assert _tree_changed(before["blue"].params, states["blue"].params)
+        assert int(states["blue"].step) == (update_idx + 1) * 2
+        assert int(states["red"].step) == ((update_idx + 1) // 2) * 2
+        assert float(metrics["blue"]["updated"]) == 1.0
+        assert float(metrics["red"]["updated"]) == float(red_updated)
+        if red_updated:
+            assert _tree_changed(before["red"].params, states["red"].params)
+        else:
+            _assert_tree_exact(before["red"], states["red"])
+            assert float(metrics["red"]["total_loss"]) == 0.0
+        assert float(norm["red"].count) > previous_norm_count
+        np.testing.assert_allclose(metrics["red"]["raw_rollout_return"], -metrics["blue"]["raw_rollout_return"])
+
+
+def test_interval_update_requires_explicit_rollout_index(tiny_joint):
+    networks, configs = tiny_joint
+    configs["red"]["UPDATE_EVERY"] = 2
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    with pytest.raises(ValueError, match="update_idx is required"):
+        update(states, env_state, obs, jax.random.PRNGKey(7), norm)
+
+
+def test_half_rate_optimizer_anneals_over_scheduled_updates():
+    config = {**_config(), "ANNEAL_LR": True, "NUM_UPDATES": 4, "UPDATE_EVERY": 2}
+    optimizer = joint._make_optimizer(config)
+    params = jnp.array(0.0)
+    state = optimizer.init(params)
+    rates = []
+    for _ in range(2):
+        delta, state = optimizer.update(jnp.array(1.0), state, params)
+        rates.append(float(-delta))
+    np.testing.assert_allclose(rates, [config["LR"], config["LR"] / 2], rtol=1e-4)
+
+
 def test_jitted_update_accepts_aliased_reward_normalizer_leaves(tiny_joint):
     networks, configs = tiny_joint
     configs["blue"]["NORM_REWARDS"] = True

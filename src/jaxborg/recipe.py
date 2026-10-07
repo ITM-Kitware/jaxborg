@@ -90,6 +90,18 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
     if mode not in TRAIN_TEAM_MODES:
         raise ValueError(f"{source}: train.teams must be one of {TRAIN_TEAM_MODES}, got {mode!r}")
 
+    update_every = train.get("update_every", {})
+    if not isinstance(update_every, dict):
+        raise ValueError(f"{source}: train.update_every must be a mapping")
+    unknown_intervals = set(update_every) - set(TEAMS)
+    if unknown_intervals:
+        raise ValueError(f"{source}: unknown teams in train.update_every: {sorted(unknown_intervals)}")
+    for team, interval in update_every.items():
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+            raise ValueError(f"{source}: train.update_every.{team} must be a positive integer")
+        if interval != 1 and mode != "both":
+            raise ValueError(f"{source}: train.update_every intervals greater than 1 require train.teams: both")
+
     opponents = train.get("opponents") or {}
     if not isinstance(opponents, dict):
         raise ValueError(f"{source}: train.opponents must be a mapping")
@@ -584,6 +596,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "NUM_STEPS": int(train["episode_length"]),
         "NUM_MINIBATCHES": int(jax_.get("num_minibatches", 16)),
         "UPDATE_EPOCHS": int(jax_.get("update_epochs", 4)),
+        "UPDATE_EVERY": int(train.get("update_every", {}).get(selected_team, 1)),
         "TOTAL_TIMESTEPS": int(train["total_timesteps"]),
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
@@ -643,6 +656,7 @@ def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[
         "rollout_length": rollout_length,
         "num_rollouts_per_update": rollouts_per_update,
         "num_epochs": int(cr.get("num_epochs", 4)),
+        "update_every": int(train.get("update_every", {}).get(selected_team, 1)),
         "num_minibatches": int(cr.get("num_minibatches", 16)),
         "total_timesteps": int(train["total_timesteps"]),
         "TRAIN_VARIANT": train_variant(recipe),
