@@ -17,6 +17,7 @@ from flax.training.train_state import TrainState
 
 from jaxborg.adaptive_updates import AdaptiveUpdateSettings, adaptive_red_update
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
+from jaxborg.opponent_population import OPPONENT_NAMES, OpponentPopulationSettings
 from jaxborg.policies import (
     has_centralized_critic,
     init_policy_params,
@@ -25,6 +26,7 @@ from jaxborg.policies import (
     policy_sequence,
     policy_step,
 )
+from jaxborg.population_env import PopulationCC4Env
 from jaxborg.training_topology_sampling import validate_training_topology_coverage
 
 TEAMS = ("blue", "red")
@@ -53,6 +55,13 @@ class TeamTransition(NamedTuple):
     reset: jax.Array | None = None
     # MAPPO only: world state from the same pre-step state as obs/value.
     critic_obs: jax.Array | None = None
+    # Population membership, independent of Red dormancy / action availability.
+    sample_mask: jax.Array | None = None
+
+
+class PopulationTrainState(TrainState):
+    # Empty minibatches need not advance Adam, so step no longer counts PPOs.
+    ppo_updates: jax.Array
 
 
 class RewardNormState(NamedTuple):
@@ -124,8 +133,11 @@ def _normalize_reward(
     done: jax.Array,
     state: RewardNormState,
     config: Mapping[str, Any],
+    sample_mask: jax.Array | None = None,
 ) -> tuple[jax.Array, RewardNormState]:
     """Normalize a scalar team payoff across vectorized environments."""
+    if sample_mask is not None:
+        reward = jnp.where(sample_mask, reward, 0.0)
     if not bool(config.get("NORM_REWARDS", False)):
         return reward * float(config.get("REWARD_SCALE", 1.0)), state
 
@@ -133,6 +145,10 @@ def _normalize_reward(
     batch_mean = jnp.mean(new_returns)
     batch_var = jnp.var(new_returns)
     batch_count = jnp.asarray(reward.shape[0], dtype=jnp.float32)
+    if sample_mask is not None:
+        batch_count = sample_mask.astype(jnp.float32).sum()
+        batch_mean = _masked_mean(new_returns, sample_mask)
+        batch_var = _masked_mean(jnp.square(new_returns - batch_mean), sample_mask)
     delta = batch_mean - state.mean
     total_count = state.count + batch_count
     new_mean = state.mean + delta * batch_count / total_count
@@ -140,8 +156,15 @@ def _normalize_reward(
     m_b = batch_var * batch_count
     m2 = m_a + m_b + jnp.square(delta) * state.count * batch_count / total_count
     new_var = m2 / total_count
+    if sample_mask is not None:
+        # Avoid even roundoff changes to stored moments on an all-scripted
+        # tick. There is no observation of the learned Red reward process.
+        new_mean = jnp.where(batch_count > 0, new_mean, state.mean)
+        new_var = jnp.where(batch_count > 0, new_var, state.var)
     scaled = jnp.clip(reward / (jnp.sqrt(new_var) + 1e-8), -10.0, 10.0)
     next_returns = new_returns * (1.0 - done.astype(jnp.float32))
+    if sample_mask is not None:
+        next_returns = jnp.where(sample_mask, next_returns, 0.0)
     next_state = RewardNormState(next_returns, new_mean, new_var, total_count)
     return scaled * float(config.get("REWARD_SCALE", 1.0)), next_state
 
@@ -289,6 +312,31 @@ def _make_team_updater(network, config: Mapping[str, Any]):
         metrics["grad_norm"] = optax.global_norm(grads)
         return train_state.apply_gradients(grads=grads), metrics
 
+    def apply_minibatch(train_state, loss_fn, transitions):
+        if not config.get("MASK_EMPTY_MINIBATCHES", False):
+            return apply_gradients(train_state, loss_fn, train_state.params)
+        empty = dict.fromkeys(
+            (
+                "total_loss",
+                "actor_loss",
+                "critic_loss",
+                "entropy",
+                "approx_kl",
+                "clip_frac",
+                "explained_var",
+                "pre_clip_grad_norm",
+                "grad_norm",
+            ),
+            jnp.float32(0),
+        )
+        available = jnp.any(transitions.actor_mask > 0) | jnp.any(transitions.critic_mask > 0)
+        return jax.lax.cond(
+            available,
+            lambda state: apply_gradients(state, loss_fn, state.params),
+            lambda state: (state, empty),
+            train_state,
+        )
+
     def flat_epoch(carry, batch):
         """Feedforward layout: every (t, env, agent) row is an independent sample."""
         flat_batch, flat_advantages, flat_targets, batch_size = batch
@@ -314,7 +362,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
                 )
                 return ppo_objective(pi, value, transitions, gae, batch_targets)
 
-            return apply_gradients(train_state, loss_fn, train_state.params)
+            return apply_minibatch(train_state, loss_fn, transitions)
 
         train_state, metrics = jax.lax.scan(minibatch_step, train_state, minibatches)
         return (train_state, rng), metrics
@@ -357,7 +405,7 @@ def _make_team_updater(network, config: Mapping[str, Any]):
                 )
                 return ppo_objective(pi, value, transitions, gae, batch_targets)
 
-            return apply_gradients(train_state, loss_fn, train_state.params)
+            return apply_minibatch(train_state, loss_fn, transitions)
 
         train_state, metrics = jax.lax.scan(minibatch_step, train_state, minibatches)
         return (train_state, rng), metrics
@@ -406,6 +454,8 @@ def _make_team_updater(network, config: Mapping[str, Any]):
             None,
             update_epochs,
         )
+        if isinstance(train_state, PopulationTrainState):
+            train_state = train_state.replace(ppo_updates=train_state.ppo_updates + 1)
         return train_state, rng, jax.tree.map(lambda x: x.mean(), metrics)
 
     return update
@@ -445,6 +495,20 @@ def make_joint_train(
     base = team_configs[trainable_teams[0]]
     num_envs = int(base["NUM_ENVS"])
     num_steps = int(base["NUM_STEPS"])
+    population = OpponentPopulationSettings.from_config(base.get("OPPONENT_POPULATION"))
+    if population is not None and set(trainable_teams) != set(TEAMS):
+        raise ValueError("OPPONENT_POPULATION requires both teams training")
+    if any(cfg.get("OPPONENT_POPULATION") != base.get("OPPONENT_POPULATION") for cfg in team_configs.values()):
+        raise ValueError("both teams must share OPPONENT_POPULATION")
+    # Preserve the exact legacy environment, keys and updater for a pure
+    # cotrained population, including when preservation was requested.
+    population = population if population is not None and population.mixed else None
+    preserve_red_batch = population is not None and population.preserve_red_batch_size
+    rollout_envs = num_envs * (2 if preserve_red_batch else 1)
+    team_slices = {
+        "blue": slice(0, num_envs),
+        "red": slice(num_envs, rollout_envs) if preserve_red_batch else slice(0, num_envs),
+    }
     topology_bank = tuple(base.get("TOPOLOGY_BANK") or ())
     if topology_bank:
         validate_training_topology_coverage(len(topology_bank), num_envs)
@@ -469,7 +533,10 @@ def make_joint_train(
     if any(cfg.get("ADAPTIVE_UPDATES") != base.get("ADAPTIVE_UPDATES") for cfg in team_configs.values()):
         raise ValueError("both teams must share ADAPTIVE_UPDATES")
 
-    env = make_joint_jax_env(
+    env_factory = (
+        make_joint_jax_env if population is None else lambda variant, **kw: PopulationCC4Env(variant, population, **kw)
+    )
+    env = env_factory(
         base["TRAIN_VARIANT"],
         topology_mode=base.get("TOPOLOGY_MODE", "generative"),
         training_mode=bool(base.get("TRAINING_MODE", True)),
@@ -492,8 +559,8 @@ def make_joint_train(
         return scalar_or_batched_step(keys, states, actions)
 
     reset_key, topology_key = jax.random.split(jax.random.PRNGKey(int(base["SEED"])))
-    reset_keys = jax.random.split(reset_key, num_envs)
-    if topology_bank and hasattr(env, "reset_batch"):
+    reset_keys = jax.random.split(reset_key, rollout_envs)
+    if (topology_bank or population is not None) and hasattr(env, "reset_batch"):
         init_obs, init_env_state = env.reset_batch(reset_keys, topology_key)
     else:
         init_obs, init_env_state = jax.vmap(env.reset)(reset_keys)
@@ -508,15 +575,27 @@ def make_joint_train(
             params = supplied_params.get(team)
             if params is None:
                 params = init_policy_params(networks[team], keys[team], int(obs_shape[-1]))
-            states[team] = TrainState.create(
+            state_class = TrainState if population is None else PopulationTrainState
+            states[team] = state_class.create(
                 apply_fn=networks[team].apply,
                 params=params,
                 tx=_make_optimizer(cfg),
+                **({"ppo_updates": jnp.int32(0)} if population is not None else {}),
             )
         return states
 
-    updaters = {team: _make_team_updater(networks[team], team_configs[team]) for team in trainable_teams}
+    updaters = {
+        team: _make_team_updater(
+            networks[team], {**team_configs[team], "MASK_EMPTY_MINIBATCHES": population is not None}
+        )
+        for team in trainable_teams
+    }
     info_keys = REWARD_COMPONENTS + GAME_COUNTERS
+    if population is not None:
+        info_keys += tuple(f"red_{key}" for key in REWARD_COMPONENTS)
+        info_keys += tuple(
+            f"population.{name}.{key}" for name in OPPONENT_NAMES for key in ("steps", "episodes", "return")
+        )
     recurrent = {team: is_recurrent(networks[team]) for team in TEAMS}
     centralized = {team: has_centralized_critic(networks[team]) and team in trainable_teams for team in TEAMS}
 
@@ -527,7 +606,16 @@ def make_joint_train(
 
     # One sequence per (env, agent), ordered env-major to match the flatten in
     # the rollout and the reshape in the updater.
-    sequence_counts = {team: num_envs * num_agents[team] for team in TEAMS}
+    sequence_counts = {team: rollout_envs * num_agents[team] for team in TEAMS}
+
+    def training_carry(team, carry):
+        if not preserve_red_batch:
+            return carry
+        part = team_slices[team]
+        return jax.tree.map(
+            lambda x: x.reshape((rollout_envs, num_agents[team], -1))[part].reshape((num_envs * num_agents[team], -1)),
+            carry,
+        )
 
     # Do not donate the nested team state here. Small scalar leaves in the two
     # reward-normalizer pytrees may alias after construction, and XLA rejects
@@ -544,7 +632,7 @@ def make_joint_train(
         elif adaptive_state is not None:
             raise ValueError("adaptive_state requires ADAPTIVE_UPDATES")
         rollout_number = 1 if update_idx is None else update_idx + 1
-        info_init = {key: jnp.zeros(num_envs, dtype=jnp.float32) for key in info_keys}
+        info_init = {key: jnp.zeros(rollout_envs, dtype=jnp.float32) for key in info_keys}
         # Truncated BPTT with the window set to the rollout. NUM_STEPS is the
         # recipe's episode_length and every env resets on the same tick, so a
         # window boundary is an episode boundary and starting from a blank
@@ -552,7 +640,7 @@ def make_joint_train(
         # ever produces them, are still handled by the per-row reset flags.
         window_carries = {team: initial_carry(networks[team], sequence_counts[team]) for team in TEAMS}
         # Row 0 of a window opens a sequence, so it resets by definition.
-        reset_init = {team: jnp.ones((num_envs, num_agents[team]), dtype=jnp.bool_) for team in TEAMS}
+        reset_init = {team: jnp.ones((rollout_envs, num_agents[team]), dtype=jnp.bool_) for team in TEAMS}
 
         def env_step(carry, _):
             env_state, obs, rng, norm_states, info_sums, carries, resets = carry
@@ -581,7 +669,7 @@ def make_joint_train(
                 )
                 flat_action = pi.sample(seed=action_key)
                 flat_log_prob = pi.log_prob(flat_action)
-                shape = (num_envs, num_agents[team])
+                shape = (rollout_envs, num_agents[team])
                 team_actions = flat_action.reshape(shape)
                 for idx, name in enumerate(names):
                     actions[name] = team_actions[:, idx]
@@ -596,8 +684,16 @@ def make_joint_train(
 
             before = env_state.state
             step_key, topology_key = jax.random.split(step_key)
-            step_keys = jax.random.split(step_key, num_envs)
+            step_keys = jax.random.split(step_key, rollout_envs)
             new_obs, new_env_state, rewards, dones, infos = step_batch(step_keys, env_state, actions, topology_key)
+            if population is not None:
+                learned = env_state.opponent_id == 0
+                infos.update({f"red_{key}": infos[key] * learned for key in REWARD_COMPONENTS})
+                for opponent_id, name in enumerate(OPPONENT_NAMES):
+                    selected = env_state.opponent_id == opponent_id
+                    infos[f"population.{name}.steps"] = selected.astype(jnp.float32)
+                    infos[f"population.{name}.episodes"] = selected & (before.time == 0)
+                    infos[f"population.{name}.return"] = selected * sum(infos[key] for key in REWARD_COMPONENTS)
             info_sums = {key: info_sums[key] + jnp.asarray(infos[key], dtype=jnp.float32) for key in info_keys}
             done_env = dones["__all__"].astype(jnp.float32)
             transitions = {}
@@ -605,12 +701,15 @@ def make_joint_train(
             for team in TEAMS:
                 names = agents[team]
                 obs_batch, mask_batch, team_actions, value, log_prob, critic_obs = transition_parts[team]
-                raw_reward = rewards[names[0]]
+                part = team_slices[team]
+                sample_mask = (env_state.opponent_id[part] == 0) if population is not None and team == "red" else None
+                raw_reward = rewards[names[0]][part]
                 scaled_reward, next_norm = _normalize_reward(
                     raw_reward,
-                    done_env,
+                    done_env[part],
                     norm_states[team],
                     team_configs[team],
+                    sample_mask=sample_mask,
                 )
                 norm_states[team] = next_norm
                 reward_batch = jnp.repeat(scaled_reward[:, None], num_agents[team], axis=1)
@@ -633,18 +732,24 @@ def make_joint_train(
                     critic_mask = active_before.astype(jnp.float32)
                     transition_done = episode_done
                     next_resets[team] = next_sequence_reset(team, episode_done, active_before)
+                    if population is not None:
+                        actor_mask *= learned[:, None]
+                        critic_mask *= learned[:, None]
                 transitions[team] = TeamTransition(
-                    done=transition_done,
-                    action=team_actions,
-                    value=value,
+                    done=transition_done[part],
+                    action=team_actions[part],
+                    value=value[part],
                     reward=reward_batch,
-                    log_prob=log_prob,
-                    obs=obs_batch,
-                    avail_actions=mask_batch,
-                    actor_mask=actor_mask,
-                    critic_mask=critic_mask,
-                    reset=resets[team] if recurrent[team] else None,
-                    critic_obs=critic_obs,
+                    log_prob=log_prob[part],
+                    obs=obs_batch[part],
+                    avail_actions=mask_batch[part],
+                    actor_mask=actor_mask[part],
+                    critic_mask=critic_mask[part],
+                    reset=resets[team][part] if recurrent[team] else None,
+                    critic_obs=None if critic_obs is None else critic_obs[part],
+                    sample_mask=jnp.broadcast_to(sample_mask[:, None], reward_batch.shape)
+                    if sample_mask is not None
+                    else None,
                 )
             return (new_env_state, new_obs, rng, norm_states, info_sums, carries, next_resets), transitions
 
@@ -655,7 +760,8 @@ def make_joint_train(
             num_steps,
         )
 
-        raw_blue_return = sum(info_sums[component] for component in REWARD_COMPONENTS).mean()
+        raw_blue_return = sum(info_sums[component][:num_envs] for component in REWARD_COMPONENTS).mean()
+        red_available = jnp.any(trajectories["red"].critic_mask > 0) if population is not None else jnp.asarray(True)
         if adaptive_settings is not None:
             red_update_due, adaptive_state, adaptive_metrics = adaptive_red_update(
                 adaptive_settings,
@@ -663,6 +769,7 @@ def make_joint_train(
                 blue_return=raw_blue_return,
                 rollout_number=rollout_number,
                 warmup_update_every=update_intervals["red"],
+                update_available=red_available,
             )
 
         metrics = {}
@@ -679,9 +786,12 @@ def make_joint_train(
                 reset=resets[team].reshape(-1),
                 critic_obs=None if critic_obs is None else critic_obs.reshape((-1, critic_obs.shape[-1])),
             )
-            last_value = last_value.reshape((num_envs, num_agents[team]))
+            last_value = last_value.reshape((rollout_envs, num_agents[team]))
             if team == "red":
                 last_value = last_value * env_state.state.red_agent_active.astype(jnp.float32)
+                if population is not None:
+                    last_value *= (env_state.opponent_id == 0)[:, None]
+            last_value = last_value[team_slices[team]]
 
             zero = jnp.zeros((), dtype=jnp.float32)
             empty_metrics = {
@@ -706,7 +816,7 @@ def make_joint_train(
                         trajectories[team],
                         last_value,
                         update_key,
-                        init_carry=window_carries[team],
+                        init_carry=training_carry(team, window_carries[team]),
                     )
                     return state, result
 
@@ -714,7 +824,9 @@ def make_joint_train(
                 did_update = (
                     red_update_due if adaptive_red else jnp.asarray(rollout_number % update_intervals[team] == 0)
                 )
-                if update_intervals[team] == 1 and not adaptive_red:
+                if team == "red":
+                    did_update &= red_available
+                if update_intervals[team] == 1 and not adaptive_red and population is None:
                     train_states[team], team_metrics = update_team(train_states[team])
                 else:
                     train_states[team], team_metrics = jax.lax.cond(
@@ -725,7 +837,11 @@ def make_joint_train(
                     )
             team_metrics["updated"] = did_update.astype(jnp.float32)
             cfg = team_configs[team]
-            team_metrics["update_count"] = train_states[team].step // (cfg["NUM_MINIBATCHES"] * cfg["UPDATE_EPOCHS"])
+            team_metrics["update_count"] = (
+                train_states[team].ppo_updates
+                if population is not None
+                else train_states[team].step // (cfg["NUM_MINIBATCHES"] * cfg["UPDATE_EPOCHS"])
+            )
             if team == "red" and adaptive_settings is not None:
                 team_metrics.update(adaptive_metrics)
             sign = 1.0 if team == "blue" else -1.0
@@ -733,22 +849,56 @@ def make_joint_train(
             # Logging them apart separates "Red landed impacts" from "Blue
             # burned budget", which the zero-sum total cannot distinguish.
             for component in REWARD_COMPONENTS:
-                team_metrics[component] = sign * info_sums[component].mean()
+                team_metrics[component] = sign * info_sums[component][:num_envs].mean()
             raw_return = sign * raw_blue_return
             team_metrics["raw_rollout_return"] = raw_return
             team_metrics["mean_rollout_return"] = trajectories[team].reward.sum(axis=0).mean()
+            if team == "red" and population is not None:
+                sample_mask = trajectories[team].sample_mask
+                eligible_steps = sample_mask[:, :, 0].sum()
+                for component in REWARD_COMPONENTS:
+                    team_metrics[component] = (
+                        -info_sums[f"red_{component}"][team_slices[team]].sum()
+                        * num_steps
+                        / jnp.maximum(eligible_steps, 1)
+                    )
+                team_metrics["raw_rollout_return"] = sum(team_metrics[key] for key in REWARD_COMPONENTS)
+                team_metrics["mean_rollout_return"] = _masked_mean(trajectories[team].reward, sample_mask) * num_steps
+                team_metrics["usable_env_steps"] = eligible_steps
+                team_metrics["usable_samples"] = trajectories[team].critic_mask.sum()
+                team_metrics["optimizer_steps"] = train_states[team].step
             team_metrics["actor_fraction"] = trajectories[team].actor_mask.mean()
             team_metrics["critic_fraction"] = trajectories[team].critic_mask.mean()
             metrics[team] = team_metrics
 
         metrics["game"] = {
             "blue_return": metrics["blue"]["raw_rollout_return"],
-            "red_return": metrics["red"]["raw_rollout_return"],
+            "red_return": -raw_blue_return if population is not None else metrics["red"]["raw_rollout_return"],
             # Unsigned game outcomes. Unlike the returns these are not
             # zero-sum, so they show absolute progress for one team without
             # the other team's decline confounding it.
-            **{counter: info_sums[counter].mean() for counter in GAME_COUNTERS},
+            **{counter: info_sums[counter][:num_envs].mean() for counter in GAME_COUNTERS},
         }
+        if population is not None:
+            population_metrics = {
+                "mixed_blue_return": raw_blue_return,
+                "supplemental_env_steps": jnp.int32((rollout_envs - num_envs) * num_steps),
+                "simulation_env_steps": jnp.int32(rollout_envs * num_steps),
+            }
+            for name, percentage in zip(OPPONENT_NAMES, population.percentages, strict=True):
+                steps = info_sums[f"population.{name}.steps"][:num_envs].sum()
+                population_metrics.update(
+                    {
+                        f"{name}.configured_percentage": jnp.float32(percentage),
+                        f"{name}.observed_percentage": 100 * steps / (num_envs * num_steps),
+                        f"{name}.env_steps": steps,
+                        f"{name}.episodes": info_sums[f"population.{name}.episodes"][:num_envs].sum(),
+                        f"{name}.blue_return": info_sums[f"population.{name}.return"][:num_envs].sum()
+                        * num_steps
+                        / jnp.maximum(steps, 1),
+                    }
+                )
+            metrics["population"] = population_metrics
         result = (train_states, env_state, obs, rng, reward_norm_states, metrics)
         return (*result, adaptive_state) if adaptive_settings is not None else result
 

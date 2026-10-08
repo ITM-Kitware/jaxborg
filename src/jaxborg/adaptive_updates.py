@@ -1,6 +1,4 @@
-"""Adapt the GAPT two-phase schedule to Red PPO and raw Blue returns.
-
-"""
+"""Adapt the GAPT two-phase schedule to Red PPO and raw Blue returns."""
 
 from __future__ import annotations
 
@@ -64,6 +62,7 @@ def adaptive_red_update(
     blue_return: jax.Array,
     rollout_number: jax.Array,
     warmup_update_every: int,
+    update_available: jax.Array = True,
 ) -> tuple[jax.Array, AdaptiveUpdateState, dict[str, jax.Array]]:
     """Decide after collection, before PPO, using the current on-policy batch.
 
@@ -71,6 +70,9 @@ def adaptive_red_update(
     includes phase one and the current rollout. A closed gate forces one PPO
     update at the end of every ``max_frozen_blue_rollouts`` consecutive closed
     rollouts. Any Red update resets that counter; phase-one skips do not count.
+    Population runs always contribute their mixed Blue return, even if no
+    learned Red played. ``update_available=False`` defers the optimizer update
+    without clearing the freeze counter or dropping the return observation.
     """
     returns = jnp.roll(state.blue_returns, -1).at[-1].set(blue_return)
     count = jnp.minimum(state.window_count + 1, settings.window_blue_updates)
@@ -79,7 +81,7 @@ def adaptive_red_update(
     gate_open = adaptive & (count == settings.window_blue_updates) & (mean_return > settings.reward_threshold)
     closed_rollouts = state.frozen_rollouts + 1
     forced = adaptive & ~gate_open & (closed_rollouts >= settings.max_frozen_blue_rollouts)
-    did_update = jnp.where(adaptive, gate_open | forced, rollout_number % warmup_update_every == 0)
+    did_update = jnp.where(adaptive, gate_open | forced, rollout_number % warmup_update_every == 0) & update_available
     frozen_rollouts = jnp.where(adaptive & ~did_update, closed_rollouts, 0)
     next_state = AdaptiveUpdateState(returns, count, frozen_rollouts)
     metrics = {
@@ -87,7 +89,7 @@ def adaptive_red_update(
         "reward_window_mean": mean_return,
         "reward_window_count": count,
         "gate_open": gate_open.astype(jnp.float32),
-        "forced_update": forced.astype(jnp.float32),
+        "forced_update": (forced & did_update).astype(jnp.float32),
         "frozen_rollouts": frozen_rollouts,
     }
     return did_update, next_state, metrics

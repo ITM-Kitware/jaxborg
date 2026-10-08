@@ -556,6 +556,8 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     adaptive_state = initial_adaptive_update_state(adaptive_settings) if adaptive_settings is not None else None
     if adaptive_settings is not None:
         print(f"  adaptive Red updates: {adaptive_settings}", flush=True)
+    if configs["blue"].get("OPPONENT_POPULATION"):
+        print(f"  opponent population: {configs['blue']['OPPONENT_POPULATION']}", flush=True)
     print(f"  env+networks setup: {time.perf_counter() - t0:.1f}s", flush=True)
 
     num_updates = int(configs["blue"]["NUM_UPDATES"])
@@ -679,6 +681,14 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 )
                 row[f"team.{team}.lr"] = float(configs[team]["LR"])
                 row[f"team.{team}.trainable"] = team in trainable_teams
+            if "population" in metrics:
+                row.update({f"population.{key}": float(value) for key, value in metrics["population"].items()})
+                for key in ("usable_env_steps", "usable_samples", "optimizer_steps"):
+                    row[f"team.red.{key}"] = float(metrics["red"][key])
+                supplemental_steps = int(metrics["population"]["supplemental_env_steps"]) * (update_idx + 1)
+                row["population.supplemental_env_steps_total"] = supplemental_steps
+                row["population.simulation_env_steps_total"] = env_steps + supplemental_steps
+                row["population.simulation_throughput_sps"] = (env_steps + supplemental_steps) / elapsed
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             mlflow.log_metrics(

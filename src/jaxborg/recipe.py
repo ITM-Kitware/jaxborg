@@ -33,6 +33,7 @@ import yaml
 
 from jaxborg.adaptive_updates import AdaptiveUpdateSettings
 from jaxborg.blue_observation_contract import enhanced_obs_enabled
+from jaxborg.opponent_population import OpponentPopulationSettings
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
@@ -102,6 +103,10 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
             raise ValueError(f"{source}: train.update_every.{team} must be a positive integer")
         if interval != 1 and mode != "both":
             raise ValueError(f"{source}: train.update_every intervals greater than 1 require train.teams: both")
+
+    population = OpponentPopulationSettings.from_config(train.get("opponent_population"))
+    if population is not None and mode != "both":
+        raise ValueError(f"{source}: train.opponent_population requires train.teams: both")
 
     adaptive_updates = AdaptiveUpdateSettings.from_config(train.get("adaptive_updates"))
     if adaptive_updates is not None:
@@ -611,6 +616,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "UPDATE_EPOCHS": int(jax_.get("update_epochs", 4)),
         "UPDATE_EVERY": int(train.get("update_every", {}).get(selected_team, 1)),
         "ADAPTIVE_UPDATES": copy.deepcopy(train.get("adaptive_updates")),
+        "OPPONENT_POPULATION": copy.deepcopy(train.get("opponent_population")),
         "TOTAL_TIMESTEPS": int(train["total_timesteps"]),
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
@@ -632,6 +638,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
 
 def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
     """Flatten a team view into the dict that ippo_cyborg.py consumes."""
+    if OpponentPopulationSettings.from_config(recipe.get("train", {}).get("opponent_population")) is not None:
+        raise ValueError("train.opponent_population is supported only by the JAX joint trainer")
     if recipe.get("train", {}).get("adaptive_updates") is not None:
         raise ValueError("train.adaptive_updates is supported only by the JAX joint trainer")
     teams = training_teams(recipe)
