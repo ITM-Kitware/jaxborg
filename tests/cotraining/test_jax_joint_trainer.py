@@ -10,6 +10,7 @@ import numpy as np
 import optax
 import pytest
 from flax import struct
+from flax.serialization import to_state_dict
 from flax.training.train_state import TrainState
 
 from jaxborg.adaptive_updates import AdaptiveUpdateSettings, initial_adaptive_update_state
@@ -89,6 +90,42 @@ class _TinyJointEnv:
             "green_asf_count": zero,
         }
         return self._obs(next_state), next_state, rewards, dones, infos
+
+
+@struct.dataclass
+class _TinyPopulationState:
+    state: _FakeSimState
+    opponent_id: jax.Array
+
+
+class _TinyPopulationEnv(_TinyJointEnv):
+    """Fixed test matchups with separately controllable scripted returns."""
+
+    def __init__(self, settings, *, scripted_return=10.0, learned_return=1.0):
+        super().__init__(blue_obs_dim=4, red_obs_dim=6, blue_actions=3, red_actions=5)
+        self.settings = settings
+        self.scripted_return = scripted_return
+        self.learned_return = learned_return
+
+    def reset_batch(self, keys, topology_key):
+        del topology_key
+        _, inner = jax.vmap(super().reset)(keys)
+        count = len(keys)
+        primary = count // 2 if self.settings.preserve_red_batch_size else count
+        # Mixed batches alternate learned / scripted, independent of their
+        # rewards. Endpoints are pure, and the supplemental half is learned.
+        ids = jnp.arange(count) % 2
+        if self.settings.percentages[0] == 0:
+            ids = jnp.ones(count, dtype=jnp.int32)
+        ids = jnp.where(jnp.arange(count) >= primary, 0, ids)
+        state = _TinyPopulationState(inner.state, ids)
+        return jax.vmap(self._obs)(state), state
+
+    def step(self, key, state, actions):
+        obs, next_state, _, dones, infos = super().step(key, state, actions)
+        reward = jnp.where(state.opponent_id == 0, self.learned_return, self.scripted_return)
+        infos["reward_ria"] = reward
+        return obs, next_state, {"blue_0": reward, "red_0": -reward}, dones, infos
 
 
 def _config() -> dict:
@@ -300,7 +337,10 @@ def test_adaptive_update_requires_explicit_schedule_state(tiny_joint):
         update(states, env_state, obs, jax.random.PRNGKey(7), norm, update_idx=0)
 
 
-def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint, monkeypatch, tmp_path):
+@pytest.mark.parametrize("population_mode", [None, False, True])
+def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(
+    tiny_joint, monkeypatch, tmp_path, population_mode
+):
     from scripts.train.algorithms import ippo_jax as trainer
 
     networks, configs = tiny_joint
@@ -319,6 +359,14 @@ def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint
         "train": {"teams": "both"},
         "arch": {"name": "shared"},
     }
+    if population_mode is not None:
+        population = _population_test_config(preserve=population_mode)
+        recipe["train"]["opponent_population"] = population
+        for config in configs.values():
+            config.update(OPPONENT_POPULATION=population, NUM_ENVS=4, TOTAL_TIMESTEPS=48)
+        monkeypatch.setattr(
+            joint, "PopulationCC4Env", lambda variant, settings, **kw: _TinyPopulationEnv(settings, scripted_return=1.0)
+        )
     monkeypatch.setattr(trainer, "project_jax", lambda _recipe, *, team: configs[team])
     monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(
@@ -334,8 +382,9 @@ def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint
     monkeypatch.setattr(trainer.mlflow, "log_metrics", lambda values, **_kw: logged.append(values))
     monkeypatch.setattr(trainer.mlflow, "log_artifact", lambda *_a, **_kw: None)
     monkeypatch.setattr(trainer.mlflow, "end_run", lambda: None)
-    monkeypatch.setattr(trainer, "save_jax_bundle", lambda *_a, **_kw: None)
-    monkeypatch.setattr(trainer, "write_sidecar", lambda path, *_a, **_kw: path)
+    bundles, sidecars = [], []
+    monkeypatch.setattr(trainer, "save_jax_bundle", lambda path, policies, **kw: bundles.append((policies, kw)))
+    monkeypatch.setattr(trainer, "write_sidecar", lambda path, recipe, **kw: sidecars.append((recipe, kw)) or path)
     monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
 
     trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_adaptive", tmp_path)
@@ -349,6 +398,16 @@ def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint
     assert rows[-1]["team.red.update_count"] == 2
     assert rows[-1]["team.red.forced_update"] == 1
     assert logged[-2]["team.red.forced_update"] == 1  # Final per-update MLflow record.
+    if population_mode is not None:
+        assert rows[-1]["population.mixed_blue_return"] == 2
+        assert rows[-1]["population.fsm.observed_percentage"] == 50
+        assert rows[-1]["population.supplemental_env_steps_total"] == (48 if population_mode else 0)
+        assert rows[-1]["population.simulation_env_steps_total"] == (96 if population_mode else 48)
+        assert rows[-1]["team.red.usable_env_steps"] == (8 if population_mode else 4)
+        assert logged[-2]["population.mixed_blue_return"] == 2
+        assert sidecars[-1][0]["train"]["opponent_population"] == population
+        assert bundles[-1][1]["provenance"]["total_steps"] == 48
+        assert set(bundles[-1][0]) == {"blue", "red"}
 
 
 def test_half_rate_optimizer_anneals_over_scheduled_updates():
@@ -1032,3 +1091,171 @@ def test_enhanced_obs_joint_update(architecture, monkeypatch):
     for team in joint.TEAMS:
         assert _tree_changed(before[team], states[team].params)
         assert np.isfinite(float(metrics[team]["total_loss"]))
+
+
+def _population_test_config(*, preserve=False, learned=75):
+    return {
+        "enabled": True,
+        "preserve_red_batch_size": preserve,
+        "blue": [{"opponent": "cotrained", "percentage": learned}, {"opponent": "fsm", "percentage": 100 - learned}],
+    }
+
+
+def _population_update(
+    tiny_joint,
+    monkeypatch,
+    *,
+    preserve=False,
+    learned=75,
+    scripted_return=10.0,
+    learned_return=1.0,
+    architecture="feedforward",
+    adaptive=False,
+):
+    networks, configs = tiny_joint
+    settings = _population_test_config(preserve=preserve, learned=learned)
+    for cfg in configs.values():
+        cfg.update(NUM_ENVS=4, NUM_MINIBATCHES=4, TOTAL_TIMESTEPS=8, NORM_REWARDS=True, OPPONENT_POPULATION=settings)
+        if adaptive:
+            cfg["ADAPTIVE_UPDATES"] = {
+                "phase_switch_blue_updates": 0,
+                "window_blue_updates": 1,
+                "reward_threshold": 5.0,
+                "max_frozen_blue_rollouts": 2,
+            }
+    if architecture == "lstm":
+        networks = _recurrent_networks(3, 5, cell="lstm")
+    monkeypatch.setattr(
+        joint,
+        "PopulationCC4Env",
+        lambda variant, settings, **kw: _TinyPopulationEnv(
+            settings, scripted_return=scripted_return, learned_return=learned_return
+        ),
+    )
+    _, obs, env_state, initialize, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = initialize(jax.random.PRNGKey(5))
+    norm = {team: joint.initial_reward_norm_state(4) for team in joint.TEAMS}
+    schedule = (
+        initial_adaptive_update_state(AdaptiveUpdateSettings.from_config(configs["blue"]["ADAPTIVE_UPDATES"]))
+        if adaptive
+        else None
+    )
+    result = update(states, env_state, obs, jax.random.PRNGKey(6), norm, update_idx=0, adaptive_state=schedule)
+    jax.block_until_ready(result)
+    return states, result
+
+
+@pytest.mark.parametrize("architecture", ["feedforward", "lstm"])
+@pytest.mark.parametrize("preserve", [False, True])
+def test_population_updates_both_teams_with_correct_batch_membership(tiny_joint, monkeypatch, architecture, preserve):
+    before, result = _population_update(tiny_joint, monkeypatch, architecture=architecture, preserve=preserve)
+    states, _, _, _, norms, metrics = result
+    assert _tree_changed(before["blue"].params, states["blue"].params)
+    assert _tree_changed(before["red"].params, states["red"].params)
+    assert int(states["red"].ppo_updates) == 1
+    assert int(states["blue"].ppo_updates) == 1
+    if architecture == "lstm":
+        # One sequence per minibatch: exactly two Red sequences are masked
+        # in default mode, and neither may advance the optimizer.
+        assert int(states["red"].step) == (4 if preserve else 2)
+    assert metrics["blue"]["raw_rollout_return"] == 11.0
+    assert metrics["red"]["raw_rollout_return"] == -2.0
+    assert metrics["red"]["usable_env_steps"] == (8 if preserve else 4)
+    assert norms["blue"].count == pytest.approx(8.0001)
+    assert norms["red"].count == pytest.approx((8 if preserve else 4) + 0.0001)
+    assert metrics["population"]["supplemental_env_steps"] == (8 if preserve else 0)
+    assert metrics["population"]["simulation_env_steps"] == (16 if preserve else 8)
+    assert metrics["population"]["fsm.observed_percentage"] == 50
+    assert metrics["population"]["fsm.episodes"] == 2
+    assert metrics["population"]["fsm.blue_return"] == 20
+    assert metrics["population"]["cotrained.blue_return"] == 2
+    assert metrics["population"]["mixed_blue_return"] == 11
+
+
+@pytest.mark.parametrize("architecture", ["feedforward", "lstm"])
+def test_population_scripted_rewards_change_blue_and_gate_but_not_red(tiny_joint, monkeypatch, architecture):
+    _, first = _population_update(tiny_joint, monkeypatch, architecture=architecture, scripted_return=10, adaptive=True)
+    _, second = _population_update(
+        tiny_joint, monkeypatch, architecture=architecture, scripted_return=100, adaptive=True
+    )
+    _assert_tree_exact(to_state_dict(first[0]["red"]), to_state_dict(second[0]["red"]))
+    _assert_tree_exact(first[4]["red"], second[4]["red"])
+    assert _tree_changed(first[0]["blue"].params, second[0]["blue"].params)
+    assert first[5]["red"]["reward_window_mean"] == 11
+    assert second[5]["red"]["reward_window_mean"] == 101
+    _, closed = _population_update(
+        tiny_joint, monkeypatch, architecture=architecture, scripted_return=-10, adaptive=True
+    )
+    assert closed[5]["red"]["gate_open"] == 0
+    assert closed[5]["red"]["updated"] == 0
+    assert first[5]["red"]["gate_open"] == 1
+
+
+@pytest.mark.parametrize("preserve", [False, True])
+def test_population_all_scripted_still_advances_mixed_gate(tiny_joint, monkeypatch, preserve):
+    before, result = _population_update(tiny_joint, monkeypatch, learned=0, preserve=preserve, adaptive=True)
+    states, _, _, _, norms, metrics, schedule = result
+    assert metrics["red"]["reward_window_mean"] == 20
+    assert metrics["red"]["gate_open"] == 1
+    assert schedule.window_count == 1
+    assert metrics["red"]["updated"] == int(preserve)
+    assert _tree_changed(before["blue"].params, states["blue"].params)
+    if not preserve:
+        _assert_tree_exact(before["red"], states["red"])
+        _assert_tree_exact(norms["red"], joint.initial_reward_norm_state(4))
+        assert metrics["red"]["raw_rollout_return"] == 0
+        assert schedule.frozen_rollouts == 1
+
+
+def test_population_supplemental_returns_do_not_enter_adaptive_gate(tiny_joint, monkeypatch):
+    _, first = _population_update(tiny_joint, monkeypatch, learned=0, preserve=True, adaptive=True, learned_return=1)
+    _, second = _population_update(tiny_joint, monkeypatch, learned=0, preserve=True, adaptive=True, learned_return=100)
+    assert first[5]["red"]["reward_window_mean"] == second[5]["red"]["reward_window_mean"] == 20
+    _assert_tree_exact(to_state_dict(first[0]["blue"]), to_state_dict(second[0]["blue"]))
+    _assert_tree_exact(first[4]["blue"], second[4]["blue"])
+    assert first[5]["red"]["raw_rollout_return"] == -2
+    assert second[5]["red"]["raw_rollout_return"] == -200
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        None,
+        {"enabled": False},
+        _population_test_config(learned=100),
+        _population_test_config(learned=100, preserve=True),
+    ],
+)
+def test_population_disabled_or_pure_cotraining_keeps_legacy_results(tiny_joint, config):
+    networks, configs = tiny_joint
+
+    def run():
+        _, obs, state, initialize, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+        return update(
+            initialize(jax.random.PRNGKey(8)),
+            state,
+            obs,
+            jax.random.PRNGKey(9),
+            {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS},
+        )
+
+    expected = run()
+    for cfg in configs.values():
+        cfg["OPPONENT_POPULATION"] = config
+    actual = run()
+    _assert_tree_exact(to_state_dict(expected), to_state_dict(actual))
+
+
+def test_population_empty_batch_freezes_red_with_existing_adam_moments(tiny_joint, monkeypatch):
+    _, first = _population_update(tiny_joint, monkeypatch, adaptive=True)
+    states, env_state, obs, rng, norms, _, schedule = first
+    networks, configs = tiny_joint
+    _, _, _, _, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    env_state = env_state.replace(opponent_id=jnp.ones_like(env_state.opponent_id))
+    result = update(states, env_state, obs, rng, norms, update_idx=1, adaptive_state=schedule)
+    _assert_tree_exact(to_state_dict(states["red"]), to_state_dict(result[0]["red"]))
+    assert states["red"].step > 0
+    for field in ("mean", "var", "count"):
+        np.testing.assert_array_equal(getattr(norms["red"], field), getattr(result[4]["red"], field))
+    assert result[5]["red"]["updated"] == 0
+    assert result[5]["red"]["reward_window_mean"] == 20

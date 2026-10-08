@@ -159,6 +159,31 @@ def test_adaptive_recipes_preserve_standard_settings_and_project_schedule(base, 
         assert load(control)["train"]["topology_generation"]["count"] == 1
         baseline["eval"]["env_diversity"]["baseline_recipe"] = control
     del recipe["train"]["adaptive_updates"], recipe["train"]["update_every"]
+    # The adaptive controls already disable cross-seed evaluation; preserve
+    # that existing recipe choice independently of their training schedule.
+    assert recipe["eval"]["cross_seed_play"]["enabled"] is False
+    baseline["eval"]["cross_seed_play"]["enabled"] = False
     for item in (recipe, baseline):
         del item["meta"], item["__source_path__"]
     assert recipe == baseline
+
+
+def test_population_empty_red_batches_keep_returns_and_defer_forced_update():
+    settings = AdaptiveUpdateSettings(
+        phase_switch_blue_updates=0, window_blue_updates=1, reward_threshold=-2000, max_frozen_blue_rollouts=2
+    )
+    state = initial_adaptive_update_state(settings)
+    for number, available in enumerate((False, False, False, True), 1):
+        updated, state, metrics = adaptive_red_update(
+            settings,
+            state,
+            blue_return=jnp.float32(-3000),
+            rollout_number=jnp.int32(number),
+            warmup_update_every=4,
+            update_available=jnp.asarray(available),
+        )
+        assert bool(updated) == available
+        assert metrics["reward_window_mean"] == -3000
+        assert metrics["reward_window_count"] == 1
+        assert metrics["frozen_rollouts"] == (0 if available else number)
+        assert metrics["forced_update"] == int(available)
