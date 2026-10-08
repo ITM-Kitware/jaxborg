@@ -31,6 +31,7 @@ from typing import Any
 
 import yaml
 
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings
 from jaxborg.blue_observation_contract import enhanced_obs_enabled
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
@@ -102,6 +103,13 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         if interval != 1 and mode != "both":
             raise ValueError(f"{source}: train.update_every intervals greater than 1 require train.teams: both")
 
+    adaptive_updates = AdaptiveUpdateSettings.from_config(train.get("adaptive_updates"))
+    if adaptive_updates is not None:
+        if mode != "both":
+            raise ValueError(f"{source}: train.adaptive_updates requires train.teams: both")
+        if update_every.get("blue", 1) != 1:
+            raise ValueError(f"{source}: train.adaptive_updates requires train.update_every.blue: 1")
+
     opponents = train.get("opponents") or {}
     if not isinstance(opponents, dict):
         raise ValueError(f"{source}: train.opponents must be a mapping")
@@ -143,6 +151,11 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
         for section, values in override.items():
             if not isinstance(values, dict):
                 raise ValueError(f"{source}: train.team_overrides.{team}.{section} must be a mapping")
+
+    if adaptive_updates is not None:
+        red_core = {**recipe["core"], **overrides.get("red", {}).get("core", {})}
+        if red_core.get("anneal_lr", False):
+            raise ValueError(f"{source}: train.adaptive_updates requires constant Red learning rate (anneal_lr: false)")
 
     ev = recipe.get("eval") or {}
     if not isinstance(ev, dict):
@@ -597,6 +610,7 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
         "NUM_MINIBATCHES": int(jax_.get("num_minibatches", 16)),
         "UPDATE_EPOCHS": int(jax_.get("update_epochs", 4)),
         "UPDATE_EVERY": int(train.get("update_every", {}).get(selected_team, 1)),
+        "ADAPTIVE_UPDATES": copy.deepcopy(train.get("adaptive_updates")),
         "TOTAL_TIMESTEPS": int(train["total_timesteps"]),
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
@@ -618,6 +632,8 @@ def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str,
 
 def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
     """Flatten a team view into the dict that ippo_cyborg.py consumes."""
+    if recipe.get("train", {}).get("adaptive_updates") is not None:
+        raise ValueError("train.adaptive_updates is supported only by the JAX joint trainer")
     teams = training_teams(recipe)
     selected_team = team or (teams[0] if len(teams) == 1 else "blue")
     resolved = team_recipe(recipe, selected_team)

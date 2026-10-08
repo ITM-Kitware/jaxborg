@@ -15,6 +15,7 @@ import jax.numpy as jnp
 import optax
 from flax.training.train_state import TrainState
 
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings, adaptive_red_update
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.policies import (
     has_centralized_critic,
@@ -426,6 +427,11 @@ def make_joint_train(
     UPDATE_EVERY schedules a team's PPO update on every Nth joint rollout;
     skipped trajectories are discarded. Pass a zero-based update_idx to the
     returned function when using an interval greater than one.
+
+    ADAPTIVE_UPDATES overrides Red's interval after the configured warmup.
+    When enabled, pass adaptive_state and update_idx; the returned tuple has
+    the next adaptive_state as its seventh element. Ordinary runs retain the
+    original six-element result.
     """
 
     if set(team_configs) != set(TEAMS) or set(networks) != set(TEAMS):
@@ -453,6 +459,15 @@ def make_joint_train(
         if tuple(cfg.get("TOPOLOGY_BANK") or ()) != topology_bank:
             raise ValueError(f"{team} must share TOPOLOGY_BANK in a joint rollout")
         cfg["NUM_UPDATES"] = int(cfg["TOTAL_TIMESTEPS"]) // (num_envs * num_steps)
+
+    adaptive_settings = AdaptiveUpdateSettings.from_config(base.get("ADAPTIVE_UPDATES"))
+    if adaptive_settings is not None:
+        if set(trainable_teams) != set(TEAMS) or update_intervals["blue"] != 1:
+            raise ValueError("ADAPTIVE_UPDATES requires both teams training and Blue updating every rollout")
+        if bool(team_configs["red"].get("ANNEAL_LR", False)):
+            raise ValueError("ADAPTIVE_UPDATES requires constant Red learning rate (ANNEAL_LR: False)")
+    if any(cfg.get("ADAPTIVE_UPDATES") != base.get("ADAPTIVE_UPDATES") for cfg in team_configs.values()):
+        raise ValueError("both teams must share ADAPTIVE_UPDATES")
 
     env = make_joint_jax_env(
         base["TRAIN_VARIANT"],
@@ -518,9 +533,16 @@ def make_joint_train(
     # reward-normalizer pytrees may alias after construction, and XLA rejects
     # donating one physical buffer through two flattened arguments.
     @jax.jit
-    def collect_and_update(train_states, env_state, obs, rng, reward_norm_states, update_idx=None):
+    def collect_and_update(train_states, env_state, obs, rng, reward_norm_states, update_idx=None, adaptive_state=None):
         if update_idx is None and any(update_intervals[team] > 1 for team in trainable_teams):
             raise ValueError("update_idx is required when UPDATE_EVERY is greater than 1")
+        if adaptive_settings is not None:
+            if adaptive_state is None or update_idx is None:
+                raise ValueError("adaptive_state and update_idx are required for ADAPTIVE_UPDATES")
+            if adaptive_state.blue_returns.shape != (adaptive_settings.window_blue_updates,):
+                raise ValueError("adaptive_state window must match ADAPTIVE_UPDATES.window_blue_updates")
+        elif adaptive_state is not None:
+            raise ValueError("adaptive_state requires ADAPTIVE_UPDATES")
         rollout_number = 1 if update_idx is None else update_idx + 1
         info_init = {key: jnp.zeros(num_envs, dtype=jnp.float32) for key in info_keys}
         # Truncated BPTT with the window set to the rollout. NUM_STEPS is the
@@ -633,6 +655,16 @@ def make_joint_train(
             num_steps,
         )
 
+        raw_blue_return = sum(info_sums[component] for component in REWARD_COMPONENTS).mean()
+        if adaptive_settings is not None:
+            red_update_due, adaptive_state, adaptive_metrics = adaptive_red_update(
+                adaptive_settings,
+                adaptive_state,
+                blue_return=raw_blue_return,
+                rollout_number=rollout_number,
+                warmup_update_every=update_intervals["red"],
+            )
+
         metrics = {}
         for team in TEAMS:
             names = agents[team]
@@ -678,8 +710,11 @@ def make_joint_train(
                     )
                     return state, result
 
-                did_update = jnp.asarray(rollout_number % update_intervals[team] == 0)
-                if update_intervals[team] == 1:
+                adaptive_red = team == "red" and adaptive_settings is not None
+                did_update = (
+                    red_update_due if adaptive_red else jnp.asarray(rollout_number % update_intervals[team] == 0)
+                )
+                if update_intervals[team] == 1 and not adaptive_red:
                     train_states[team], team_metrics = update_team(train_states[team])
                 else:
                     train_states[team], team_metrics = jax.lax.cond(
@@ -689,21 +724,17 @@ def make_joint_train(
                         train_states[team],
                     )
             team_metrics["updated"] = did_update.astype(jnp.float32)
+            cfg = team_configs[team]
+            team_metrics["update_count"] = train_states[team].step // (cfg["NUM_MINIBATCHES"] * cfg["UPDATE_EPOCHS"])
+            if team == "red" and adaptive_settings is not None:
+                team_metrics.update(adaptive_metrics)
             sign = 1.0 if team == "blue" else -1.0
             # Signed so the four components still sum to raw_rollout_return.
             # Logging them apart separates "Red landed impacts" from "Blue
             # burned budget", which the zero-sum total cannot distinguish.
             for component in REWARD_COMPONENTS:
                 team_metrics[component] = sign * info_sums[component].mean()
-            raw_return = (
-                sign
-                * (
-                    info_sums["reward_ria"]
-                    + info_sums["reward_lwf"]
-                    + info_sums["reward_asf"]
-                    + info_sums["action_cost"]
-                ).mean()
-            )
+            raw_return = sign * raw_blue_return
             team_metrics["raw_rollout_return"] = raw_return
             team_metrics["mean_rollout_return"] = trajectories[team].reward.sum(axis=0).mean()
             team_metrics["actor_fraction"] = trajectories[team].actor_mask.mean()
@@ -718,7 +749,8 @@ def make_joint_train(
             # the other team's decline confounding it.
             **{counter: info_sums[counter].mean() for counter in GAME_COUNTERS},
         }
-        return train_states, env_state, obs, rng, reward_norm_states, metrics
+        result = (train_states, env_state, obs, rng, reward_norm_states, metrics)
+        return (*result, adaptive_state) if adaptive_settings is not None else result
 
     return env, init_obs, init_env_state, init_train_states, collect_and_update
 

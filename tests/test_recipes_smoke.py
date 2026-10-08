@@ -75,6 +75,10 @@ def test_jax_projection(recipe):
 
 
 def test_cleanrl_projection(recipe):
+    if recipe["train"].get("adaptive_updates") is not None:
+        with pytest.raises(ValueError, match="only by the JAX joint trainer"):
+            project_cleanrl(recipe)
+        return
     cfg = project_cleanrl(recipe)
     for key in (
         "lr",
@@ -109,12 +113,15 @@ def test_eval_variant_resolves(recipe):
     assert isinstance(v, GameVariant)
 
 
-def test_minibatch_divides_batch(recipe):
-    """num_minibatches must divide the rollout batch evenly on both backends."""
+def test_minibatch_divides_batch(recipe, monkeypatch):
+    """num_minibatches must divide the rollout batch on supported backends."""
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
     j = project_jax(recipe)
     assert (j["NUM_ENVS"] * j["NUM_STEPS"]) % j["NUM_MINIBATCHES"] == 0, (
         "JAX: num_envs * num_steps not divisible by num_minibatches"
     )
+    if recipe["train"].get("adaptive_updates") is not None:
+        return  # This schedule only runs on JAX; rejection is checked above.
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
     assert batch % c["num_minibatches"] == 0, (

@@ -76,6 +76,18 @@ train:
   # Skipped cycles leave parameters and optimizer state unchanged, including Adam moments.
   update_every: {blue: 1, red: 1}
 
+  # Optional two-phase Red update schedule (JAX only, teams: both, Blue interval 1).
+  # update_every.red applies only during phase 1; set it to 4 for quarter-rate Red.
+  # Phase 2 opens at mean raw Blue rollout return > reward_threshold and then
+  # updates Red every rollout. A closed gate skips PPO, except for the forced
+  # update at the end of max_frozen_blue_rollouts consecutive closed rollouts.
+  # Red must use a constant learning rate (core.anneal_lr: false).
+  # adaptive_updates:
+  #   phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
+  #   reward_threshold: -2000.0
+  #   window_blue_updates: 5         # Includes current rollout and phase-one history.
+  #   max_frozen_blue_rollouts: 50
+
   episode_length: 500  # PPO rollout horizon; it does not change environment termination.
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
   variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
