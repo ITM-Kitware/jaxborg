@@ -59,12 +59,12 @@ train:
       - opponent: fsm
         percentage: 25
   # Phase 1: 200 Blue PPO updates and 50 Red PPO updates, at unchanged LR.
-  update_every: {blue: 1, red: 4}
-  adaptive_updates:
-    phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
-    reward_threshold: -2000.0      # Open when mean raw Blue return > threshold.
-    window_blue_updates: 5        # Current rollout and the previous four.
-    max_frozen_blue_rollouts: 50   # Force one Red update on the 50th closed rollout.
+  # update_every: {blue: 1, red: 4}
+  # adaptive_updates:
+  #   phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
+  #   reward_threshold: -2000.0      # Open when mean raw Blue return > threshold.
+  #   window_blue_updates: 5        # Current rollout and the previous four.
+  #   max_frozen_blue_rollouts: 50   # Force one Red update on the 50th closed rollout.
   # Phase 2: Red updates every rollout while open, otherwise skips PPO.
   # Every Red update resets the frozen counter; skipped data is discarded.
   episode_length: 500
@@ -101,7 +101,7 @@ eval:
 
   # One final Blue vs the next training seed's final Red (cyclic seed order).
   # The multi-seed launcher supplies the opponent after all training finishes.
-  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  # Disabled for the single-seed PBT launcher; enable with at least two training seeds.
   cross_seed_play:
     enabled: false
     seeds: 1000-1009
@@ -118,11 +118,9 @@ eval:
     deterministic: false
 
   # Built-in post-training history suites, scheduled before after_training.
-  # play_priors is a cheaper alternative to cross_play. With the identical
-  # settings below, its 4 adjacent matchups are already in the 9-cell matrix.
-  # Leave it disabled to avoid replaying those same games in a second suite.
+  # Run adjacent-checkpoint comparisons as well as the full cross-play matrix.
   play_priors:
-    enabled: false
+    enabled: true
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
@@ -140,10 +138,10 @@ eval:
     max_checkpoints: 3
     required: false
 
-  # Disabled to save evaluation time; enabling this scores up to 20 saved Blues
-  # against fixed scripted Reds. The final-model scripted sweep remains enabled.
+  # Replay up to 20 saved Blues against fixed FSM and CIA Reds after training.
+  # Log Blue reward and CIA at each checkpoint's original training step.
   checkpoint_scripted_reds:
-    enabled: false
+    enabled: true
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
     episodes_per_seed: 3

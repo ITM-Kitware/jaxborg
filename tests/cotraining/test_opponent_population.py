@@ -94,6 +94,10 @@ def test_population_recipes_preserve_adaptive_sources(base, monkeypatch):
         assert recipe["eval"]["env_diversity"]["baseline_recipe"] == control
         assert load(control)["train"]["topology_generation"]["count"] == 1
         source["eval"]["env_diversity"]["baseline_recipe"] = control
+    # PBT also evaluates adjacent checkpoints and fixed scripted Reds over time.
+    for suite in ("play_priors", "checkpoint_scripted_reds"):
+        assert recipe["eval"][suite]["enabled"] is True
+        source["eval"][suite]["enabled"] = True
     del recipe["train"]["opponent_population"]
     for item in (source, recipe):
         del item["meta"], item["__source_path__"]
