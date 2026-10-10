@@ -51,9 +51,8 @@ if str(_REPO_ROOT / "src") not in sys.path:
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.blue_observation_contract import (
-    recipe_blue_obs_size,
-)
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings, initial_adaptive_update_state
+from jaxborg.blue_observation_contract import recipe_blue_obs_size
 from jaxborg.checkpoint import (
     PolicyBundleEntry,
     load_jax_policy,
@@ -546,6 +545,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         print(
             f"  {team}: arch={arches[team]['name']} hidden_dim={arches[team].get('hidden_dim', 256)} "
             f"critic={getattr(networks[team], 'critic_input', 'local')} "
+            f"update_every={configs[team]['UPDATE_EVERY']} "
             f"status={'trainable' if team in trainable_teams else 'frozen'}",
             flush=True,
         )
@@ -566,6 +566,10 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     rng, init_key = jax.random.split(rng)
     train_states = init_states(init_key)
     reward_norm_states = {team: initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
+    adaptive_settings = AdaptiveUpdateSettings.from_config(configs["blue"].get("ADAPTIVE_UPDATES"))
+    adaptive_state = initial_adaptive_update_state(adaptive_settings) if adaptive_settings is not None else None
+    if adaptive_settings is not None:
+        print(f"  adaptive Red updates: {adaptive_settings}", flush=True)
     print(f"  env+networks setup: {time.perf_counter() - t0:.1f}s", flush=True)
 
     num_updates = int(configs["blue"]["NUM_UPDATES"])
@@ -604,13 +608,18 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     print(f"Starting joint training ({num_updates} updates)...", flush=True)
     with metrics_path.open("w") as metrics_file:
         for update_idx in range(num_updates):
-            train_states, env_state, obs, rng, reward_norm_states, metrics = collect_and_update(
+            result = collect_and_update(
                 train_states,
                 env_state,
                 obs,
                 rng,
                 reward_norm_states,
+                update_idx=update_idx,
+                adaptive_state=adaptive_state,
             )
+            train_states, env_state, obs, rng, reward_norm_states, metrics = result[:6]
+            if adaptive_settings is not None:
+                adaptive_state = result[6]
             metrics = jax.device_get(metrics)
             final_metrics = metrics
             if update_idx == 0:
@@ -657,13 +666,30 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 "mean_rollout_return": "normalized_return",
                 "actor_fraction": "actor_fraction",
                 "critic_fraction": "critic_fraction",
+                "updated": "updated",
+                "update_count": "update_count",
                 **{component: component for component in joint_reward_components},
             }
             for team in ("blue", "red"):
+                values = {metric_names[key]: float(metrics[team][key]) for key in metric_names}
+                if team == "red" and adaptive_settings is not None:
+                    values.update(
+                        {
+                            key: float(metrics[team][key])
+                            for key in (
+                                "adaptive_phase",
+                                "reward_window_mean",
+                                "reward_window_count",
+                                "gate_open",
+                                "forced_update",
+                                "frozen_rollouts",
+                            )
+                        }
+                    )
                 add_team_metrics(
                     row,
                     team,
-                    {metric_names[key]: float(metrics[team][key]) for key in metric_names},
+                    values,
                 )
                 row[f"team.{team}.lr"] = float(configs[team]["LR"])
                 row[f"team.{team}.trainable"] = team in trainable_teams

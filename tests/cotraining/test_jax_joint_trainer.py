@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,7 @@ import pytest
 from flax import struct
 from flax.training.train_state import TrainState
 
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings, initial_adaptive_update_state
 from jaxborg.policies import make_jax_policy, policy_from_arch
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
 from scripts.train.algorithms import ippo_jax_joint as joint
@@ -197,6 +199,185 @@ def test_single_team_mode_keeps_frozen_opponent_byte_identical(tiny_joint):
     assert int(after["blue"].step) == 1
     assert int(after["red"].step) == 0
     assert float(metrics["red"]["total_loss"]) == 0.0
+
+
+@pytest.mark.parametrize("architecture", ["feedforward", "lstm"])
+def test_red_half_rate_skips_complete_optimizer_updates(tiny_joint, architecture):
+    networks, configs = tiny_joint
+    if architecture == "lstm":
+        networks = _recurrent_networks(3, 5, cell="lstm")
+    for config in configs.values():
+        config.update(TOTAL_TIMESTEPS=8, UPDATE_EPOCHS=2, NORM_REWARDS=True)
+    configs["red"]["UPDATE_EVERY"] = 2
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    rng = jax.random.PRNGKey(7)
+
+    # Exercise both JIT branches, including a skipped update after Adam has
+    # acquired nonzero moments. No production environment or training run.
+    for update_idx in range(4):
+        before = dict(states)
+        previous_norm_count = float(norm["red"].count)
+        states, env_state, obs, rng, norm, metrics = update(states, env_state, obs, rng, norm, update_idx=update_idx)
+        jax.block_until_ready(metrics)
+        red_updated = (update_idx + 1) % 2 == 0
+        assert _tree_changed(before["blue"].params, states["blue"].params)
+        assert int(states["blue"].step) == (update_idx + 1) * 2
+        assert int(states["red"].step) == ((update_idx + 1) // 2) * 2
+        assert float(metrics["blue"]["updated"]) == 1.0
+        assert float(metrics["red"]["updated"]) == float(red_updated)
+        if red_updated:
+            assert _tree_changed(before["red"].params, states["red"].params)
+        else:
+            _assert_tree_exact(before["red"], states["red"])
+            assert float(metrics["red"]["total_loss"]) == 0.0
+        assert float(norm["red"].count) > previous_norm_count
+        np.testing.assert_allclose(metrics["red"]["raw_rollout_return"], -metrics["blue"]["raw_rollout_return"])
+
+
+def test_interval_update_requires_explicit_rollout_index(tiny_joint):
+    networks, configs = tiny_joint
+    configs["red"]["UPDATE_EVERY"] = 2
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    with pytest.raises(ValueError, match="update_idx is required"):
+        update(states, env_state, obs, jax.random.PRNGKey(7), norm)
+
+
+@pytest.mark.parametrize("architecture", ["feedforward", "lstm"])
+def test_adaptive_red_updates_freeze_optimizer_and_use_current_raw_return(tiny_joint, monkeypatch, architecture):
+    networks, configs = tiny_joint
+    if architecture == "lstm":
+        networks = _recurrent_networks(3, 5, cell="lstm")
+    settings = {"phase_switch_blue_updates": 4, "window_blue_updates": 2, "max_frozen_blue_rollouts": 2}
+    for config in configs.values():
+        config.update(TOTAL_TIMESTEPS=20, UPDATE_EPOCHS=2, NORM_REWARDS=True, ADAPTIVE_UPDATES=settings)
+    configs["red"]["UPDATE_EVERY"] = 4
+    original_step = _TinyJointEnv.step
+
+    def step(env, key, state, actions):
+        obs, state, rewards, dones, infos = original_step(env, key, state, actions)
+        rollout = (state.state.time - 1) // 2 + 1
+        reward = jnp.where(rollout <= 6, -1500.0, jnp.where(rollout <= 8, -400.0, -2500.0))
+        rewards = {"blue_0": reward, "red_0": -reward}
+        infos = {
+            **infos,
+            "reward_ria": reward,
+            "reward_default": reward,
+            "reward_shaping": reward,
+            "reward_selected": reward,
+            "red_reward_selected": -reward,
+        }
+        return obs, state, rewards, dones, infos
+
+    monkeypatch.setattr(_TinyJointEnv, "step", step)
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    adaptive_state = initial_adaptive_update_state(AdaptiveUpdateSettings.from_config(settings))
+    rng = jax.random.PRNGKey(7)
+    red_updates = 0
+    for number in range(1, 11):
+        before = dict(states)
+        norm_count = float(norm["red"].count)
+        states, env_state, obs, rng, norm, metrics, adaptive_state = update(
+            states, env_state, obs, rng, norm, update_idx=number - 1, adaptive_state=adaptive_state
+        )
+        jax.block_until_ready(metrics)
+        due = number in (4, 6, 7, 8, 10)
+        red_updates += due
+        assert int(states["blue"].step) == number * 2
+        assert int(states["red"].step) == red_updates * 2
+        assert int(metrics["blue"]["update_count"]) == number
+        assert int(metrics["red"]["update_count"]) == red_updates
+        assert bool(metrics["red"]["updated"]) == due
+        assert bool(metrics["red"]["gate_open"]) == (number in (7, 8))
+        assert bool(metrics["red"]["forced_update"]) == (number in (6, 10))
+        assert float(norm["red"].count) > norm_count
+        if due:
+            assert _tree_changed(before["red"].params, states["red"].params)
+        else:
+            _assert_tree_exact(before["red"], states["red"])
+            assert float(metrics["red"]["total_loss"]) == 0
+        if number == 7:
+            assert float(metrics["red"]["reward_window_mean"]) == -1900.0
+            assert float(metrics["blue"]["raw_rollout_return"]) == -800.0
+
+
+def test_adaptive_update_requires_explicit_schedule_state(tiny_joint):
+    networks, configs = tiny_joint
+    for config in configs.values():
+        config["ADAPTIVE_UPDATES"] = {}
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    with pytest.raises(ValueError, match="adaptive_state and update_idx are required"):
+        update(states, env_state, obs, jax.random.PRNGKey(7), norm, update_idx=0)
+
+
+def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint, monkeypatch, tmp_path):
+    from scripts.train.algorithms import ippo_jax as trainer
+
+    networks, configs = tiny_joint
+    settings = {
+        "phase_switch_blue_updates": 4,
+        "reward_threshold": 3.0,  # The tiny environment's raw return is below 3.
+        "window_blue_updates": 1,
+        "max_frozen_blue_rollouts": 2,
+    }
+    for team, config in configs.items():
+        config.update(TOTAL_TIMESTEPS=12, UPDATE_EVERY=4 if team == "red" else 1, ADAPTIVE_UPDATES=settings)
+    recipe = {
+        "meta": {"name": "tiny_adaptive"},
+        "algorithm": "ippo",
+        "core": {"lr": 1e-2},
+        "train": {"teams": "both"},
+        "arch": {"name": "shared"},
+    }
+    monkeypatch.setattr(trainer, "project_jax", lambda _recipe, *, team: configs[team])
+    monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(
+        trainer,
+        "_network_from_arch",
+        lambda _arch, action_dim: networks["red" if action_dim == trainer.RED_POLICY_ACTION_DIM else "blue"],
+    )
+    monkeypatch.setattr(
+        trainer, "MlflowCheckpointEvaluator", lambda _recipe: SimpleNamespace(due=lambda *_a, **_kw: False)
+    )
+    monkeypatch.setattr(trainer, "start_run", lambda *_a, **_kw: SimpleNamespace(info=SimpleNamespace(run_id="test")))
+    logged = []
+    monkeypatch.setattr(trainer.mlflow, "log_metrics", lambda values, **_kw: logged.append(values))
+    monkeypatch.setattr(trainer.mlflow, "log_artifact", lambda *_a, **_kw: None)
+    monkeypatch.setattr(trainer.mlflow, "end_run", lambda: None)
+    monkeypatch.setattr(trainer, "save_jax_bundle", lambda *_a, **_kw: None)
+    monkeypatch.setattr(trainer, "write_sidecar", lambda path, *_a, **_kw: path)
+    monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
+
+    trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_adaptive", tmp_path)
+
+    rows = [json.loads(line) for line in (tmp_path / "metrics.jsonl").read_text().splitlines()]
+    assert len(rows) == 6
+    assert [row["team.red.updated"] for row in rows] == [0, 0, 0, 1, 0, 1]
+    assert [row["team.red.adaptive_phase"] for row in rows] == [1, 1, 1, 1, 2, 2]
+    assert [row["team.red.frozen_rollouts"] for row in rows] == [0, 0, 0, 0, 1, 0]
+    assert rows[-1]["team.blue.update_count"] == 6
+    assert rows[-1]["team.red.update_count"] == 2
+    assert rows[-1]["team.red.forced_update"] == 1
+    assert logged[-2]["team.red.forced_update"] == 1  # Final per-update MLflow record.
+
+
+def test_half_rate_optimizer_anneals_over_scheduled_updates():
+    config = {**_config(), "ANNEAL_LR": True, "NUM_UPDATES": 4, "UPDATE_EVERY": 2}
+    optimizer = joint._make_optimizer(config)
+    params = jnp.array(0.0)
+    state = optimizer.init(params)
+    rates = []
+    for _ in range(2):
+        delta, state = optimizer.update(jnp.array(1.0), state, params)
+        rates.append(float(-delta))
+    np.testing.assert_allclose(rates, [config["LR"], config["LR"] / 2], rtol=1e-4)
 
 
 def test_jitted_update_accepts_aliased_reward_normalizer_leaves(tiny_joint):
@@ -875,7 +1056,8 @@ def test_enhanced_obs_joint_update(architecture, monkeypatch):
 
 @pytest.mark.parametrize("red_mode", ["zero_sum", "damage"])
 @pytest.mark.parametrize("normalize", [False, True])
-def test_joint_training_uses_selected_shaping_and_reports_both(tiny_joint, monkeypatch, red_mode, normalize):
+@pytest.mark.parametrize("schedule", ["every_rollout", "half_rate", "adaptive"])
+def test_joint_training_uses_selected_shaping_and_reports_both(tiny_joint, monkeypatch, red_mode, normalize, schedule):
     from dataclasses import replace
 
     from jaxborg.reward_config import RewardConfig
@@ -900,16 +1082,50 @@ def test_joint_training_uses_selected_shaping_and_reports_both(tiny_joint, monke
         return obs, state, {"blue_0": shaped, "red_0": red}, dones, info
 
     monkeypatch.setattr(_TinyJointEnv, "step", shaped_step)
-    for cfg in tiny_joint[1].values():
+    networks, configs = tiny_joint
+    settings = {
+        "phase_switch_blue_updates": 0,
+        "window_blue_updates": 1,
+        # Default return is above this threshold; shaped return is below it.
+        "reward_threshold": -10.0,
+        "max_frozen_blue_rollouts": 2,
+    }
+    for cfg in configs.values():
         cfg["TRAIN_VARIANT"] = replace(CC4_STOCK, red_reward=red_mode)
         cfg["REWARD_CONFIG"] = RewardConfig("shaping", 1, (1, 0, 0))
         cfg["NORM_REWARDS"] = normalize
-    _, _, metrics = _one_joint_update(tiny_joint, ("blue", "red"))
-    blue, red = metrics["blue"], metrics["red"]
-    assert float(blue["reward_shaping"] - blue["reward_default"]) == pytest.approx(-20)
-    assert float(blue["raw_rollout_return"]) == pytest.approx(float(blue["reward_shaping"]))
-    assert float(red["raw_rollout_return"]) == pytest.approx(float(red["reward_shaping"]))
-    expected_sum = 0 if red_mode == "zero_sum" else -6
-    assert float(blue["raw_rollout_return"] + red["raw_rollout_return"]) == pytest.approx(expected_sum)
-    if normalize:
-        assert float(blue["mean_rollout_return"]) != pytest.approx(float(blue["raw_rollout_return"]))
+        cfg["TOTAL_TIMESTEPS"] = 4
+        if schedule == "adaptive":
+            cfg["ADAPTIVE_UPDATES"] = settings
+    configs["red"]["UPDATE_EVERY"] = 2 if schedule == "half_rate" else 1
+    _, obs, env_state, init_states, update = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    states = init_states(jax.random.PRNGKey(3))
+    norm = {team: joint.initial_reward_norm_state(1) for team in joint.TEAMS}
+    rng = jax.random.PRNGKey(7)
+    adaptive_state = (
+        initial_adaptive_update_state(AdaptiveUpdateSettings.from_config(settings)) if schedule == "adaptive" else None
+    )
+    for index in range(2):
+        before = dict(states)
+        result = update(states, env_state, obs, rng, norm, update_idx=index, adaptive_state=adaptive_state)
+        states, env_state, obs, rng, norm, metrics = result[:6]
+        blue, red = metrics["blue"], metrics["red"]
+        assert float(blue["reward_shaping"] - blue["reward_default"]) == pytest.approx(-20)
+        assert float(blue["raw_rollout_return"]) == pytest.approx(float(blue["reward_shaping"]))
+        assert float(red["raw_rollout_return"]) == pytest.approx(float(red["reward_shaping"]))
+        expected_sum = 0 if red_mode == "zero_sum" else -6
+        assert float(blue["raw_rollout_return"] + red["raw_rollout_return"]) == pytest.approx(expected_sum)
+        if normalize:
+            assert float(blue["mean_rollout_return"]) != pytest.approx(float(blue["raw_rollout_return"]))
+        due = schedule == "every_rollout" or index == 1
+        assert bool(red["updated"]) == due
+        assert _tree_changed(before["blue"].params, states["blue"].params)
+        if due:
+            assert _tree_changed(before["red"].params, states["red"].params)
+        else:
+            _assert_tree_exact(before["red"], states["red"])
+        if schedule == "adaptive":
+            adaptive_state = result[6]
+            assert float(red["reward_window_mean"]) == pytest.approx(float(blue["raw_rollout_return"]))
+            assert not bool(red["gate_open"])
+            assert bool(red["forced_update"]) == (index == 1)

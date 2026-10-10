@@ -48,6 +48,112 @@ def test_missing_train_teams_defaults_to_blue(tmp_path):
     assert training_teams(recipe) == ("blue",)
     assert project_jax(recipe)["TRAIN_TEAM"] == "blue"
     assert project_cleanrl(recipe)["train_team"] == "blue"
+    assert project_jax(recipe)["UPDATE_EVERY"] == 1
+    assert project_cleanrl(recipe)["update_every"] == 1
+
+
+def test_team_update_intervals_are_projected_without_changing_learning_rate(tmp_path):
+    raw = _recipe(teams="both")
+    raw["train"]["update_every"] = {"red": 2}
+    recipe = load(str(_write_recipe(tmp_path, raw)))
+    for backend, interval_key, lr_key in (("jax", "UPDATE_EVERY", "LR"), ("cyborg", "update_every", "lr")):
+        configs = project_team_configs(recipe, backend)
+        assert configs["blue"][interval_key] == 1
+        assert configs["red"][interval_key] == 2
+        assert configs["blue"][lr_key] == configs["red"][lr_key] == pytest.approx(3e-4)
+
+
+@pytest.mark.parametrize("adaptive", [False, True])
+def test_shaping_and_red_update_schedules_can_be_combined(tmp_path, adaptive):
+    raw = _recipe(teams="both")
+    raw["train"].update(
+        variant="cia_resilience",
+        reward={"name": "shaping", "lambda": 1.0, "weights": {"C": 1.0, "I": 0.0, "A": 0.0}},
+        update_every={"red": 4},
+    )
+    if adaptive:
+        raw["train"]["adaptive_updates"] = {"reward_threshold": -3000.0}
+    recipe = load(str(_write_recipe(tmp_path, raw)))
+    configs = project_team_configs(recipe, "jax")
+    for team, interval in (("blue", 1), ("red", 4)):
+        assert configs[team]["UPDATE_EVERY"] == interval
+        assert configs[team]["REWARD_CONFIG"].name == "shaping"
+        assert configs[team]["REWARD_CONFIG"].weights == (1.0, 0.0, 0.0)
+        assert configs[team]["ADAPTIVE_UPDATES"] == ({"reward_threshold": -3000.0} if adaptive else None)
+    with pytest.raises(ValueError, match="JAX backend"):
+        project_cleanrl(recipe)
+
+
+@pytest.mark.parametrize(
+    "intervals", [None, 2, [], {"green": 2}, {"red": 0}, {"red": -1}, {"red": 1.5}, {"red": True}, {"red": "2"}]
+)
+def test_invalid_team_update_intervals_are_rejected(tmp_path, intervals):
+    raw = _recipe(teams="both")
+    raw["train"]["update_every"] = intervals
+    with pytest.raises(ValueError, match="train.update_every"):
+        load(str(_write_recipe(tmp_path, raw)))
+
+
+def test_update_intervals_require_cotraining(tmp_path):
+    raw = _recipe(teams="blue")
+    raw["train"]["update_every"] = {"blue": 2}
+    with pytest.raises(ValueError, match="require train.teams: both"):
+        load(str(_write_recipe(tmp_path, raw)))
+
+
+@pytest.mark.parametrize(
+    ("base", "suffix"),
+    [
+        ("cotraining", "red_half_rate"),
+        ("cotraining_lstm", "red_half_rate"),
+        ("cotraining_env_diversity", "red_half_rate"),
+        ("cotraining_lstm_env_diversity", "red_half_rate"),
+        ("cotraining", "no_reward_norm"),
+        ("cotraining_lstm", "no_reward_norm"),
+    ],
+)
+def test_training_configuration_recipes_preserve_baselines_with_experiment_overrides(base, suffix, monkeypatch):
+    # Projection must not generate topology banks or launch training/evaluation.
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
+    baseline = load(base)
+    recipe = load(f"cotraining/training_configurations/{base}_{suffix}")
+    assert recipe["meta"]["name"] == f"{base}_{suffix}"
+    red_interval = 2 if suffix == "red_half_rate" else 1
+    if suffix == "no_reward_norm":
+        assert recipe["core"]["norm_rewards"] is False
+        baseline["core"]["norm_rewards"] = False
+    for backend, key in (("jax", "UPDATE_EVERY"), ("cyborg", "update_every")):
+        configs = project_team_configs(recipe, backend)
+        assert configs["blue"][key] == 1
+        assert configs["red"][key] == red_interval
+    if suffix == "red_half_rate":
+        assert recipe["train"].pop("update_every") == {"blue": 1, "red": 2}
+    assert recipe["train"]["total_timesteps"] == 50_000_000
+    baseline["train"]["total_timesteps"] = 50_000_000
+    assert recipe["eval"]["cross_play"]["max_checkpoints"] == 5
+    # These experiments retain their smaller evaluation budgets; the baseline
+    # additionally participates in the newer HMARL comparison.
+    baseline["eval"]["cross_play"].update(max_checkpoints=5, required=False)
+    baseline["eval"]["cross_play"].pop("include_final")
+    baseline["eval"]["checkpoint_scripted_reds"] = {
+        "enabled": False,
+        "reds": ["fsm", "cia_c", "cia_i", "cia_a"],
+        "seeds": "1000-1009",
+        "episodes_per_seed": 3,
+        "max_checkpoints": 20,
+        "required": False,
+    }
+    baseline["eval"]["after_training"] = [
+        suite for suite in baseline["eval"]["after_training"] if suite["name"] not in ("hmarl-reds", "nondiverse-red")
+    ]
+    if "env_diversity" in baseline["eval"]:
+        control_name = f"{base.removesuffix('_env_diversity')}_{suffix}"
+        assert recipe["eval"]["env_diversity"]["baseline_recipe"] == control_name
+        assert load(control_name)["train"]["topology_generation"]["count"] == 1
+        baseline["eval"]["env_diversity"]["baseline_recipe"] = control_name
+    for item in (baseline, recipe):
+        del item["meta"], item["__source_path__"]
+    assert recipe == baseline
 
 
 def test_team_overrides_are_deep_merged_and_projected(tmp_path):

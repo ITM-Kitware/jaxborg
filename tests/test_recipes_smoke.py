@@ -82,6 +82,10 @@ def test_cleanrl_projection(recipe):
         with pytest.raises(ValueError, match="JAX backend"):
             project_cleanrl(recipe)
         return
+    if recipe["train"].get("adaptive_updates") is not None:
+        with pytest.raises(ValueError, match="only by the JAX joint trainer"):
+            project_cleanrl(recipe)
+        return
     cfg = project_cleanrl(recipe)
     for key in (
         "lr",
@@ -116,8 +120,9 @@ def test_eval_variant_resolves(recipe):
     assert isinstance(v, GameVariant)
 
 
-def test_minibatch_divides_batch(recipe):
-    """num_minibatches must divide the rollout batch evenly on both backends."""
+def test_minibatch_divides_batch(recipe, monkeypatch):
+    """num_minibatches must divide the rollout batch on supported backends."""
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
     j = project_jax(recipe)
     assert (j["NUM_ENVS"] * j["NUM_STEPS"]) % j["NUM_MINIBATCHES"] == 0, (
         "JAX: num_envs * num_steps not divisible by num_minibatches"
@@ -126,6 +131,8 @@ def test_minibatch_divides_batch(recipe):
         with pytest.raises(ValueError, match="JAX backend"):
             project_cleanrl(recipe)
         return
+    if recipe["train"].get("adaptive_updates") is not None:
+        return  # This schedule only runs on JAX; rejection is checked above.
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
     assert batch % c["num_minibatches"] == 0, (
@@ -156,7 +163,7 @@ def test_cotraining_development_budget_preserves_checkpoint_spacing_and_sequence
     stride = cfg["num_envs"] * recipe["train"]["episode_length"] * cfg["checkpoint_every_updates"]
     assert cfg["num_envs"] == 96
     assert stride == (480_000 if name == "cotraining_test_rule_change" else 960_000)
-    assert recipe["eval"]["cross_play"]["max_checkpoints"] == 3
+    assert recipe["eval"]["cross_play"]["max_checkpoints"] == 10
     assert recipe["eval"]["topology_generation"]["count"] == 10
     if recipe["arch"]["name"] == "recurrent":
         for agents in (5, 6):
@@ -217,6 +224,6 @@ def test_rule_knobs_are_off_everywhere_except_the_harness(recipe):
 
 
 def test_the_rule_knob_harness_is_the_only_recipe_declaring_overrides():
-    """Only the rule harness and its explicit alignment copy declare overrides."""
+    """Only the rule harness declares game-rule overrides."""
     declared = sorted(name for name in RECIPE_NAMES if (load(name).get("train") or {}).get("variant_overrides"))
-    assert declared == [RULE_KNOB_HARNESS, RULE_KNOB_HARNESS + "_alignment_c"]
+    assert declared == [RULE_KNOB_HARNESS]

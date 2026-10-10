@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import copy
+from types import SimpleNamespace
+
 import numpy as np
+import pytest
 import torch
 
 from jaxborg.actions.red_policy import (
@@ -10,9 +14,72 @@ from jaxborg.actions.red_policy import (
 )
 from jaxborg.constants import GLOBAL_MAX_HOSTS, RED_OBS_SIZE
 from jaxborg.cyborg_joint import POLICY_AGENT_IDS, CyborgJointAdapter
+from jaxborg.policies import make_torch_policy
 from jaxborg.recipe import load, project_cleanrl
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
-from scripts.train.algorithms.ippo_cyborg import _make_joint_runtimes, compute_torch_ppo_loss
+from scripts.train.algorithms.ippo_cyborg import _make_joint_runtimes, _ppo_update, compute_torch_ppo_loss
+
+
+@pytest.mark.parametrize("interval", [1, 2])
+def test_torch_update_interval_preserves_adam_and_discards_skipped_data(interval):
+    torch.manual_seed(3)
+    agent = make_torch_policy("shared", obs_dim=4, action_dim=3, hidden_dim=8, hidden_layers=1)
+    optimizer = torch.optim.Adam(agent.parameters(), lr=1e-2)
+    accumulated = {}
+    runtime = SimpleNamespace(
+        agent=agent,
+        optimizer=optimizer,
+        cfg={
+            "update_every": interval,
+            "lr": 1e-2,
+            "anneal_lr": True,
+            "num_epochs": 2,
+            "num_minibatches": 2,
+            "clip_coef": 0.2,
+            "vf_coef": 0.5,
+            "ent_coef": 0.01,
+            "max_grad_norm": 1.0,
+        },
+        accumulated=accumulated,
+        clear_accumulated=accumulated.clear,
+    )
+    obs = torch.arange(16, dtype=torch.float32).reshape(4, 4) / 10
+    masks = torch.ones((4, 3), dtype=torch.bool)
+    actions = torch.zeros(4, dtype=torch.long)
+    for cycle in range(1, 5):
+        with torch.no_grad():
+            _, logprobs, _, values = agent.get_action_and_value(obs, masks, actions)
+        batch = {
+            "obs": obs,
+            "masks": masks,
+            "actions": actions,
+            "logprobs": logprobs,
+            "values": values.flatten(),
+            "advantages": torch.tensor([1.0, -1.0, 0.5, -0.5]),
+            "returns": torch.tensor([2.0, 0.5, 1.0, -1.0]),
+            "actor_active": torch.ones(4, dtype=torch.bool),
+            "critic_active": torch.ones(4, dtype=torch.bool),
+        }
+        accumulated.update({key: [value] for key, value in batch.items()})
+        before_params = copy.deepcopy(agent.state_dict())
+        before_optimizer = copy.deepcopy(optimizer.state_dict())
+        stats = _ppo_update(runtime, cycle, total_updates=4)
+        assert not accumulated
+        assert stats["updated"] == float(cycle % interval == 0)
+        if cycle % interval:
+            for key, value in agent.state_dict().items():
+                torch.testing.assert_close(value, before_params[key], rtol=0, atol=0)
+            after_optimizer = optimizer.state_dict()
+            assert after_optimizer["param_groups"] == before_optimizer["param_groups"]
+            for key, state in after_optimizer["state"].items():
+                for field, value in state.items():
+                    torch.testing.assert_close(value, before_optimizer["state"][key][field], rtol=0, atol=0)
+        else:
+            assert any(not torch.equal(value, before_params[key]) for key, value in agent.state_dict().items())
+            expected_lr = 1e-2 * (1 - (cycle // interval - 1) / (4 // interval))
+            assert stats["lr"] == pytest.approx(expected_lr)
+        for state in optimizer.state.values():
+            assert int(state["step"]) == (cycle // interval) * 4
 
 
 def _sleep_actions(env: CyborgJointAdapter) -> dict[str, int]:

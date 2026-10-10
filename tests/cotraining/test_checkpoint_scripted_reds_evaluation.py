@@ -207,6 +207,7 @@ def test_hmarl_comparison_recipes_curve_fsm_and_cia_every_48m_steps_plus_final()
         # The final-model sweep is the headline number in every recipe.
         scripted = next(e for e in recipe["eval"]["after_training"] if e["name"] == "scripted-reds")
         assert scripted["args"][scripted["args"].index("--seeds") + 1] == "1000-1009"
+        assert scripted["args"][scripted["args"].index("--episodes-per-seed") + 1] == 1
         if path.stem not in HMARL_COMPARISON:
             assert not settings.enabled
             continue
@@ -217,7 +218,7 @@ def test_hmarl_comparison_recipes_curve_fsm_and_cia_every_48m_steps_plus_final()
         assert settings.every_steps % 960_000 == 0
         assert settings.include_final is True
         assert settings.seeds == (1000, 1001, 1002)
-        assert settings.episodes_per_seed == 6
+        assert settings.episodes_per_seed == 3
 
 
 def test_every_steps_selects_fixed_interval_and_appends_exact_final(tmp_path, monkeypatch):

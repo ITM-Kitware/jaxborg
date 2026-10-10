@@ -928,17 +928,7 @@ def compute_torch_ppo_loss(
 
 def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) -> dict[str, float]:
     cfg = runtime.cfg
-    batches = {key: torch.cat(value) for key, value in runtime.accumulated.items()}
-    runtime.clear_accumulated()
     assert runtime.optimizer is not None
-
-    lr = cfg["lr"]
-    if cfg["anneal_lr"]:
-        frac = 1.0 - (update_idx - 1) / max(total_updates, 1)
-        lr = max(frac * cfg["lr"], 1e-6)
-        for group in runtime.optimizer.param_groups:
-            group["lr"] = lr
-
     totals = {
         "loss_policy": 0.0,
         "loss_value": 0.0,
@@ -949,6 +939,29 @@ def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) 
         "ppo_grad_norm": 0.0,
         "ppo_pre_clip_grad_norm": 0.0,
     }
+    interval = cfg.get("update_every", 1)
+    if update_idx % interval != 0:
+        # Discard this cycle's data so the next update stays on-policy and
+        # uses the normal batch size. Adam and the policy remain untouched.
+        runtime.clear_accumulated()
+        return {
+            **totals,
+            "ppo_explained_variance": 0.0,
+            "lr": float(runtime.optimizer.param_groups[0]["lr"]),
+            "updated": 0.0,
+        }
+
+    batches = {key: torch.cat(value) for key, value in runtime.accumulated.items()}
+    runtime.clear_accumulated()
+    lr = cfg["lr"]
+    if cfg["anneal_lr"]:
+        team_update_idx = update_idx // interval
+        team_total_updates = max(total_updates // interval, 1)
+        frac = 1.0 - (team_update_idx - 1) / team_total_updates
+        lr = max(frac * cfg["lr"], 1e-6)
+        for group in runtime.optimizer.param_groups:
+            group["lr"] = lr
+
     count = 0
     total_rows = batches["obs"].shape[0]
     num_minibatches = min(cfg["num_minibatches"], total_rows)
@@ -1000,6 +1013,7 @@ def _ppo_update(runtime: TorchTeamRuntime, update_idx: int, total_updates: int) 
         explained = float(1 - (returns - old_values).var(unbiased=False) / (target_var + 1e-8))
     totals["ppo_explained_variance"] = explained
     totals["lr"] = float(lr)
+    totals["updated"] = 1.0
     return totals
 
 
