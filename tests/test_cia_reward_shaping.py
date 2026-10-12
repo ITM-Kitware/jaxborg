@@ -13,7 +13,7 @@ from jaxborg.env import ScenarioEnv
 from jaxborg.evaluation.cyborg_reward import CyborgRewardTracker, native_reward_fields
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.evaluation.reward_reporting import reward_fields, reward_mlflow_metrics
-from jaxborg.recipe import load, project_jax
+from jaxborg.recipe import load, project_jax, project_team_configs, team_recipe
 from jaxborg.reward_config import RewardConfig
 from jaxborg.rewards import compute_reward_breakdown
 from jaxborg.scenarios.cc4.game_variants import CC4_STOCK, CIA_RESILIENCE
@@ -163,26 +163,70 @@ def test_reward_config_rejects_invalid_values(raw):
         RewardConfig.from_recipe({"train": {"reward": raw}})
 
 
-def test_config_defaults_projection_and_alignment_copies(monkeypatch):
+@pytest.mark.parametrize(
+    "base",
+    [
+        "cotraining",
+        "cotraining_env_diversity",
+        "cotraining_lstm",
+        "cotraining_lstm_env_diversity",
+        "cotraining_mappo",
+        "cotraining_mappo_env_diversity",
+    ],
+)
+@pytest.mark.parametrize("axis", ["c", "i", "a"])
+def test_config_defaults_projection_and_alignment_copies(monkeypatch, base, axis):
     import jaxborg.recipe as module
 
     monkeypatch.setattr(module, "_resolve_topology_bank", lambda *args, **kwargs: ())
     assert RewardConfig.from_recipe({}) == RewardConfig("default", 1, (1, 1, 1))
     assert project_jax(load("cotraining"))["REWARD_CONFIG"] == RewardConfig()
-    originals = list(Path("recipes/cotraining").glob("cotraining*.yaml"))
-    copies = list(Path("recipes/cotraining/alignment").glob("*.yaml"))
-    assert len(copies) == len(originals)
-    for path in copies:
-        recipe = load(str(path))
-        cfg = project_jax(recipe)
-        assert cfg["REWARD_CONFIG"] == RewardConfig("shaping", 1, (1, 0, 0))
+
+    recipe = load(f"{base}_alignment_{axis}")
+    baseline = load(base)
+    adaptive = load(f"{base.replace('_mappo', '')}_adaptive_updates")
+    assert recipe["meta"]["name"] == f"{base}_alignment_{axis}"
+    assert recipe["arch"] == baseline["arch"]
+    weights = tuple(float(component == axis) for component in "cia")
+    configs = project_team_configs(recipe, "jax")
+    baseline_configs = project_team_configs(baseline, "jax")
+    adaptive_configs = project_team_configs(adaptive, "jax")
+    for team, cfg in configs.items():
+        assert cfg["REWARD_CONFIG"] == RewardConfig("shaping", 3, weights)
+        assert cfg["TOTAL_TIMESTEPS"] == 80_000_000
+        assert cfg["UPDATE_EVERY"] == (1 if team == "blue" else 4)
+        assert cfg["ADAPTIVE_UPDATES"] == adaptive_configs[team]["ADAPTIVE_UPDATES"]
+        assert cfg["LR"] == adaptive_configs[team]["LR"]
+        assert cfg["ANNEAL_LR"] is False
         assert cfg["TRAIN_VARIANT"].resilience_roles
-        assert recipe["train"]["topology_generation"]["op_zone_servers"] == 3
-        assert "alignment" in recipe["train"]["topology_generation"]["cache_dir"]
-        baseline = recipe.get("eval", {}).get("env_diversity", {}).get("baseline_recipe")
-        if baseline:
-            assert baseline.endswith("_alignment_c")
-            load(baseline)
+        assert team_recipe(recipe, team)["arch"] == team_recipe(baseline, team)["arch"]
+        for key in ("NETWORK_TYPE", "HIDDEN_DIM", "HIDDEN_LAYERS", "CLIP_VALUE_LOSS"):
+            assert cfg[key] == baseline_configs[team][key]
+
+    topology = recipe["train"]["topology_generation"]
+    assert topology["op_zone_servers"] == 3
+    assert "alignment" in topology["cache_dir"]
+    assert topology["count"] == baseline["train"]["topology_generation"]["count"]
+    if "env_diversity" in recipe["eval"]:
+        control_name = f"{base.removesuffix('_env_diversity')}_alignment_{axis}"
+        assert recipe["eval"]["env_diversity"]["baseline_recipe"] == control_name
+        control = load(control_name)
+        assert control["train"]["topology_generation"]["count"] == 1
+        assert control["train"]["reward"] == recipe["train"]["reward"]
+        baseline["eval"]["env_diversity"]["baseline_recipe"] = control_name
+        # This suite excludes same-seed opponents, so one seed cannot run it.
+        assert recipe["eval"]["env_diversity"]["enabled"] is False
+        baseline["eval"]["env_diversity"]["enabled"] = False
+    assert recipe["eval"]["cross_seed_play"]["enabled"] is False
+    baseline["eval"]["cross_seed_play"]["enabled"] = False
+    assert recipe["eval"] == baseline["eval"]
+    for suite in ("cia", "cross_play", "checkpoint_scripted_reds"):
+        assert recipe["eval"][suite]["enabled"] is True
+    for suite in ("cross_play", "checkpoint_scripted_reds"):
+        assert recipe["eval"][suite]["include_final"] is True
+        assert recipe["eval"][suite]["required"] is True
+    stride = configs["blue"]["NUM_ENVS"] * configs["blue"]["NUM_STEPS"] * configs["blue"]["CHECKPOINT_EVERY_UPDATES"]
+    assert recipe["eval"]["checkpoint_scripted_reds"]["every_steps"] % stride == 0
 
 
 def test_paired_evaluation_uses_episode_sums_and_reports_both_modes():
