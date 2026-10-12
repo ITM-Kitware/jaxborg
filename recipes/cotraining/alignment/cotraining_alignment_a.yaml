@@ -1,0 +1,221 @@
+# A-only alignment copy; training and evaluation record default and shaping rewards.
+meta:
+  name: cotraining_alignment_a
+  source: "Dual-team simultaneous self-play baseline"
+  added: 2026-10-10
+  notes: |
+    Both parameter-sharing feedforward policies start from fresh weights
+    and act on the same pre-step state.
+    Training uses one fixed generated topology (seed 0).
+    Train for 80M environment steps with A-only CIA shaping (lambda 3).
+    Red receives the negative of the complete shaped Blue reward.
+    Adaptive Red updates follow cotraining_adaptive_updates;
+    Blue uses LR 1e-4 and Red uses LR 3e-4. The gate uses unnormalized
+    shaped Blue returns; the inherited unshaped-reward threshold is
+    provisional for alignment. This schedule requires the JAX backend.
+
+algorithm: ippo
+cage4_enhanced_obs: true
+
+# Saved-checkpoint reward/CIA curves are evaluated after training by
+# eval.checkpoint_scripted_reds, matching the current cotraining evaluation protocol.
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 1
+    seed: null  # Defaults to the training seed + 100000.
+    deterministic: false
+
+core:
+  lr: 3.0e-4  # Red's LR; Blue uses train.team_overrides.blue.core.lr.
+  anneal_lr: false
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  # Constant learning rate; assess progress against fixed scripted Reds.
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  # Shared adversarial payoff; A-only CIA shaping. Both scores are reported.
+  reward:
+    name: shaping  # default selects the unchanged CC4 payoff.
+    lambda: 3.0
+    weights: {C: 0.0, I: 0.0, A: 1.0}
+  teams: both
+  team_overrides:
+    blue:
+      core:
+        lr: 1.0e-4  # Match the adaptive recipes' Blue learning rate.
+  # Phase 1: 200 Blue PPO updates (9.6M env steps) and 50 Red PPO updates.
+  update_every: {blue: 1, red: 4}
+  adaptive_updates:
+    phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
+    reward_threshold: -3650.0  # Provisional threshold from the unshaped adaptive recipe.
+    window_blue_updates: 20       # Current rollout and the previous 19; unnormalized shaped Blue returns.
+    max_frozen_blue_rollouts: 100  # Force one Red update after 4.8M closed-gate env steps.
+  # Phase 2: Red updates every rollout while open, otherwise skips PPO.
+  # Every Red update resets the frozen counter; skipped data is discarded.
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 80000000
+  variant: cia_resilience
+
+  # One fixed training topology; num_envs controls rollout parallelism.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 1
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/alignment/train_ops3
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Disabled for single-training-seed alignment runs. Requires another
+  # training seed's final Red model when enabled.
+  cross_seed_play:
+    enabled: false
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # play_priors is a cheaper alternative to cross_play. It evaluates
+  # adjacent checkpoints rather than the full cross-play matrix below.
+  # Leave it disabled; cross_play is the enabled historical-opponent suite.
+  play_priors:
+    enabled: false
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+
+  # Ten checkpoints spread across training, including the exact final bundle.
+  # Ten checkpoints -> 100 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 10
+    include_final: true  # Final Blue is evaluated against the sampled prior Reds.
+    required: true
+
+  # Blue's curve against fixed FSM and CIA Reds, run on the evaluation GPU.
+  # Every 4.8M steps (each fifth 960k checkpoint) plus the exact final bundle:
+  # 17 points at 80M, each 4 Reds x 90 episodes (3 seeds x 3 episodes x 10 topologies).
+  # The final-model scripted-reds sweep below remains the 100-episode result.
+  checkpoint_scripted_reds:
+    enabled: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1002
+    episodes_per_seed: 3
+    every_steps: 4800000
+    include_final: true
+    required: true
+
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
+  after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 4
+
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+jax:
+  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20  # Save every 960,000 environment steps.

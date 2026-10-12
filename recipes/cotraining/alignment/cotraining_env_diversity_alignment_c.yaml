@@ -4,16 +4,21 @@ meta:
   source: "Dual-team simultaneous self-play with topology diversity"
   added: 2026-09-06
   notes: |
-    Topology-diversity counterpart to cotraining. Both parameter-sharing
-    policies start from fresh weights and train on a fixed bank of 100
-    generated topologies. Other recipe-controlled environment-diversity axes
-    remain disabled. Evaluation uses the same held-out bank as cotraining.
+    Both parameter-sharing feedforward policies start from fresh weights
+    and act on the same pre-step state.
+    Training uses a fixed bank of 100 generated topologies (seeds 0-99).
+    Train for 80M environment steps with C-only CIA shaping (lambda 3).
+    Red receives the negative of the complete shaped Blue reward.
+    Adaptive Red updates follow cotraining_env_diversity_adaptive_updates;
+    Blue uses LR 1e-4 and Red uses LR 3e-4. The gate uses unnormalized
+    shaped Blue returns; the inherited unshaped-reward threshold is
+    provisional for alignment. This schedule requires the JAX backend.
 
 algorithm: ippo
 cage4_enhanced_obs: true
 
-# During-training evaluation is disabled. Reward and CIA are measured after
-# training by the enabled built-in suites and explicit eval.after_training list.
+# Saved-checkpoint reward/CIA curves are evaluated after training by
+# eval.checkpoint_scripted_reds, matching the current cotraining evaluation protocol.
 mlflow:
   checkpoint_eval:
     every_steps: 0
@@ -22,7 +27,8 @@ mlflow:
     deterministic: false
 
 core:
-  lr: 3.0e-4
+  lr: 3.0e-4  # Red's LR; Blue uses train.team_overrides.blue.core.lr.
+  anneal_lr: false
   gamma: 0.99
   gae_lambda: 0.95
   clip_eps: 0.2
@@ -42,14 +48,27 @@ train:
   # Shared adversarial payoff; C-only CIA shaping. Both scores are reported.
   reward:
     name: shaping  # default selects the unchanged CC4 payoff.
-    lambda: 1.0
+    lambda: 3.0
     weights: {C: 1.0, I: 0.0, A: 0.0}
   teams: both
+  team_overrides:
+    blue:
+      core:
+        lr: 1.0e-4  # Match the adaptive recipes' Blue learning rate.
+  # Phase 1: 200 Blue PPO updates (9.6M env steps) and 50 Red PPO updates.
+  update_every: {blue: 1, red: 4}
+  adaptive_updates:
+    phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
+    reward_threshold: -2550.0  # Provisional threshold from the unshaped adaptive recipe.
+    window_blue_updates: 20       # Current rollout and the previous 19; unnormalized shaped Blue returns.
+    max_frozen_blue_rollouts: 100  # Force one Red update after 4.8M closed-gate env steps.
+  # Phase 2: Red updates every rollout while open, otherwise skips PPO.
+  # Every Red update resets the frozen counter; skipped data is discarded.
   episode_length: 500
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 50000000
+  total_timesteps: 80000000
   variant: cia_resilience
 
   # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
@@ -78,19 +97,18 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
-  # One final Blue vs the next training seed's final Red (cyclic seed order).
-  # The multi-seed launcher supplies the opponent after all training finishes.
-  # Three seeds -> three matchups; reward and CIA use the held-out bank above.
+  # Disabled for single-training-seed alignment runs. Requires another
+  # training seed's final Red model when enabled.
   cross_seed_play:
-    enabled: true
+    enabled: false
     seeds: 1000-1009
     episodes_per_seed: 1
     deterministic: false
 
-  # Multi-seed launcher: compare both Blue conditions against both Red pools.
-  # Excludes same-training-seed opponents; runs once after all seeds finish.
+  # Disabled with one training seed: this comparison excludes same-seed
+  # opponents and requires at least two seeds in both conditions.
   env_diversity:
-    enabled: true
+    enabled: false
     baseline_recipe: cotraining_alignment_c
     seeds: 1000-1009
     episodes_per_seed: 1
@@ -122,7 +140,7 @@ eval:
 
   # Blue's curve against fixed FSM and CIA Reds, run on the evaluation GPU.
   # Every 4.8M steps (each fifth 960k checkpoint) plus the exact final bundle:
-  # 11 points at 50M, each 4 Reds x 90 episodes (3 seeds x 3 episodes x 10 topologies).
+  # 17 points at 80M, each 4 Reds x 90 episodes (3 seeds x 3 episodes x 10 topologies).
   # The final-model scripted-reds sweep below remains the 100-episode result.
   checkpoint_scripted_reds:
     enabled: true
@@ -206,7 +224,7 @@ eval:
         - --progress
 
     # Same-seed non-diverse Red; supplied after both conditions finish training.
-    # Other seeds from both Red conditions are covered by eval.env_diversity.
+    # This same-seed matchup does not require cross-seed evaluation.
     - name: nondiverse-red
       script: scripts/eval/eval_matchup.py
       model_arg: --blue-path
