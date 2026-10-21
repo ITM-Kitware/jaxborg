@@ -109,6 +109,7 @@ def test_run_cross_play_evaluates_every_ordered_pair_and_writes_a_summary(tmp_pa
     attached: list[dict] = []
     recipe = load("cotraining")
     recipe["run"] = {"train_run_id": "run-1", "seed": 42}
+    recipe["eval"]["cross_play"]["include_final"] = False
     output = tmp_path / "cross_play.jsonl"
     run_cross_play(
         tmp_path / "model_x.safetensors",
@@ -141,13 +142,17 @@ def test_disabled_cross_play_is_a_no_op():
     assert run_cross_play("model.safetensors", _recipe(cross_play=False)) is None
 
 
-def test_cotraining_recipes_enable_cross_play_without_failing_the_training_job():
-    for name in ("cotraining", "cotraining_env_diversity"):
+def test_comparison_recipes_require_cross_play_including_final_model():
+    for name in (
+        base + suffix
+        for base in ("cotraining", "cotraining_lstm", "cotraining_mappo", "cotraining_mappo_lstm")
+        for suffix in ("", "_env_diversity")
+    ):
         settings = CrossPlaySettings.from_recipe(load(name))
         assert settings.enabled
         assert settings.max_checkpoints >= 2
-        # On trial: a failure must not take down an hours-long training run.
-        assert settings.required is False
+        assert settings.required is True
+        assert settings.include_final is True
 
 
 def test_default_cross_play_shares_one_context_across_all_cells(tmp_path, monkeypatch):
@@ -179,3 +184,50 @@ def test_default_cross_play_shares_one_context_across_all_cells(tmp_path, monkey
     )
     assert len(contexts) == 4
     assert all(context is contexts[0] for context in contexts)
+
+
+@pytest.mark.parametrize("final_steps", [120, 140])
+def test_include_final_keeps_exact_final_blue_against_prior_reds(tmp_path, monkeypatch, final_steps):
+    from jaxborg.evaluation import cross_play
+
+    monkeypatch.setattr(cross_play, "find_periodic_checkpoints", lambda *_a: _checkpoints(3))
+    monkeypatch.setattr(cross_play, "_git_commit", lambda: "test")
+    final = tmp_path / "model_final.safetensors"
+    final.touch()
+    recipe = _recipe(cross_play={"include_final": True, "max_checkpoints": 3})
+    recipe["run"]["total_steps"] = final_steps
+    calls = []
+
+    def evaluate(blue, red, **kwargs):
+        calls.append((blue, red))
+        return SimpleNamespace(
+            blue_returns=[0.0],
+            red_returns=[0.0],
+            episode_seeds=[1000],
+            policies={},
+            topology_paths=[],
+            topology_sampling="exhaustive",
+            cia_summary=None,
+        )
+
+    output = run_cross_play(
+        final, recipe, output=tmp_path / "out.jsonl", evaluate_fn=evaluate, attach_metrics_fn=lambda *a, **kw: None
+    )
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    assert len(calls) == 9
+    final_rows = [row for row in rows[:-1] if row["blue_checkpoint"] == str(final)]
+    assert len(final_rows) == 3
+    assert sum(row["red_step"] < final_steps for row in final_rows) == 2
+    assert rows[-1]["checkpoint_steps"][-1] == final_steps
+    if final_steps == 120:
+        assert all(red.name != "checkpoint_120.safetensors" for _, red in calls)
+
+
+def test_include_final_rejects_missing_step_provenance(tmp_path, monkeypatch):
+    from jaxborg.evaluation import cross_play
+
+    monkeypatch.setattr(cross_play, "find_periodic_checkpoints", lambda *_a: _checkpoints(3))
+    with pytest.raises(ValueError, match="run.total_steps"):
+        run_cross_play(tmp_path / "model_final.safetensors", _recipe(cross_play={"include_final": True}))
+    with pytest.raises(ValueError, match="include_final must be a boolean"):
+        CrossPlaySettings.from_recipe(_recipe(cross_play={"include_final": "true"}))

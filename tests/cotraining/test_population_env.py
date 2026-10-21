@@ -162,9 +162,16 @@ def test_population_cia_rejects_incompatible_topologies():
         PopulationCC4Env(GameVariant("insufficient_roles"), OpponentPopulationSettings((0, 0, 100, 0, 0)))
 
 
-def test_production_population_reset_and_step_have_compatible_jax_branches():
+@pytest.mark.parametrize("version,width", [(None, 210), (1, 402), (2, 450)])
+def test_production_population_reset_and_step_have_compatible_jax_branches(version, width):
     env = PopulationCC4Env(
-        GameVariant("trace_population", op_zone_servers=3, num_steps=2),
+        GameVariant(
+            "trace_population",
+            op_zone_servers=3,
+            num_steps=2,
+            cage4_enhanced_obs=version is not None,
+            blue_observation_version=version or 2,
+        ),
         OpponentPopulationSettings((20, 20, 20, 20, 20)),
         training_mode=True,
     )
@@ -173,19 +180,25 @@ def test_production_population_reset_and_step_have_compatible_jax_branches():
     actions = {name: jnp.int32(0) for name in env.agents}
     new_obs, new_state, rewards, dones, _ = jax.eval_shape(env.step_env, key, state, actions)
     assert set(new_obs) == set(obs) == set(rewards) == set(env.agents)
+    assert obs["blue_0"].shape == new_obs["blue_0"].shape == (width,)
+    assert (state.state.blue_ioc_memory is not None) is (version == 2)
+    assert (new_state.state.blue_ioc_memory is not None) is (version == 2)
     assert new_state.opponent_id.shape == ()
     assert dones["__all__"].shape == ()
 
 
-def test_production_population_batched_scan_traces_preserved_batches_and_reset():
+@pytest.mark.parametrize("enhanced", [False, True])
+def test_production_population_batched_scan_traces_preserved_batches_and_reset(enhanced):
     env = PopulationCC4Env(
-        GameVariant("trace_preserved_population", num_steps=2),
+        GameVariant("trace_preserved_population", num_steps=2, cage4_enhanced_obs=enhanced),
         OpponentPopulationSettings((75, 25, 0, 0, 0), preserve_red_batch_size=True),
         training_mode=True,
     )
     keys = jax.random.split(jax.random.PRNGKey(15), 4)
     _, state = jax.eval_shape(env.reset_batch, keys, jax.random.PRNGKey(16))
     actions = {name: jnp.zeros(4, jnp.int32) for name in env.agents}
-    _, state, _, dones, _ = jax.eval_shape(env.step_batch, keys, state, actions, jax.random.PRNGKey(17))
+    obs, state, _, dones, _ = jax.eval_shape(env.step_batch, keys, state, actions, jax.random.PRNGKey(17))
+    assert obs["blue_0"].shape == (4, 450 if enhanced else 210)
+    assert (state.state.blue_ioc_memory is not None) is enhanced
     assert state.opponent_id.shape == (4,)
     assert dones["__all__"].shape == (4,)

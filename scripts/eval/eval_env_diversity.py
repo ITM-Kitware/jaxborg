@@ -58,6 +58,9 @@ def main(argv=None):
                 raise ValueError("Supply --recipe or both baseline_recipe and diverse_recipe")
             baseline, diverse = load(args.baseline_recipe), load(args.diverse_recipe)
             settings = EnvDiversitySettings.from_recipe(diverse)
+        evaluation_recipe = None if args.eval_recipe is None else load(args.eval_recipe)
+        if evaluation_recipe is not None and "env_diversity" in evaluation_recipe.get("eval", {}):
+            settings = EnvDiversitySettings.from_recipe(evaluation_recipe)
         plan = build_plan(
             baseline,
             diverse,
@@ -68,7 +71,7 @@ def main(argv=None):
             checkpoint_step=args.checkpoint_step,
             baseline_tag=args.baseline_tag,
             diverse_tag=args.diverse_tag,
-            eval_recipe=None if args.eval_recipe is None else load(args.eval_recipe),
+            eval_recipe=evaluation_recipe,
             deterministic=settings.deterministic if args.deterministic is None else args.deterministic,
         )
     except (ValueError, FileNotFoundError) as exc:

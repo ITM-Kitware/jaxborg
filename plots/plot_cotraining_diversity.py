@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> None:
         help="Output directory; defaults to <exp-dir>/plots/cotraining_diversity",
     )
     parser.add_argument("--formats", nargs="+", default=["png", "pdf"], choices=["png", "pdf", "svg"])
+    parser.add_argument(
+        "--families", nargs="+", choices=list(data.FAMILY_ORDER), help="Limit figures to these learner families"
+    )
     parser.add_argument("--cross-play-family", default="lstm", choices=list(data.FAMILY_ORDER))
     parser.add_argument("--cross-play-seed", type=int, default=42)
     args = parser.parse_args(argv)
@@ -46,7 +49,7 @@ def main(argv: list[str] | None = None) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     _style()
 
-    runs = data.completed_runs(db_path)
+    runs = data.completed_runs(db_path, families=args.families)
     scripted = data.load_scripted(eval_dir, runs.ids)
     checkpoint_scripted = data.load_checkpoint_scripted(eval_dir, runs.ids)
     matchups = data.load_matchups(eval_dir, runs.ids)

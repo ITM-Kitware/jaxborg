@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from jaxborg.evaluation import post_training
+from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
 from jaxborg.evaluation.post_training import (
     PostTrainingEvalSettings,
     run_configured_evaluations_after_training,
@@ -40,6 +41,28 @@ def _final_model(tmp_path: Path) -> Path:
     model.write_bytes(b"model")
     (run_dir / "recipe_run.yaml").write_text("meta:\n  name: multi-eval-test\n")
     return model
+
+
+def test_cli_coordinator_uses_cpu_and_preserves_child_gpu_selection(monkeypatch):
+    import os
+    import runpy
+    import sys
+
+    events = []
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7")
+    fake_jax = SimpleNamespace(config=SimpleNamespace(update=lambda key, value: events.append(("config", key, value))))
+    monkeypatch.setitem(sys.modules, "jax", fake_jax)
+
+    def fake_main():
+        events.append(("main", post_training._evaluation_jax_platforms("jax"), os.environ["CUDA_VISIBLE_DEVICES"]))
+
+    monkeypatch.setattr(post_training, "main", fake_main)
+    script = Path(__file__).resolve().parents[2] / "scripts" / "eval" / "run_after_training.py"
+    runpy.run_path(str(script), run_name="__main__")
+
+    assert events == [("config", "jax_platforms", "cpu"), ("main", "cuda", "7")]
+    assert os.environ["JAX_PLATFORMS"] == "cuda"
 
 
 def test_settings_preserve_order_and_accept_numeric_cli_arguments(tmp_path):
@@ -148,6 +171,99 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
     assert [entry["status"] for entry in manifest["evaluations"]] == ["succeeded", "succeeded"]
 
 
+def test_resume_retries_failed_and_missing_suites_and_preserves_successes(tmp_path, monkeypatch):
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    nonces = iter((1, 2, 3))
+    monkeypatch.setattr(post_training.time, "time_ns", lambda: next(nonces))
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    names = ["cross-seed", "cross-play", "checkpoint-reds", "final-reds"]
+    recipe = _recipe(
+        [
+            {"name": name, "script": str(script), "args": ["--name", name, "--recipe", "{recipe}"]}
+            for name in names
+        ]
+    )
+    calls = []
+
+    def fail_checkpoint(command, **kwargs):
+        name = kwargs["env"]["JAXBORG_EVAL_NAME"]
+        calls.append(name)
+        if name == "checkpoint-reds":
+            raise subprocess.CalledProcessError(1, command)
+        return SimpleNamespace(returncode=0)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        run_configured_evaluations_after_training(
+            model, recipe, save_evaluation_recipe=True, run_subprocess=fail_checkpoint
+        )
+    assert calls == names[:3]
+    old_manifest = next((model.parents[2] / "eval" / "manifests").glob("*.json"))
+
+    # Recovery must tolerate uv choosing a new interpreter and a new recipe
+    # archive filename, while retaining the same commands and recipe contents.
+    monkeypatch.setattr(post_training.sys, "executable", "/tmp/recovery-python")
+    calls.clear()
+
+    def succeed(command, **kwargs):
+        calls.append(kwargs["env"]["JAXBORG_EVAL_NAME"])
+        assert kwargs["env"]["JAX_PLATFORMS"] == "cuda"
+        return SimpleNamespace(returncode=0)
+
+    manifest_path = run_configured_evaluations_after_training(model, recipe, resume=True, run_subprocess=succeed)
+    assert calls == names[2:]
+    records = json.loads(manifest_path.read_text())["evaluations"]
+    assert [record["status"] for record in records] == ["succeeded"] * 4
+    assert [record["reused_from"] for record in records[:2]] == [str(old_manifest)] * 2
+    assert all("reused_from" not in record for record in records[2:])
+
+    calls.clear()
+    run_configured_evaluations_after_training(model, recipe, resume=True, run_subprocess=succeed)
+    assert calls == []
+
+
+@pytest.mark.parametrize("change", ["recipe", "command", "platform", "model", "running", "failed", "nonzero", "corrupt"])
+def test_resume_does_not_skip_changed_or_unfinished_jobs(tmp_path, monkeypatch, change):
+    monkeypatch.setenv("JAX_PLATFORMS", "cuda")
+    nonces = iter((1, 2))
+    monkeypatch.setattr(post_training.time, "time_ns", lambda: next(nonces))
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    recipe = _recipe([{"name": "one", "script": str(script), "args": ["--recipe", "{recipe}"]}])
+    previous = run_configured_evaluations_after_training(
+        model,
+        recipe,
+        save_evaluation_recipe=True,
+        run_subprocess=lambda *_a, **_k: SimpleNamespace(returncode=0),
+    )
+    saved = json.loads(previous.read_text())
+    record = saved["evaluations"][0]
+    if change == "recipe":
+        recipe["core"]["lr"] = 1e-4
+    elif change == "command":
+        record["command"].extend(["--red-path", "/tmp/different-opponent.safetensors"])
+    elif change == "platform":
+        record["jax_platforms"] = "cpu"
+    elif change == "model":
+        saved["model"] = str(tmp_path / "different-model.safetensors")
+    elif change in ("running", "failed"):
+        record["status"] = change
+    elif change == "nonzero":
+        record["returncode"] = 1
+    previous.write_text("{" if change == "corrupt" else json.dumps(saved))
+
+    calls = []
+    run_configured_evaluations_after_training(
+        model,
+        recipe,
+        resume=True,
+        run_subprocess=lambda command, **kwargs: calls.append(command),
+    )
+    assert len(calls) == 1
+
+
 def test_explicit_jax_platform_is_preserved(tmp_path, monkeypatch):
     monkeypatch.setenv("JAX_PLATFORMS", "cpu")
     model = _final_model(tmp_path)
@@ -241,9 +357,17 @@ def test_cotraining_pipeline_uses_cross_play_then_final_checks_without_duplicate
 
     run_configured_evaluations_after_training(model, recipe, run_subprocess=fake_run)
 
-    # Historical cross-play runs first; priors and scripted checkpoint curves are off.
+    # Historical cross-play runs first, then any scripted checkpoint curve; priors are off.
     # Cross-seed play needs an explicit opponent, so it is skipped here.
-    cross_play, benchmark, learned, scripted = calls
+    cross_play, *calls = calls
+    if CheckpointScriptedRedsSettings.from_recipe(recipe).enabled:
+        curve, *calls = calls
+        assert Path(curve[1]).name == "eval_checkpoint_scripted_reds.py"
+    benchmark, learned, scripted, *extra = calls
+    if any(job["name"] == "hmarl-reds" for job in recipe["eval"]["after_training"]):
+        assert len(extra) == 1 and Path(extra[0][1]).name == "eval_hmarl_reds.py"
+    else:
+        assert not extra
     assert Path(benchmark[1]).name == "eval_scripted_reds.py"
     assert benchmark[benchmark.index("--seeds") + 1] == "1000-1099"
     assert benchmark[benchmark.index("--reds") + 1] == "fsm"
@@ -322,3 +446,89 @@ def test_native_benchmark_can_use_cpu_after_gpu_training(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert calls[0][1] == "cpu"
     assert calls[0][0].count("--model") == 1
+
+
+@pytest.mark.parametrize("launcher_platform", [None, "cuda"])
+def test_comparison_checkpoint_curves_run_on_gpu(tmp_path, monkeypatch, launcher_platform):
+    model = _final_model(tmp_path)
+    if launcher_platform is None:
+        monkeypatch.delenv("JAX_PLATFORMS", raising=False)
+    else:
+        monkeypatch.setenv("JAX_PLATFORMS", launcher_platform)
+    monkeypatch.delenv("JAXBORG_SKIP_POST_TRAINING_EVAL", raising=False)
+    platforms = {}
+
+    def fake_run(command, **kwargs):
+        platforms[Path(command[1]).name] = kwargs["env"]["JAX_PLATFORMS"]
+        return SimpleNamespace(returncode=0)
+
+    run_configured_evaluations_after_training(model, load("cotraining_lstm"), run_subprocess=fake_run)
+    assert platforms["eval_checkpoint_scripted_reds.py"] == "cuda"
+    assert platforms["eval_scripted_reds.py"] == "cpu"  # CybORG benchmark stays on CPU.
+
+
+@pytest.mark.parametrize("base", ["cotraining", "cotraining_lstm", "cotraining_mappo"])
+def test_diverse_recipe_evaluates_exact_nondiverse_counterpart(tmp_path, base):
+    model = _final_model(tmp_path)
+    recipe = load(base + "_env_diversity")
+    recipe["run"] = {"seed": 42}
+    red = model.with_name("model_baseline.safetensors")
+    red.touch()
+    saved = load(base)
+    saved["run"] = {"seed": 42}
+    red.with_name("recipe_baseline.yaml").write_text(yaml.safe_dump(saved))
+    calls = []
+    manifest_path = run_configured_evaluations_after_training(
+        model,
+        recipe,
+        nondiverse_red=red,
+        run_subprocess=lambda cmd, **kw: calls.append(cmd),
+    )
+    command = next(cmd for cmd in calls if "nondiverse-red" in cmd)
+    assert command[command.index("--blue-path") + 1] == str(model)
+    assert command[command.index("--red-path") + 1] == str(red)
+    assert command[command.index("--seeds") + 1] == "1000-1009"
+    manifest = json.loads(manifest_path.read_text())
+    assert all(job["status"] == "succeeded" and job["required"] for job in manifest["evaluations"])
+
+
+@pytest.mark.parametrize("wrong_seed,wrong_recipe", [(100, False), (42, True)])
+def test_nondiverse_counterpart_rejects_wrong_seed_or_condition(tmp_path, wrong_seed, wrong_recipe):
+    model = _final_model(tmp_path)
+    recipe = load("cotraining_env_diversity")
+    recipe["run"] = {"seed": 42}
+    red = model.with_name("model_baseline.safetensors")
+    red.touch()
+    saved = load("cotraining_env_diversity" if wrong_recipe else "cotraining")
+    saved["run"] = {"seed": wrong_seed}
+    red.with_name("recipe_baseline.yaml").write_text(yaml.safe_dump(saved))
+    with pytest.raises(ValueError, match="configured baseline.*same seed"):
+        run_configured_evaluations_after_training(
+            model, recipe, nondiverse_red=red, run_subprocess=lambda *a, **kw: pytest.fail("must fail before work")
+        )
+
+
+def test_cli_passes_counterpart_and_preserves_saved_training_settings(tmp_path, monkeypatch):
+    model = _final_model(tmp_path)
+    saved = load("cotraining_lstm_env_diversity")
+    saved["run"] = {"seed": 42, "total_steps": 49_968_000}
+    saved["jax"]["num_minibatches"] = 8  # Eval override must never rewrite training provenance.
+    saved["eval"] = {}
+    model.with_name("recipe_run.yaml").write_text(yaml.safe_dump(saved))
+    captured = []
+    monkeypatch.setattr(
+        post_training,
+        "run_configured_evaluations_after_training",
+        lambda *args, **kwargs: captured.append((args, kwargs)) or Path("manifest.json"),
+    )
+    post_training.main(
+        ["--model", str(model), "--recipe", "cotraining_lstm_env_diversity", "--nondiverse-red", "baseline.safetensors"]
+    )
+    (actual_model, recipe), kwargs = captured[0]
+    assert actual_model == str(model)
+    assert recipe["jax"]["num_minibatches"] == 8
+    assert recipe["run"] == saved["run"]
+    assert any(job["name"] == "nondiverse-red" for job in recipe["eval"]["after_training"])
+    assert kwargs["nondiverse_red"] == "baseline.safetensors"
+    assert kwargs["save_evaluation_recipe"] is True
+    assert yaml.safe_load(model.with_name("recipe_run.yaml").read_text())["eval"] == {}

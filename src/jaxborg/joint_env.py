@@ -77,6 +77,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
         red_reward: str = "zero_sum",
         blue_block_policy: str = "cc4",
         cage4_enhanced_obs: bool = False,
+        blue_observation_version: int = 2,
         name: str | None = None,
     ):
         self._env = ScenarioEnv(
@@ -89,6 +90,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
             red_reward=red_reward,
             blue_block_policy=blue_block_policy,
             cage4_enhanced_obs=cage4_enhanced_obs,
+            blue_observation_version=blue_observation_version,
         )
         self.blue_block_policy = blue_block_policy
         self.cfg = scenario_config
@@ -108,7 +110,7 @@ class JointPolicyCC4Env(MultiAgentEnv):
             self.observation_spaces[agent] = Box(
                 low=0.0,
                 high=2.0 if cage4_enhanced_obs else 1.0,
-                shape=(blue_obs_size(cage4_enhanced_obs),),
+                shape=(blue_obs_size(cage4_enhanced_obs, blue_observation_version),),
                 dtype=jnp.float32,
             )
         for agent in self.red_agents:

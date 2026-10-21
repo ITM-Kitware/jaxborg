@@ -1,6 +1,6 @@
 """Load completed runs and paired evaluations from MLflow SQLite and JSONL.
 
-Runs must finish at least 95% of the 70M-step budget; repeated evaluations use
+Runs must finish at least 95% of their recorded step budget; repeated evaluations use
 the latest eval_id. Training curves use a 30-update mean, with sample SD across
 seeds; end-of-training components average the last 30 updates."""
 
@@ -97,7 +97,7 @@ class CompletedRuns:
     ids: frozenset[str]
 
 
-def completed_runs(db_path: Path, min_fraction: float = MIN_STEP_FRACTION) -> CompletedRuns:
+def completed_runs(db_path: Path, min_fraction: float = MIN_STEP_FRACTION, *, families=None) -> CompletedRuns:
     """Finished, non-deleted co-training runs that reached ``min_fraction`` of the step budget."""
     conn = sqlite3.connect(db_path)
     best: dict[str, tuple[float, int, str]] = {}
@@ -105,25 +105,29 @@ def completed_runs(db_path: Path, min_fraction: float = MIN_STEP_FRACTION) -> Co
     query = "select run_uuid, name, status, lifecycle_stage, coalesce(start_time, 0) from runs"
     for uuid, name, status, stage, start in conn.execute(query).fetchall():
         recipe = _recipe_from_run_name(name or "")
-        if recipe is None or family(recipe) is None:
+        if recipe is None or family(recipe) is None or (families is not None and family(recipe) not in families):
             continue
         count, last = conn.execute(
             "select count(*), max(step) from metrics where run_uuid=? and key='team.blue.return'", (uuid,)
         ).fetchone()
         last = float(last or 0)
+        budget_row = conn.execute(
+            "select value from params where run_uuid=? and key='recipe.train.total_timesteps'", (uuid,)
+        ).fetchone()
+        budget = float(budget_row[0]) if budget_row else MAX_STEPS
         if stage != "active":
             reason = f"lifecycle {stage}"
         elif status != "FINISHED":
             reason = f"status {status}"
-        elif not count or last < min_fraction * MAX_STEPS:
+        elif not count or last < min_fraction * budget:
             reason = f"stopped at {last / 1e6:.1f}M steps"
         else:
             reason = None
         if reason:
             excluded.append((name, uuid, reason))
             continue
-        if name not in best or (last, start) > best[name][:2]:
-            best[name] = (last, start, uuid)
+        if name not in best or (start, last) > best[name][:2]:
+            best[name] = (start, last, uuid)
     for name, uuid, reason in sorted(excluded):
         print(f"exclude run {name} ({uuid[:8]}): {reason}")
     by_name = {name: uuid for name, (_, _, uuid) in best.items()}
@@ -189,7 +193,7 @@ def _load_scripted(eval_dir: Path, completed_ids: frozenset[str], *, checkpoint:
                     }
                 )
     _report_dropped(kind, dropped)
-    return _latest(pd.DataFrame(rows), keys, kind)
+    return paired_rows(_latest(pd.DataFrame(rows), keys, kind), [k for k in keys if k != "condition"])
 
 
 def load_matchups(eval_dir: Path, completed_ids: frozenset[str]) -> pd.DataFrame:
@@ -223,7 +227,10 @@ def load_matchups(eval_dir: Path, completed_ids: frozenset[str]) -> pd.DataFrame
             }
         )
     _report_dropped("learned-Red matchup", dropped)
-    return _latest(pd.DataFrame(rows), ["family", "condition", "kind", "blue_seed", "red_seed"], "learned-Red matchup")
+    return paired_rows(
+        _latest(pd.DataFrame(rows), ["family", "condition", "kind", "blue_seed", "red_seed"], "learned-Red matchup"),
+        ["family", "kind", "blue_seed", "red_seed"],
+    )
 
 
 def load_cross_play(eval_dir: Path, completed_ids: frozenset[str]) -> dict[tuple[str, str, int], dict]:
@@ -342,6 +349,17 @@ def load_team_components(db_path: Path, runs: CompletedRuns, last_updates: int =
             row[key] = float(np.mean(values)) if values else np.nan
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def paired_rows(frame: pd.DataFrame, keys: list[str]) -> pd.DataFrame:
+    """Keep identical training seeds in both conditions for each reported comparison."""
+    if frame.empty:
+        return frame
+    counts = frame.groupby(keys, dropna=False)["condition"].transform("nunique")
+    dropped = int((counts != len(CONDITIONS)).sum())
+    if dropped:
+        print(f"exclude {dropped} unpaired evaluation row(s): waiting for matching training seeds")
+    return frame[counts == len(CONDITIONS)].copy()
 
 
 def paired_families(frame: pd.DataFrame) -> list[str]:

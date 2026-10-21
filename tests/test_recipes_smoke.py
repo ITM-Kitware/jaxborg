@@ -12,13 +12,17 @@ cycles instead of 125).
 from pathlib import Path
 
 import pytest
+import yaml
 
+from jaxborg.opponent_population import OpponentPopulationSettings
 from jaxborg.policies import POLICY_REGISTRY
 from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, train_variant
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
-RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.rglob("*.yaml"))
+RECIPE_NAMES = sorted(
+    p.stem for p in RECIPES_DIR.rglob("*.yaml") if yaml.safe_load(p.read_text()).get("kind") != "pretrained_eval"
+)
 
 assert RECIPE_NAMES, f"No recipes found in {RECIPES_DIR}"
 
@@ -75,7 +79,10 @@ def test_jax_projection(recipe):
 
 
 def test_cleanrl_projection(recipe):
-    if recipe["train"].get("adaptive_updates") is not None:
+    if (
+        recipe["train"].get("adaptive_updates") is not None
+        or OpponentPopulationSettings.from_config(recipe["train"].get("opponent_population")) is not None
+    ):
         with pytest.raises(ValueError, match="only by the JAX joint trainer"):
             project_cleanrl(recipe)
         return
@@ -120,7 +127,10 @@ def test_minibatch_divides_batch(recipe, monkeypatch):
     assert (j["NUM_ENVS"] * j["NUM_STEPS"]) % j["NUM_MINIBATCHES"] == 0, (
         "JAX: num_envs * num_steps not divisible by num_minibatches"
     )
-    if recipe["train"].get("adaptive_updates") is not None:
+    if (
+        recipe["train"].get("adaptive_updates") is not None
+        or OpponentPopulationSettings.from_config(recipe["train"].get("opponent_population")) is not None
+    ):
         return  # This schedule only runs on JAX; rejection is checked above.
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
@@ -146,6 +156,8 @@ def test_stock_cotraining_recipes_stay_feedforward():
 @pytest.mark.parametrize("name", sorted(p.stem for p in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")))
 def test_cotraining_development_budget_preserves_checkpoint_spacing_and_sequence_batches(name):
     recipe = load(name)
+    if name != "cotraining_test_rule_change":
+        assert recipe["train"]["total_timesteps"] == 50_000_000
     cfg = recipe["jax"]
     stride = cfg["num_envs"] * recipe["train"]["episode_length"] * cfg["checkpoint_every_updates"]
     assert cfg["num_envs"] == 96
@@ -169,6 +181,12 @@ def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
     for recipe in (gru, lstm):
         # Prose and file path are expected to differ; nothing else is.
         del recipe["meta"], recipe["__source_path__"]
+        # LSTM additionally participates in the HMARL comparison. Its final-model
+        # suites, history inclusion and scripted-Red curve differ; the underlying
+        # eval cases match.
+        recipe["eval"].pop("after_training")
+        recipe["eval"].pop("cross_play")
+        recipe["eval"].pop("checkpoint_scripted_reds")
         if suffix:
             # Each recurrent arm compares against its own non-diverse baseline.
             baseline = recipe["eval"]["env_diversity"].pop("baseline_recipe")

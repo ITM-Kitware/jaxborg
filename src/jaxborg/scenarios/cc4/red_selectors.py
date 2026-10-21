@@ -37,10 +37,15 @@ import jax.numpy as jnp
 from jaxborg.actions.encoding import RED_SLEEP
 from jaxborg.actions.rng import sample_red_policy_choice
 from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS
+from jaxborg.scenarios.cc4.hmarl_reds import HMARL_RED_TRANSFERS
 from jaxborg.scenarios.cc4.red_fsm import (
     ACTION_VALID_MASK,
     FSM_ACT_DISCOVER,
     FSM_F,
+    FSM_K,
+    FSM_KD,
+    FSM_R,
+    FSM_RD,
     NUM_FSM_ACTIONS,
     NUM_FSM_STATES,
     PROBABILITY_MATRIX,
@@ -228,6 +233,27 @@ def _select_all_red_agents(
 # Registry — name → factory(**kwargs) → RedSelector.
 
 
+def hmarl_red_probability_matrix(name: str) -> jax.Array:
+    """Apply the paper's scan/objective specialization to the stock matrix.
+
+    Impact Red retains Discover=0.5 at R; its attack choices become
+    Impact=0.5, Degrade=0 at R and Impact=1, Degrade=0 at RD.
+    The scan variants keep Discover=0.5 at K, then exclusively use their scan.
+    """
+    states, source, destination = HMARL_RED_TRANSFERS[name]
+    indices = {"K": FSM_K, "KD": FSM_KD, "R": FSM_R, "RD": FSM_RD}
+    matrix = PROBABILITY_MATRIX
+    for state in states:
+        row = indices[state]
+        matrix = matrix.at[row, destination].add(matrix[row, source]).at[row, source].set(0.0)
+    return matrix
+
+
+def _hmarl_red(name: str, **_) -> RedSelector:
+    matrix = hmarl_red_probability_matrix(name)
+    return role_biased_selector(target_roles=(), prob_matrix=matrix, valid_mask=matrix >= 0.0)
+
+
 def _resilience(target_weight: float = 5.0, **_) -> RedSelector:
     return role_biased_selector(
         target_roles=(ROLE_AUTH, ROLE_DB, ROLE_WEB),
@@ -265,6 +291,9 @@ def _cia_a(target_weight: float = 10.0, **_) -> RedSelector:
 REGISTRY: dict[str, Callable[..., RedSelector]] = {
     "fsm": lambda **_: fsm_selector,
     "finite_state": lambda **_: fsm_selector,  # CybORG-side agent name alias
+    "aggressive": lambda **kw: _hmarl_red("aggressive", **kw),
+    "stealthy": lambda **kw: _hmarl_red("stealthy", **kw),
+    "impact": lambda **kw: _hmarl_red("impact", **kw),
     "resilience": _resilience,
     "cia_c": _cia_c,
     "c": _cia_c,

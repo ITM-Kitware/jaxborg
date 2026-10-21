@@ -191,6 +191,22 @@ eval:
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress
 
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
 jax:
   num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
   num_minibatches: 16

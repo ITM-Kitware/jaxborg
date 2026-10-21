@@ -187,6 +187,22 @@ eval:
 # shuffles transitions across the time axis -- so this recipe is JAX-only and
 # carries no `cleanrl:` block; project_cleanrl's defaults keep the smoke tests
 # well-formed.
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
 jax:
   num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
   # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.

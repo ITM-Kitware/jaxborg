@@ -22,10 +22,12 @@ from pathlib import Path
 from statistics import mean, stdev
 from typing import Any
 
-from jaxborg.blue_observation_contract import enhanced_obs_enabled
+from jaxborg.blue_observation_contract import enhanced_obs_enabled, enhanced_obs_version
+from jaxborg.scenarios.cc4.hmarl_reds import HMARL_REDS
 
 DEFAULT_SCRIPTED_REDS = ("fsm", "cia_c", "cia_i", "cia_a")
-_SUPPORTED_SCRIPTED_REDS = frozenset(DEFAULT_SCRIPTED_REDS)
+SUPPORTED_SCRIPTED_REDS = (*DEFAULT_SCRIPTED_REDS, *HMARL_REDS[1:])
+_SUPPORTED_SCRIPTED_REDS = frozenset(SUPPORTED_SCRIPTED_REDS)
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _EVAL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
@@ -89,7 +91,7 @@ def _normalise_reds(value: str | Sequence[str]) -> tuple[str, ...]:
     if unknown:
         raise ValueError(
             "eval.scripted_red.reds contains unsupported agents "
-            f"{sorted(unknown)}; expected a subset of {list(DEFAULT_SCRIPTED_REDS)}"
+            f"{sorted(unknown)}; expected a subset of {list(SUPPORTED_SCRIPTED_REDS)}"
         )
     if len(set(reds)) != len(reds):
         raise ValueError("eval.scripted_red.reds must not contain duplicates")
@@ -285,7 +287,9 @@ def evaluate_scripted_reds(
     rows: list[dict[str, Any]] = []
 
     for red in settings.reds:
-        variant = variant_for_red(red, cage4_enhanced_obs=enhanced_obs_enabled(recipe))
+        variant = variant_for_red(
+            red, cage4_enhanced_obs=enhanced_obs_enabled(recipe), blue_observation_version=enhanced_obs_version(recipe)
+        )
         print(
             f"Blue from {model_path.name} vs {red}: {len(settings.seeds) * settings.episodes_per_seed} episodes",
             flush=True,
@@ -322,6 +326,7 @@ def evaluate_scripted_reds(
             "eval_red": red,
             "variant": variant.name,
             "cage4_enhanced_obs": variant.cage4_enhanced_obs,
+            "blue_observation_version": variant.blue_observation_version,
             "red_agent": variant.red_agent,
             "resilience_roles": variant.resilience_roles,
             "episode_length": variant.num_steps,
@@ -456,7 +461,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument(
         "--reds",
         nargs="+",
-        choices=DEFAULT_SCRIPTED_REDS,
+        choices=SUPPORTED_SCRIPTED_REDS,
         default=list(DEFAULT_SCRIPTED_REDS),
         help="Scripted Red opponents to evaluate",
     )

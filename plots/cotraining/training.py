@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-from .data import CONDITIONS, FAMILY_ORDER, MAX_STEPS, TEAMS, _seed_band
+from .data import CONDITIONS, FAMILY_ORDER, TEAMS, _seed_band
 from .style import (
     _TICK_LABELS,
     COMPONENT_COLORS,
@@ -24,7 +24,8 @@ from .style import (
 
 
 def _training_panel(ax: plt.Axes, data: pd.DataFrame, *, linewidth: float) -> None:
-    grid = np.linspace(0, MAX_STEPS, 141)
+    end = float(data["step"].max())
+    grid = np.linspace(0, end, 141)
     for cond in CONDITIONS:
         runs = [run for _, run in data[data["condition"] == cond].groupby("seed")]
         if not runs:
@@ -32,7 +33,7 @@ def _training_panel(ax: plt.Axes, data: pd.DataFrame, *, linewidth: float) -> No
         mean, low, high = _seed_band(runs, grid, "step", "value")
         ax.fill_between(grid / 1e6, low, high, color=_lighten(COND_COLORS[cond]), alpha=0.55, lw=0)
         ax.plot(grid / 1e6, mean, color=COND_COLORS[cond], lw=linewidth)
-    ax.set_xlim(0, MAX_STEPS / 1e6)
+    ax.set_xlim(0, end / 1e6)
     _grid(ax)
 
 
