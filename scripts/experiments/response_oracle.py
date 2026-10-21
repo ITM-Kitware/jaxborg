@@ -33,7 +33,7 @@ import yaml
 from jaxborg.checkpoint import load_jax_bundle, read_sidecar
 from jaxborg.evaluation.cia.fixed_topology import canonical_topology_fingerprint
 from jaxborg.recipe import load as load_recipe
-from jaxborg.recipe import team_recipe
+from jaxborg.recipe import project_jax, team_recipe
 from jaxborg.research_tracking import parameter_hash
 from jaxborg.response_campaign import load_campaign
 from jaxborg.response_oracle import (
@@ -187,6 +187,38 @@ def prepare(args):
         requested_steps=config["training"]["requested_steps"],
         trainable_team=team,
     )
+    budget_search = config["selection"]["checkpoint"] == "budget_milestones"
+    if budget_search:
+        if sidecar["algorithm"] != "ippo":
+            raise ValueError("budget diagnostic requires the late IPPO source pair")
+        recipe.setdefault("jax", {})["checkpoint_every_updates"] = 104
+        expected = {
+            "LR": 0.0003,
+            "ANNEAL_LR": False,
+            "GAMMA": 0.99,
+            "GAE_LAMBDA": 0.95,
+            "ENT_COEF": 0.01,
+            "VF_COEF": 0.5,
+            "NORM_REWARDS": True,
+            "NETWORK_TYPE": "shared",
+            "HIDDEN_DIM": 256,
+            "HIDDEN_LAYERS": 2,
+            "ACTIVATION": "tanh",
+            "NUM_ENVS": 96,
+            "NUM_STEPS": 500,
+            "NUM_MINIBATCHES": 16,
+            "UPDATE_EPOCHS": 4,
+        }
+        projected = project_jax(recipe, team="red")
+        if any(projected.get(key) != value for key, value in expected.items()):
+            raise ValueError("budget diagnostic must preserve the original Red optimizer and rollout configuration")
+        if budget(recipe) != {
+            "requested_steps": 20000000,
+            "completed_steps": 19968000,
+            "updates": 416,
+            "steps_per_update": 48000,
+        }:
+            raise ValueError("budget diagnostic has an unexpected update stride")
     recipe_paths = {}
     for seed in config["training"]["seeds"]:
         path = study / f"recipe-{team}-seed{seed}.yaml"
@@ -292,6 +324,22 @@ def prepare(args):
         "eval_recipe": str(eval_recipe),
         "eval_recipe_sha256": file_hash(eval_recipe),
     }
+    if budget_search:
+        updates = config["selection"]["checkpoint_updates"]
+        candidates = ["original", *[f"update-{update}" for update in updates]]
+        manifest["question"] = (
+            "Does extending one fresh Red response from 9.984M to 19.968M improve "
+            "the discovered deviation against late IPPO Blue?"
+        )
+        manifest["selection"] = {
+            **config["selection"],
+            "candidates": candidates,
+            "candidate_order": candidates,
+            "checkpoints_per_attempt": (
+                "prespecified updates; separate cumulative-budget validation selections locked before confirmation"
+            ),
+            "checkpoint_steps": [update * 48000 for update in updates],
+        }
     protocol_ref = owner.write_json("protocol/manifest.json", manifest)
     owner.export("protocol/manifest.json", report_dir / "manifest.json")
     write_json(study / "manifest.json", manifest)

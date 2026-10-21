@@ -45,12 +45,37 @@ def load_campaign(path, defender_name):
         "topology": {"generator": "jax", "seed": 0, "count": 1},
     }:
         raise ValueError("supported target is enhanced-v2 singleton stock CC4 with zero-sum rewards")
-    if config["selection"] != {
+    selection = config["selection"]
+    budget_search = selection.get("checkpoint") == "budget_milestones"
+    expected_selection = {
         "rule": "highest_validation_blue_mean" if team == "blue" else "lowest_validation_blue_mean",
         "checkpoint": "final",
         "original_fallback": True,
         "tie_break": "original_then_training_seed_order",
-    }:
+    }
+    if budget_search:
+        expected_selection.update(
+            checkpoint="budget_milestones",
+            tie_break="original_then_checkpoint_order",
+            checkpoint_updates=[104, 208, 312, 416],
+            budget_updates=[208, 416],
+        )
+        if (
+            team != "red"
+            or len(config["training"]["seeds"]) != 1
+            or config["training"]["requested_steps"] != 20000000
+            or defender["steps"] != 49968000
+            or defender["seed"] != 42
+            or config["evaluation"]["validation"]["episodes"] != 100
+            or config["evaluation"]["test"]["episodes"] != 600
+            or config["resources"]["time_limit"] != "04:00:00"
+            or config["resources"]["max_concurrent_jobs"] != 1
+        ):
+            raise ValueError(
+                "budget diagnostic requires one 20M Red attempt at late seed-42 IPPO, "
+                "100/600 episodes and a four-hour single-job cap"
+            )
+    if selection != expected_selection:
         raise ValueError("unsupported selection rule")
     if config["evaluation"]["stochastic"] is not True:
         raise ValueError("response evaluation requires stochastic actions")
