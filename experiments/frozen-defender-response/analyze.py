@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
+PROJECT = HERE.parents[1]
 
 
 def require(condition, message):
@@ -478,18 +479,22 @@ def figures(destination, summary, curves, order, config):
 
 def source_record():
     def git(*args):
-        result = subprocess.run(["git", "-C", str(HERE), *args], text=True, capture_output=True)
+        try:
+            result = subprocess.run(["git", "-C", str(PROJECT), *args], text=True, capture_output=True)
+        except OSError:
+            return None
         return result.stdout.strip() if result.returncode == 0 else None
 
-    files = [
-        HERE / name
-        for name in ("analyze.py", "index_bundle.py", "pyproject.toml", "uv.lock", ".python-version", "README.md")
+    files = [PROJECT / name for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md")] + [
+        HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")
     ]
-    status = git("status", "--porcelain", "--untracked-files=all", "--", ".")
+    checkout = git("rev-parse", "--show-toplevel")
+    is_checkout = checkout is not None and Path(checkout).resolve() == PROJECT
+    status = git("status", "--porcelain", "--untracked-files=all", "--", ".") if is_checkout else None
     return {
-        "git_commit": git("rev-parse", "HEAD"),
+        "git_commit": git("rev-parse", "HEAD") if is_checkout else None,
         "dirty": bool(status) if status is not None else None,
-        "files": {path.name: digest(path) for path in files if path.exists()},
+        "files": {path.relative_to(PROJECT).as_posix(): digest(path) for path in files},
         "python": platform.python_version(),
         "platform": platform.platform(),
         "dependencies": {item.metadata["Name"]: item.version for item in importlib.metadata.distributions()},
@@ -503,9 +508,7 @@ def run(args):
         not output.is_relative_to(root) and not root.is_relative_to(output),
         "Output must be separate from the input bundle",
     )
-    checkout = subprocess.run(["git", "-C", str(HERE), "rev-parse", "--show-toplevel"], text=True, capture_output=True)
-    source_root = Path(checkout.stdout.strip()) if checkout.returncode == 0 else HERE
-    require(not output.is_relative_to(source_root), "Generated reports must be outside the source checkout")
+    require(not output.is_relative_to(PROJECT), "Generated reports must be outside the source checkout")
     index, references = verified_bundle(root)
     protocol, state, evaluations, finals, curves, training_rows, training_seconds = validate(references, index)
     config_path = args.config.resolve() if args.config else root / index["configuration"]
@@ -606,7 +609,9 @@ def run(args):
         figures(destination, summary, curves, list(state["training"]), config)
         (destination / "analysis-source").mkdir()
         for name in source["files"]:
-            shutil.copyfile(HERE / name, destination / "analysis-source" / name)
+            copied = destination / "analysis-source" / name
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(PROJECT / name, copied)
         write_json(destination / "input-index.json", index)
         report = f"""# Frozen Blue response report
 

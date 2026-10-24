@@ -3,6 +3,7 @@
 import copy
 import csv
 import hashlib
+import importlib.metadata
 import io
 import json
 import os
@@ -14,6 +15,7 @@ import unittest
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+PROJECT = HERE.parents[1]
 SCRIPT = HERE / "analyze.py"
 
 
@@ -373,10 +375,18 @@ class ReportCliTests(unittest.TestCase):
         self.bundle = SyntheticBundle(self.root / "downloaded" / "inputs")
         self.output = self.root / "unrelated" / "report"
 
-    def run_cli(self, *arguments):
-        environment = {**os.environ, "MPLCONFIGDIR": str(self.root / "matplotlib")}
+    def run_cli(self, *arguments, script=SCRIPT, output=None, environment=None):
+        environment = {**os.environ, "MPLCONFIGDIR": str(self.root / "matplotlib"), **(environment or {})}
         return subprocess.run(
-            [sys.executable, str(SCRIPT), "--input", str(self.bundle.root), "--output", str(self.output), *arguments],
+            [
+                sys.executable,
+                str(script),
+                "--input",
+                str(self.bundle.root),
+                "--output",
+                str(output or self.output),
+                *arguments,
+            ],
             cwd=self.root,
             env=environment,
             text=True,
@@ -450,10 +460,67 @@ class ReportCliTests(unittest.TestCase):
         for name, metadata in manifest["outputs"].items():
             data = (self.output / name).read_bytes()
             self.assertEqual(metadata, {"size": len(data), "sha256": sha256(data)})
-        self.assertEqual((self.output / "analysis-source" / "analyze.py").read_bytes(), SCRIPT.read_bytes())
+        source = manifest["analysis_source"]
+        expected_files = {"pyproject.toml", "uv.lock", ".python-version", "README.md"} | {
+            f"experiments/frozen-defender-response/{name}"
+            for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")
+        }
+        self.assertEqual(set(source["files"]), expected_files)
+        for name in expected_files:
+            data = (PROJECT / name).read_bytes()
+            self.assertEqual((self.output / "analysis-source" / name).read_bytes(), data)
+            self.assertEqual(source["files"][name], sha256(data))
+        for dependency in ("numpy", "matplotlib"):
+            self.assertEqual(source["dependencies"][dependency], importlib.metadata.version(dependency))
         self.assertIn("[input index](input-index.json)", (self.output / "README.md").read_text())
         after = {str(path): sha256(path.read_bytes()) for path in self.bundle.root.rglob("*") if path.is_file()}
         self.assertEqual(before, after)
+
+    def test_shared_project_source_snapshot_runs_without_git(self):
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        snapshot = self.output / "analysis-source"
+        replay = self.root / "replayed-report"
+        result = self.run_cli(script=snapshot / SCRIPT.relative_to(PROJECT), output=replay, environment={"PATH": ""})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        original = read_json(self.output / "manifest.json")["analysis_source"]
+        copied = read_json(replay / "manifest.json")["analysis_source"]
+        self.assertIsNone(copied["git_commit"])
+        self.assertIsNone(copied["dirty"])
+        self.assertEqual(copied["files"], original["files"])
+        for name in ("summary.json", "resolved-config.json", "per-episode.csv"):
+            self.assertEqual((replay / name).read_bytes(), (self.output / name).read_bytes())
+        for name in ("pyproject.toml", "uv.lock", ".python-version"):
+            self.assertEqual((replay / "analysis-source" / name).read_bytes(), (PROJECT / name).read_bytes())
+
+    def test_source_snapshot_does_not_claim_enclosing_repository_revision(self):
+        result = self.run_cli()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for arguments in (
+            ["init", "--quiet", "--template="],
+            [
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "Create unrelated fixture",
+            ],
+        ):
+            subprocess.run(["git", "-C", str(self.root), *arguments], check=True, capture_output=True)
+        replay = self.root / "replayed-report"
+        result = self.run_cli(script=self.output / "analysis-source" / SCRIPT.relative_to(PROJECT), output=replay)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        copied = read_json(replay / "manifest.json")["analysis_source"]
+        self.assertIsNone(copied["git_commit"])
+        self.assertIsNone(copied["dirty"])
 
     def test_parameter_overrides_are_recorded_without_editing_source(self):
         source_hash = sha256(SCRIPT.read_bytes())

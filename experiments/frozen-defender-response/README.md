@@ -1,30 +1,32 @@
 # Frozen-defender response analysis
 
 This study-local command regenerates the completed MAPPO frozen-Blue response
-report from saved measurements. It uses NumPy and Matplotlib, with an independent
-lockfile, and does not import JAX, the simulator, training code, or MLflow.
+report from saved measurements. It uses NumPy and Matplotlib from the main
+project dependencies and lockfile. The analysis does not import JAX, the
+simulator, training code, or MLflow.
 
-From this directory, run:
+From the repository root, run:
 
 ```bash
-uv run --frozen python analyze.py --input /path/to/input-bundle --output /path/to/new-report
+uv run --frozen --extra cpu python experiments/frozen-defender-response/analyze.py \
+  --input /path/to/input-bundle --output /path/to/new-report
 ```
 
 The output must be a new directory outside the source checkout and input bundle.
-The input directory is read only. Once this small environment has been installed,
-`uv run --offline --frozen ...` runs without network access. `uv sync --frozen`
-installs only this directory's dependencies, not the enclosing simulator project.
+The input directory is read only. Once the project environment has been installed,
+`uv run --offline --frozen --extra cpu ...` runs without network access. Use the
+repository's `cuda` extra instead if working in an existing GPU environment.
 
 ## File ownership
 
 ```text
 Source checkout:
+  pyproject.toml          shared project dependencies, including NumPy and Matplotlib
+  uv.lock                 exact resolved dependency versions
+  .python-version         shared Python version
   experiments/frozen-defender-response/
     analyze.py           validation, statistics, tables, and figures
     index_bundle.py      index the copied records for this one reference study
-    pyproject.toml        report-only dependencies
-    uv.lock               exact resolved dependency versions
-    .python-version       Python minor version
     test_analyze.py        synthetic command-line checks
     README.md
 
@@ -53,7 +55,8 @@ bootstrap overrides and captures the supplied values, defaults, overrides, and
 fully resolved configuration in the output:
 
 ```bash
-uv run --frozen python analyze.py --input /path/to/input-bundle \
+uv run --frozen --extra cpu python experiments/frozen-defender-response/analyze.py \
+  --input /path/to/input-bundle \
   --output /path/to/another-report --bootstrap-seed 3000002
 ```
 
@@ -89,12 +92,15 @@ learning-curve tables are retained only as reference outputs.
 To assemble this particular fixture, copy the selected producer files into a new
 `input/producer/<run-id>/artifacts/` tree, preserving their bytes. The original
 report's `results/state.json` identifies all training, validation, and final runs.
-Retain a snapshot of this analysis directory, excluding `.venv` and caches, beside
-the producer records. Record its commit and file hashes in `analysis-source.json`.
+Retain the analysis scripts and instructions at their repository-relative paths,
+plus the root `pyproject.toml`, `uv.lock`, `.python-version`, and `README.md`, in
+`analysis-source/` beside the producer records. Exclude `.venv` and caches. Record
+the snapshot's commit and file hashes in `analysis-source.json`.
 Then index that copied tree once:
 
 ```bash
-uv run --frozen python index_bundle.py --input /path/to/input-bundle \
+uv run --frozen --extra cpu python experiments/frozen-defender-response/index_bundle.py \
+  --input /path/to/input-bundle \
   --source-store 'itm (sqlite:////home/local/KHQ/paul.elliott/jaxborg-exp/shared/mlflow.db)'
 ```
 
@@ -133,13 +139,22 @@ outputs should come from the clean committed analysis revision. Files in the
 source archive and producer manifests are retained evidence and are not executed.
 Running the standalone analysis snapshot without Git records unknown Git revision
 and cleanliness; the input snapshot identity and exact source hashes remain available.
+The copied snapshot preserves the shared project lock and repository-relative
+analysis paths. To run it without installing the absent trainer source, use these
+commands from its `analysis-source/` directory:
+
+```bash
+uv sync --frozen --extra cpu --no-install-project
+uv run --no-sync python experiments/frozen-defender-response/analyze.py \
+  --input /path/to/input-bundle --output /path/to/new-report
+```
 
 ## Focused verification
 
-From the repository root, use the report environment:
+From the repository root, use the shared environment:
 
 ```bash
-uv run --project experiments/frozen-defender-response --frozen \
+uv run --frozen --extra cpu \
   python -m unittest discover -s experiments/frozen-defender-response -p test_analyze.py
 ```
 
