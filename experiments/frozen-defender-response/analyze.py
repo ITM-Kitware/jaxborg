@@ -648,10 +648,6 @@ and [execution record](manifest.json).
 Producer revision: `{protocol["source_revision"]}`. Analysis revision: `{source["git_commit"]}`.
 The reference bootstrap interval was
 {"verified exactly" if reference_interval else "not compared because bootstrap settings changed"}.
-
-This report verifies retained records and recorded freeze assertions.
-Model tensors were not loaded or independently rehashed. Policy reevaluation requires the checkpoint,
-sidecar, topology, and producing environment; no simulation or training was performed here.
 """
         (destination / "README.md").write_text(report)
         outputs = {
