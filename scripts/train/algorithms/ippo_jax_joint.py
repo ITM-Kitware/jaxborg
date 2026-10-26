@@ -16,6 +16,7 @@ import optax
 from flax.training.train_state import TrainState
 
 from jaxborg.adaptive_updates import AdaptiveUpdateSettings, adaptive_red_update
+from jaxborg.evaluation.environment_contract import JointEnvFactory, construct_joint_env
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.policies import (
     has_centralized_critic,
@@ -418,8 +419,13 @@ def make_joint_train(
     trainable_teams: tuple[str, ...],
     initial_params: Mapping[str, Any] | None = None,
     use_batched_reset: bool = True,
+    env_factory: JointEnvFactory | None = None,
 ):
     """Build the joint environment and a JIT'd rollout/update function.
+
+    ``env_factory`` optionally constructs a canonical joint CC4 JAX environment
+    from the variant and explicit topology/training settings before compilation.
+    Pass the same builder to ``evaluate_matchup`` for the scientific contract.
 
     Both network forward passes happen before the single call to ``env.step``.
     Frozen policies still participate in inference, but their PPO updater is
@@ -469,8 +475,10 @@ def make_joint_train(
     if any(cfg.get("ADAPTIVE_UPDATES") != base.get("ADAPTIVE_UPDATES") for cfg in team_configs.values()):
         raise ValueError("both teams must share ADAPTIVE_UPDATES")
 
-    env = make_joint_jax_env(
+    env = construct_joint_env(
         base["TRAIN_VARIANT"],
+        env_factory=env_factory,
+        default_factory=make_joint_jax_env,
         topology_mode=base.get("TOPOLOGY_MODE", "generative"),
         training_mode=bool(base.get("TRAINING_MODE", True)),
         topology_path=list(topology_bank) if topology_bank else None,
