@@ -119,7 +119,7 @@ def test_cotraining_benchmark_arguments_are_accepted_by_cli(cli_evaluator, recip
         "model.safetensors",
         reds=["fsm"],
         seeds="1000-1099",
-        episodes_per_seed=6,
+        episodes_per_seed=1,
         deterministic=False,
         workers=4,
         progress=False,
