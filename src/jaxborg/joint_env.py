@@ -1,4 +1,4 @@
-"""Joint learned-Blue/learned-Red JAX environment.
+"""JAX environment controlled by Blue and Red policies.
 
 The wrapper exposes all eleven policy agents while delegating game mechanics to
 one :class:`jaxborg.env.ScenarioEnv` step.  Red compact actions are translated
@@ -63,7 +63,7 @@ def force_sleep_for_unavailable_actions(
 
 
 class JointPolicyCC4Env(MultiAgentEnv):
-    """Policy-facing CC4 env for simultaneous learned Blue and Red play."""
+    """CC4 environment accepting Blue and Red policy actions."""
 
     def __init__(
         self,

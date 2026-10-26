@@ -58,6 +58,17 @@ def _validate_resilience_topology(
             )
 
 
+def variant_env_settings(variant: GameVariant) -> dict:
+    """Map the variant fields shared by scripted and Blue/Red policy environments."""
+    return {
+        "num_steps": variant.num_steps,
+        "op_zone_min_servers": variant.op_zone_servers,
+        "red_reward": variant.red_reward,
+        "blue_block_policy": variant.blue_block_policy,
+        "cage4_enhanced_obs": variant.cage4_enhanced_obs,
+    }
+
+
 def make_jax_env(
     variant: GameVariant,
     *,
@@ -75,20 +86,16 @@ def make_jax_env(
     extras = _resilience_extras_factory if variant.resilience_roles else _empty_extras_factory
     selector = make_red_selector(variant.red_agent, target_weight=variant.target_weight)
     return FsmRedCC4Env(
-        num_steps=variant.num_steps,
+        **variant_env_settings(variant),
         topology_mode=topology_mode,
         training_mode=training_mode,
         topology_path=topology_path,
         red_selector=selector,
         extras_factory=extras,
-        op_zone_min_servers=variant.op_zone_servers,
         mission_bank=mission_bank,
         mission_bank_amplify=mission_bank_amplify,
         phase_boundary_bank=phase_boundary_bank,
         phase_rewards_bank=phase_rewards_bank,
-        red_reward=variant.red_reward,
-        blue_block_policy=variant.blue_block_policy,
-        cage4_enhanced_obs=variant.cage4_enhanced_obs,
         name=name,
     )
 
@@ -101,18 +108,14 @@ def make_joint_jax_env(
     topology_path: str | Path | Sequence[str | Path] | None = None,
     name: str | None = None,
 ) -> JointPolicyCC4Env:
-    """Build the all-policy JAX env used for learned Red or joint training."""
+    """Build a JAX environment where Blue and Red actions come from policies."""
 
     if variant.resilience_roles:
         _validate_resilience_topology(variant, topology_path)
     return JointPolicyCC4Env(
-        num_steps=variant.num_steps,
+        **variant_env_settings(variant),
         topology_mode=topology_mode,
         training_mode=training_mode,
         topology_path=topology_path,
-        op_zone_min_servers=variant.op_zone_servers,
-        red_reward=variant.red_reward,
-        blue_block_policy=variant.blue_block_policy,
-        cage4_enhanced_obs=variant.cage4_enhanced_obs,
         name=name,
     )

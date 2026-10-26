@@ -45,6 +45,7 @@ from jaxborg.constants import (
     OBS_VECTOR_HOSTS_PER_SUBNET,
     SUBNET_NAMES,
 )
+from jaxborg.evaluation.environment_contract import JointEnvFactory, construct_joint_env
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.evaluation.jax_env_factory import make_joint_jax_env
 from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
@@ -147,7 +148,16 @@ class MatchupEvaluationContext:
             self.policies[key] = load_matchup_policy(path, team=team, backend=backend)
         return self.policies[key]
 
-    def environment(self, variant, topology_paths):
+    def environment(self, variant, topology_paths, env_factory: JointEnvFactory | None = None):
+        if env_factory is not None:
+            return construct_joint_env(
+                variant,
+                env_factory=env_factory,
+                default_factory=make_joint_jax_env,
+                topology_mode="generative",
+                training_mode=False,
+                topology_path=topology_paths or None,
+            )
         key = (variant, tuple(topology_paths))
         if key not in self.environments:
             self.environments[key] = make_joint_jax_env(
@@ -730,8 +740,12 @@ def evaluate_matchup(
     topology_sampling: str = "exhaustive",
     cia: Mapping[str, Any] | None = None,
     context: MatchupEvaluationContext | None = None,
+    env_factory: JointEnvFactory | None = None,
 ) -> MatchupEvaluation:
     """Evaluate independently sourced learned policies in the JAX simulator.
+
+    ``env_factory`` accepts the same construction contract as joint training.
+    Custom environments are validated before rollout and are not context-cached.
 
     A configured bank defaults to exhaustive evaluation: every expanded
     episode seed is run once on every topology. ``random`` samples the complete
@@ -771,7 +785,7 @@ def evaluate_matchup(
 
     # Load and stack the bank once. Reconstructing an environment per episode
     # becomes prohibitively expensive for exhaustive held-out evaluations.
-    env = context.environment(variant, topology_paths)
+    env = context.environment(variant, topology_paths, env_factory)
 
     blue_returns = []
     episode_seeds = []
