@@ -38,13 +38,45 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      - run: uv run pytest -v --junitxml="$RUNNER_TEMP/pytest-fast.xml"
+      - name: Record runner resources
+        run: |
+          {
+            date -u
+            nproc
+            free -m
+            df -h "$RUNNER_TEMP"
+            for resource in memory.max memory.current memory.peak memory.events cpu.max; do
+              resource_path="/sys/fs/cgroup/$resource"
+              if [ -r "$resource_path" ]; then
+                printf '%s: ' "$resource"
+                cat "$resource_path"
+              fi
+            done
+          } | tee "$RUNNER_TEMP/runner-resources.txt"
+      - name: Run fast tests in separate processes
+        run: |
+          vmstat -t -w -S M 30 &
+          resource_monitor_pid=$!
+          trap 'kill "$resource_monitor_pid" 2>/dev/null || true' EXIT
+          for group in cotraining other; do
+            printf '%s\n' 'GNU time maxRSS is a per-process high-water mark, not the summed peak of concurrent pytest workers.' \
+              > "$RUNNER_TEMP/pytest-fast-$group.resources.txt"
+          done
+          fast_status=0
+          /usr/bin/time -v -a -o "$RUNNER_TEMP/pytest-fast-cotraining.resources.txt" \
+            uv run pytest tests/cotraining -v --junitxml="$RUNNER_TEMP/pytest-fast-cotraining.xml" || fast_status=$?
+          /usr/bin/time -v -a -o "$RUNNER_TEMP/pytest-fast-other.resources.txt" \
+            uv run pytest --ignore=tests/cotraining -v --junitxml="$RUNNER_TEMP/pytest-fast-other.xml" || fast_status=$?
+          exit "$fast_status"
       - name: Retain fast test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-fast
-          path: ${{ runner.temp }}/pytest-fast.xml
+          path: |
+            ${{ runner.temp }}/pytest-fast-*.xml
+            ${{ runner.temp }}/pytest-fast-*.resources.txt
+            ${{ runner.temp }}/runner-resources.txt
           retention-days: 7
           if-no-files-found: ignore
 
@@ -67,6 +99,21 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
+      - name: Record runner resources
+        run: |
+          {
+            date -u
+            nproc
+            free -m
+            df -h "$RUNNER_TEMP"
+            for resource in memory.max memory.current memory.peak memory.events cpu.max; do
+              resource_path="/sys/fs/cgroup/$resource"
+              if [ -r "$resource_path" ]; then
+                printf '%s: ' "$resource"
+                cat "$resource_path"
+              fi
+            done
+          } | tee "$RUNNER_TEMP/runner-resources.txt"
       # actions/cache restores exactly one cache per step, so we cannot
       # save per-shard partials and hope to merge them at restore time.
       # Instead, aggregate-durations (below) merges every shard's output
@@ -95,16 +142,26 @@ jobs:
       # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
       # parallelism axis here, and stacking xdist on top contends on the
       # JAX persistent-cache lock (cold cache + many tiny compiles).
-      - run: >-
-          uv run pytest -o "addopts=" -v -m slow --splits 8
-          --group ${{ matrix.group }} --store-durations
-          --junitxml="$RUNNER_TEMP/pytest-slow.xml"
+      - name: Run slow tests with resource diagnostics
+        run: |
+          vmstat -t -w -S M 30 &
+          resource_monitor_pid=$!
+          trap 'kill "$resource_monitor_pid" 2>/dev/null || true' EXIT
+          printf '%s\n' 'GNU time maxRSS is a per-process high-water mark, not the summed peak of concurrent pytest workers.' \
+            > "$RUNNER_TEMP/pytest-slow.resources.txt"
+          /usr/bin/time -v -a -o "$RUNNER_TEMP/pytest-slow.resources.txt" \
+            uv run pytest -o "addopts=" -v -m slow --splits 8 \
+            --group ${{ matrix.group }} --store-durations \
+            --junitxml="$RUNNER_TEMP/pytest-slow.xml"
       - name: Retain slow test results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results-slow-${{ matrix.group }}
-          path: ${{ runner.temp }}/pytest-slow.xml
+          path: |
+            ${{ runner.temp }}/pytest-slow.xml
+            ${{ runner.temp }}/pytest-slow.resources.txt
+            ${{ runner.temp }}/runner-resources.txt
           retention-days: 7
           if-no-files-found: ignore
       - name: Upload this shard's durations
