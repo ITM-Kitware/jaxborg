@@ -253,9 +253,7 @@ def build_topology(
         else:
             a_floor = b_floor = int(op_zone_min_servers)
         # alpha-order positions 3 and 4 are OPERATIONAL_ZONE_A / OPERATIONAL_ZONE_B.
-        floor_per_alpha = jnp.array(
-            [-1, -1, -1, int(a_floor), int(b_floor), -1, -1, -1], dtype=jnp.int32
-        )
+        floor_per_alpha = jnp.array([-1, -1, -1, int(a_floor), int(b_floor), -1, -1, -1], dtype=jnp.int32)
         n_servers = jnp.where(floor_per_alpha >= 0, floor_per_alpha, random_n)
     else:
         n_servers = random_n

@@ -30,7 +30,6 @@ import numpy as np
 
 from jaxborg.parity.fsm_red_env import make_fsm_red_env
 
-
 N_EPISODES = int(os.environ.get("CEC_SPIKE_EPISODES", "32"))
 N_STEPS = int(os.environ.get("CEC_SPIKE_STEPS", "500"))
 
@@ -103,7 +102,10 @@ def main() -> int:
         print(f"VERDICT: PASS  (ratio {ratio:.2f} >= {THRESHOLD})  — env-diverse has real spread.")
         return 0
     else:
-        print(f"VERDICT: FAIL  (ratio {ratio:.2f} < {THRESHOLD})  — env-diverse spread is not meaningfully larger than red/green noise.")
+        print(
+            f"VERDICT: FAIL  (ratio {ratio:.2f} < {THRESHOLD})  — "
+            "env-diverse spread is not meaningfully larger than red/green noise."
+        )
         print("  → port phase-reward / topology banks from diversity branch before any Phase 5 training.")
         return 1
 
