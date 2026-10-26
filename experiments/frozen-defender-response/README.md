@@ -1,9 +1,26 @@
 # Frozen-defender response analysis
 
+**Question:** can freshly trained Red challengers improve their return against
+one frozen Blue policy? This completed study trained three challengers, selected
+using validation scores with Original Red as a fallback, then compared the
+selected Red against Original Red on 600 paired held-out cases.
+
 This study-local command regenerates the completed MAPPO frozen-Blue response
 report from saved measurements. It uses NumPy and Matplotlib from the main
 project dependencies and lockfile. The analysis does not import JAX, the
 simulator, training code, or MLflow.
+
+The script validates this historical fixture against its retained reference
+summary. It is not the starting analysis for an arbitrary new experiment. Reuse
+the [directory and configuration conventions](../README.md); choose analysis and
+checks appropriate to a new question.
+
+## Run the saved analysis
+
+Obtain the reference input bundle from the study author. The bundle is held
+outside Git; a shared download location has not yet been established. It includes
+an `index.json`, `analysis.json`, source evidence, and producer records described
+[below](#reference-input-bundle). The indexer does not download these inputs.
 
 From the repository root, run:
 
@@ -16,6 +33,16 @@ The output must be a new directory outside the source checkout and input bundle.
 The input directory is read only. Once the project environment has been installed,
 `uv run --offline --frozen --extra cpu ...` runs without network access. Use the
 repository's `cuda` extra instead if working in an existing GPU environment.
+
+## Review the result
+
+1. Open the generated `README.md` and `comparison.png`: the selected challenger
+   adds about 112 Red return, with a paired 95% interval of about 87 to 137.
+2. Inspect `validation.csv` for the selection evidence, then `learning-curves.png`
+   for how the three challengers trained. Final test scores do not select the winner.
+3. Inspect `resolved-config.json` and `manifest.json` when checking the inputs,
+   actual settings, or source identity. The raw-to-summary tables remain alongside
+   the figures.
 
 ## File ownership
 
@@ -67,9 +94,8 @@ Inputs and recorded selection are not modified by an analysis override.
 
 ## Reference input bundle
 
-The producing store identity is
-`itm (sqlite:////home/local/KHQ/paul.elliott/jaxborg-exp/shared/mlflow.db)`.
-This string identifies the original evidence; the analyzer never connects to it.
+The input index records the original tracking-store identity as provenance;
+the analyzer never connects to it.
 The report is `fd73b4b6b6ed400aab12dc6a96dfe56b`, protocol owner
 `af6bc98321dd4e9e892d76b0369e0d8e`, and producing revision
 `c4f1b32c99faacb5ab229cbef056fa0e66367112`.
@@ -93,19 +119,22 @@ To assemble this particular fixture, copy the selected producer files into a new
 `input/producer/<run-id>/artifacts/` tree, preserving their bytes. The original
 report's `results/state.json` identifies all training, validation, and final runs.
 Retain the analysis scripts and instructions at their repository-relative paths,
-plus the root `pyproject.toml`, `uv.lock`, `.python-version`, and `README.md`, in
-`analysis-source/` beside the producer records. Exclude `.venv` and caches. Record
+plus `experiments/README.md` and the root `pyproject.toml`, `uv.lock`,
+`.python-version`, and `README.md`, in `analysis-source/` beside the producer
+records. Exclude `.venv` and caches. Record
 the snapshot's commit and file hashes in `analysis-source.json`.
 Then index that copied tree once:
 
 ```bash
 uv run --frozen --extra cpu python experiments/frozen-defender-response/index_bundle.py \
   --input /path/to/input-bundle \
-  --source-store 'itm (sqlite:////home/local/KHQ/paul.elliott/jaxborg-exp/shared/mlflow.db)'
+  --source-store '<original tracking-store identity>'
 ```
 
 The indexer is specific to this reference study. It writes the input hash index
 and initial analysis settings, and refuses to overwrite an indexed bundle. The
+source and report run IDs in `index_bundle.py` identify this completed study.
+For another experiment, define its own input contract and analysis. The
 analyzer additionally verifies the producer manifests' completion and hashes;
 indexing alone does not establish scientific validity. A trusted copy of the index
 or its checksum is needed to detect replacement of the entire bundle.
