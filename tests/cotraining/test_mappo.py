@@ -185,6 +185,11 @@ def test_mappo_recipes_train_both_teams_and_preserve_game_controls(baseline, nam
 
     stripped = copy.deepcopy(recipe)
     del stripped["train"]["team_overrides"]
+    if count > 1:
+        paired_baseline = name.removesuffix("_env_diversity")
+        assert stripped["eval"]["env_diversity"]["baseline_recipe"] == paired_baseline
+        assert control["eval"]["env_diversity"]["baseline_recipe"] == "cotraining"
+        control["eval"]["env_diversity"]["baseline_recipe"] = paired_baseline
     for obj in (stripped, control):
         for key in ("meta", "algorithm", "__source_path__"):
             obj.pop(key)
