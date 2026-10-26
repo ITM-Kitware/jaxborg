@@ -1,5 +1,8 @@
 # Capture a checkpoint evaluation
 
+Start with the [experiment guide](../experiments/README.md) to choose a workflow.
+For existing saved results, use [historical evidence import](local-evidence-producers.md).
+
 `python -m jaxborg.evaluation.capture` retains evidence from a Torch `.pt`
 checkpoint evaluated against scripted Red in CybORG. It uses the maintained
 checkpoint loader, game variants, and rollout. The checkpoint must have its
