@@ -7,6 +7,8 @@ import importlib.metadata
 import io
 import json
 import os
+import runpy
+import statistics
 import subprocess
 import sys
 import tarfile
@@ -322,6 +324,7 @@ class SyntheticBundle:
                 "per_episode_red_returns": [-value for value in blue],
                 "blue_mean_return": sum(blue) / len(blue),
                 "red_mean_return": -sum(blue) / len(blue),
+                "blue_std_return": statistics.stdev(blue),
             },
         )
 
@@ -605,6 +608,57 @@ class ReportCliTests(unittest.TestCase):
         self.bundle.owners["test-selected"]["source"]["git_commit"] = "b" * 40
         self.bundle.refresh()
         self.assert_rejected("Producer source revision differs")
+
+    def saved_selection(self, source=None):
+        from jaxborg.experiment_producers import frozen_bundle
+        from jaxborg.experiment_producers.source import analysis_source_identity
+        from jaxborg.experiment_records import collate
+
+        functions = runpy.run_path(str(SCRIPT))
+        configuration = functions["resolve_config"](self.bundle.protocol, self.bundle.config, {})
+        records = frozen_bundle(self.bundle.root)
+        protocol = next(row for row in records if row["kind"] == "protocol")
+        selected_attempts = {
+            row["trial_id"]: row["id"]
+            for row in records
+            if row["kind"] == "attempt" and isinstance(row["trial_id"], str)
+        }
+        selection = collate(
+            records,
+            protocol_id=protocol["id"],
+            selected_attempts=selected_attempts,
+            selected_evaluations=[row["id"] for row in records if row["kind"] == "evaluation"],
+            analysis={"source": source or analysis_source_identity(SCRIPT), "configuration": configuration},
+        )
+        path = self.root / "collation.json"
+        path.write_bytes(encoded(selection))
+        return path
+
+    def test_saved_selection_cli_archives_all_executable_helpers(self):
+        from jaxborg.experiment_producers.source import analysis_source_files
+
+        selection = self.saved_selection()
+        result = self.run_cli("--selection", str(selection))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(read_json(self.output / "collation.json"), read_json(selection))
+        source = read_json(self.output / "manifest.json")["analysis_source"]
+        for name, path in analysis_source_files(SCRIPT).items():
+            self.assertEqual(source["files"][name], sha256(path.read_bytes()))
+            self.assertEqual((self.output / "analysis-source" / name).read_bytes(), path.read_bytes())
+
+    def test_saved_selection_rejects_wrong_executable_source(self):
+        selection = self.saved_selection(source="sha256:" + "0" * 64)
+        result = self.run_cli("--selection", str(selection))
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("Analyzer source differs", result.stderr)
+        self.assertFalse(self.output.exists())
+
+    def test_saved_selection_rejects_changed_configuration(self):
+        selection = self.saved_selection()
+        result = self.run_cli("--selection", str(selection), "--bootstrap-seed", "123")
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("configuration differs", result.stderr)
+        self.assertFalse(self.output.exists())
 
     def test_existing_output_is_preserved(self):
         self.output.mkdir(parents=True)
