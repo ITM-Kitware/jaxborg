@@ -43,7 +43,16 @@ def _model(tmp_path, seed, recipe):
 def test_cotraining_pipelines_match_mappo_and_use_one_final_cross_seed_opponent(tmp_path, monkeypatch, name):
     monkeypatch.delenv("JAXBORG_SKIP_POST_TRAINING_EVAL", raising=False)
     recipe = load(name)
-    assert recipe["eval"] == load("cotraining_mappo_joint_obs")["eval"]
+    expected_eval = load("cotraining_mappo_joint_obs")["eval"]
+    if name.endswith("_env_diversity"):
+        expected_eval["env_diversity"] = {
+            "enabled": True,
+            "baseline_recipe": name.removesuffix("_env_diversity"),
+            "seeds": "1000-1009",
+            "episodes_per_seed": 1,
+            "deterministic": False,
+        }
+    assert recipe["eval"] == expected_eval
     blue = _model(tmp_path, 42, recipe)
     red = _model(tmp_path, 100, recipe)
     calls = []
@@ -56,6 +65,7 @@ def test_cotraining_pipelines_match_mappo_and_use_one_final_cross_seed_opponent(
     assert [kwargs["env"]["JAXBORG_EVAL_NAME"] for _, kwargs in calls] == [
         "cross-seed-play",
         "cross_play",
+        "cage4-benchmark",
         "learned-red-ppo",
         "scripted-reds",
     ]
