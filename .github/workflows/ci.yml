@@ -38,7 +38,15 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
-      - run: uv run pytest
+      - run: uv run pytest -v --junitxml="$RUNNER_TEMP/pytest-fast.xml"
+      - name: Retain fast test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-fast
+          path: ${{ runner.temp }}/pytest-fast.xml
+          retention-days: 7
+          if-no-files-found: ignore
 
   test-slow:
     name: pytest (slow) ${{ matrix.group }}/8
@@ -87,7 +95,18 @@ jobs:
       # `-o addopts=` overrides pyproject's `-n auto`: sharding is the
       # parallelism axis here, and stacking xdist on top contends on the
       # JAX persistent-cache lock (cold cache + many tiny compiles).
-      - run: uv run pytest -o "addopts=" -m slow --splits 8 --group ${{ matrix.group }} --store-durations
+      - run: >-
+          uv run pytest -o "addopts=" -v -m slow --splits 8
+          --group ${{ matrix.group }} --store-durations
+          --junitxml="$RUNNER_TEMP/pytest-slow.xml"
+      - name: Retain slow test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-slow-${{ matrix.group }}
+          path: ${{ runner.temp }}/pytest-slow.xml
+          retention-days: 7
+          if-no-files-found: ignore
       - name: Upload this shard's durations
         if: always()
         uses: actions/upload-artifact@v4

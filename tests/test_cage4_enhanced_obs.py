@@ -199,7 +199,7 @@ def test_enhanced_checkpoint_roundtrip_and_inference(scenario, tmp_path, name):
 def test_flag_is_enabled_only_for_actual_cotraining_recipes():
     for path in Path("recipes").rglob("*.yaml"):
         recipe = load(str(path))
-        expected = path.parent.name == "cotraining" and recipe.get("train", {}).get("teams") == "both"
+        expected = Path("recipes/cotraining") in path.parents and recipe.get("train", {}).get("teams") == "both"
         assert enhanced_obs_enabled(recipe) is expected, path
         assert train_variant(recipe).cage4_enhanced_obs is expected
         assert eval_variant(recipe).cage4_enhanced_obs is expected

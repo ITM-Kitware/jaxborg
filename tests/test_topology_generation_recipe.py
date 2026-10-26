@@ -144,9 +144,18 @@ def test_cotraining_recipes_use_nested_train_pools_and_one_held_out_eval_pool(na
     assert baseline_train == diversity_train[:1]
     assert len(baseline_eval) == 10
     assert baseline_eval == diversity_eval
-    assert baseline["eval"] == diversity["eval"]
+    assert diversity["eval"] == {
+        **baseline["eval"],
+        "env_diversity": {
+            "enabled": True,
+            "baseline_recipe": name,
+            "seeds": "1000-1009",
+            "episodes_per_seed": 1,
+            "deterministic": False,
+        },
+    }
     assert baseline["eval"]["topology_generation"] == load("cotraining")["eval"]["topology_generation"]
-    assert baseline["train"]["total_timesteps"] == diversity["train"]["total_timesteps"] == 70_000_000
+    assert baseline["train"]["total_timesteps"] == diversity["train"]["total_timesteps"] == 50_000_000
     assert set(diversity_train).isdisjoint(baseline_eval)
     assert baseline["eval"]["topology_sampling"] == "exhaustive"
     assert diversity["eval"]["topology_sampling"] == "exhaustive"

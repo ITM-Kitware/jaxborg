@@ -34,6 +34,7 @@ class _PolicyModule:
 @struct.dataclass
 class _SimState:
     time: jnp.ndarray
+    blue_pending_ticks: jnp.ndarray
     ot_service_stopped: jnp.ndarray
     host_service_reliability: jnp.ndarray
     host_decoy_reliability: jnp.ndarray
@@ -54,6 +55,7 @@ class _FsmState:
 def _initial_sim_state() -> _SimState:
     return _SimState(
         time=jnp.int32(0),
+        blue_pending_ticks=jnp.zeros(1, dtype=jnp.int32),
         ot_service_stopped=jnp.zeros(3, dtype=jnp.bool_),
         host_service_reliability=jnp.full((3, 1), 100, dtype=jnp.int32),
         host_decoy_reliability=jnp.full((3, 1), 100, dtype=jnp.int32),

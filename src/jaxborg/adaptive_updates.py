@@ -1,6 +1,4 @@
-"""Adapt the GAPT two-phase schedule to Red PPO and raw Blue returns.
-
-"""
+"""Adapt the GAPT two-phase schedule to Red PPO and raw Blue returns."""
 
 from __future__ import annotations
 

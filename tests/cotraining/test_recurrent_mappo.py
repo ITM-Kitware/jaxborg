@@ -125,6 +125,10 @@ def test_experiments_cotrain_both_lstm_mappo_teams_with_baseline_controls(suffix
     monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_a, **_kw: ())
     assert recipe["algorithm"] == "mappo"
     assert recipe["train"]["teams"] == "both"
+    if suffix:
+        assert recipe["eval"]["env_diversity"]["baseline_recipe"] == "cotraining_mappo_lstm"
+        assert control["eval"]["env_diversity"]["baseline_recipe"] == "cotraining_mappo"
+        control["eval"]["env_diversity"]["baseline_recipe"] = "cotraining_mappo_lstm"
     assert recipe["eval"] == control["eval"]
     assert recipe["jax"] == control["jax"]
     for key, value in control["train"].items():

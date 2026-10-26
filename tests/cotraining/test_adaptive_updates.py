@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import asdict
-
 import jax
 import jax.numpy as jnp
 import numpy as np
@@ -139,18 +137,33 @@ def test_adaptive_recipe_rejects_incompatible_training_settings(tmp_path, incomp
 
 
 @pytest.mark.parametrize(
-    "base", ["cotraining", "cotraining_env_diversity", "cotraining_lstm", "cotraining_lstm_env_diversity"]
+    ("base", "reward_threshold"),
+    [
+        ("cotraining", -3650.0),
+        ("cotraining_env_diversity", -2550.0),
+        ("cotraining_lstm", -2450.0),
+        ("cotraining_lstm_env_diversity", -2450.0),
+    ],
 )
-def test_adaptive_recipes_preserve_standard_settings_and_project_schedule(base, monkeypatch):
+def test_adaptive_recipes_preserve_standard_settings_and_project_schedule(base, reward_threshold, monkeypatch):
     monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
     baseline = load(base)
     recipe = load(f"cotraining/training_configurations/adaptive_updates/{base}_adaptive_updates")
     assert recipe["meta"]["name"] == f"{base}_adaptive_updates"
+    expected_schedule = {
+        "phase_switch_blue_updates": 200,
+        "reward_threshold": reward_threshold,
+        "window_blue_updates": 20,
+        "max_frozen_blue_rollouts": 100,
+    }
+    assert recipe["train"]["adaptive_updates"] == expected_schedule
+    assert recipe["train"]["team_overrides"] == {"blue": {"core": {"lr": 1e-4}}}
     configs = project_team_configs(recipe, "jax")
     for team, interval in (("blue", 1), ("red", 4)):
-        assert configs[team]["ADAPTIVE_UPDATES"] == asdict(AdaptiveUpdateSettings())
+        assert configs[team]["ADAPTIVE_UPDATES"] == expected_schedule
         assert configs[team]["UPDATE_EVERY"] == interval
-        assert configs[team]["LR"] == pytest.approx(baseline["core"]["lr"])
+        assert configs[team]["LR"] == pytest.approx(1e-4 if team == "blue" else baseline["core"]["lr"])
+        assert configs[team]["ANNEAL_LR"] is False
     with pytest.raises(ValueError, match="only by the JAX joint trainer"):
         project_cleanrl(recipe)
     if base.endswith("_env_diversity"):
@@ -158,7 +171,12 @@ def test_adaptive_recipes_preserve_standard_settings_and_project_schedule(base, 
         assert recipe["eval"]["env_diversity"]["baseline_recipe"] == control
         assert load(control)["train"]["topology_generation"]["count"] == 1
         baseline["eval"]["env_diversity"]["baseline_recipe"] = control
-    del recipe["train"]["adaptive_updates"], recipe["train"]["update_every"]
+    assert recipe["core"].pop("anneal_lr") is False
+    assert recipe["eval"]["cross_seed_play"]["enabled"] is False
+    assert recipe["eval"]["checkpoint_scripted_reds"]["enabled"] is True
+    baseline["eval"]["cross_seed_play"]["enabled"] = False
+    baseline["eval"]["checkpoint_scripted_reds"]["enabled"] = True
+    del recipe["train"]["adaptive_updates"], recipe["train"]["update_every"], recipe["train"]["team_overrides"]
     for item in (recipe, baseline):
         del item["meta"], item["__source_path__"]
     assert recipe == baseline

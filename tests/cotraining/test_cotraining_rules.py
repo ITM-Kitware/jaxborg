@@ -160,8 +160,8 @@ class TestRecipePlumbing:
         assert variant_for_red("fsm").blue_block_policy == "cc4"
         assert variant_for_red("cia_a").red_reward == "zero_sum"
 
-    def test_no_overrides_is_the_registered_variant(self):
-        assert train_variant({"train": {"variant": "cc4_stock"}}) is CC4_STOCK
+    def test_no_overrides_preserves_registered_variant_values(self):
+        assert train_variant({"train": {"variant": "cc4_stock"}}) == CC4_STOCK
 
     def test_unknown_override_key_rejected(self):
         with pytest.raises(ValueError, match="unknown train.variant_overrides"):
