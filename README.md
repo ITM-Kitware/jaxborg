@@ -76,6 +76,9 @@ uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
 See [experiment directories](experiments/README.md) for where to keep study
 methods, optional maintained configurations, and analysis code. The first example
 reproduces a completed frozen-defender response study from saved measurements.
+Use [evaluation capture](docs/evaluation-capture.md) to retain checkpoint inputs,
+source, episode observations, failures, and explicit retry identities for a
+declared scientific protocol.
 
 ## Usage
 
