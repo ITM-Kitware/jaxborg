@@ -23,14 +23,16 @@ def _parser():
     publish = commands.add_parser("publish")
     publish.add_argument("--package", required=True)
     search = commands.add_parser("search")
-    search.add_argument("--study", required=True)
+    search.add_argument("--study", required=True, help="Filter the scientific study_id in protocol records")
     for key in ("protocol", "trial", "record"):
         search.add_argument("--" + key)
     inspect = commands.add_parser("inspect")
     fetch = commands.add_parser("fetch")
     fetch.add_argument("--output", required=True)
     for command in (publish, search):
-        command.add_argument("--experiment", required=True)
+        command.add_argument(
+            "--experiment", required=True, help="MLflow experiment name used as the storage destination"
+        )
     for command in (publish, search, inspect, fetch):
         command.add_argument("--tracking-uri", required=True)
     for command in (inspect, fetch):

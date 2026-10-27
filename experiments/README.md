@@ -30,14 +30,19 @@ evaluations explicitly when collating them; retries do not create new replicates
 experiments/<question>/
   README.md          question, method, commands, input/result references
   analyze.py         analysis specific to this question, when needed
-  experiment.yaml    optional maintained settings or sweep definition
 ```
 
 This is a convention, not a required set of files. Start with a README describing
 the question, compared conditions, budget, seed/evaluation procedure, and where to
-find the inputs and results. Add code or a configuration when it is useful to
-maintain. Keep reusable simulator, policy, trainer, and evaluator behavior in the
-shared implementation; keep reusable training presets in `recipes/`.
+find the inputs and results. Add study-specific analysis code and analysis
+settings when useful. Executable training and evaluation settings use the existing
+recipe schema and loader, including recipes kept within a study directory and
+passed by path. Keep reusable presets in `recipes/` and reusable simulator,
+policy, trainer, and evaluator behavior in the shared implementation.
+
+A protocol declares expected trial cells and an explicit selection rule.
+Attempts record retry relationships. Neither defines another executable
+configuration or launcher.
 
 Use the repository's `pyproject.toml`, `uv.lock`, and Python selection. NumPy and
 Matplotlib are shared dependencies. Generated data, checkpoints, logs, tables,
@@ -45,8 +50,8 @@ figures, and reports belong outside Git.
 
 ## Running another trial
 
-Choose the code and optionally a maintained preset, then supply the trial's
-settings through the command's supported configuration or overrides. Changing a
+Choose an existing recipe, then supply the trial's settings through the command's
+supported overrides. Study code may reference recipes and those overrides. Changing a
 seed or budget does not require a new directory or commit. Changing maintained
 code or an intentionally versioned preset follows the ordinary review process.
 

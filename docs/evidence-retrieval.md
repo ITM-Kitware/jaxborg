@@ -12,6 +12,10 @@ packages, downloads and reports outside the checkout. Set `URI` to an authorized
 MLflow tracking service with HTTP artifact proxying, and `EXPERIMENT` to its
 destination experiment. There is no implicit tracking destination.
 
+`--experiment` names the MLflow storage destination. `--study` filters the
+scientific `study_id` already carried by protocol records. These names may
+differ; neither selects a recipe, loads a study directory, or launches work.
+
 ```bash
 python -m jaxborg.experiment_discovery prepare \
   --kind frozen-defender --input "$INPUT" --selection "$COLLATION" \
