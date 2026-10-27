@@ -1,3 +1,4 @@
+import hashlib
 import importlib.metadata
 import json
 import math
@@ -5,6 +6,7 @@ import os
 import shutil
 import subprocess
 import sys
+from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -265,8 +267,10 @@ def test_partial_failure_and_explicit_retry_preserve_one_scientific_trial(
         return original(env, variant, ep_seed, agent, **kwargs)
 
     monkeypatch.setattr(cyborg_runner, "rollout_episode", interrupted)
+    torch.manual_seed(312)
     with pytest.raises(error_type, match="stop after first completed episode"):
         _run(root, protocol, tiny_model)
+    assert torch.equal(torch.rand(8), torch.rand(8, generator=torch.Generator().manual_seed(312)))
     records = load_records(root)
     failed = next(record for record in records if record["kind"] == "attempt")
     evaluation = next(record for record in records if record["kind"] == "evaluation")
@@ -484,3 +488,82 @@ def test_invalid_recipe_is_rejected_before_capture_and_cannot_use_loader_fallbac
     assert message in failure["error"]["message"]
     assert "attempt_id" not in failure and "evaluation_id" not in failure
     assert not root.exists()
+
+
+@pytest.mark.parametrize("deterministic", [True, False])
+def test_explicit_native_evaluation_matches_retained_capture_settings_and_observations(
+    tmp_path, protocol, tiny_model, deterministic
+):
+    from jaxborg.checkpoint import read_sidecar
+    from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg, resolve_torch_evaluation_settings
+
+    recipe_bytes = tiny_model.with_name("recipe_tiny.yaml").read_bytes()
+    model_bytes = tiny_model.read_bytes()
+    settings = resolve_torch_evaluation_settings(read_sidecar(tiny_model), deterministic=deterministic, horizon=2)
+    torch.manual_seed(312)
+    rewards, seeds = evaluate_on_cyborg(
+        tiny_model,
+        variant=settings.variant,
+        seeds=[17, 18],
+        episodes_per_seed=1,
+        deterministic=deterministic,
+        policy_seed=100,
+        workers=1,
+        progress=False,
+    )
+    assert torch.equal(torch.rand(8), torch.rand(8, generator=torch.Generator().manual_seed(312)))
+    torch.manual_seed(999)
+    root = tmp_path / "store"
+    capture = _run(root, protocol, tiny_model, deterministic=deterministic)
+    assert torch.equal(torch.rand(8), torch.rand(8, generator=torch.Generator().manual_seed(999)))
+    records = load_records(root)
+    observations = _observations(root, records, capture.evaluation_id)
+    assert [row["reward"] for row in observations] == rewards
+    assert [row["seed"] for row in observations] == seeds == [17, 18]
+    assert [row["policy_seed"] for row in observations] == [100, 101]
+    attempt = next(r for r in records if r["id"] == capture.attempt_id)
+    config = attempt["facts"]["resolved_config"]["value"]
+    assert config["variant"] == asdict(settings.variant)
+    assert config["policy"] == settings.policy and config["deterministic"] == settings.deterministic
+    evaluation = next(r for r in records if r["id"] == capture.evaluation_id)
+    assert evaluation["metrics"] == [{"name": "blue_return", "unit": "score", "value": sum(rewards) / len(rewards)}]
+    assert tiny_model.read_bytes() == model_bytes
+    assert tiny_model.with_name("recipe_tiny.yaml").read_bytes() == recipe_bytes
+    for artifact in records:
+        if artifact["kind"] == "artifact":
+            payload = (root / artifact["uri"]).read_bytes()
+            assert len(payload) == artifact["size_bytes"]
+            assert hashlib.sha256(payload).hexdigest() == artifact["sha256"]
+
+
+def test_capture_still_rejects_duplicate_explicit_seeds_before_creating_attempt(tmp_path, protocol, tiny_model):
+    root = tmp_path / "store"
+    with pytest.raises(ValueError, match="unique"):
+        _run(root, protocol, tiny_model, seeds=[17, 17])
+    assert not root.exists()
+
+
+def test_capture_execution_uses_retained_inputs_after_originals_disappear(tmp_path, protocol, tiny_model, monkeypatch):
+    from jaxborg.evaluation import capture
+
+    model_hash = hashlib.sha256(tiny_model.read_bytes()).hexdigest()
+    recipe_path = tiny_model.with_name("recipe_tiny.yaml")
+    recipe_hash = hashlib.sha256(recipe_path.read_bytes()).hexdigest()
+    original = capture.start_evaluation
+
+    def retain_then_remove_originals(*args, **kwargs):
+        retained = original(*args, **kwargs)
+        tiny_model.unlink()
+        recipe_path.unlink()
+        return retained
+
+    monkeypatch.setattr(capture, "start_evaluation", retain_then_remove_originals)
+    root = tmp_path / "store"
+    retained = _run(root, protocol, tiny_model, seeds=[17])
+    records = load_records(root)
+    assert next(r for r in records if r["id"] == retained.attempt_id)["status"] == "succeeded"
+    assert len(_observations(root, records, retained.evaluation_id)) == 1
+    for role, expected in (("policy checkpoint", model_hash), ("policy recipe", recipe_hash)):
+        artifact = next(r for r in records if r.get("role") == role)
+        assert artifact["sha256"] == expected
+        assert hashlib.sha256((root / artifact["uri"]).read_bytes()).hexdigest() == expected

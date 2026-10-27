@@ -90,9 +90,8 @@ def run_evaluation(
     """
     from jaxborg.checkpoint import sidecar_path
     from jaxborg.constants import BLUE_OBS_SIZE
-    from jaxborg.evaluation.cyborg_runner import torch_policy_configuration
+    from jaxborg.evaluation.cyborg_runner import resolve_torch_evaluation_settings
     from jaxborg.evaluation.provenance import collect_provenance
-    from jaxborg.recipe import eval_variant
 
     root = _outside_source(root)
     model = Path(model).expanduser().resolve()
@@ -112,7 +111,8 @@ def run_evaluation(
     _metric_contract(protocol)
     recipe_path = sidecar_path(model)
     recipe = _read_recipe(recipe_path)
-    variant = replace(eval_variant(recipe), num_steps=horizon)
+    settings = resolve_torch_evaluation_settings(recipe, deterministic=deterministic, horizon=horizon)
+    variant = settings.variant
     provenance = collect_provenance(allow_dirty=allow_dirty)
     policy_seeds = [policy_seed + index for index in range(len(seeds))]
     config = {
@@ -122,13 +122,13 @@ def run_evaluation(
         "model_filename": model.name,
         "recipe_filename": recipe_path.name,
         "recipe": recipe,
-        "policy": torch_policy_configuration(recipe),
+        "policy": settings.policy,
         "variant": asdict(variant),
         "horizon": horizon,
         "seeds": list(seeds),
         "policy_seeds": policy_seeds,
         "episodes_per_seed": 1,
-        "deterministic": deterministic,
+        "deterministic": settings.deterministic,
         "policy_device": "cpu",
         "observation_size": BLUE_OBS_SIZE,
         "action_size": 242,
@@ -137,7 +137,7 @@ def run_evaluation(
         "action_contract": "242 EnterpriseMAE action indices per Blue agent, masked by the live action mask",
         "reward_contract": "sum of blue_agent_0 rewards returned by EnterpriseMAE.step across completed episode steps",
         "wrapper": "CybORG.Agents.Wrappers.EnterpriseMAE",
-        "procedure": "jaxborg.evaluation.cyborg_runner.load_torch_policy and rollout_episode",
+        "procedure": "jaxborg.evaluation.cyborg_runner.run_torch_episodes",
         "execution": provenance.configuration,
     }
     facts = {
@@ -169,7 +169,6 @@ def run_evaluation(
         if _read_recipe(capture.inputs[_RECIPE_ROLE]) != recipe:
             raise ValueError("Recipe sidecar changed while its input bytes were retained")
 
-        import torch
         from CybORG.Agents.Wrappers import EnterpriseMAE
 
         from jaxborg.constants import CC4_CONFIG
@@ -178,95 +177,89 @@ def run_evaluation(
 
         completed = []
         topologies = []
-        # Policy construction initializes parameters before loading their saved values.
-        with torch.random.fork_rng(devices=[]):
-            torch.random.default_generator.manual_seed(policy_seed)
-            policy, loaded_recipe = cyborg_runner.load_torch_policy(capture.inputs[_CHECKPOINT_ROLE])
-        if loaded_recipe != recipe:
-            raise ValueError("Loaded policy recipe differs from the retained configuration")
-        devices = sorted({str(parameter.device) for parameter in policy.parameters()})
-        if devices != ["cpu"]:
-            raise ValueError("Retained policy must execute on its declared CPU device")
-
         with TemporaryDirectory(prefix="jaxborg-evaluation-") as temporary:
             temporary = Path(temporary)
-            runtime = temporary / "runtime.json"
-            runtime.write_text(
-                json.dumps(
-                    {
-                        "policy_devices": devices,
-                        "policy_class": f"{type(policy).__module__}.{type(policy).__qualname__}",
-                        "wrapper": f"{EnterpriseMAE.__module__}.{EnterpriseMAE.__qualname__}",
-                        "observation_size": cyborg_runner.OBS_DIM,
-                        "action_size": cyborg_runner.ACT_DIM,
-                        "blue_agents": cyborg_runner.AGENT_IDS,
-                        "reward_agent": cyborg_runner.AGENT_IDS[0],
-                    },
-                    sort_keys=True,
-                    allow_nan=False,
-                )
-                + "\n"
-            )
-            add_artifact(capture, runtime, role="evaluation runtime")
-            for index, (seed, episode_policy_seed) in enumerate(zip(seeds, policy_seeds)):
 
-                def on_reset(env, reset, *, index=index, seed=seed):
-                    topology = temporary / f"episode-{index}-topology.npz"
-                    save_topology(
-                        build_const_from_cyborg(env.env),
-                        topology,
-                        metadata={
-                            "source": "cyborg evaluation reset",
-                            "source_seed": seed,
-                            "episode_index": index,
-                            "variant": asdict(variant),
-                            "role_map": reset.role_map,
+            def on_policy(policy, loaded_recipe):
+                if loaded_recipe != recipe:
+                    raise ValueError("Loaded policy recipe differs from the retained configuration")
+                devices = sorted({str(parameter.device) for parameter in policy.parameters()})
+                if devices != ["cpu"]:
+                    raise ValueError("Retained policy must execute on its declared CPU device")
+                runtime = temporary / "runtime.json"
+                runtime.write_text(
+                    json.dumps(
+                        {
+                            "policy_devices": devices,
+                            "policy_class": f"{type(policy).__module__}.{type(policy).__qualname__}",
+                            "wrapper": f"{EnterpriseMAE.__module__}.{EnterpriseMAE.__qualname__}",
+                            "observation_size": cyborg_runner.OBS_DIM,
+                            "action_size": cyborg_runner.ACT_DIM,
+                            "blue_agents": cyborg_runner.AGENT_IDS,
+                            "reward_agent": cyborg_runner.AGENT_IDS[0],
                         },
-                        scenario_config=replace(CC4_CONFIG, max_steps=horizon),
+                        sort_keys=True,
+                        allow_nan=False,
                     )
-                    artifact_id = add_artifact(capture, topology, role="evaluation reset topology")
-                    topologies.append(artifact_id)
-                    metadata = temporary / f"episode-{index}-reset.json"
-                    metadata.write_text(
-                        json.dumps(
-                            {
-                                "episode_index": index,
-                                "seed": seed,
-                                "role_map": reset.role_map,
-                                "topology_id": artifact_id,
-                            },
-                            sort_keys=True,
-                            allow_nan=False,
-                        )
-                        + "\n"
-                    )
-                    add_artifact(capture, metadata, role="evaluation reset metadata")
+                    + "\n"
+                )
+                add_artifact(capture, runtime, role="evaluation runtime")
 
-                def on_complete(reward, steps, *, index=index, seed=seed, episode_policy_seed=episode_policy_seed):
-                    if not 0 < steps <= horizon:
-                        raise ValueError("Completed episode step count exceeds the declared horizon")
-                    record_episode(
-                        capture,
-                        episode_index=index,
-                        seed=seed,
-                        reward=reward,
-                        policy_seed=episode_policy_seed,
-                        steps=steps,
+            def on_reset(index, seed, env, reset):
+                topology = temporary / f"episode-{index}-topology.npz"
+                save_topology(
+                    build_const_from_cyborg(env.env),
+                    topology,
+                    metadata={
+                        "source": "cyborg evaluation reset",
+                        "source_seed": seed,
+                        "episode_index": index,
+                        "variant": asdict(variant),
+                        "role_map": reset.role_map,
+                    },
+                    scenario_config=replace(CC4_CONFIG, max_steps=horizon),
+                )
+                artifact_id = add_artifact(capture, topology, role="evaluation reset topology")
+                topologies.append(artifact_id)
+                metadata = temporary / f"episode-{index}-reset.json"
+                metadata.write_text(
+                    json.dumps(
+                        {
+                            "episode_index": index,
+                            "seed": seed,
+                            "role_map": reset.role_map,
+                            "topology_id": artifact_id,
+                        },
+                        sort_keys=True,
+                        allow_nan=False,
                     )
-                    completed.append(index)
+                    + "\n"
+                )
+                add_artifact(capture, metadata, role="evaluation reset metadata")
 
-                with torch.random.fork_rng(devices=[]):
-                    torch.random.default_generator.manual_seed(episode_policy_seed)
-                    env = cyborg_runner.make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
-                    cyborg_runner.rollout_episode(
-                        env,
-                        variant,
-                        seed,
-                        policy,
-                        deterministic=deterministic,
-                        on_reset=on_reset,
-                        on_complete=on_complete,
-                    )
+            def on_complete(index, seed, episode_policy_seed, reward, steps):
+                if not 0 < steps <= horizon:
+                    raise ValueError("Completed episode step count exceeds the declared horizon")
+                record_episode(
+                    capture,
+                    episode_index=index,
+                    seed=seed,
+                    reward=reward,
+                    policy_seed=episode_policy_seed,
+                    steps=steps,
+                )
+                completed.append(index)
+
+            cyborg_runner.run_torch_episodes(
+                capture.inputs[_CHECKPOINT_ROLE],
+                variant=variant,
+                episode_seeds=seeds,
+                deterministic=settings.deterministic,
+                policy_seeds=policy_seeds,
+                on_policy=on_policy,
+                on_reset=on_reset,
+                on_complete=on_complete,
+            )
         if completed != list(range(len(seeds))) or len(topologies) != len(seeds):
             raise ValueError(
                 "Successful evaluation requires an observed topology and result for every requested episode"
