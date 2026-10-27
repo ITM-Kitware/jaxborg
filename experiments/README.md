@@ -16,6 +16,8 @@ tracked in [#28](https://github.com/ITM-Kitware/jaxborg/issues/28).
   policy in CybORG and retain inputs, source, episode results, and execution status.
 - [Import existing evidence](../docs/local-evidence-producers.md): read a retained
   frozen-defender bundle or co-training SQLite store into version 1 records.
+- [Retrieve retained evidence](../docs/evidence-retrieval.md): discover an exact
+  MLflow publication and verify its downloaded inputs, records and saved selection.
 - [Rebuild the frozen-defender report](frozen-defender-response/README.md): analyze
   that study's saved evidence with its scientific checks and explicit selection.
 
