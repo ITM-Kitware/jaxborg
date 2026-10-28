@@ -83,6 +83,8 @@ jobs:
   test-slow:
     name: pytest (slow) ${{ matrix.group }}/8
     runs-on: ubuntu-latest
+    env:
+      XLA_FLAGS: --xla_cpu_parallel_codegen_split_count=1
     # Cold-cache headroom: with no aggregated .test_durations yet,
     # pytest-split round-robins by test count and heavy parametrized
     # tests cluster into a couple of shards. Once aggregate-durations
