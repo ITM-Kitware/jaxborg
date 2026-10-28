@@ -1,48 +1,31 @@
 # Capture a checkpoint evaluation
 
-Start with the [experiment guide](../experiments/README.md) to choose a workflow.
-For existing saved results, use [historical evidence import](local-evidence-producers.md).
+See the [experiment guide](../experiments/README.md) for workflow and recipe
+conventions, or [historical import](local-evidence-producers.md) for saved results.
 
-`python -m jaxborg.evaluation.capture` retains evidence from a Torch `.pt`
-checkpoint evaluated against scripted Red in CybORG. It uses the maintained
-checkpoint loader, game variants, and episode execution used by the Torch branch
-of `scripts/eval/eval_recipe.py`. Capture records evidence around that shared
-execution. The checkpoint must have its
-`recipe_<tag>.yaml` or `.yml` sidecar beside `model_<tag>.pt`.
+`python -m jaxborg.evaluation.capture` evaluates a Torch `.pt` checkpoint against
+scripted Red in CybORG, retaining evidence around the same checkpoint loader,
+settings resolver, and episode executor as `scripts/eval/eval_recipe.py`.
+The checkpoint requires an adjacent `recipe_<tag>.yaml` or `.yml` sidecar.
 
-This path runs serially, with one explicit environment seed per episode and
-a configured horizon between 1 and 500 steps. It
-does not train a policy, attach to MLflow, resume an interrupted attempt, reuse
-an evaluation, or support JAX checkpoints and custom environment builders.
+Capture runs serially with unique explicit environment seeds, a 1-500 step
+horizon, and policy RNG seed `--policy-seed + episode_index`. Recipe evaluation
+expands each root `s` into `s + episode_index`, allowing overlapping seeds, and
+keeps ambient policy randomness. For reproducible programmatic comparisons,
+`evaluate_on_cyborg` accepts `policy_seed`, which also preserves results across
+worker counts. Match checkpoint, resolved variant/horizon, ordered seeds,
+sampling mode, and policy seed; set `episodes_per_seed=1`.
 
-The commands retain different seed contracts. Recipe evaluation expands each
-root seed `s` into `s + episode_index`; overlapping roots can produce repeated
-episode seeds. Capture takes one unique, explicit environment seed per episode.
-It also isolates policy randomness using `--policy-seed + episode_index`.
-The recipe command keeps its existing ambient policy randomness; sharing the
-runner does not make those stochastic evaluations identical.
+Capture does not train, attach to MLflow, resume attempts, reuse evaluations, or
+support JAX checkpoints and custom environment builders.
 
-For a reproducible programmatic comparison, `evaluate_on_cyborg` accepts an
-optional `policy_seed`. With `episodes_per_seed=1`, match the checkpoint, resolved
-variant and horizon, ordered environment seeds, policy seed and sampling mode
-to capture. Explicit policy seeds also preserve results across worker counts.
+## Declare scientific cells
 
-## Declare the scientific cells first
-
-Save a version 1 protocol outside the checkout. Trial IDs describe intended
-observations, including trials that have not started. An attempt is one execution
-of a trial. Episode seeds are subsamples within an evaluation, not independent
-policy training replicates.
-
-The protocol declares expected cells and a selection rule; attempts record retry
-relationships. Neither is an executable configuration or launcher. Training and
-evaluation settings use the existing recipe schema and loader, including
-study-local recipes passed by path; this capture command reads the checkpoint's
-retained recipe sidecar.
-
-For example, this protocol compares action selection settings on a fixed policy
-and matched episode cohort. Its replicate names describe evaluation cohorts.
-They make no claim about independent training replication.
+Save a version 1 protocol outside the checkout. It declares intended trials,
+including unstarted ones; runtime settings come from the retained recipe and
+supported capture overrides. This example compares sampling modes on one fixed
+policy and matched episode cohorts. Its replicates are evaluation cohorts,
+not independently trained policies.
 
 ```json
 {
@@ -83,15 +66,15 @@ They make no claim about independent training replication.
 }
 ```
 
-Declare the protocol before launching any trials:
+Declare the protocol before launching trials:
 
 ```bash
 python -m jaxborg.evaluation.capture declare \
   --root /evidence/action-selection --protocol /inputs/protocol.json
 ```
 
-The evidence root must be outside the source checkout. Each root holds one
-immutable protocol. A changed protocol needs a new root and revision.
+Each evidence root must be outside the source checkout and holds one immutable
+protocol. A changed protocol needs a new root and revision.
 
 ## Run and retain an attempt
 
@@ -107,83 +90,66 @@ python -m jaxborg.evaluation.capture run \
   --seeds 17 18 --horizon 500 --policy-seed 100 --deterministic
 ```
 
-Condition labels do not select or validate runtime settings. For example, naming
-a trial `stochastic:cohort-1` does not reject `--deterministic`. Capture retains
-the actual resolved settings; study-specific checks must establish that they
-match the intended condition. Required-fact checks establish presence and
-knownness, not that a value matches a treatment or makes conditions comparable.
+Condition labels do not select or validate settings: `stochastic:cohort-1` does
+not reject `--deterministic`. Study-specific checks must compare intended
+conditions with retained settings. Required-fact checks establish presence and
+knownness, not treatment equality or scientific comparability.
 
-Every valid invocation creates new store-qualified attempt and evaluation IDs.
-Success and execution-failure responses include both IDs for subsequent selection
-or an explicit retry.
-Rerunning the same trial does not overwrite earlier evidence or create another
-scientific cell. To declare a retry, pass `--retry-of` with the previous terminal
-attempt's full ID. The predecessor must belong to the same protocol and trial.
-There is no automatic choice among successful attempts.
+Each valid invocation creates fresh store-qualified attempt and evaluation IDs,
+returned on success and execution failure. To declare a retry, pass `--retry-of`
+with a terminal predecessor's full attempt ID from the same protocol and trial.
+Reruns preserve earlier evidence; successful attempts are never selected
+automatically.
 
-A production execution requires a clean source checkout. `--allow-dirty`
-permits a development execution and records that override. Each attempt retains
-the package's Python sources, `pyproject.toml`, `uv.lock`, a source hash manifest,
-Git revision, installed dependency versions and available VCS revisions, Python
-and operating system observations, and evaluator settings. The retained lock is
-the intended dependency resolution; the installed versions describe what ran.
-Source changes during evaluation prevent a successful completion marker.
+Production requires a clean source checkout; `--allow-dirty` records a development
+override. Each attempt retains the package's Python sources, `pyproject.toml`,
+`uv.lock`, source hashes, Git revision, installed dependency/VCS versions,
+Python/OS observations, and resolved settings. The lock records intended
+dependencies; installed versions record what ran. Source changes during execution
+prevent success.
 
-The evaluator consumes retained copies of the checkpoint and recipe. Imported
-weights remain external artifacts with no invented training parent. Resolved
-settings include the actual game variant and horizon, policy sampling mode,
-environment seed for each episode, and separate policy RNG seeds. Each reset
-retains the actual topology and any role assignment. Completed episode records
-contain the observed Blue return and step count. A complete evaluation reports
-the arithmetic mean only when the protocol declares the matching metric.
+Execution loads retained checkpoint and recipe copies. Settings include the
+variant, horizon, sampling mode, and environment/policy seed schedule. Resets
+retain actual topology and roles; completed episodes retain Blue return and step
+count. Success reports the declared arithmetic mean. Imported weights remain
+external inputs without an invented training parent.
 
-## Failures, cancellation, and missing work
+## Failures and incomplete work
 
-Invalid launch settings or an unreadable recipe are rejected during preflight.
-After preflight, the initial running records exist before checkpoint copying or
-loading. Copy, model loading, and rollout failures retain failed records and
-available artifacts. Keyboard interruption retains cancelled records. Completed
-episodes remain inspectable, but neither failed nor cancelled evaluations gain
-a completed aggregate metric.
+Invalid settings and unreadable recipes fail preflight. Running records exist
+before input copying and model loading; subsequent failures retain failed
+records and available artifacts. Keyboard interruption records cancellation.
+Completed episodes remain inspectable, but failed/cancelled evaluations have no
+completed aggregate. Budgets count durable completed episodes and their steps,
+excluding partial episode work.
 
-Episode budgets count durable completed observations. Step counts from those
-observations describe completed episodes; they do not include unobserved work
-inside an interrupted episode. Terminal evidence is sealed against further
-writes through the capture API. Integrity verification checks retained bytes
-before success and export; it is not a cryptographic signature against someone
-rewriting the entire store.
+Terminal evidence rejects further API writes. Hash/size checks before success
+and export detect changed bytes, but do not authenticate a rewritten whole store.
+A hard kill may leave an attempt running. There is no reconciliation or resume
+command; a new attempt may run the same trial but cannot claim an explicit retry
+of an unresolved running predecessor.
 
-A hard kill can leave an attempt marked running. Keep it as incomplete evidence;
-do not infer success from files or elapsed time. This slice has no automated
-reconciliation or resume command. A fresh invocation can execute the same trial
-with a new attempt ID. It cannot claim an explicit retry of an unresolved
-running predecessor.
-
-## Export and choose explicitly
+## Export and select
 
 ```bash
 python -m jaxborg.evaluation.capture export \
   --root /evidence/action-selection --output /evidence/records.json
 ```
 
-Export verifies artifact sizes and hashes, then writes a new record file. A
-preexisting export is never overwritten. Artifact URIs are relative to the
-evidence root, not the exported file's directory. Copy the entire evidence root
-when moving or sharing it. The source checkout and original checkpoint files
-are not needed to inspect the retained bytes.
+Export verifies artifact sizes/hashes and requires a new output file. Artifact
+URIs are relative to the evidence root, not the export directory. Move the whole
+root to preserve inspection without the original checkpoint or source checkout.
 
-Use the record command with a separate selection JSON containing `protocol_id`,
-`selected_attempts` (trial ID to attempt ID), `selected_evaluations`, and
-`analysis` (source identity and resolved configuration):
+Supply a separate selection JSON with `protocol_id`, `selected_attempts` (trial
+to attempt IDs), `selected_evaluations`, and `analysis` (source identity and
+resolved configuration):
 
 ```bash
 python -m jaxborg.experiment_records \
   /evidence/records.json /inputs/selection.json /evidence/collation.json
 ```
 
-Only explicitly selected successful attempts and evaluations contribute.
-Unselected attempts remain in the saved evidence. A declared trial with no
-execution is reported as `no_attempt`; an executed trial without a selection is
-`no_explicit_selection`. Retry counts and per-episode observations do not change
-the protocol's replicate identities. Metadata validation does not itself prove
-that two scientific conditions are comparable.
+Only explicitly selected successful attempts/evaluations contribute. Others stay
+visible: an unexecuted trial is `no_attempt`; an executed trial without selection
+is `no_explicit_selection`. Retries and episode observations do not change the
+protocol's replicate identities.

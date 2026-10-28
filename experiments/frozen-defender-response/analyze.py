@@ -602,7 +602,8 @@ def run(args):
         }
         for name, row in evaluations.items()
     ]
-    source = source_record(include_helpers=bool(getattr(args, "selection", None)))
+    include_helpers = bool(getattr(args, "selection", None) or materialization)
+    source = source_record(include_helpers=include_helpers)
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".response-report-", dir=output.parent) as temporary:
         destination = Path(temporary) / "report"
@@ -642,10 +643,11 @@ def run(args):
         )
         figures(destination, summary, curves, list(state["training"]), config)
         (destination / "analysis-source").mkdir()
+        sources = analysis_files(include_helpers=include_helpers)
         for name in source["files"]:
             copied = destination / "analysis-source" / name
             copied.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(analysis_files(include_helpers=bool(getattr(args, "selection", None)))[name], copied)
+            shutil.copyfile(sources[name], copied)
         write_json(destination / "input-index.json", index)
         report = f"""# Frozen Blue response report
 

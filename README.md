@@ -73,12 +73,10 @@ uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
 
 ## Experiments
 
-See [experiment directories](experiments/README.md) for where to keep study
-methods, optional maintained configurations, and analysis code. The first example
-reproduces a completed frozen-defender response study from saved measurements.
-Use [evaluation capture](docs/evaluation-capture.md) to retain checkpoint inputs,
-source, episode observations, failures, and explicit retry identities for a
-declared scientific protocol.
+The [experiment guide](experiments/README.md) covers study methods, recipes,
+analysis, and retained evidence. [Evaluation capture](docs/evaluation-capture.md)
+retains Torch checkpoint inputs, source, episodes, failures, and retries around
+the shared recipe evaluator; its guide explains the seed contracts for comparisons.
 
 ## Usage
 
@@ -115,11 +113,6 @@ JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
 ```
 
 Training output goes to `$JAXBORG_EXP_DIR` (defaults to `../jaxborg-exp/`).
-
-For retained Torch evaluation inputs, episode results, failures and retries, use
-[evaluation capture](docs/evaluation-capture.md). It shares recipe settings and
-native episode execution with the Torch recipe evaluator. The guide explains
-the different seed contracts so comparisons use equivalent settings.
 
 ## Recipes
 
