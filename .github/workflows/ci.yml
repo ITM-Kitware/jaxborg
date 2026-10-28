@@ -99,6 +99,14 @@ jobs:
         with:
           enable-cache: true
       - run: uv sync --extra cpu
+      - name: Add swap for full simulator compilation
+        run: |
+          swap_path="$RUNNER_TEMP/jaxborg-ci.swap"
+          sudo fallocate -l 8G "$swap_path"
+          sudo chmod 600 "$swap_path"
+          sudo mkswap "$swap_path"
+          sudo swapon "$swap_path"
+          swapon --show
       - name: Record runner resources
         run: |
           {
