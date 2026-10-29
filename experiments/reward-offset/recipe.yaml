@@ -1,0 +1,32 @@
+meta:
+  name: payoff-blocking-development
+  source: bounded construction demonstration
+algorithm: ippo
+core:
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: false
+arch:
+  name: separate
+  hidden_dim: 4
+  hidden_layers: 1
+train:
+  teams: both
+  variant: cc4_stock
+  episode_length: 2
+  total_timesteps: 2
+  variant_overrides:
+    red_reward: zero_sum
+    blue_block_policy: cc4
+eval:
+  variant: cc4_stock
+  policy_backend: jax
+jax:
+  num_envs: 1
+  num_minibatches: 1
+  update_epochs: 1

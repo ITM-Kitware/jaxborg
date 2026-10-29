@@ -9,6 +9,8 @@ Keep generated data, checkpoints, logs, figures, and reports outside Git.
   Torch policy in CybORG and retain inputs, source, episodes, and execution status.
 - [Record joint training and evaluation](../docs/joint-execution-records.md):
   retain JAX training updates, owned checkpoints, matchups and trajectories.
+- [Run the payoff/blocking example](reward-offset/README.md): compose four
+  conditions and rebuild a comparison from explicitly selected evidence.
 - [Import existing evidence](../docs/local-evidence-producers.md): read a retained
   frozen-defender bundle or co-training SQLite store into version 1 records.
 - [Retrieve retained evidence](../docs/evidence-retrieval.md): find an exact MLflow
