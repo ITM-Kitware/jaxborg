@@ -196,7 +196,74 @@ def fresh_output(output, input_root=None):
     return output
 
 
-def prepare_package(kind, input_root, output, selection=None):
+def _report_files(root, selection, records):
+    """Verify the supported collation plot's closed report without running its source."""
+    if root.is_symlink():
+        raise ValueError("Report root must not be a symbolic link")
+    manifest = _read(_file(root, "manifest.json"))
+    if (
+        set(manifest) != {"schema_version", "collation_id", "analysis", "files", "corrections"}
+        or manifest["schema_version"] != 2
+    ):
+        raise ValueError("Unsupported collation report manifest")
+    if (
+        manifest["collation_id"] != selection["id"]
+        or manifest["analysis"] != selection["analysis"]
+        or _read(_file(root, "collation.json")) != selection
+    ):
+        raise ValueError("Report collation or analysis differs from the packaged selection")
+    required = {"collation.json", "joined.json", "joined.csv", "selection-status.json", "evaluation.png"}
+    files = manifest["files"]
+    if not isinstance(files, dict) or not required <= files.keys():
+        raise ValueError("Report lacks required outputs")
+    sources = {}
+    for name, identity in files.items():
+        _relative(name)
+        if not isinstance(identity, dict) or set(identity) != {"sha256", "size_bytes"}:
+            raise ValueError(f"Invalid report file identity: {name}")
+        if _identity(_file(root, name)) != identity:
+            raise ValueError(f"Report file hash or size differs: {name}")
+        if name.startswith("analysis-source/"):
+            sources[name.removeprefix("analysis-source/")] = identity["sha256"]
+        elif name not in required:
+            raise ValueError(f"Unsupported report file: {name}")
+    actual = set()
+    for path in root.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"Symbolic link in report: {path.relative_to(root)}")
+        if path.is_file():
+            actual.add(path.relative_to(root).as_posix())
+        elif not path.is_dir():
+            raise ValueError("Unsupported report entry")
+    if actual != set(files) | {"manifest.json"}:
+        raise ValueError("Report file closure differs from manifest")
+    required_sources = {
+        "scripts/eval/plot_results.py",
+        "src/jaxborg/__init__.py",
+        "src/jaxborg/experiment_records/__init__.py",
+        "src/jaxborg/experiment_records/core.py",
+    }
+    source_digest = (
+        "sha256:" + hashlib.sha256(json.dumps(sources, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    )
+    if not required_sources <= sources.keys() or source_digest != selection["analysis"]["source"]:
+        raise ValueError("Report analyzer source differs from the selected identity")
+    corrections = {
+        record["id"]: record["extensions"]["evaluation_correction"]
+        for record in records
+        if record["id"] in selection["selected_evaluations"] and "evaluation_correction" in record.get("extensions", {})
+    }
+    if manifest["corrections"] != corrections:
+        raise ValueError("Report correction relationships differ from selected evaluations")
+    if _read(root / "selection-status.json") != {
+        "excluded": selection["excluded"],
+        "missing": selection["missing"],
+    }:
+        raise ValueError("Report selection status differs from the packaged selection")
+    return {**files, "manifest.json": _identity(root / "manifest.json")}
+
+
+def prepare_package(kind, input_root, output, selection=None, report=None):
     """Validate a closed input snapshot and expose a new package atomically."""
     root = Path(input_root).expanduser().absolute()
     if root.is_symlink():
@@ -208,6 +275,14 @@ def prepare_package(kind, input_root, output, selection=None):
     if selection is not None:
         selected_bytes = Path(selection).read_bytes()
         _check_selection(json.loads(selected_bytes, object_pairs_hook=_pairs), records, kind, root)
+    report_files = {}
+    if report is not None:
+        if kind != "evaluation-capture" or selected_bytes is None:
+            raise ValueError("A collation report requires evaluation-capture and an explicit selection")
+        report = Path(report).expanduser().absolute()
+        report_files = _report_files(report, json.loads(selected_bytes, object_pairs_hook=_pairs), records)
+        if output.is_relative_to(report.resolve()) or report.resolve().is_relative_to(output):
+            raise ValueError("Package output must be separate from the report")
     identities = {name: _identity(_file(root, name)) for name in names}
     with tempfile.TemporaryDirectory(prefix=".evidence-", dir=output.parent) as temporary:
         stage = Path(temporary) / "package"
@@ -221,6 +296,12 @@ def prepare_package(kind, input_root, output, selection=None):
         (stage / "records.json").write_bytes(_json(records))
         if selected_bytes is not None:
             (stage / "selection.json").write_bytes(selected_bytes)
+        for name, identity in report_files.items():
+            destination = stage / "report" / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(_file(report, name), destination)
+            if _identity(destination) != identity:
+                raise ValueError(f"Report changed during preparation: {name}")
         repeated, repeated_names = _snapshot(kind, root, root)
         if (
             repeated != records
@@ -232,6 +313,10 @@ def prepare_package(kind, input_root, output, selection=None):
         files["records.json"] = _identity(stage / "records.json")
         if selected_bytes is not None:
             files["selection.json"] = _identity(stage / "selection.json")
+        if report is not None:
+            if _report_files(report, json.loads(selected_bytes, object_pairs_hook=_pairs), records) != report_files:
+                raise ValueError("Report changed during preparation")
+            files.update({"report/" + name: identity for name, identity in report_files.items()})
         manifest = {
             "schema_version": 2,
             "kind": kind,
@@ -314,6 +399,11 @@ def verify_package(root, expected_digest=None):
 
             _verify_frozen_records(selected, records)
             _analysis_selection(selected, root / "input")
+    if "report/manifest.json" in manifest["files"]:
+        if manifest["kind"] != "evaluation-capture" or not manifest["selection"]:
+            raise ValueError("A collation report requires evaluation-capture and an explicit selection")
+        report_files = _report_files(root / "report", selected, records)
+        expected_files.update("report/" + name for name in report_files)
     if set(manifest["files"]) != expected_files:
         raise ValueError("Package contains files outside the authoritative evidence closure")
     if manifest["artifacts"] != _artifact_map(manifest["kind"], records, {"root": str(origin), "names": names}):
@@ -336,6 +426,11 @@ def package_paths(root):
         "records": str(root / "records.json"),
         "selection": str(root / "selection.json") if manifest["selection"] else None,
         "materialization": str(root / "manifest.json"),
+        **(
+            {"report": str(root / "report"), "analysis_source": str(root / "report" / "analysis-source")}
+            if "report/manifest.json" in manifest["files"]
+            else {}
+        ),
     }
 
 
@@ -351,6 +446,7 @@ def frozen_materialization(input_root, descriptor):
 
 def inspect_package(root):
     manifest = verify_package(root)
+    report = _read(Path(root) / "report/manifest.json") if "report/manifest.json" in manifest["files"] else None
     records = _read(Path(root) / "records.json")
     attempts = [r for r in records if r["kind"] == "attempt"]
     protocols = [r for r in records if r["kind"] == "protocol"]
@@ -369,6 +465,17 @@ def inspect_package(root):
             if t["id"] not in attempted
         ],
         "unretained_references": manifest["unretained_references"],
+        **(
+            {
+                "report": {
+                    "path": "report",
+                    "collation_id": report["collation_id"],
+                    "analysis": report["analysis"],
+                }
+            }
+            if report is not None
+            else {}
+        ),
     }
 
 
