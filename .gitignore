@@ -9,6 +9,7 @@ build/
 .cache/
 jaxborg-exp/
 .bank_cache/
+.ruff_cache/
 mlruns/
 .agent_handoff/
 .jax_cache/
@@ -17,3 +18,15 @@ mlruns/
 slurm-*.out
 scripts/dev/catalog_status.json
 outputs/*
+
+docs/*
+!docs/parity.md
+!docs/topologies.md
+exp/
+logs/
+.codex
+remote/
+.vscode/
+
+scripts/temp
+

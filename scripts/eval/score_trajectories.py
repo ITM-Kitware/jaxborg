@@ -40,9 +40,24 @@ def main():
     parser.add_argument("--summary-json", default=None)
     parser.add_argument("--per-episode-json", default=None)
     parser.add_argument("--recipe", default=None, help="Path or name of recipe yaml")
+    parser.add_argument(
+        "--eval-red",
+        default=None,
+        help=(
+            "Override the recipe's eval.red selector before resolving the "
+            "variant. CLI > recipe. Only meaningful if the scorer or its "
+            "downstream consumers branch on the variant."
+        ),
+    )
     args = parser.parse_args()
 
-    eval_cfg = project_eval(load(args.recipe)) if args.recipe is not None else {}
+    if args.recipe is not None:
+        recipe = load(args.recipe)
+        if args.eval_red is not None:
+            recipe.setdefault("eval", {})["red"] = args.eval_red
+        eval_cfg = project_eval(recipe)
+    else:
+        eval_cfg = {}
     scorer = get_cia_scorer(eval_cfg)
 
     traj_dir = Path(args.traj_dir)

@@ -152,7 +152,7 @@ def _get_action_and_info(
     chosen_fsm_action = jnp.clip(chosen_fsm_action, 0, jnp.int32(NUM_FSM_ACTIONS - 1))
 
     discover_subnet = _pick_discover_subnet(state, const, agent_id, key3)
-    exploit_action = _pick_exploit_action(state, chosen_host, key4)
+    exploit_action = _pick_exploit_action(state, agent_id, chosen_host, key4)
     host_subnet = const.host_subnet[chosen_host]
     target_subnet = jnp.where(chosen_fsm_action == FSM_ACT_DISCOVER, discover_subnet, host_subnet)
     jax_action = _fsm_action_to_jax_action(chosen_fsm_action, chosen_host, target_subnet, exploit_action)

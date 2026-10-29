@@ -73,32 +73,32 @@ def test_invalid_settings_are_rejected(tiny_model, arguments):
         resolve_torch_evaluation_settings(read_sidecar(tiny_model), **arguments)
 
 
-def test_expanded_repeated_seeds_and_real_spawn_workers_keep_global_episode_order(tiny_model):
+def test_expanded_unique_seeds_and_real_spawn_workers_keep_global_episode_order(tiny_model):
     arguments = dict(variant=SHORT_VARIANT, seeds=[17, 18], episodes_per_seed=2, policy_seed=100, progress=False)
     serial = evaluate_on_cyborg(tiny_model, workers=1, **arguments)
     parallel = evaluate_on_cyborg(tiny_model, workers=2, **arguments)
     assert serial == parallel
-    assert serial[1] == [17, 18, 18, 19]
+    assert serial[1] == [34, 35, 36, 37]
     completed = []
     explicit = run_torch_episodes(
         tiny_model,
         variant=SHORT_VARIANT,
-        episode_seeds=[17, 18, 18, 19],
+        episode_seeds=[34, 35, 36, 37],
         policy_seeds=[100, 101, 102, 103],
         on_complete=lambda *values: completed.append(values),
     )
     assert explicit == serial
-    assert [(row[0], row[1], row[2]) for row in completed] == [(0, 17, 100), (1, 18, 101), (2, 18, 102), (3, 19, 103)]
+    assert [(row[0], row[1], row[2]) for row in completed] == [(0, 34, 100), (1, 35, 101), (2, 36, 102), (3, 37, 103)]
     more_workers = evaluate_on_cyborg(
         tiny_model,
         variant=SHORT_VARIANT,
-        seeds=[17, 18],
+        seeds=[34, 35],
         episodes_per_seed=1,
         policy_seed=100,
         workers=8,
         progress=False,
     )
-    assert more_workers == (serial[0][:2], [17, 18])
+    assert more_workers == (serial[0][:2], [34, 35])
 
 
 def test_seeded_stochastic_execution_restores_caller_draws_and_ignores_ambient_seed(tiny_model):
@@ -246,3 +246,80 @@ def test_existing_recipe_cli_writes_one_native_deterministic_result_without_trac
     assert len(result["per_episode"]) == 1 and math.isfinite(result["per_episode"][0])
     assert result["mean_reward"] == result["per_episode"][0]
     assert "attached eval metrics" not in completed.stdout
+
+
+def test_default_policy_seeding_matches_direct_rollout_and_worker_counts(tiny_model, monkeypatch):
+    from jaxborg.evaluation import cyborg_runner as runner
+
+    arguments = dict(variant=SHORT_VARIANT, seeds=[17, 18], episodes_per_seed=1, progress=False)
+    torch.manual_seed(312)
+    serial = evaluate_on_cyborg(tiny_model, workers=1, **arguments)
+    torch.manual_seed(999)
+    parallel = evaluate_on_cyborg(tiny_model, workers=2, **arguments)
+    assert serial == parallel
+
+    traces = []
+    original_make = runner.make_cyborg_env
+
+    def make(*args, **kwargs):
+        env = original_make(*args, **kwargs)
+        original_step = env.step
+        trace = []
+        traces.append(trace)
+
+        def step(actions):
+            trace.append(dict(actions))
+            return original_step(actions)
+
+        env.step = step
+        return env
+
+    monkeypatch.setattr(runner, "make_cyborg_env", make)
+    run_torch_episodes(tiny_model, variant=SHORT_VARIANT, episode_seeds=[17])
+    policy, _ = runner.load_torch_policy(tiny_model)
+    torch.manual_seed(999)
+    runner.rollout_episode(
+        make(SHORT_VARIANT, 17, wrapper_class=runner.EnterpriseMAE), SHORT_VARIANT, 17, policy, deterministic=False
+    )
+    run_torch_episodes(tiny_model, variant=SHORT_VARIANT, episode_seeds=[17], policy_seeds=[100])
+    runner.rollout_episode(
+        make(SHORT_VARIANT, 17, wrapper_class=runner.EnterpriseMAE),
+        SHORT_VARIANT,
+        17,
+        policy,
+        deterministic=False,
+        policy_seed=100,
+    )
+    assert traces[0] == traces[1]
+    assert traces[2] == traces[3]
+    assert traces[0] != traces[2]
+
+
+def test_enhanced_bundle_runs_and_rejects_mismatched_observation_contract(tmp_path):
+    from jaxborg.blue_observation_contract import blue_obs_size
+    from jaxborg.checkpoint import save_torch_bundle
+
+    arch = {"name": "shared", "hidden_dim": 8, "hidden_layers": 1}
+    recipe = {"arch": arch, "train": {"variant": "cc4_stock"}, "cage4_enhanced_obs": True}
+    model = tmp_path / "model_enhanced.pt"
+    policy = make_torch_policy(**arch, obs_dim=blue_obs_size(True), action_dim=242)
+    save_torch_bundle(
+        model,
+        {
+            "blue": {
+                "weights": policy.state_dict(),
+                "team": "blue",
+                "obs_dim": blue_obs_size(True),
+                "action_dim": 242,
+                "arch": arch,
+            }
+        },
+    )
+    model.with_name("recipe_enhanced.yaml").write_text(yaml.safe_dump(recipe))
+    settings = resolve_torch_evaluation_settings(recipe, horizon=2)
+    rewards, seeds = run_torch_episodes(
+        model, variant=settings.variant, episode_seeds=[17], deterministic=True, policy_seeds=[100]
+    )
+    assert seeds == [17] and len(rewards) == 1 and math.isfinite(rewards[0])
+    with pytest.raises(ValueError, match="cage4_enhanced_obs must match"):
+        run_torch_episodes(model, variant=SHORT_VARIANT, episode_seeds=[17])

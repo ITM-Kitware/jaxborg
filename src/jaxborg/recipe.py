@@ -1,6 +1,6 @@
 """Recipe loader — single YAML, two backends.
 
-A recipe lives at `recipes/<name>.yaml` (repo root) and declares both the
+A recipe lives under `recipes/` (including experiment subfolders) and declares both the
 backend-agnostic training contract (algorithm, arch, core hyperparameters,
 buffer/minibatch targets) and the backend-specific knobs needed to realize
 that contract on JAX vs CybORG-CleanRL.
@@ -8,6 +8,8 @@ that contract on JAX vs CybORG-CleanRL.
 Use:
     >>> from jaxborg.recipe import load, project_jax, project_cleanrl
     >>> recipe = load("singh")              # by name
+    >>> recipe = load("cotraining_mappo")   # unique name in a subfolder
+    >>> recipe = load("cotraining/cotraining_mappo")  # qualified name
     >>> recipe = load("/abs/path/to.yaml")    # or absolute path
     >>> jax_cfg = project_jax(recipe)         # flat dict for ippo_jax.py
     >>> cr_cfg = project_cleanrl(recipe)      # flat dict for ippo_cyborg.py
@@ -20,31 +22,49 @@ a recipe from a trainer config.
 
 from __future__ import annotations
 
+import copy
 import math
+import os
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 import yaml
 
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings
+from jaxborg.blue_observation_contract import enhanced_obs_enabled
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.scenarios.cc4.game_variants import VARIANTS
+from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
+from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
 
 REQUIRED_SECTIONS = ("meta", "algorithm", "core", "arch", "train")
+TEAMS = ("blue", "red")
+TRAIN_TEAM_MODES = (*TEAMS, "both")
+POLICY_BACKENDS = ("jax", "cyborg")
 
 
 def load(name_or_path: str) -> dict[str, Any]:
-    """Resolve a recipe name (e.g. 'singh') or absolute path; return parsed dict.
+    """Resolve a recipe name, qualified name or file path; return parsed dict.
 
     Raises FileNotFoundError if the recipe doesn't exist, ValueError if a
-    required section is missing.
+    required section is missing or a short name matches multiple subfolders.
+    Existing file paths and top-level recipes take precedence over name lookup.
     """
     p = Path(name_or_path)
-    if not p.is_absolute() and not p.exists():
-        p = RECIPES_DIR / f"{name_or_path}.yaml"
-    if not p.exists():
+    if not p.is_absolute() and not p.is_file():
+        recipe_name = p if p.suffix == ".yaml" else Path(f"{name_or_path}.yaml")
+        p = RECIPES_DIR / recipe_name
+        if not p.is_file() and len(recipe_name.parts) == 1:
+            matches = sorted(path for path in RECIPES_DIR.rglob(recipe_name.name) if path.is_file())
+            if len(matches) > 1:
+                choices = ", ".join(str(path.relative_to(RECIPES_DIR)) for path in matches)
+                raise ValueError(f"Ambiguous recipe name {name_or_path!r}; use a qualified name: {choices}")
+            if matches:
+                p = matches[0]
+    if not p.is_file():
         raise FileNotFoundError(f"Recipe not found: {name_or_path} (looked at {p})")
     raw = yaml.safe_load(p.read_text())
     _validate(raw, source=str(p))
@@ -53,24 +73,412 @@ def load(name_or_path: str) -> dict[str, Any]:
 
 
 def _validate(recipe: dict[str, Any], *, source: str) -> None:
+    if not isinstance(recipe, dict):
+        raise ValueError(f"{source}: recipe must be a YAML mapping")
+    enhanced_obs_enabled(recipe)
     for section in REQUIRED_SECTIONS:
         if section not in recipe:
             raise ValueError(f"{source}: missing required section '{section}'")
+        if section != "algorithm" and not isinstance(recipe[section], dict):
+            raise ValueError(f"{source}: section '{section}' must be a mapping")
     if "name" not in recipe["arch"]:
         raise ValueError(f"{source}: arch.name is required")
     if "lr" not in recipe["core"]:
         raise ValueError(f"{source}: core.lr is required")
 
+    train = recipe["train"]
+    mode = train.get("teams", "blue")
+    if mode not in TRAIN_TEAM_MODES:
+        raise ValueError(f"{source}: train.teams must be one of {TRAIN_TEAM_MODES}, got {mode!r}")
+
+    update_every = train.get("update_every", {})
+    if not isinstance(update_every, dict):
+        raise ValueError(f"{source}: train.update_every must be a mapping")
+    unknown_intervals = set(update_every) - set(TEAMS)
+    if unknown_intervals:
+        raise ValueError(f"{source}: unknown teams in train.update_every: {sorted(unknown_intervals)}")
+    for team, interval in update_every.items():
+        if isinstance(interval, bool) or not isinstance(interval, int) or interval < 1:
+            raise ValueError(f"{source}: train.update_every.{team} must be a positive integer")
+        if interval != 1 and mode != "both":
+            raise ValueError(f"{source}: train.update_every intervals greater than 1 require train.teams: both")
+
+    adaptive_updates = AdaptiveUpdateSettings.from_config(train.get("adaptive_updates"))
+    if adaptive_updates is not None:
+        if mode != "both":
+            raise ValueError(f"{source}: train.adaptive_updates requires train.teams: both")
+        if update_every.get("blue", 1) != 1:
+            raise ValueError(f"{source}: train.adaptive_updates requires train.update_every.blue: 1")
+
+    opponents = train.get("opponents") or {}
+    if not isinstance(opponents, dict):
+        raise ValueError(f"{source}: train.opponents must be a mapping")
+    unknown_opponents = set(opponents) - set(TEAMS)
+    if unknown_opponents:
+        raise ValueError(f"{source}: unknown opponent teams: {sorted(unknown_opponents)}")
+    for team, ref in opponents.items():
+        _validate_model_ref(ref, source=f"{source}: train.opponents.{team}")
+
+    if mode == "red" and not opponents.get("blue"):
+        raise ValueError(f"{source}: red-only training requires train.opponents.blue")
+    expected_opponent = {"blue": "red", "red": "blue"}.get(mode)
+    if expected_opponent is not None:
+        wrong_opponents = set(opponents) - {expected_opponent}
+        if wrong_opponents:
+            raise ValueError(
+                f"{source}: {mode}-only training may only configure train.opponents.{expected_opponent}; "
+                f"got {sorted(wrong_opponents)}"
+            )
+    if mode == "both" and opponents:
+        raise ValueError(f"{source}: train.opponents is not allowed when train.teams is 'both'")
+    if mode == "both" and train.get("initial_weights"):
+        raise ValueError(f"{source}: train.initial_weights is not allowed when train.teams is 'both'")
+
+    overrides = train.get("team_overrides") or {}
+    if not isinstance(overrides, dict):
+        raise ValueError(f"{source}: train.team_overrides must be a mapping")
+    unknown_teams = set(overrides) - set(TEAMS)
+    if unknown_teams:
+        raise ValueError(f"{source}: unknown teams in train.team_overrides: {sorted(unknown_teams)}")
+    for team, override in overrides.items():
+        if not isinstance(override, dict):
+            raise ValueError(f"{source}: train.team_overrides.{team} must be a mapping")
+        unknown_sections = set(override) - {"core", "arch"}
+        if unknown_sections:
+            raise ValueError(
+                f"{source}: train.team_overrides.{team} may only contain core and arch; got {sorted(unknown_sections)}"
+            )
+        for section, values in override.items():
+            if not isinstance(values, dict):
+                raise ValueError(f"{source}: train.team_overrides.{team}.{section} must be a mapping")
+
+    if adaptive_updates is not None:
+        red_core = {**recipe["core"], **overrides.get("red", {}).get("core", {})}
+        if red_core.get("anneal_lr", False):
+            raise ValueError(f"{source}: train.adaptive_updates requires constant Red learning rate (anneal_lr: false)")
+
+    ev = recipe.get("eval") or {}
+    if not isinstance(ev, dict):
+        raise ValueError(f"{source}: eval must be a mapping")
+    topology_sampling = ev.get("topology_sampling", "exhaustive")
+    if topology_sampling not in ("exhaustive", "random"):
+        raise ValueError(
+            f"{source}: eval.topology_sampling must be 'exhaustive' or 'random', got {topology_sampling!r}"
+        )
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
+    from jaxborg.evaluation.cia.config import CIAEvalSettings, validate_cia_evaluation
+
+    cia_settings = CIAEvalSettings.from_recipe(recipe)
+    validate_cia_evaluation(
+        cia_settings,
+        variant=eval_variant(recipe),
+        topology_sampling=topology_sampling,
+        topology_paths=expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT),
+    )
+    backend = ev.get("policy_backend")
+    if backend is not None and backend not in POLICY_BACKENDS:
+        raise ValueError(f"{source}: eval.policy_backend must be one of {POLICY_BACKENDS}, got {backend!r}")
+    policies = ev.get("policies") or {}
+    if not isinstance(policies, dict):
+        raise ValueError(f"{source}: eval.policies must be a mapping")
+    if policies:
+        if backend is None:
+            raise ValueError(f"{source}: eval.policy_backend is required when eval.policies is set")
+        missing = set(TEAMS) - set(policies)
+        unknown = set(policies) - set(TEAMS)
+        if missing:
+            raise ValueError(f"{source}: eval.policies requires both blue and red; missing {sorted(missing)}")
+        if unknown:
+            raise ValueError(f"{source}: unknown teams in eval.policies: {sorted(unknown)}")
+        for team, ref in policies.items():
+            _validate_model_ref(ref, source=f"{source}: eval.policies.{team}", expected_backend=backend)
+
+    # Keep post-training evaluation failures discoverable at recipe-load time,
+    # before an hours-long training run starts.
+    from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
+    from jaxborg.evaluation.cross_play import CrossPlaySettings
+    from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings
+    from jaxborg.evaluation.env_diversity_config import EnvDiversitySettings
+    from jaxborg.evaluation.play_priors import PlayPriorsSettings
+    from jaxborg.evaluation.post_training import PostTrainingEvalSettings
+    from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
+
+    scripted_red = ScriptedRedEvalSettings.from_recipe(recipe)
+    post_training = PostTrainingEvalSettings.from_recipe(recipe)
+    play_priors = PlayPriorsSettings.from_recipe(recipe)
+    cross_play = CrossPlaySettings.from_recipe(recipe)
+    cross_seed_play = CrossSeedPlaySettings.from_recipe(recipe)
+    env_diversity = EnvDiversitySettings.from_recipe(recipe)
+    checkpoint_scripted_reds = CheckpointScriptedRedsSettings.from_recipe(recipe)
+    # Every checkpoint-history suite replays durable checkpoints, so they all
+    # need a positive checkpoint stride and a reserved pipeline name.
+    checkpoint_suites = (
+        ("play_priors", play_priors.enabled),
+        ("cross_play", cross_play.enabled),
+        ("checkpoint_scripted_reds", checkpoint_scripted_reds.enabled),
+    )
+    for name, enabled in checkpoint_suites:
+        if not enabled:
+            continue
+        for section_name in ("jax", "cleanrl"):
+            section = recipe.get(section_name, {}) or {}
+            checkpoint_every = section.get("checkpoint_every_updates", 50)
+            if isinstance(checkpoint_every, bool) or not isinstance(checkpoint_every, int) or checkpoint_every <= 0:
+                raise ValueError(
+                    f"{source}: eval.{name} requires {section_name}.checkpoint_every_updates to be a positive integer"
+                )
+        if any(evaluation.name == name for evaluation in post_training.evaluations):
+            raise ValueError(f"{source}: eval.after_training name {name!r} is reserved")
+    # Replaying a co-trained pair needs both policies in every bundle.
+    for name, enabled in (
+        *checkpoint_suites[:2],
+        ("cross_seed_play", cross_seed_play.enabled),
+        ("env_diversity", env_diversity.enabled),
+    ):
+        if enabled and mode != "both":
+            raise ValueError(f"{source}: eval.{name} is only supported when train.teams is 'both'")
+    if cross_seed_play.enabled and any(
+        evaluation.name == "cross-seed-play" for evaluation in post_training.evaluations
+    ):
+        raise ValueError(f"{source}: eval.after_training name 'cross-seed-play' is reserved")
+    if checkpoint_scripted_reds.enabled:
+        # The suite scores Blue against fixed Reds and reports CIA per checkpoint.
+        if mode == "red":
+            raise ValueError(f"{source}: eval.checkpoint_scripted_reds requires Blue to be trainable")
+        if not cia_settings.enabled:
+            raise ValueError(f"{source}: eval.checkpoint_scripted_reds requires eval.cia.enabled: true")
+    for evaluation in post_training.evaluations:
+        evaluation.resolve_script()
+    if scripted_red.after_training and (
+        post_training.evaluations
+        or play_priors.enabled
+        or cross_play.enabled
+        or cross_seed_play.enabled
+        or checkpoint_scripted_reds.enabled
+    ):
+        raise ValueError(
+            f"{source}: use either eval.after_training or legacy eval.scripted_red.after_training, not both"
+        )
+    if scripted_red.after_training and mode == "red":
+        raise ValueError(f"{source}: eval.scripted_red.after_training requires Blue to be trainable")
+
+
+def _validate_model_ref(ref: Any, *, source: str, expected_backend: str | None = None) -> None:
+    """Validate a path/experiment reference without touching the filesystem."""
+    if isinstance(ref, (str, Path)):
+        if not str(ref):
+            raise ValueError(f"{source}: model path cannot be empty")
+        return
+    if not isinstance(ref, dict):
+        raise ValueError(f"{source}: model reference must be a path string or mapping")
+    if not ref.get("path") and not ref.get("experiment"):
+        raise ValueError(f"{source}: model reference requires 'path' or 'experiment'")
+    backend = ref.get("backend")
+    if backend == "torch":
+        backend = "cyborg"
+    if backend is not None and backend not in POLICY_BACKENDS:
+        raise ValueError(f"{source}: backend must be one of {POLICY_BACKENDS}, got {backend!r}")
+    if expected_backend is not None and backend is not None and backend != expected_backend:
+        raise ValueError(f"{source}: backend {backend!r} does not match selected backend {expected_backend!r}")
+
+
+def training_teams(recipe: dict[str, Any]) -> tuple[str, ...]:
+    """Return concrete trainable teams, preserving the legacy Blue default."""
+    mode = recipe.get("train", {}).get("teams", "blue")
+    if mode == "both":
+        return TEAMS
+    if mode not in TEAMS:
+        raise ValueError(f"train.teams must be one of {TRAIN_TEAM_MODES}, got {mode!r}")
+    return (mode,)
+
+
+def team_recipe(recipe: dict[str, Any], team: str) -> dict[str, Any]:
+    """Return a copy with ``team_overrides.<team>`` deep-merged into core/arch.
+
+    ``arch`` is the exception to the merge: an override that changes
+    ``arch.name`` *replaces* the block rather than merging into it, because a
+    different architecture is a different schema and fields do not carry across
+    it. Merging would leave the global architecture's keys behind — `cell` and
+    `trunk` on a feedforward team (which is rejected outright), or a recurrent
+    `hidden_layers: 1` silently thinning a `shared` trunk. Giving one team a
+    recurrent policy and the other an MLP is a supported arm, so it must not
+    require restating every field the two archs happen to share.
+    """
+    if team not in TEAMS:
+        raise ValueError(f"team must be one of {TEAMS}, got {team!r}")
+    projected = copy.deepcopy(recipe)
+    override = projected.get("train", {}).get("team_overrides", {}).get(team, {})
+    _deep_merge(projected["core"], override.get("core", {}))
+    arch_override = override.get("arch", {})
+    if arch_override.get("name", projected["arch"]["name"]) != projected["arch"]["name"]:
+        projected["arch"] = copy.deepcopy(arch_override)
+    else:
+        _deep_merge(projected["arch"], arch_override)
+    if projected["arch"]["name"] in ("mappo", "recurrent_mappo"):
+        projected["arch"]["cage4_enhanced_obs"] = enhanced_obs_enabled(projected)
+    return projected
+
+
+def _deep_merge(target: dict[str, Any], override: dict[str, Any]) -> None:
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_merge(target[key], value)
+        else:
+            target[key] = copy.deepcopy(value)
+
+
+def _normalise_backend(backend: str) -> str:
+    backend = "cyborg" if backend == "torch" else backend
+    if backend not in POLICY_BACKENDS:
+        raise ValueError(f"backend must be one of {POLICY_BACKENDS} (or 'torch'), got {backend!r}")
+    return backend
+
+
+def resolve_model_ref(
+    ref: str | Path | dict[str, Any],
+    *,
+    backend: str,
+    recipe: dict[str, Any] | None = None,
+    exp_dir: str | Path | None = None,
+    must_exist: bool = True,
+) -> Path:
+    """Resolve a model path or experiment reference for one policy backend.
+
+    A mapping's ``path`` takes precedence over ``experiment``. Relative paths
+    are interpreted relative to the source recipe, when known, rather than the
+    process working directory. Experiment references use the canonical
+    ``$JAXBORG_EXP_DIR/<algo>_<backend>/<experiment>/model_<experiment>`` layout,
+    where ``<algo>`` comes from the recipe. Calls without a recipe retain the
+    legacy ``ippo`` default.
+    """
+    backend = _normalise_backend(backend)
+    _validate_model_ref(ref, source="model reference", expected_backend=backend)
+    raw_ref: dict[str, Any] = {"path": str(ref)} if isinstance(ref, (str, Path)) else ref
+
+    if raw_ref.get("path"):
+        path = Path(raw_ref["path"]).expanduser()
+        if not path.is_absolute():
+            source_path = (recipe or {}).get("__source_path__") or (recipe or {}).get("meta", {}).get("source_path")
+            base = Path(source_path).expanduser().resolve().parent if source_path else Path.cwd()
+            path = base / path
+    else:
+        experiment = str(raw_ref["experiment"])
+        root = Path(exp_dir or os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).expanduser()
+        suffix = ".safetensors" if backend == "jax" else ".pt"
+        algorithm = "ippo" if recipe is None else recipe["algorithm"]
+        path = root / f"{algorithm}_{backend}" / experiment / f"model_{experiment}{suffix}"
+
+    path = path.resolve()
+    incompatible_suffixes = {"jax": {".pt"}, "cyborg": {".safetensors", ".flax", ".orbax"}}
+    if path.suffix.lower() in incompatible_suffixes[backend]:
+        raise ValueError(f"Model {path} is not compatible with the {backend!r} policy backend")
+    if must_exist and not path.is_file():
+        raise FileNotFoundError(f"Model not found: {path}")
+    return path
+
+
+def resolve_train_opponents(
+    recipe: dict[str, Any],
+    *,
+    backend: str,
+    exp_dir: str | Path | None = None,
+    must_exist: bool = True,
+) -> dict[str, Path]:
+    """Resolve all configured frozen opponents for a trainer."""
+    backend = _normalise_backend(backend)
+    refs = recipe.get("train", {}).get("opponents") or {}
+    return {
+        team: resolve_model_ref(
+            ref,
+            backend=backend,
+            recipe=recipe,
+            exp_dir=exp_dir,
+            must_exist=must_exist,
+        )
+        for team, ref in refs.items()
+    }
+
+
+def resolve_eval_policies(
+    recipe: dict[str, Any],
+    *,
+    exp_dir: str | Path | None = None,
+    must_exist: bool = True,
+) -> dict[str, Path]:
+    """Resolve the independently configured Blue and Red evaluation models."""
+    ev = recipe.get("eval") or {}
+    refs = ev.get("policies") or {}
+    if not refs:
+        return {}
+    backend = _normalise_backend(ev["policy_backend"])
+    return {
+        team: resolve_model_ref(
+            ref,
+            backend=backend,
+            recipe=recipe,
+            exp_dir=exp_dir,
+            must_exist=must_exist,
+        )
+        for team, ref in refs.items()
+    }
+
+
+_VARIANT_OVERRIDE_KEYS = ("red_reward", "blue_block_policy")
+
+
+def _apply_variant_overrides(base: GameVariant, recipe: dict[str, Any]) -> GameVariant:
+    """Overlay ``train.variant_overrides`` onto a registered variant.
+
+    Only the co-training rule knobs are overridable; everything else stays a
+    property of the named variant so recipes cannot quietly fork the scenario.
+    The overrides live under ``train`` and apply to evaluation too — a Blue
+    trained under a narrower action mask has to be scored under the same one,
+    and the resolved recipe sidecar carries them to every evaluator.
+    """
+    overrides = (recipe.get("train") or {}).get("variant_overrides") or {}
+    unknown = set(overrides) - set(_VARIANT_OVERRIDE_KEYS)
+    if unknown:
+        raise ValueError(
+            f"unknown train.variant_overrides keys {sorted(unknown)}; allowed: {list(_VARIANT_OVERRIDE_KEYS)}"
+        )
+    base = replace(base, cage4_enhanced_obs=enhanced_obs_enabled(recipe))
+    if not overrides:
+        return base
+    return replace(base, **{k: overrides[k] for k in _VARIANT_OVERRIDE_KEYS if k in overrides})
+
 
 def train_variant(recipe: dict[str, Any]) -> GameVariant:
     name = recipe.get("train", {}).get("variant", "cc4_stock")
-    return VARIANTS[name]
+    return _apply_variant_overrides(VARIANTS[name], recipe)
 
 
 def eval_variant(recipe: dict[str, Any]) -> GameVariant:
+    """Resolve the eval-time GameVariant.
+
+    Precedence:
+      1. ``eval.red`` (if set) — overrides the variant's red selector. The
+         base variant (``eval.variant`` or ``train.variant``) is used only to
+         decide ``resilience_roles`` for the fsm path; CIA-biased reds
+         (``cia_c`` / ``cia_i`` / ``cia_a`` / ``resilience``) carry their
+         own resilience_roles=True since their selectors require role tags.
+         This means setting ``eval.red: cia_a`` on a ``cc4_stock`` recipe
+         forces ``resilience_roles=True`` to keep the selector consistent.
+      2. ``eval.variant`` — full variant name in ``VARIANTS``.
+      3. ``train.variant`` — fallback if no eval section is configured.
+    """
     eval_cfg = recipe.get("eval") or {}
-    name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
-    return VARIANTS[name]
+    base_name = eval_cfg.get("variant") or recipe.get("train", {}).get("variant", "cc4_stock")
+    base = _apply_variant_overrides(VARIANTS[base_name], recipe)
+    red = eval_cfg.get("red")
+    if red is None:
+        return base
+    return variant_for_red(
+        red,
+        resilience_roles=base.resilience_roles,
+        red_reward=base.red_reward,
+        blue_block_policy=base.blue_block_policy,
+        cage4_enhanced_obs=base.cage4_enhanced_obs,
+    )
 
 
 def resolve_eval_variant(
@@ -98,18 +506,96 @@ def resolve_eval_variant(
     return default if default is not None else CC4_STOCK
 
 
-def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
-    """Flatten recipe into the dict shape ippo_jax.py's config expects."""
-    core = recipe["core"]
-    arch = recipe["arch"]
-    train = recipe["train"]
-    jax_ = recipe.get("jax", {})
+def _project_mission_bank(train: dict[str, Any]) -> list[list[float]] | None:
+    """Project ``train.mission_bank`` to a list of (LWF, ASF, RIA) triples.
+
+    Returns ``None`` when the recipe omits ``mission_bank`` or supplies an
+    empty list — both signal "no per-reset variation" (legacy behavior).
+    """
+    bank = train.get("mission_bank")
+    if bank is None:
+        return None
+    out: list[list[float]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(f"train.mission_bank entries must be (LWF, ASF, RIA) triples; got {entry!r}")
+        out.append([float(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
+def _resolve_topology_bank(section: dict[str, Any], *, scope: str = "train") -> tuple[Path, ...]:
+    """Resolve or materialize one section's topology-bank declaration."""
+    return materialize_topology_bank(section, scope=scope, repo_root=REPO_ROOT)
+
+
+def _project_phase_boundary_bank(train: dict[str, Any]) -> list[list[int]] | None:
+    """Project ``train.phase_boundary_bank`` to a list of int triples."""
+    bank = train.get("phase_boundary_bank")
+    if bank is None:
+        return None
+    out: list[list[int]] = []
+    for entry in bank:
+        triple = list(entry)
+        if len(triple) != 3:
+            raise ValueError(
+                "train.phase_boundary_bank entries must be 3-tuples "
+                f"(phase0_start, phase1_start, phase2_start); got {entry!r}"
+            )
+        out.append([int(x) for x in triple])
+    if not out:
+        return None
+    return out
+
+
+def _project_phase_rewards_bank(train: dict[str, Any]):
+    """Resolve ``train.phase_rewards_bank`` to a stacked numpy bank or None.
+
+    Recipe accepts either a bool (``true`` → use the canonical 6-entry
+    crown-jewel rotation bank from topology_numpy) or a list of explicit
+    ``(MISSION_PHASES, NUM_SUBNETS, 3)`` arrays for custom banks. Most
+    callers want the bool form.
+    """
+    val = train.get("phase_rewards_bank")
+    if val is None or val is False:
+        return None
+    if val is True:
+        from jaxborg.scenarios.cc4.topology_numpy import get_phase_rewards_bank
+
+        return get_phase_rewards_bank()
+    # Explicit list of arrays — pass through (caller stacks).
+    return val
+
+
+def project_jax(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
+    """Flatten a team view of a recipe into the JAX trainer config shape.
+
+    Calling this without ``team`` retains the historical behavior for legacy
+    Blue recipes. A single-team Red recipe naturally selects Red; joint recipes
+    select Blue for this one-policy view and should use ``project_team_configs``
+    to obtain both views.
+    """
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
+    teams = training_teams(recipe)
+    selected_team = team or (teams[0] if len(teams) == 1 else "blue")
+    resolved = team_recipe(recipe, selected_team)
+    core = resolved["core"]
+    arch = resolved["arch"]
+    train = resolved["train"]
+    jax_ = resolved.get("jax", {})
+    opponents = copy.deepcopy(train.get("opponents") or {})
+    for ref in opponents.values():
+        if isinstance(ref, dict):
+            _validate_model_ref(ref, source="train opponent", expected_backend="jax")
     return {
         "LR": float(core["lr"]),
         "GAMMA": float(core["gamma"]),
         "GAE_LAMBDA": float(core["gae_lambda"]),
         "CLIP_EPS": float(core.get("clip_eps", 0.2)),
         "VF_COEF": float(core.get("vf_coef", 0.5)),
+        "CLIP_VALUE_LOSS": bool(core.get("clip_value_loss", False)),
         "MAX_GRAD_NORM": float(core.get("max_grad_norm", 0.5)),
         "ENT_COEF": float(core.get("ent_coef", 0.0)),
         "NORM_REWARDS": bool(core.get("norm_rewards", False)),
@@ -123,23 +609,42 @@ def project_jax(recipe: dict[str, Any]) -> dict[str, Any]:
         "NUM_STEPS": int(train["episode_length"]),
         "NUM_MINIBATCHES": int(jax_.get("num_minibatches", 16)),
         "UPDATE_EPOCHS": int(jax_.get("update_epochs", 4)),
+        "UPDATE_EVERY": int(train.get("update_every", {}).get(selected_team, 1)),
+        "ADAPTIVE_UPDATES": copy.deepcopy(train.get("adaptive_updates")),
         "TOTAL_TIMESTEPS": int(train["total_timesteps"]),
         "CHECKPOINT_EVERY_UPDATES": int(jax_.get("checkpoint_every_updates", 50)),
         "BUSY_MASKING": bool(jax_.get("busy_masking", False)),
         "GRAD_CLIP_MODE": jax_.get("grad_clip_mode", "global"),
         "TRAIN_VARIANT": train_variant(recipe),
         "EVAL_VARIANT": eval_variant(recipe),
+        "TRAIN_TEAMS": teams,
+        "TRAIN_TEAM": selected_team,
+        "OPPONENTS": opponents,
         "TRAINING_MODE": True,
         "MLFLOW_ENABLED": True,
+        "MISSION_BANK": _project_mission_bank(train),
+        "MISSION_BANK_AMPLIFY": float(train.get("mission_bank_amplify", 1.0)),
+        "TOPOLOGY_BANK": _resolve_topology_bank(train, scope="train"),
+        "PHASE_BOUNDARY_BANK": _project_phase_boundary_bank(train),
+        "PHASE_REWARDS_BANK": _project_phase_rewards_bank(train),
     }
 
 
-def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
-    """Flatten recipe into the dict that ippo_cyborg.py CLI args populate."""
-    core = recipe["core"]
-    arch = recipe["arch"]
-    train = recipe["train"]
-    cr = recipe.get("cleanrl", {})
+def project_cleanrl(recipe: dict[str, Any], *, team: str | None = None) -> dict[str, Any]:
+    """Flatten a team view into the dict that ippo_cyborg.py consumes."""
+    if recipe.get("train", {}).get("adaptive_updates") is not None:
+        raise ValueError("train.adaptive_updates is supported only by the JAX joint trainer")
+    teams = training_teams(recipe)
+    selected_team = team or (teams[0] if len(teams) == 1 else "blue")
+    resolved = team_recipe(recipe, selected_team)
+    core = resolved["core"]
+    arch = resolved["arch"]
+    train = resolved["train"]
+    cr = resolved.get("cleanrl", {})
+    opponents = copy.deepcopy(train.get("opponents") or {})
+    for ref in opponents.values():
+        if isinstance(ref, dict):
+            _validate_model_ref(ref, source="train opponent", expected_backend="cyborg")
 
     num_envs = int(cr.get("num_envs", 48))
     rollout_length = int(cr.get("rollout_length", train["episode_length"]))
@@ -167,24 +672,74 @@ def project_cleanrl(recipe: dict[str, Any]) -> dict[str, Any]:
         "rollout_length": rollout_length,
         "num_rollouts_per_update": rollouts_per_update,
         "num_epochs": int(cr.get("num_epochs", 4)),
+        "update_every": int(train.get("update_every", {}).get(selected_team, 1)),
         "num_minibatches": int(cr.get("num_minibatches", 16)),
         "total_timesteps": int(train["total_timesteps"]),
         "TRAIN_VARIANT": train_variant(recipe),
         "EVAL_VARIANT": eval_variant(recipe),
+        "train_teams": teams,
+        "train_team": selected_team,
+        "opponents": opponents,
     }
 
 
-def project_eval(recipe: dict[str, Any]) -> dict[str, Any]:
+def project_team_configs(recipe: dict[str, Any], backend: str) -> dict[str, dict[str, Any]]:
+    """Project one independent optimizer/policy config for every trainable team."""
+    backend = _normalise_backend(backend)
+    projector = project_jax if backend == "jax" else project_cleanrl
+    return {team: projector(recipe, team=team) for team in training_teams(recipe)}
+
+
+def project_eval(
+    recipe: dict[str, Any],
+    *,
+    materialize_topologies: bool = False,
+) -> dict[str, Any]:
     """Flatten the eval section of a recipe into a config dict.
 
     Keys returned:
         cia_metric    — only "resilience" today; default if unset
         EVAL_VARIANT  — resolved GameVariant
+        scripted_red  — optional legacy trained-Blue scripted-opponent sweep
+        after_training — ordered final-checkpoint evaluation scripts
+        TOPOLOGY_BANK — resolved evaluation topology snapshot paths
+
+    ``materialize_topologies=True`` creates missing seed-generated snapshots.
+    The default remains read-only because metric-only consumers also use this
+    projection without constructing an evaluation environment.
     """
+    validate_topology_split(recipe, repo_root=REPO_ROOT)
     ev = recipe.get("eval") or {}
+    from jaxborg.evaluation.cia.config import CIAEvalSettings, validate_cia_evaluation
+
+    cia_settings = CIAEvalSettings.from_recipe(recipe)
+    topology_bank = (
+        _resolve_topology_bank(ev, scope="eval")
+        if materialize_topologies
+        else expand_topology_bank(ev, scope="eval", repo_root=REPO_ROOT)
+    )
+    topology_sampling = ev.get("topology_sampling", "exhaustive")
+    validate_cia_evaluation(
+        cia_settings,
+        variant=eval_variant(recipe),
+        topology_sampling=topology_sampling,
+        topology_paths=topology_bank,
+        inspect_snapshots=materialize_topologies,
+    )
     return {
-        "cia_metric": ev.get("cia_metric", "resilience"),
+        "cia_metric": cia_settings.metric,
+        "CIA": cia_settings.as_dict(),
         "EVAL_VARIANT": eval_variant(recipe),
+        "policy_backend": ev.get("policy_backend"),
+        "policies": copy.deepcopy(ev.get("policies") or {}),
+        "scripted_red": copy.deepcopy(ev.get("scripted_red") or {}),
+        "after_training": copy.deepcopy(ev.get("after_training") or []),
+        "play_priors": copy.deepcopy(ev.get("play_priors", False)),
+        "cross_play": copy.deepcopy(ev.get("cross_play", False)),
+        "cross_seed_play": copy.deepcopy(ev.get("cross_seed_play", False)),
+        "checkpoint_scripted_reds": copy.deepcopy(ev.get("checkpoint_scripted_reds", False)),
+        "TOPOLOGY_BANK": topology_bank,
+        "TOPOLOGY_SAMPLING": topology_sampling,
     }
 
 

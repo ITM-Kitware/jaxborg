@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Sequence
 
+from jaxborg.joint_env import JointPolicyCC4Env
 from jaxborg.parity.fsm_red_env import FsmRedCC4Env, _empty_extras_factory
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.red_selectors import make_red_selector
@@ -14,12 +15,10 @@ from jaxborg.scenarios.cc4.topology_roles import (
     count_resilience_candidates,
 )
 
-# build_topology server count per op-zone-B subnet is uniform in [1, 7) → min 1.
-# Both alpha-zone subnets are forced to op_zone_min_servers when set; otherwise
-# they share the same [1, 6] random range. The candidate pool spans both zones,
-# so worst-case = 2 * min(alpha-server-floor) + 2.
-_OP_ZONE_B_MIN_PER_SUBNET = 1
-_GENERATIVE_ALPHA_RANDOM_FLOOR = 1
+# Both operational-zone subnets are forced to op_zone_min_servers when set;
+# otherwise they share the same [1, 6] random range. The candidate pool spans
+# exactly those two zones, so its worst case is twice the per-zone floor.
+_GENERATIVE_OP_ZONE_RANDOM_FLOOR = 1
 _MIN_RESILIENCE_CANDIDATES = 3
 
 
@@ -28,8 +27,8 @@ def _resilience_extras_factory(key, const):
 
 
 def _generative_min_candidates(op_zone_servers: int | None) -> int:
-    alpha_floor = _GENERATIVE_ALPHA_RANDOM_FLOOR if op_zone_servers is None else op_zone_servers
-    return 2 * alpha_floor + 2 * _OP_ZONE_B_MIN_PER_SUBNET
+    per_zone_floor = _GENERATIVE_OP_ZONE_RANDOM_FLOOR if op_zone_servers is None else op_zone_servers
+    return 2 * per_zone_floor
 
 
 def _validate_resilience_topology(
@@ -65,6 +64,10 @@ def make_jax_env(
     topology_mode: str = "generative",
     training_mode: bool = False,
     topology_path: str | Path | Sequence[str | Path] | None = None,
+    mission_bank: Sequence[Sequence[float]] | None = None,
+    mission_bank_amplify: float = 1.0,
+    phase_boundary_bank: Sequence[Sequence[int]] | None = None,
+    phase_rewards_bank: Sequence | None = None,
     name: str | None = None,
 ) -> FsmRedCC4Env:
     if variant.resilience_roles:
@@ -79,5 +82,37 @@ def make_jax_env(
         red_selector=selector,
         extras_factory=extras,
         op_zone_min_servers=variant.op_zone_servers,
+        mission_bank=mission_bank,
+        mission_bank_amplify=mission_bank_amplify,
+        phase_boundary_bank=phase_boundary_bank,
+        phase_rewards_bank=phase_rewards_bank,
+        red_reward=variant.red_reward,
+        blue_block_policy=variant.blue_block_policy,
+        cage4_enhanced_obs=variant.cage4_enhanced_obs,
+        name=name,
+    )
+
+
+def make_joint_jax_env(
+    variant: GameVariant,
+    *,
+    topology_mode: str = "generative",
+    training_mode: bool = False,
+    topology_path: str | Path | Sequence[str | Path] | None = None,
+    name: str | None = None,
+) -> JointPolicyCC4Env:
+    """Build the all-policy JAX env used for learned Red or joint training."""
+
+    if variant.resilience_roles:
+        _validate_resilience_topology(variant, topology_path)
+    return JointPolicyCC4Env(
+        num_steps=variant.num_steps,
+        topology_mode=topology_mode,
+        training_mode=training_mode,
+        topology_path=topology_path,
+        op_zone_min_servers=variant.op_zone_servers,
+        red_reward=variant.red_reward,
+        blue_block_policy=variant.blue_block_policy,
+        cage4_enhanced_obs=variant.cage4_enhanced_obs,
         name=name,
     )

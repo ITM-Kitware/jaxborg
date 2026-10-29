@@ -1,0 +1,80 @@
+meta:
+  name: cec_phase6_C11_10M
+  source: "Phase 6 plan — Option B (10M timesteps × 3 seeds, full cocktail replicate)"
+  added: 2026-05-11
+  notes: |
+    Full env-diversity cocktail at 10M timesteps — tests whether the cocktail
+    needs more training to reveal a ZSC benefit. At 3M timesteps Test 2
+    REFUTED all four held-out reds (Δs +20..+102, sign flips). Option B
+    extends training by ~3.3× to see if the cocktail converges on a
+    transferable representation.
+
+algorithm: ippo
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 10000000
+  variant: cc4_stock
+  topology_bank:
+    - scripts/dev/topology_bank/shape_00.snapshot.npz
+    - scripts/dev/topology_bank/shape_01.snapshot.npz
+    - scripts/dev/topology_bank/shape_02.snapshot.npz
+    - scripts/dev/topology_bank/shape_03.snapshot.npz
+    - scripts/dev/topology_bank/shape_04.snapshot.npz
+    - scripts/dev/topology_bank/shape_05.snapshot.npz
+    - scripts/dev/topology_bank/shape_06.snapshot.npz
+    - scripts/dev/topology_bank/shape_07.snapshot.npz
+    - scripts/dev/topology_bank/shape_08.snapshot.npz
+    - scripts/dev/topology_bank/shape_09.snapshot.npz
+    - scripts/dev/topology_bank/shape_10.snapshot.npz
+    - scripts/dev/topology_bank/shape_11.snapshot.npz
+    - scripts/dev/topology_bank/shape_12.snapshot.npz
+    - scripts/dev/topology_bank/shape_13.snapshot.npz
+    - scripts/dev/topology_bank/shape_14.snapshot.npz
+    - scripts/dev/topology_bank/shape_15.snapshot.npz
+  mission_bank:
+    - [1, 1, 1]
+    - [3, 3, 1]
+    - [1, 3, 3]
+    - [3, 1, 3]
+  mission_bank_amplify: 1.0
+  phase_boundary_bank:
+    - [0, 167, 333]
+    - [0, 100, 300]
+    - [0, 200, 400]
+    - [0, 150, 250]
+  phase_rewards_bank: true
+
+eval:
+  variant: cc4_stock
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16

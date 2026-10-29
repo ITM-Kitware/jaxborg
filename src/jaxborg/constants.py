@@ -78,6 +78,13 @@ ACTIVITY_EXPLOIT = 2
 NUM_GREEN_RANDOM_FIELDS = CC4_CONFIG.num_green_random_fields
 NUM_RED_POLICY_RANDOM_FIELDS = CC4_CONFIG.num_red_policy_random_fields
 
+# Exploit-relevant ports retained from each successful Red service scan.
+# CybORG stores the actual port list on the scanning RedAbstractSession; JAX
+# uses this compact fixed-width projection because CC4 only models these ports.
+RED_SCANNED_PORTS = (21, 22, 25, 80, 443, 3390)
+RED_SCANNED_PORT_IDS = {port: i for i, port in enumerate(RED_SCANNED_PORTS)}
+NUM_RED_SCANNED_PORTS = len(RED_SCANNED_PORTS)
+
 MIN_HOSTS_PER_SUBNET = CC4_CONFIG.min_hosts_per_subnet
 MAX_HOSTS_PER_SUBNET = CC4_CONFIG.max_hosts_per_subnet
 
@@ -94,3 +101,10 @@ MAX_TRACKED_SESSION_PIDS = CC4_CONFIG.max_tracked_session_pids
 MAX_TRACKED_SUSPICIOUS_PIDS = CC4_CONFIG.max_tracked_suspicious_pids
 ABSTRACT_RANK_NONE = 1_000_000
 BLUE_OBS_SIZE = CC4_CONFIG.blue_obs_size
+
+# Learned-Red policy contract.  These dimensions deliberately do not replace
+# ScenarioEnv's legacy raw-Red interface: the raw simulator action ABI remains
+# the 2,202 actions ending at ``RED_WITHDRAW_END``.  Learned policies use a
+# compact, backend-neutral view which is translated at the environment edge.
+RED_OBS_SIZE = MISSION_PHASES + 3 + NUM_RED_AGENTS + NUM_SUBNETS + 5 * GLOBAL_MAX_HOSTS
+RED_POLICY_ACTION_DIM = 1 + NUM_SUBNETS + 8 * GLOBAL_MAX_HOSTS

@@ -18,7 +18,7 @@ from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, tra
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
-RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.glob("*.yaml"))
+RECIPE_NAMES = sorted(p.stem for p in RECIPES_DIR.rglob("*.yaml"))
 
 assert RECIPE_NAMES, f"No recipes found in {RECIPES_DIR}"
 
@@ -75,6 +75,10 @@ def test_jax_projection(recipe):
 
 
 def test_cleanrl_projection(recipe):
+    if recipe["train"].get("adaptive_updates") is not None:
+        with pytest.raises(ValueError, match="only by the JAX joint trainer"):
+            project_cleanrl(recipe)
+        return
     cfg = project_cleanrl(recipe)
     for key in (
         "lr",
@@ -109,14 +113,94 @@ def test_eval_variant_resolves(recipe):
     assert isinstance(v, GameVariant)
 
 
-def test_minibatch_divides_batch(recipe):
-    """num_minibatches must divide the rollout batch evenly on both backends."""
+def test_minibatch_divides_batch(recipe, monkeypatch):
+    """num_minibatches must divide the rollout batch on supported backends."""
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
     j = project_jax(recipe)
     assert (j["NUM_ENVS"] * j["NUM_STEPS"]) % j["NUM_MINIBATCHES"] == 0, (
         "JAX: num_envs * num_steps not divisible by num_minibatches"
     )
+    if recipe["train"].get("adaptive_updates") is not None:
+        return  # This schedule only runs on JAX; rejection is checked above.
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
     assert batch % c["num_minibatches"] == 0, (
         "CleanRL: num_envs * rollout_length * num_rollouts_per_update not divisible by num_minibatches"
     )
+
+
+def test_stock_cotraining_recipes_stay_feedforward():
+    """The MLP co-training recipes are the control arm and the published runs.
+
+    Every number in docs/cotraining_collapse.md was measured with
+    `arch.name: shared`. A recurrent architecture belongs in its own recipe,
+    never as an edit to these.
+    """
+    for name in ("cotraining", "cotraining_env_diversity", "cotraining_test_rule_change"):
+        arch = load(name)["arch"]
+        assert arch["name"] == "shared", f"{name} must stay feedforward"
+        assert arch["hidden_layers"] == 2
+        assert "cell" not in arch and "trunk" not in arch
+
+
+@pytest.mark.parametrize("name", sorted(p.stem for p in (RECIPES_DIR / "cotraining").glob("cotraining*.yaml")))
+def test_cotraining_development_budget_preserves_checkpoint_spacing_and_sequence_batches(name):
+    recipe = load(name)
+    cfg = recipe["jax"]
+    stride = cfg["num_envs"] * recipe["train"]["episode_length"] * cfg["checkpoint_every_updates"]
+    assert cfg["num_envs"] == 96
+    assert stride == (480_000 if name == "cotraining_test_rule_change" else 960_000)
+    assert recipe["eval"]["cross_play"]["max_checkpoints"] == 3
+    assert recipe["eval"]["topology_generation"]["count"] == 10
+    if recipe["arch"]["name"] == "recurrent":
+        for agents in (5, 6):
+            assert (cfg["num_envs"] * agents) % cfg["num_minibatches"] == 0
+
+
+@pytest.mark.parametrize("suffix", ["", "_env_diversity"])
+def test_recurrent_cotraining_arms_differ_only_in_the_cell(suffix):
+    """`cotraining_rnn` and `cotraining_lstm` are a controlled A/B on the cell.
+
+    If they drift apart on anything else — budget, minibatches, topologies —
+    a gap between the two runs stops being attributable to GRU vs LSTM.
+    """
+    gru = load(f"cotraining_rnn{suffix}")
+    lstm = load(f"cotraining_lstm{suffix}")
+    for recipe in (gru, lstm):
+        # Prose and file path are expected to differ; nothing else is.
+        del recipe["meta"], recipe["__source_path__"]
+        if suffix:
+            # Each recurrent arm compares against its own non-diverse baseline.
+            baseline = recipe["eval"]["env_diversity"].pop("baseline_recipe")
+            assert baseline == f"cotraining_{'rnn' if recipe['arch']['cell'] == 'gru' else 'lstm'}"
+
+    assert gru["arch"].pop("cell") == "gru"
+    assert lstm["arch"].pop("cell") == "lstm"
+    assert gru == lstm
+
+
+# The only recipe allowed to run non-stock CC4 rules. It exists to test the
+# knobs, and it ships in the `both` arm rather than the control.
+RULE_KNOB_HARNESS = "cotraining_test_rule_change"
+
+
+def test_rule_knobs_are_off_everywhere_except_the_harness(recipe):
+    """`red_reward` and `blue_block_policy` default to stock CC4.
+
+    Both change the game, not just the optimizer: `damage` alters Red's payoff
+    and `mission_safe` removes Blue actions outright, so a recipe that picks
+    one up by accident produces numbers that cannot be compared to any
+    published CC4 result. They also propagate to evaluation through the
+    resolved sidecar, so the mistake would follow the policy out of training.
+    """
+    expected = ("damage", "mission_safe") if recipe["meta"]["name"] == RULE_KNOB_HARNESS else ("zero_sum", "cc4")
+    for resolved, where in ((train_variant(recipe), "train"), (eval_variant(recipe), "eval")):
+        assert (resolved.red_reward, resolved.blue_block_policy) == expected, (
+            f"{recipe['meta']['name']} {where} variant is not {expected}"
+        )
+
+
+def test_the_rule_knob_harness_is_the_only_recipe_declaring_overrides():
+    """Names the one file to look at when a run's rules are in question."""
+    declared = sorted(name for name in RECIPE_NAMES if (load(name).get("train") or {}).get("variant_overrides"))
+    assert declared == [RULE_KNOB_HARNESS]

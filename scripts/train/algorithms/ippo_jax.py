@@ -27,6 +27,7 @@ if "JAX_COMPILATION_CACHE_DIR" not in os.environ:
 os.environ.setdefault("JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS", "0")
 
 import argparse
+import copy
 import json
 import sys
 import time
@@ -38,22 +39,56 @@ import jax.numpy as jnp
 import mlflow
 import optax
 from flax.training.train_state import TrainState
-from jaxmarl.wrappers.baselines import LogWrapper
+from jaxmarl.wrappers.baselines import LogEnvState, LogWrapper
 
 # Make `import jaxborg.*` work when invoked as a script.
 _REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
+from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.checkpoint import save_jax_params, write_sidecar
+from jaxborg.adaptive_updates import AdaptiveUpdateSettings, initial_adaptive_update_state
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.checkpoint import (
+    PolicyBundleEntry,
+    load_jax_policy,
+    read_sidecar,
+    save_jax_bundle,
+    write_sidecar,
+)
 from jaxborg.evaluation.jax_env_factory import make_jax_env
-from jaxborg.metrics_schema import make_row
-from jaxborg.mlflow_setup import start_run
-from jaxborg.policies import make_jax_policy
+from jaxborg.evaluation.training_checkpoint import evaluate_training_checkpoint
+from jaxborg.learned_red import RED_OBS_SIZE, RED_POLICY_ACTION_DIM
+from jaxborg.metrics_schema import add_team_metrics, make_row
+from jaxborg.mlflow_setup import MlflowCheckpointEvaluator, start_run
+from jaxborg.policies import (
+    has_centralized_critic,
+    init_policy_params,
+    initial_carry,
+    is_recurrent,
+    policy_from_arch,
+    policy_sequence,
+    policy_step,
+)
 from jaxborg.recipe import load as load_recipe
-from jaxborg.recipe import project_jax
+from jaxborg.recipe import (
+    project_jax,
+    resolve_train_opponents,
+    team_recipe,
+    training_teams,
+)
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.training_topology_sampling import validate_training_topology_coverage
+from scripts.train.algorithms.ippo_jax_joint import (
+    GAME_COUNTERS as joint_game_counters,
+)
+from scripts.train.algorithms.ippo_jax_joint import (
+    REWARD_COMPONENTS as joint_reward_components,
+)
+from scripts.train.algorithms.ippo_jax_joint import initial_reward_norm_state, make_joint_train
 
 
 class Transition(NamedTuple):
@@ -65,6 +100,9 @@ class Transition(NamedTuple):
     obs: jnp.ndarray
     avail_actions: jnp.ndarray
     blue_busy: jnp.ndarray
+    # Recurrent archs only: the hidden state was zeroed before this row acted,
+    # i.e. the previous step ended the episode. ``None`` for feedforward archs.
+    reset: jnp.ndarray | None = None
 
 
 class RewardNormState(NamedTuple):
@@ -87,9 +125,17 @@ def make_train(config, network):
     """Build env and a single JIT'd collect_and_update fn from a flat config."""
     num_envs = config["NUM_ENVS"]
     variant: GameVariant = config["TRAIN_VARIANT"]
+    topology_bank = config.get("TOPOLOGY_BANK") or None
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), num_envs)
     inner_env = make_jax_env(
         variant,
         training_mode=bool(config.get("TRAINING_MODE", True)),
+        topology_path=list(topology_bank) if topology_bank else None,
+        mission_bank=config.get("MISSION_BANK"),
+        mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
+        phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
+        phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     agents = list(inner_env.agents)
     num_agents = inner_env.num_agents
@@ -99,8 +145,49 @@ def make_train(config, network):
 
     env = LogWrapper(inner_env)
     init_key = jax.random.PRNGKey(config["SEED"])
-    init_keys = jax.random.split(init_key, num_envs)
-    init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
+    if topology_bank:
+        if not hasattr(inner_env, "reset_batch") or not hasattr(inner_env, "step_batch"):
+            raise TypeError("topology-bank training requires reset_batch and step_batch support")
+        init_key, topology_key = jax.random.split(init_key)
+        init_keys = jax.random.split(init_key, num_envs)
+        init_obs, init_inner_state = inner_env.reset_batch(init_keys, topology_key)
+        log_zeros = jnp.zeros((num_envs, num_agents))
+        init_env_state = LogEnvState(
+            env_state=init_inner_state,
+            episode_returns=log_zeros,
+            episode_lengths=log_zeros,
+            returned_episode_returns=log_zeros,
+            returned_episode_lengths=log_zeros,
+        )
+
+        def step_batch(keys, state, actions, topology_key):
+            obs, inner_state, rewards, dones, info = inner_env.step_batch(keys, state.env_state, actions, topology_key)
+            episode_done = dones["__all__"]
+            episode_done_column = episode_done[:, None]
+            keep = 1 - episode_done_column
+            new_episode_returns = state.episode_returns + jnp.stack([rewards[agent] for agent in agents], axis=-1)
+            new_episode_lengths = state.episode_lengths + 1
+            state = LogEnvState(
+                env_state=inner_state,
+                episode_returns=new_episode_returns * keep,
+                episode_lengths=new_episode_lengths * keep,
+                returned_episode_returns=state.returned_episode_returns * keep
+                + new_episode_returns * episode_done_column,
+                returned_episode_lengths=state.returned_episode_lengths * keep
+                + new_episode_lengths * episode_done_column,
+            )
+            info["returned_episode_returns"] = state.returned_episode_returns
+            info["returned_episode_lengths"] = state.returned_episode_lengths
+            info["returned_episode"] = jnp.repeat(episode_done_column, num_agents, axis=1)
+            return obs, state, rewards, dones, info
+
+    else:
+        init_keys = jax.random.split(init_key, num_envs)
+        init_obs, init_env_state = jax.vmap(env.reset)(init_keys)
+
+        def step_batch(keys, state, actions, topology_key):
+            del topology_key
+            return jax.vmap(env.step)(keys, state, actions)
 
     norm_rewards = bool(config.get("NORM_REWARDS", False))
 
@@ -108,19 +195,32 @@ def make_train(config, network):
         frac = 1.0 - (count // (config["NUM_MINIBATCHES"] * config["UPDATE_EPOCHS"])) / config["NUM_UPDATES"]
         return config["LR"] * frac
 
+    recurrent = is_recurrent(network)
+
     def _init_train_state(rng):
-        init_x = jnp.zeros(inner_env.observation_space(agents[0]).shape)
-        params = network.init(rng, init_x)
+        obs_dim = int(inner_env.observation_space(agents[0]).shape[-1])
+        params = init_policy_params(network, rng, obs_dim)
         if config["ANNEAL_LR"]:
             tx = optax.adam(learning_rate=linear_schedule, eps=1e-5)
         else:
             tx = optax.adam(config["LR"], eps=1e-5)
         return TrainState.create(apply_fn=network.apply, params=params, tx=tx)
 
+    num_sequences = num_agents * num_envs
+
     @partial(jax.jit, donate_argnums=(0, 1, 2, 3, 4))
     def _collect_and_update(train_state, env_state, obs, rng, reward_norm_state):
         _agent_ids = jnp.arange(num_agents)
-        _mask_over_envs = jax.vmap(compute_blue_action_mask, in_axes=(0, None, 0))
+        # Truncated BPTT with the window set to the rollout: NUM_STEPS is the
+        # recipe's episode_length and every env resets on the same tick, so a
+        # window boundary is an episode boundary. Mid-window resets are still
+        # handled by the per-row reset flags carried in the transition.
+        window_carry = initial_carry(network, num_sequences)
+        # Row 0 of a window opens a sequence, so it resets by definition.
+        reset_init = jnp.ones((num_envs, num_agents), dtype=jnp.bool_)
+        # `blue_block_policy` is a static string, so bind it before vmapping.
+        _masker = partial(compute_blue_action_mask, blue_block_policy=variant.blue_block_policy)
+        _mask_over_envs = jax.vmap(_masker, in_axes=(0, None, 0))
         _mask_over_agents = jax.vmap(_mask_over_envs, in_axes=(None, 0, None))
 
         _info_acc_init = {
@@ -137,16 +237,25 @@ def make_train(config, network):
         }
 
         def _env_step(carry, _):
-            env_state, obs, rng, info_acc, rn_state = carry
+            env_state, obs, rng, info_acc, rn_state, policy_carry, reset = carry
             obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
             busy_batch = env_state.env_state.state.blue_pending_ticks > 0
             avail_batch = _mask_over_agents(env_state.env_state.const, _agent_ids, env_state.env_state.state).transpose(
                 1, 0, 2
             )
+            sleep_only = jnp.zeros(avail_batch.shape[-1], dtype=jnp.bool_).at[0].set(True)
+            avail_batch = jnp.where(busy_batch[..., None], sleep_only, avail_batch)
             rng, _rng = jax.random.split(rng)
             flat_obs = obs_batch.reshape(-1, obs_batch.shape[-1])
             flat_avail = avail_batch.reshape(-1, avail_batch.shape[-1])
-            pi, value = network.apply(train_state.params, flat_obs, flat_avail)
+            pi, value, policy_carry = policy_step(
+                network,
+                train_state.params,
+                flat_obs,
+                flat_avail,
+                carry=policy_carry,
+                reset=reset.reshape(-1),
+            )
             action_flat = pi.sample(seed=_rng)
             log_prob_flat = pi.log_prob(action_flat)
             action = action_flat.reshape(num_envs, num_agents)
@@ -154,8 +263,9 @@ def make_train(config, network):
             value = value.reshape(num_envs, num_agents)
             env_act = {agents[i]: action[:, i] for i in range(num_agents)}
             rng, _rng = jax.random.split(rng)
-            step_keys = jax.random.split(_rng, num_envs)
-            new_obs, new_env_state, rewards, dones, info = jax.vmap(env.step)(step_keys, env_state, env_act)
+            step_key, topology_key = jax.random.split(_rng)
+            step_keys = jax.random.split(step_key, num_envs)
+            new_obs, new_env_state, rewards, dones, info = step_batch(step_keys, env_state, env_act, topology_key)
             info_acc = jax.tree.map(lambda acc, v: acc + jnp.asarray(v, dtype=jnp.float32), info_acc, info)
             team_reward = rewards[agents[0]]
             done_signal = dones[agents[0]]
@@ -179,8 +289,9 @@ def make_train(config, network):
             else:
                 reward_out = jnp.stack([rewards[a] for a in agents], axis=-1) * config.get("REWARD_SCALE", 1.0)
 
+            agent_done = jnp.stack([dones[a] for a in agents], axis=-1)
             transition = Transition(
-                done=jnp.stack([dones[a] for a in agents], axis=-1),
+                done=agent_done,
                 action=action,
                 value=value,
                 reward=reward_out,
@@ -188,16 +299,26 @@ def make_train(config, network):
                 obs=obs_batch,
                 avail_actions=avail_batch,
                 blue_busy=busy_batch.astype(jnp.float32),
+                reset=reset if recurrent else None,
             )
-            return (new_env_state, new_obs, rng, info_acc, rn_state), transition
+            return (new_env_state, new_obs, rng, info_acc, rn_state, policy_carry, agent_done > 0), transition
 
-        (env_state, obs, rng, info_sums, reward_norm_state), traj_batch = jax.lax.scan(
-            _env_step, (env_state, obs, rng, _info_acc_init, reward_norm_state), None, config["NUM_STEPS"]
+        (env_state, obs, rng, info_sums, reward_norm_state, policy_carry, reset), traj_batch = jax.lax.scan(
+            _env_step,
+            (env_state, obs, rng, _info_acc_init, reward_norm_state, window_carry, reset_init),
+            None,
+            config["NUM_STEPS"],
         )
 
         last_obs_batch = jnp.stack([obs[a] for a in agents], axis=-2)
         flat_last_obs = last_obs_batch.reshape(-1, last_obs_batch.shape[-1])
-        _, last_val = network.apply(train_state.params, flat_last_obs)
+        _, last_val, _ = policy_step(
+            network,
+            train_state.params,
+            flat_last_obs,
+            carry=policy_carry,
+            reset=reset.reshape(-1),
+        )
         last_val = last_val.reshape(num_envs, num_agents)
 
         def _get_advantages(gae_and_next_value, gae_inputs):
@@ -216,18 +337,33 @@ def make_train(config, network):
             unroll=8,
         )
         targets = advantages + traj_batch.value
-        policy_mask = jnp.ones_like(traj_batch.blue_busy)
+        # CybORG ignores submissions while an action is in progress. Force
+        # Sleep above and omit those rows from the actor objective while still
+        # retaining them in GAE/value learning for delayed-action credit.
+        policy_mask = 1.0 - traj_batch.blue_busy
 
         def _update_epoch(update_state, unused):
             def _update_minibatch(train_state, batch_info):
-                traj_batch, advantages, targets, policy_mask = batch_info
+                traj_batch, advantages, targets, policy_mask, init_carry = batch_info
+                # The leading axis of 1 exists only so the carry rides the same
+                # take/reshape as the time-major arrays; drop it before replay.
+                init_carry = jax.tree.map(lambda leaf: leaf[0], init_carry)
 
-                def _loss_fn(params, traj_batch, gae, targets, policy_mask):
-                    gae = (gae - gae.mean()) / (gae.std() + 1e-8)
-                    pi, value = network.apply(params, traj_batch.obs, traj_batch.avail_actions)
-                    log_prob = pi.log_prob(traj_batch.action)
+                def _loss_fn(params, traj_batch, gae, targets, policy_mask, init_carry):
                     policy_weight = policy_mask.astype(jnp.float32)
                     policy_count = jnp.maximum(policy_weight.sum(), 1.0)
+                    gae_mean = jnp.sum(policy_weight * gae) / policy_count
+                    gae_var = jnp.sum(policy_weight * jnp.square(gae - gae_mean)) / policy_count
+                    gae = (gae - gae_mean) / (jnp.sqrt(gae_var) + 1e-8)
+                    pi, value, _ = policy_sequence(
+                        network,
+                        params,
+                        traj_batch.obs,
+                        traj_batch.avail_actions,
+                        carry=init_carry,
+                        reset=traj_batch.reset,
+                    )
+                    log_prob = pi.log_prob(traj_batch.action)
                     value_loss = compute_value_loss(
                         value,
                         traj_batch.value,
@@ -249,7 +385,9 @@ def make_train(config, network):
                     return total_loss, (value_loss, loss_actor, entropy, approx_kl, clip_frac, explained_var)
 
                 grad_fn = jax.value_and_grad(_loss_fn, has_aux=True)
-                total_loss, grads = grad_fn(train_state.params, traj_batch, advantages, targets, policy_mask)
+                total_loss, grads = grad_fn(
+                    train_state.params, traj_batch, advantages, targets, policy_mask, init_carry
+                )
                 pre_clip = optax.global_norm(grads)
                 max_norm = jnp.asarray(config["MAX_GRAD_NORM"], dtype=jnp.float32)
                 scale = jnp.minimum(1.0, max_norm / (pre_clip + 1e-8))
@@ -271,15 +409,35 @@ def make_train(config, network):
 
             train_state, traj_batch, advantages, targets, policy_mask, rng = update_state
             rng, _rng = jax.random.split(rng)
-            batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
-            permutation = jax.random.permutation(_rng, batch_size)
-            batch = (traj_batch, advantages, targets, policy_mask)
-            batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
-            shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
-            minibatches = jax.tree.map(
-                lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
-                shuffled,
-            )
+            if recurrent:
+                # A recurrent policy's hidden state is defined by trajectory
+                # order, so the permutation runs over sequences (env x agent)
+                # and the time axis inside a minibatch stays intact. Each
+                # minibatch is replayed from the state its window began with.
+                if num_sequences % config["NUM_MINIBATCHES"] != 0:
+                    raise ValueError(
+                        f"recurrent minibatching splits sequences, not rows: env x agent ({num_sequences}) "
+                        f"must be divisible by NUM_MINIBATCHES ({config['NUM_MINIBATCHES']})"
+                    )
+                permutation = jax.random.permutation(_rng, num_sequences)
+                batch = (traj_batch, advantages, targets, policy_mask)
+                batch = jax.tree.map(lambda x: x.reshape((x.shape[0], num_sequences) + x.shape[3:]), batch)
+                batch = batch + (jax.tree.map(lambda leaf: leaf[None], window_carry),)
+                shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=1), batch)
+                minibatches = jax.tree.map(
+                    lambda x: jnp.swapaxes(x.reshape((x.shape[0], config["NUM_MINIBATCHES"], -1) + x.shape[2:]), 0, 1),
+                    shuffled,
+                )
+            else:
+                batch_size = config["MINIBATCH_SIZE"] * config["NUM_MINIBATCHES"]
+                permutation = jax.random.permutation(_rng, batch_size)
+                batch = (traj_batch, advantages, targets, policy_mask, None)
+                batch = jax.tree.map(lambda x: x.reshape((batch_size,) + x.shape[3:]), batch)
+                shuffled = jax.tree.map(lambda x: jnp.take(x, permutation, axis=0), batch)
+                minibatches = jax.tree.map(
+                    lambda x: jnp.reshape(x, [config["NUM_MINIBATCHES"], -1] + list(x.shape[1:])),
+                    shuffled,
+                )
             train_state, loss_info = jax.lax.scan(_update_minibatch, train_state, minibatches)
             update_state = (train_state, traj_batch, advantages, targets, policy_mask, rng)
             return update_state, loss_info
@@ -307,8 +465,309 @@ def make_train(config, network):
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
-def main():
-    parser = argparse.ArgumentParser(description="IPPO-FF on JAX, recipe-driven")
+def _network_from_arch(arch: dict, action_dim: int):
+    return policy_from_arch(arch, action_dim=action_dim)
+
+
+def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
+    sidecar = read_sidecar(path)
+    return dict(team_recipe(sidecar, team)["arch"])
+
+
+def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
+    """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
+    trainable_teams = training_teams(recipe)
+    configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
+    for config in configs.values():
+        config["SEED"] = args.seed
+        topology_bank = config.get("TOPOLOGY_BANK") or ()
+        if topology_bank:
+            validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
+
+    opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
+    dims = {
+        "blue": (blue_obs_size(enhanced_obs_enabled(recipe)), BLUE_ALLOW_TRAFFIC_END),
+        "red": (RED_OBS_SIZE, RED_POLICY_ACTION_DIM),
+    }
+    networks = {}
+    initial_params = {}
+    arches = {}
+    sources = {}
+
+    for team in ("blue", "red"):
+        obs_dim, action_dim = dims[team]
+        if team in trainable_teams:
+            arch = dict(team_recipe(recipe, team)["arch"])
+            source = {"kind": "fresh", "seed": int(args.seed)}
+        else:
+            if team not in opponent_paths:
+                raise ValueError(f"joint training requires a learned {team} opponent model")
+            path = opponent_paths[team]
+            entry = load_jax_policy(
+                path,
+                team=team,
+                expected_obs_dim=obs_dim,
+                expected_action_dim=action_dim,
+            )
+            arch = dict(entry.arch) if entry.arch.get("name") else _legacy_arch_from_sidecar(path, team)
+            initial_params[team] = entry.weights
+            source = {
+                "kind": "checkpoint",
+                "path": str(path),
+                "bundle_source": entry.source,
+            }
+        arches[team] = arch
+        sources[team] = source
+        networks[team] = _network_from_arch(arch, action_dim)
+
+    print("=" * 60, flush=True)
+    print(f"{recipe['algorithm'].upper()}-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
+    print(
+        f"  trainable={','.join(trainable_teams)} num_envs={configs['blue']['NUM_ENVS']} "
+        f"num_steps={configs['blue']['NUM_STEPS']} total_timesteps={configs['blue']['TOTAL_TIMESTEPS']:,}",
+        flush=True,
+    )
+    for team in ("blue", "red"):
+        print(
+            f"  {team}: arch={arches[team]['name']} hidden_dim={arches[team].get('hidden_dim', 256)} "
+            f"critic={getattr(networks[team], 'critic_input', 'local')} "
+            f"update_every={configs[team]['UPDATE_EVERY']} "
+            f"status={'trainable' if team in trainable_teams else 'frozen'}",
+            flush=True,
+        )
+    print("=" * 60, flush=True)
+
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
+    run = start_run(recipe, backend="jax", seed=args.seed)
+    train_run_id = run.info.run_id
+    t0 = time.perf_counter()
+    env, obs, env_state, init_states, collect_and_update = make_joint_train(
+        configs,
+        networks,
+        trainable_teams=trainable_teams,
+        initial_params=initial_params,
+    )
+    del env
+    rng = jax.random.PRNGKey(args.seed + 1)
+    rng, init_key = jax.random.split(rng)
+    train_states = init_states(init_key)
+    reward_norm_states = {team: initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
+    adaptive_settings = AdaptiveUpdateSettings.from_config(configs["blue"].get("ADAPTIVE_UPDATES"))
+    adaptive_state = initial_adaptive_update_state(adaptive_settings) if adaptive_settings is not None else None
+    if adaptive_settings is not None:
+        print(f"  adaptive Red updates: {adaptive_settings}", flush=True)
+    print(f"  env+networks setup: {time.perf_counter() - t0:.1f}s", flush=True)
+
+    num_updates = int(configs["blue"]["NUM_UPDATES"])
+    if num_updates < 1:
+        raise ValueError("total_timesteps must cover at least one joint rollout")
+    num_steps = int(configs["blue"]["NUM_STEPS"])
+    num_envs = int(configs["blue"]["NUM_ENVS"])
+    metrics_path = save_dir / "metrics.jsonl"
+    start = time.perf_counter()
+    final_metrics = None
+
+    def save_bundle(path: Path, env_steps: int) -> None:
+        policies = {
+            team: PolicyBundleEntry(
+                weights=train_states[team].params,
+                team=team,
+                obs_dim=dims[team][0],
+                action_dim=dims[team][1],
+                arch=arches[team],
+                trainable=team in trainable_teams,
+                source=sources[team],
+            )
+            for team in ("blue", "red")
+        }
+        save_jax_bundle(
+            path,
+            policies,
+            provenance={
+                "recipe": recipe["meta"]["name"],
+                "seed": int(args.seed),
+                "total_steps": int(env_steps),
+                "train_run_id": train_run_id,
+            },
+        )
+
+    print(f"Starting joint training ({num_updates} updates)...", flush=True)
+    with metrics_path.open("w") as metrics_file:
+        for update_idx in range(num_updates):
+            result = collect_and_update(
+                train_states,
+                env_state,
+                obs,
+                rng,
+                reward_norm_states,
+                update_idx=update_idx,
+                adaptive_state=adaptive_state,
+            )
+            train_states, env_state, obs, rng, reward_norm_states, metrics = result[:6]
+            if adaptive_settings is not None:
+                adaptive_state = result[6]
+            metrics = jax.device_get(metrics)
+            final_metrics = metrics
+            if update_idx == 0:
+                print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
+
+            env_steps = (update_idx + 1) * num_steps * num_envs
+            elapsed = time.perf_counter() - start
+            sps = env_steps / elapsed if elapsed > 0 else 0.0
+            primary_team = "blue" if "blue" in trainable_teams else "red"
+            primary = metrics[primary_team]
+            blue = metrics["blue"]
+            row = make_row(
+                update_idx=update_idx + 1,
+                env_steps=env_steps,
+                wall_time_s=elapsed,
+                throughput_sps=sps,
+                loss_policy=float(primary["actor_loss"]),
+                loss_value=float(primary["critic_loss"]),
+                loss_entropy=float(primary["entropy"]),
+                loss_total=float(primary["total_loss"]),
+                ppo_kl_divergence=float(primary["approx_kl"]),
+                ppo_clip_fraction=float(primary["clip_frac"]),
+                ppo_explained_variance=float(primary["explained_var"]),
+                lr=float(configs[primary_team]["LR"]),
+                train_episode_reward_mean=float(blue["raw_rollout_return"]),
+                ppo_grad_norm=float(primary["grad_norm"]),
+                ppo_pre_clip_grad_norm=float(primary["pre_clip_grad_norm"]),
+                backend_extras={
+                    "jax.game.red_return": float(metrics["game"]["red_return"]),
+                    **{f"jax.game.{counter}": float(metrics["game"][counter]) for counter in joint_game_counters},
+                },
+            )
+            metric_names = {
+                "actor_loss": "loss_policy",
+                "critic_loss": "loss_value",
+                "entropy": "loss_entropy",
+                "total_loss": "loss_total",
+                "approx_kl": "ppo_kl_divergence",
+                "clip_frac": "ppo_clip_fraction",
+                "explained_var": "ppo_explained_variance",
+                "grad_norm": "ppo_grad_norm",
+                "pre_clip_grad_norm": "ppo_pre_clip_grad_norm",
+                "raw_rollout_return": "return",
+                "mean_rollout_return": "normalized_return",
+                "actor_fraction": "actor_fraction",
+                "critic_fraction": "critic_fraction",
+                "updated": "updated",
+                "update_count": "update_count",
+                **{component: component for component in joint_reward_components},
+            }
+            for team in ("blue", "red"):
+                values = {metric_names[key]: float(metrics[team][key]) for key in metric_names}
+                if team == "red" and adaptive_settings is not None:
+                    values.update(
+                        {
+                            key: float(metrics[team][key])
+                            for key in (
+                                "adaptive_phase",
+                                "reward_window_mean",
+                                "reward_window_count",
+                                "gate_open",
+                                "forced_update",
+                                "frozen_rollouts",
+                            )
+                        }
+                    )
+                add_team_metrics(
+                    row,
+                    team,
+                    values,
+                )
+                row[f"team.{team}.lr"] = float(configs[team]["LR"])
+                row[f"team.{team}.trainable"] = team in trainable_teams
+            metrics_file.write(json.dumps(row) + "\n")
+            metrics_file.flush()
+            mlflow.log_metrics(
+                {
+                    key: value
+                    for key, value in row.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool) and key != "update_idx"
+                },
+                step=env_steps,
+            )
+            if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
+                print(
+                    f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
+                    f"blue {metrics['game']['blue_return']:.1f} red {metrics['game']['red_return']:.1f} "
+                    f"{sps:.0f} sps",
+                    flush=True,
+                )
+
+            checkpoint_every = int(configs["blue"].get("CHECKPOINT_EVERY_UPDATES", 50))
+            is_final = update_idx == num_updates - 1
+            previous_steps = update_idx * num_steps * num_envs
+            eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+            periodic_checkpoint = checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0
+            if periodic_checkpoint or is_final or eval_due:
+                name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
+                checkpoint_path = save_dir / name
+                save_bundle(checkpoint_path, env_steps)
+                sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+                sidecar_path = write_sidecar(
+                    save_dir / sidecar_name,
+                    recipe,
+                    seed=args.seed,
+                    total_steps=env_steps,
+                    backend="jax",
+                    train_run_id=train_run_id,
+                    extra={
+                        "trainable_teams": list(trainable_teams),
+                        "policy_sources": sources,
+                        "model": name,
+                    },
+                )
+                if eval_due:
+                    print(
+                        f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                        f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
+                        flush=True,
+                    )
+                    try:
+                        checkpoint_evaluator.on_checkpoint(
+                            checkpoint_path,
+                            sidecar_path,
+                            env_steps=env_steps,
+                            evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
+                                checkpoint_path,
+                                backend="jax",
+                                recipe=recipe,
+                                seed=args.seed,
+                                episodes_per_seed=episodes_per_seed,
+                            ),
+                        )
+                    finally:
+                        if not is_final and not periodic_checkpoint:
+                            checkpoint_path.unlink(missing_ok=True)
+                            sidecar_path.unlink(missing_ok=True)
+
+    elapsed = time.perf_counter() - start
+    sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
+    final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
+    mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
+    mlflow.log_artifact(str(metrics_path))
+    final_model = save_dir / f"model_{tag}.safetensors"
+    sidecar = save_dir / f"recipe_{tag}.yaml"
+    if final_model.exists():
+        mlflow.log_artifact(str(final_model))
+    if sidecar.exists():
+        mlflow.log_artifact(str(sidecar))
+    mlflow.end_run()
+    print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Blue score: {final_reward:.1f}")
+    print(f"Saved to: {save_dir}")
+
+    # Run in a fresh evaluation process only after the canonical final bundle
+    # and its sidecar exist and the training MLflow run has been closed.
+    from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
+
+    run_configured_evaluations_after_training(final_model, recipe)
+
+
+def main(*, expected_algorithm: str | None = None):
+    parser = argparse.ArgumentParser(description="IPPO / MAPPO on JAX, recipe-driven")
     parser.add_argument("--recipe", required=True, help="Recipe name (e.g. 'singh') or path to YAML")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
@@ -316,16 +775,35 @@ def main():
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
     args = parser.parse_args()
 
-    recipe = load_recipe(args.recipe)
+    recipe = copy.deepcopy(load_recipe(args.recipe))
+    if expected_algorithm is not None and recipe["algorithm"] != expected_algorithm:
+        parser.error(f"this launcher requires algorithm: {expected_algorithm}")
+    teams = training_teams(recipe)
+    learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
+    blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
+    red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
+    modules = {"blue": blue_module, "red": red_module}
+    for team, module in modules.items():
+        if has_centralized_critic(module) and module.team != team:
+            parser.error(f"{team} MAPPO policy requires arch.team: {team}")
+    if has_centralized_critic(blue_module) and "blue" in teams and not learned_red:
+        parser.error("MAPPO requires joint training: use train.teams: both or a frozen learned Red opponent")
+    if recipe["algorithm"] == "mappo" and not any(has_centralized_critic(modules[team]) for team in teams):
+        parser.error("algorithm: mappo requires a trainable policy with arch.name: mappo or recurrent_mappo")
+    # Apply CLI overrides to the resolved recipe itself so the exported
+    # sidecar describes the run that actually happened.
+    if args.total_timesteps is not None:
+        recipe["train"]["total_timesteps"] = int(args.total_timesteps)
+    if args.num_envs is not None:
+        recipe.setdefault("jax", {})["num_envs"] = int(args.num_envs)
     config = project_jax(recipe)
     config["SEED"] = args.seed
-    if args.total_timesteps is not None:
-        config["TOTAL_TIMESTEPS"] = args.total_timesteps
-    if args.num_envs is not None:
-        config["NUM_ENVS"] = args.num_envs
+    topology_bank = config.get("TOPOLOGY_BANK") or ()
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
-    save_dir = EXP_DIR / "ippo_jax" / tag
+    save_dir = EXP_DIR / f"{recipe['algorithm']}_jax" / tag
     save_dir.mkdir(parents=True, exist_ok=True)
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "")
@@ -333,20 +811,24 @@ def main():
         Path(cache_dir).mkdir(parents=True, exist_ok=True)
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
+    if learned_red:
+        _run_joint_training(args, recipe, tag, save_dir)
+        return
+
     # Build a throwaway env to get action_dim for network init.
     variant: GameVariant = config["TRAIN_VARIANT"]
+    topology_bank = config.get("TOPOLOGY_BANK") or None
     inner_env = make_jax_env(
         variant,
         topology_mode=config.get("TOPOLOGY_MODE", "generative"),
+        topology_path=list(topology_bank) if topology_bank else None,
+        mission_bank=config.get("MISSION_BANK"),
+        mission_bank_amplify=config.get("MISSION_BANK_AMPLIFY", 1.0),
+        phase_boundary_bank=config.get("PHASE_BOUNDARY_BANK"),
+        phase_rewards_bank=config.get("PHASE_REWARDS_BANK"),
     )
     action_dim = inner_env.action_space(inner_env.agents[0]).n
-    network = make_jax_policy(
-        recipe["arch"]["name"],
-        action_dim=action_dim,
-        hidden_dim=config["HIDDEN_DIM"],
-        hidden_layers=config["HIDDEN_LAYERS"],
-        activation=config["ACTIVATION"],
-    )
+    network = _network_from_arch(recipe["arch"], action_dim)
 
     print("=" * 60, flush=True)
     print(f"IPPO-JAX [{recipe['meta']['name']}] seed={args.seed}")
@@ -356,6 +838,7 @@ def main():
     print(f"  arch={recipe['arch']['name']} hidden_dim={config['HIDDEN_DIM']}")
     print("=" * 60, flush=True)
 
+    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     run = start_run(recipe, backend="jax", seed=args.seed)
     train_run_id = run.info.run_id
 
@@ -422,7 +905,6 @@ def main():
             {k: v for k, v in row.items() if isinstance(v, (int, float)) and k != "update_idx"},
             step=env_steps,
         )
-
         if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
             print(
                 f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
@@ -431,19 +913,65 @@ def main():
             )
 
         ckpt_every = int(config.get("CHECKPOINT_EVERY_UPDATES", 50))
-        if (update_idx + 1) % ckpt_every == 0 or update_idx == num_updates - 1:
-            is_final = update_idx == num_updates - 1
+        is_final = update_idx == num_updates - 1
+        previous_steps = update_idx * num_steps * num_envs
+        eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
+        periodic_checkpoint = ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0
+        if periodic_checkpoint or is_final or eval_due:
             ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
-            save_jax_params(ckpt_path, train_state.params, action_dim=action_dim)
-            if is_final:
-                write_sidecar(
-                    save_dir / f"recipe_{tag}.yaml",
-                    recipe,
-                    seed=args.seed,
-                    total_steps=env_steps,
-                    backend="jax",
-                    train_run_id=train_run_id,
+            save_jax_bundle(
+                ckpt_path,
+                {
+                    "blue": PolicyBundleEntry(
+                        weights=train_state.params,
+                        team="blue",
+                        obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)),
+                        action_dim=action_dim,
+                        arch=dict(recipe["arch"]),
+                        trainable=True,
+                        source={"kind": "fresh", "seed": int(args.seed)},
+                    )
+                },
+                provenance={
+                    "recipe": recipe["meta"]["name"],
+                    "seed": int(args.seed),
+                    "total_steps": int(env_steps),
+                    "train_run_id": train_run_id,
+                },
+            )
+            sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+            sidecar_path = write_sidecar(
+                save_dir / sidecar_name,
+                recipe,
+                seed=args.seed,
+                total_steps=env_steps,
+                backend="jax",
+                train_run_id=train_run_id,
+                extra={"trainable_teams": ["blue"], "model": ckpt_path.name},
+            )
+            if eval_due:
+                print(
+                    f"  MLflow checkpoint evaluation at step {env_steps:,}; "
+                    f"evaluating {checkpoint_evaluator.settings.episodes_per_seed} episodes per seed...",
+                    flush=True,
                 )
+                try:
+                    checkpoint_evaluator.on_checkpoint(
+                        ckpt_path,
+                        sidecar_path,
+                        env_steps=env_steps,
+                        evaluate_fn=lambda episodes_per_seed: evaluate_training_checkpoint(
+                            ckpt_path,
+                            backend="jax",
+                            recipe=recipe,
+                            seed=args.seed,
+                            episodes_per_seed=episodes_per_seed,
+                        ),
+                    )
+                finally:
+                    if not is_final and not periodic_checkpoint:
+                        ckpt_path.unlink(missing_ok=True)
+                        sidecar_path.unlink(missing_ok=True)
 
     metrics_file.close()
     elapsed = time.perf_counter() - start
@@ -451,6 +979,9 @@ def main():
     final_reward = float(final_metric["raw_rollout_return"]) if final_metric is not None else float("nan")
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
     mlflow.log_artifact(str(metrics_path))
+    final_model = save_dir / f"model_{tag}.safetensors"
+    if final_model.exists():
+        mlflow.log_artifact(str(final_model))
     sidecar = save_dir / f"recipe_{tag}.yaml"
     if sidecar.exists():
         mlflow.log_artifact(str(sidecar))
@@ -458,6 +989,10 @@ def main():
 
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Final reward: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
+
+    from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
+
+    run_configured_evaluations_after_training(final_model, recipe)
 
 
 if __name__ == "__main__":

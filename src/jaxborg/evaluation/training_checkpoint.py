@@ -1,0 +1,166 @@
+"""Evaluate immutable training checkpoints for experiment tracking.
+
+The training loops deliberately call this module only after writing a model
+bundle and its recipe sidecar.  Evaluation therefore measures the exact
+checkpoint uploaded to the tracker rather than mutable in-memory parameters.
+"""
+
+from __future__ import annotations
+
+import random
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterator
+
+import numpy as np
+
+from jaxborg.mlflow_setup import CheckpointEvalSettings
+from jaxborg.recipe import eval_variant, project_eval, training_teams
+
+
+@dataclass(frozen=True)
+class TrainingCheckpointEvaluation:
+    """Structured reward and CIA result returned by an enabled checkpoint eval."""
+
+    mean_rewards: dict[str, float]
+    cia_summary: dict[str, Any]
+    per_episode_cia: list[dict[str, float]]
+    episode_role_map_ids: list[str]
+    topology_role_maps: list[dict[str, Any]]
+
+
+def _uses_learned_red(recipe: dict) -> bool:
+    teams = training_teams(recipe)
+    opponents = recipe.get("train", {}).get("opponents") or {}
+    return "red" in teams or bool(opponents.get("red"))
+
+
+@contextmanager
+def _paired_eval_rng(*, seed: int, torch_rng: bool) -> Iterator[None]:
+    """Use paired eval randomness without perturbing the trainer's RNG streams."""
+
+    python_state = random.getstate()
+    numpy_state = np.random.get_state()
+    torch_state = None
+    torch = None
+    if torch_rng:
+        import torch as torch_module
+
+        torch = torch_module
+        torch_state = torch.random.get_rng_state()
+    try:
+        random.seed(seed)
+        np.random.seed(seed % (2**32))
+        if torch is not None:
+            torch.manual_seed(seed)
+        yield
+    finally:
+        random.setstate(python_state)
+        np.random.set_state(numpy_state)
+        if torch is not None and torch_state is not None:
+            torch.random.set_rng_state(torch_state)
+
+
+def evaluate_training_checkpoint(
+    checkpoint_path: str | Path,
+    *,
+    backend: str,
+    recipe: dict,
+    seed: int,
+    episodes_per_seed: int | None = None,
+    episodes: int | None = None,
+) -> dict[str, float] | TrainingCheckpointEvaluation:
+    """Return mean checkpoint rewards for each policy team being evaluated.
+
+    Learned Blue/Red matchups use the existing JAX-native matchup evaluator
+    and load both policies from the same versioned bundle.  Legacy Blue-only
+    runs retain their existing CybORG contract evaluator.  A fixed seed range
+    is reused at every checkpoint so the sparse evaluation curve is paired.
+    """
+
+    if episodes_per_seed is not None and episodes is not None:
+        raise ValueError("set episodes_per_seed or legacy episodes, not both")
+    if episodes_per_seed is None:
+        episodes_per_seed = 10 if episodes is None else episodes
+    if isinstance(episodes_per_seed, bool) or not isinstance(episodes_per_seed, int):
+        raise ValueError(f"episodes_per_seed must be an integer, got {episodes_per_seed!r}")
+    if episodes_per_seed < 1:
+        raise ValueError(f"episodes_per_seed must be positive, got {episodes_per_seed}")
+    backend_name = "cyborg" if backend in ("cleanrl", "torch") else backend
+    if backend_name not in ("jax", "cyborg"):
+        raise ValueError(f"backend must be 'jax' or 'cyborg', got {backend!r}")
+
+    checkpoint_path = Path(checkpoint_path)
+    settings = CheckpointEvalSettings.from_recipe(recipe)
+    configured_seed = settings.seed
+    eval_seed = int(seed) + 100_000 if configured_seed is None else int(configured_seed)
+    deterministic = settings.deterministic
+    variant = eval_variant(recipe)
+    trainable_teams = training_teams(recipe)
+
+    with _paired_eval_rng(seed=eval_seed, torch_rng=backend_name == "cyborg"):
+        if _uses_learned_red(recipe):
+            from jaxborg.evaluation.matchup_runner import evaluate_matchup
+
+            eval_config = project_eval(recipe, materialize_topologies=True)
+            topology_bank = eval_config["TOPOLOGY_BANK"] or None
+            from jaxborg.evaluation.cia.config import CIAEvalSettings
+
+            cia_config = eval_config.get("CIA", CIAEvalSettings.from_recipe(recipe).as_dict())
+            matchup_kwargs = {
+                "backend": backend_name,
+                "variant": variant,
+                "seeds": [eval_seed],
+                "episodes_per_seed": episodes_per_seed,
+                "deterministic": deterministic,
+                "progress": False,
+                "topology_path": topology_bank,
+                "topology_sampling": eval_config["TOPOLOGY_SAMPLING"],
+            }
+            if cia_config["enabled"]:
+                matchup_kwargs["cia"] = cia_config
+            result = evaluate_matchup(checkpoint_path, checkpoint_path, **matchup_kwargs)
+            means = {
+                "blue": float(np.mean(result.blue_returns)),
+                "red": float(np.mean(result.red_returns)),
+            }
+            trained_means = {team: means[team] for team in trainable_teams}
+            if not cia_config["enabled"]:
+                return trained_means
+            return TrainingCheckpointEvaluation(
+                mean_rewards=trained_means,
+                cia_summary=result.cia_summary,
+                per_episode_cia=result.per_episode_cia,
+                episode_role_map_ids=result.episode_role_map_ids,
+                topology_role_maps=result.topology_role_maps,
+            )
+
+        if backend_name == "jax":
+            from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
+
+            rewards, _seed_log, _checkpoint_recipe = evaluate_jax_on_cyborg(
+                checkpoint_path,
+                variant=variant,
+                seeds=[eval_seed],
+                episodes_per_seed=episodes_per_seed,
+                deterministic=deterministic,
+                workers=1,
+                progress=False,
+            )
+        else:
+            from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
+
+            rewards, _seed_log = evaluate_on_cyborg(
+                checkpoint_path,
+                variant=variant,
+                seeds=[eval_seed],
+                episodes_per_seed=episodes_per_seed,
+                deterministic=deterministic,
+                workers=1,
+                progress=False,
+            )
+        return {"blue": float(np.mean(rewards))}
+
+
+__all__ = ["TrainingCheckpointEvaluation", "evaluate_training_checkpoint"]

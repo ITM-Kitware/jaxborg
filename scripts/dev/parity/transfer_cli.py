@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from scripts.dev.parity.bootstrap import EXP_DIR, ROOT, configure_runtime
+from scripts.dev.parity.bootstrap import EXP_DIR, configure_runtime
 
 configure_runtime()
 
@@ -403,20 +403,6 @@ def main():
         tost_result["matched"] = is_matched
         tost_path.write_text(json.dumps(tost_result, indent=2) + "\n")
         print(f"Saved TOST result: {tost_path}")
-        try:
-            import sys
-
-            sys.path.insert(0, str(ROOT / "scripts" / "dev"))
-            from catalog import update_l4_tost
-
-            update_l4_tost(
-                equivalent=tost_result["equivalent"],
-                margin=tost_result["margin"],
-                mean_diff=tost_result["mean_diff"],
-                episodes=len(jax_rewards),
-            )
-        except Exception as e:
-            print(f"WARNING: Failed to update catalog with L4 TOST result: {e}")
 
     # Optional: baselines
     if args.baselines:

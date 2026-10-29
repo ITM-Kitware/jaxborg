@@ -1,0 +1,150 @@
+meta:
+  name: br_red_vs_cotraining
+  source: "Best-response oracle: Red vs the frozen co-trained Blue"
+  added: 2026-09-08
+  notes: |
+    Half of the exploitability measurement for the cotraining pair. Red trains
+    from fresh weights against a FROZEN co-trained Blue; the value it reaches is
+    how much Red can gain by deviating, which is one of the two terms in
+    NashConv. Its twin is br_blue_vs_cotraining.
+
+    Writing (b*, r*) for the co-trained pair and u for the Blue return:
+
+        v              = u(b*, r*)          cotraining's learned-red-ppo eval
+        u(b*, BR_red)  <= v                 THIS recipe's learned-matchup eval
+        u(BR_blue, r*) >= v                 br_blue_vs_cotraining's eval
+
+        delta_red  = v - u(b*, BR_red)      >= 0
+        delta_blue = u(BR_blue, r*) - v     >= 0
+        NashConv   = delta_red + delta_blue = u(BR_blue, r*) - u(b*, BR_red)
+
+    NashConv is 0 exactly at a Nash equilibrium, and v cancels out of it, so the
+    headline number needs only the two oracle evaluations. All three quantities
+    are Blue returns, so they only compare if they are measured the same way --
+    which is why eval.after_training below mirrors cotraining's seeds, bank and
+    episode count exactly. Do not retune them here.
+
+    Reading the training curve: because the opponent is frozen, this run's
+    `team.red.return` is a stationary learning curve and can be read directly,
+    unlike co-training's zero-sum return. That is the convergence check. If it
+    is still climbing at the end, the oracle has not converged and NashConv is
+    an UNDERESTIMATE -- raise train.total_timesteps and rerun. Always report the
+    oracle budget next to the number: exploitability is only ever measured
+    relative to the strength of the oracle that searched for the deviation.
+
+algorithm: ippo
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 3
+    seed: null
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+# Applies to the trainable team (Red) only. The frozen Blue's architecture is
+# read from its own bundle, not from here, so this cannot drift out of sync
+# with the checkpoint being measured.
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  # Red trains, Blue is frozen. Red-only training requires opponents.blue.
+  teams: red
+  opponents:
+    # The Blue being measured. Resolves to
+    # $JAXBORG_EXP_DIR/ippo_jax/cotraining_seed42/model_cotraining_seed42.safetensors.
+    # Retarget this (and the twin recipe) to measure a different pair -- for a
+    # mid-run checkpoint use an explicit {path: ...} instead.
+    blue:
+      experiment: cotraining_seed42
+
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  # Half of cotraining's 20M. A best response faces a STATIONARY opponent, which
+  # is a strictly easier problem than co-training, so it should saturate sooner.
+  # The team.red.return curve is the evidence -- raise this if it has not
+  # flattened. Both oracle recipes must use the same budget or the two NashConv
+  # terms are not measured on equal footing.
+  total_timesteps: 10000000
+  variant: cc4_stock
+
+  # Identical to cotraining's train bank: the oracle has to be solving the same
+  # game as the pair it is measuring, or the deviation value is meaningless.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 5
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Both are self-play progress instruments and mean nothing when one side is
+  # frozen: play_priors would compare a Red checkpoint against a Blue that never
+  # changed, and cross_play's off-diagonal exists to expose cycling between two
+  # moving policies. Off, and they are the two most expensive evaluations in the
+  # chain.
+  play_priors:
+    enabled: false
+  cross_play:
+    enabled: false
+  checkpoint_scripted_reds:
+    enabled: false
+
+  # The one number this recipe exists to produce: u(b*, BR_red), the Blue return
+  # when the frozen co-trained Blue faces the best Red found against it. The
+  # final bundle carries BOTH policies -- trained Red and the frozen Blue it was
+  # trained against -- so pointing --blue-path and --red-path at the same bundle
+  # is exactly the matchup wanted. Seeds, bank and episodes-per-seed match
+  # cotraining's learned-red-ppo evaluation so the two are directly subtractable.
+  after_training:
+    - name: br-red-vs-frozen-blue
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 40  # 960k-step stride -> ~10 durable checkpoints over 10M.

@@ -18,6 +18,13 @@ meta:
 
 algorithm: ippo
 
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 10
+    seed: null
+    deterministic: false
+
 core:
   lr: 5.0e-5
   gamma: 0.99

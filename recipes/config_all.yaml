@@ -1,0 +1,298 @@
+# Fully explicit simultaneous Blue/Red self-play recipe. Optional settings that
+# are incompatible with fresh co-training are kept as empty mappings below.
+
+meta:
+  name: cotraining  # Stable recipe/run name used in logs and checkpoint metadata.
+  source: "Dual-team simultaneous self-play baseline"  # Human-readable provenance only.
+  added: 2026-08-16  # Documentation metadata; it does not affect training.
+  notes: |  # Free-form experiment documentation stored with recipe sidecars.
+    Opt-in Blue/Red co-training recipe. Both parameter-sharing policies start
+    from fresh weights, act on the same pre-step state, and learn from the same
+    game payoff (with the Red objective equal to the negative Blue score).
+
+# Selects scripts/train/algorithms/ippo_{jax,cyborg}.py.
+algorithm: ippo
+
+# MLflow checkpoint evaluation. The trainer freezes and evaluates the first
+# completed update crossing each interval, plus the final update.
+mlflow:
+  checkpoint_eval:
+    every_steps: 150000  # Evaluate every 5% of this 3M-step run.
+    episodes_per_seed: 10  # Episodes generated from the checkpoint evaluation seed.
+    seed: null  # null uses the training seed + 100000 for paired curves.
+    deterministic: false  # false samples actions; true takes argmax actions.
+
+# PPO settings shared by both backends and, unless overridden, both teams.
+core:
+  lr: 3.0e-4  # Adam learning rate for each team's independent optimizer.
+  gamma: 0.99  # Discount applied to future rewards.
+  gae_lambda: 0.95  # Bias/variance trade-off for generalized advantage estimation.
+  clip_eps: 0.2  # PPO policy probability-ratio clipping radius.
+  vf_coef: 0.5  # Value-loss contribution to the total PPO loss.
+  max_grad_norm: 0.5  # Global gradient-norm clipping threshold.
+  ent_coef: 0.01  # Entropy bonus coefficient encouraging exploration.
+  norm_rewards: true  # Normalize each team's reward using running return statistics.
+  reward_scale: 1.0  # Post-normalization reward multiplier (currently JAX-only).
+  anneal_lr: false  # If true, linearly decay the learning rate over the run.
+
+# Policy network used independently by Blue and Red; weights are not shared
+# between teams, while agents within one team do share that team's weights.
+# Registry: src/jaxborg/policies/__init__.py.
+arch:
+  name: shared  # shared = common actor/critic trunk; separate = two trunks; recurrent = sequence model.
+  hidden_dim: 256  # Neurons in every hidden layer; for recurrent, also the hidden-state width.
+  hidden_layers: 2  # Hidden layers per trunk; for recurrent, the dense layers *before* the cell (use 1).
+  activation: tanh  # JAX supports tanh/relu; the Torch implementation uses tanh.
+
+  # The two fields below apply to name: recurrent only. The feedforward archs
+  # reject them rather than ignoring them, so leave them commented out unless
+  # name is recurrent. See docs/training.md#recurrent-architectures.
+  #
+  # A recurrent policy carries hidden state between timesteps instead of
+  # reacting to one frame. It changes how PPO batches: minibatches become whole
+  # trajectories, so jax.num_minibatches must divide num_envs * agents rather
+  # than the row count (see the jax block below), and the CybORG/CleanRL
+  # backend cannot train it at all.
+  #
+  # cell: gru  # gru = JaxMARL's recurrent IPPO baseline cell; lstm = a (c, h) pair,
+  #            # ~20% more parameters, but measurably FASTER per PPO update:
+  #            # flax's OptimizedLSTMCell fuses its gate matmuls, and GRUCell
+  #            # has no optimized variant.
+  # trunk: shared  # shared = one encoder and one hidden state feeding both heads;
+  #                # separate = an encoder and hidden state each, the recurrent
+  #                # analogue of name: separate.
+
+train:
+  teams: both  # blue, red, or both; both enables fresh simultaneous self-play.
+
+  # Frozen opponents and initial weights are forbidden for teams: both because
+  # both policies must start fresh and learn against each other. Model refs can
+  # specify path or experiment plus an optional backend; path takes precedence.
+  opponents: {}  # For one-team runs only: map the frozen opposing team to a model ref.
+  initial_weights: {}  # Reserved model-weight sources; must remain empty for both.
+  team_overrides: {}  # Optional blue/red maps that deep-merge core and arch settings.
+  # PPO update interval per team (teams: both); omitted teams default to 1.
+  # {blue: 1, red: 2} updates Red on cycles 2, 4, ... using only that cycle's data.
+  # Skipped cycles leave parameters and optimizer state unchanged, including Adam moments.
+  update_every: {blue: 1, red: 1}
+
+  # Optional two-phase Red update schedule (JAX only, teams: both, Blue interval 1).
+  # update_every.red applies only during phase 1; set it to 4 for quarter-rate Red.
+  # Phase 2 opens at mean raw Blue rollout return > reward_threshold and then
+  # updates Red every rollout. A closed gate skips PPO, except for the forced
+  # update at the end of max_frozen_blue_rollouts consecutive closed rollouts.
+  # Red must use a constant learning rate (core.anneal_lr: false).
+  # adaptive_updates:
+  #   phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
+  #   reward_threshold: -2000.0
+  #   window_blue_updates: 5         # Includes current rollout and phase-one history.
+  #   max_frozen_blue_rollouts: 50
+
+  episode_length: 500  # PPO rollout horizon; it does not change environment termination.
+  total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
+  variant: cc4_stock  # Game rules: cc4_stock, cia_resilience, cia_c, cia_i, or cia_a.
+
+  # The only two rule knobs a recipe may change; everything else is a property
+  # of the named variant, so recipes cannot quietly fork the scenario. Both
+  # default to stock CC4, and both apply to evaluation as well as training --
+  # the resolved sidecar carries them to every evaluator, because a Blue
+  # trained under a narrower action mask has to be scored under the same one.
+  # See docs/cotraining_collapse.md for what each one is for.
+  variant_overrides: {}  # Empty (or absent) reproduces stock CC4 exactly.
+  # variant_overrides:
+  #   red_reward: zero_sum  # zero_sum = Red is paid -(total Blue score);
+  #                         # damage = Red is paid -(reward_ria + reward_lwf) only,
+  #                         # so it is not paid for reward_asf (which only Blue can
+  #                         # trigger) or for Blue's Restore action_cost. Blue's own
+  #                         # payoff is byte-identical under both.
+  #   blue_block_policy: cc4  # cc4 = stock action mask; mission_safe = BlockTraffic is
+  #                           # masked out on subnet pairs the current phase's comms
+  #                           # policy permits. mission_safe REMOVES Blue actions, so
+  #                           # its results are not comparable to stock-CC4 benchmarks
+  #                           # and a policy trained under it must be evaluated under it.
+
+  # Optional JAX topology pool. Omit both declarations to generate a fresh
+  # topology on every reset. topology_bank and topology_generation are
+  # mutually exclusive; the latter creates one immutable cached snapshot per
+  # source seed. A diversified bank must have at least jax.num_envs entries
+  # because each parallel reset batch samples without replacement. A one-entry
+  # bank is the fixed-topology control. Relative paths resolve from the repo root.
+  # topology_bank:
+  #   - topology_banks/my_experiment/train/shape_00.snapshot.npz
+  #   - topology_banks/my_experiment/train/shape_01.snapshot.npz
+  # topology_generation:
+  #   generator: cyborg  # cyborg = CAGE EnterpriseScenarioGenerator; jax = pure-JAX generator.
+  #   seed_start: 0  # First source seed, inclusive.
+  #   count: 100  # Pool size (maximum 10,000); use exactly one of count or seed_end.
+  #   seed_end: 99  # Inclusive alternative to count; leave one of these two fields commented.
+  #   cache_dir: topology_banks/my_experiment/train
+  #   output_dir: topology_banks/my_experiment/train  # Alias for cache_dir; leave one field commented.
+
+  # These legacy cross-backend targets document the intended batch shape.
+  # With explicit backend controls below, only buffer_size is used as a
+  # CleanRL fallback when num_rollouts_per_update is omitted.
+  buffer_size: 5120000  # Target rollout samples retained for recipe provenance.
+  minibatch_size: 320000  # Informational target; active controls are below.
+  sgd_iterations: 64  # Informational target; epochs * minibatches gives actual updates.
+
+eval:
+  variant: cc4_stock  # Game variant used for checkpoint/evaluation rollouts.
+  # red: fsm  # Optional Red-selector override, applied on top of eval.variant:
+  #           # fsm, cia_c, cia_i, cia_a, or resilience. The CIA-biased selectors
+  #           # require role tags, so setting one forces resilience_roles=True.
+  cia_metric: resilience  # Compatibility metric selector; does not enable CIA collection.
+  cia:
+    enabled: false
+    metric: resilience
+    role_assignment: fixed_per_topology
+  policy_backend: jax  # Backend for separately sourced eval policies: jax or cyborg.
+  policies: {}  # Empty for checkpoint eval; matchup eval requires blue/red model refs.
+  # exhaustive (default) runs every requested dynamics seed on every topology;
+  # random keeps the requested episode count and samples the bank with replacement.
+  topology_sampling: exhaustive
+
+  # Scheduling: these named blocks configure built-in POST-TRAINING suites;
+  # their position outside after_training does not make them run during training.
+  # The runner executes enabled suites in this fixed order:
+  # cross_seed_play -> play_priors -> cross_play -> checkpoint_scripted_reds,
+  # followed by the explicit after_training script list in list order.
+  # YAML key order does not change the built-in order. Only
+  # mlflow.checkpoint_eval above runs evaluations DURING training.
+
+  # Final Blue vs one other training seed's final Red; requires train.teams: both.
+  # run_cotraining.sh assigns the next seed cyclically after all training jobs:
+  # 42 -> 100, 100 -> 200, 200 -> 42 (three matchups, not a nine-cell matrix).
+  # Manual: run_after_training.py --model BLUE_FINAL --cross-seed-red RED_FINAL.
+  # Both final bundles need sidecars with distinct run.seed values. Without an
+  # explicit opponent this suite prints a skip message. No history is loaded.
+  # Records reward and, when eval.cia.enabled is true, C/I/A in result JSON and
+  # on the Blue run in MLflow: eval.after_training.cross-seed-play.jax_matchup.
+  # Uses the shared eval.variant/topology/CIA settings; no max_checkpoints field.
+  cross_seed_play:
+    enabled: false
+    seeds: 1000-1009  # Environment dynamics seeds, not training seeds.
+    episodes_per_seed: 1  # With 10 exhaustive topologies: 100 episodes per matchup.
+    deterministic: false
+    required: true  # Once scheduled, an evaluator failure fails the pipeline.
+
+  # Multi-seed launcher only: run once after both conditions finish all seeds.
+  # Configure on the diverse recipe. Both Blue conditions face both Red pools,
+  # excluding same-training-seed opponents. Failures fail the launcher.
+  # Manual: eval_env_diversity.py --recipe DIVERSE_RECIPE
+  env_diversity:
+    enabled: false
+    baseline_recipe: cotraining
+    seeds: 1000-1009
+    episodes_per_seed: 6
+    deterministic: false
+
+  # The three history evaluators below all run after training, all
+  # stride the durable checkpoints, and all accept the same seeds /
+  # episodes_per_seed / deterministic / required / max_checkpoints fields.
+  # `required: false` means a failure here cannot fail the training job.
+  # `max_checkpoints` subsamples the durable checkpoints first, so "adjacent"
+  # and "every pair" below are relative to the subsample.
+
+  # Each checkpoint against the one before it. Valid only with train.teams:
+  # both. Cost is 2 * (max_checkpoints - 1) evaluations. Note this advances
+  # both endpoints, so under a rock-paper-scissors cycle it reports an
+  # improvement at every step while the policies walk in a circle.
+  # These matchups are a subset of cross_play when checkpoint selection and
+  # evaluation settings match. Enable one or the other to avoid repeat rollouts;
+  # play_priors supplies its own metric namespace, not additional opponents.
+  play_priors:
+    enabled: false
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+    max_checkpoints: 6  # Durable checkpoints sampled; the cycle is only visible off-diagonal.
+
+  # Full n-by-n matrix: Blue from every sampled checkpoint against Red from
+  # every sampled checkpoint. Valid only with train.teams: both. Cost is
+  # max_checkpoints ** 2 matchups. Headline readouts are
+  # blue/red.worst_vs_history (should climb if progress is real) and
+  # forgetting_rate (a later policy losing to an opponent an earlier one beat).
+  cross_play:
+    enabled: false
+    seeds: 1000-1002  # Note the narrower default than play_priors: this pays n**2.
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+    max_checkpoints: 6
+
+  # Each sampled checkpoint's Blue against fixed scripted Reds, plus CIA.
+  # Scripted opponents never change, so this is an absolute scale: it moves
+  # only when Blue moves, which is what makes it readable next to a zero-sum
+  # self-play return. Watch blue.worst_reward -- Blue chasing a learned Red can
+  # regress against the FSMs it is ultimately judged on, and a mean across Reds
+  # hides that. Cost is max_checkpoints x the final-model scripted-Red sweep.
+  # This uses periodic checkpoint files; it does not automatically include the
+  # exported final model. Keep a final scripted-reds entry for the exact endpoint.
+  checkpoint_scripted_reds:
+    enabled: false
+    reds: [fsm, cia_c, cia_i, cia_a]  # Scripted opponents to sweep.
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+    required: true
+    max_checkpoints: 6
+
+  # Optional explicit script list, appended AFTER the enabled built-in suites
+  # above. All run after the durable final bundle and its sidecar are written.
+  # Each entry runs in a fresh process, in order. JAX-trained models default to CUDA; set
+  # JAX_PLATFORMS=cpu to override. Results from the built-in scripts go to
+  # $JAXBORG_EXP_DIR/eval/.
+  #
+  # Per-entry settings: name and script are required; args, model_arg and
+  # required are optional. model_arg defaults to --model and is appended with
+  # the exact final model path; set it to null for scripts that take separate
+  # Blue/Red model flags instead (eval_matchup.py). Placeholders usable inside
+  # args: {model} {recipe} {backend} {exp_dir} {eval_dir} {name}.
+  # after_training:
+  #   - name: stochastic-reds
+  #     script: scripts/eval/eval_scripted_reds.py
+  #     args: [--reds, fsm, cia_c, --seeds, 1000-1099, --workers, 8]
+  #     required: true  # false lets this entry fail without failing the job.
+  #   - name: learned-red-ppo  # Both policies from one co-trained bundle.
+  #     script: scripts/eval/eval_matchup.py
+  #     model_arg: null  # eval_matchup takes --blue-path/--red-path instead.
+  #     args: [--recipe, "{recipe}", --policy-backend, "{backend}",
+  #            --blue-path, "{model}", --red-path, "{model}", --seeds, 1000-1009]
+
+  # Optional held-out JAX evaluation pool. It never falls back to the training
+  # pool. Keep its paths and (generator, source-seed) pairs disjoint from train.
+  # topology_bank:
+  #   - topology_banks/my_experiment/test/shape_00.snapshot.npz
+  #   - topology_banks/my_experiment/test/shape_01.snapshot.npz
+  # topology_generation:
+  #   generator: cyborg
+  #   seed_start: 100
+  #   count: 20  # Seeds 100 through 119; seed_end: 119 is equivalent.
+  #   op_zone_servers: 3  # JAX only; exact count in each operational subnet.
+  #   cache_dir: topology_banks/my_experiment/test
+
+# Active controls for the JAX/Flax trainer.
+jax:
+  num_envs: 48  # Parallel environments; 48 * 500 = 24,000 env steps per update.
+  # Feedforward archs split the flat rollout rows, so this must divide
+  # num_envs * agents * episode_length. arch.name: recurrent splits whole
+  # sequences instead, so it must divide num_envs * agents (48 * 5 = 240 Blue,
+  # 48 * 6 = 288 Red) -- a stricter constraint that is checked at trace time,
+  # not by the recipe smoke tests.
+  num_minibatches: 16  # Split each team's rollout samples into this many minibatches.
+  update_epochs: 4  # PPO passes over every rollout; 16 * 4 = 64 optimizer steps/update.
+  checkpoint_every_updates: 50  # Save periodically, plus MLflow evaluation checkpoints.
+  busy_masking: false  # Compatibility field; current trainer applies fixed busy masking.
+  grad_clip_mode: global  # Compatibility field; global clipping is the current behavior.
+
+# Active controls for the CPU CybORG/Torch trainer. This backend shuffles
+# transitions across the time axis and therefore cannot train
+# arch.name: recurrent; that arch is JAX-only.
+cleanrl:
+  num_envs: 48  # Parallel reference CybORG environments.
+  rollout_length: 500  # Steps collected per environment in one rollout.
+  num_rollouts_per_update: 1  # Rollouts accumulated before each PPO update.
+  num_minibatches: 16  # Number of shuffled minibatches per epoch.
+  num_epochs: 4  # PPO passes over each collected batch.
+  checkpoint_every_updates: 50  # Save a model bundle every N updates.

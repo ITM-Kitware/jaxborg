@@ -14,6 +14,7 @@ dependencies = [
     "numpy",
     "optax",
     "pyyaml",
+    "seaborn>=0.13",
     "torch>=2.0",
 ]
 
@@ -37,6 +38,7 @@ cuda = ["jax[cuda12]>=0.7.1"]
 [project.scripts]
 export-generated-topology = "jaxborg.scenarios.cc4.topology_cli:export_generated_main"
 export-cyborg-topology = "jaxborg.scenarios.cc4.topology_cli:export_cyborg_main"
+materialize-topologies = "jaxborg.topology_bank_cli:main"
 
 [build-system]
 requires = ["hatchling"]

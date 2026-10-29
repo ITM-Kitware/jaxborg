@@ -108,6 +108,7 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    red_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
 
     host_services = jnp.where(
         covers_host,
@@ -178,6 +179,15 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
         state.host_service_reliability,
     )
     return state.replace(
+        blue_file_evidence=state.blue_file_evidence.at[target_host].set(
+            jnp.where(covers_host & const.cage4_enhanced_obs, 0, state.blue_file_evidence[target_host])
+        ),
+        blue_recovered_this_step=state.blue_recovered_this_step.at[target_host].set(
+            state.blue_recovered_this_step[target_host] | (covers_host & const.cage4_enhanced_obs)
+        ),
+        host_file_artifact=state.host_file_artifact.at[target_host].set(
+            jnp.where(covers_host, 0, state.host_file_artifact[target_host])
+        ),
         host_compromised=host_compromised,
         red_sessions=red_sessions,
         red_session_count=red_session_count,
@@ -189,6 +199,7 @@ def apply_blue_restore(state: SimulatorState, const: SimulatorConst, agent_id: i
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         host_services=host_services,

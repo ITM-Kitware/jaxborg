@@ -288,6 +288,7 @@ def reassign_cross_subnet_sessions(state: SimulatorState, const: SimulatorConst)
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    red_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
     red_scan_source_pid = jnp.where(full_clear, jnp.int32(-1), scan_synced.red_scan_source_pid)
     host_suspicious_process = jnp.any(red_suspicious_process_count > 0, axis=0)
 
@@ -319,6 +320,7 @@ def reassign_cross_subnet_sessions(state: SimulatorState, const: SimulatorConst)
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_pid=red_primary_pid,

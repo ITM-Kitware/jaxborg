@@ -22,9 +22,10 @@ from jaxborg.actions.encoding import (
 )
 from jaxborg.actions.masking import compute_blue_action_mask
 from jaxborg.actions.pids import append_pid_to_row
-from jaxborg.actions.red_common import apply_red_session_check
+from jaxborg.actions.red_common import apply_red_session_check, observed_exploit_ports
+from jaxborg.blue_observation_contract import blue_obs_size
 from jaxborg.constants import CC4_CONFIG, COMPROMISE_USER
-from jaxborg.observations import get_blue_obs, get_red_obs
+from jaxborg.observations import get_blue_obs, get_red_obs, update_blue_observation_memory
 from jaxborg.reassignment import reassign_cross_subnet_sessions
 from jaxborg.rewards import advance_mission_phase, compute_reward_breakdown
 from jaxborg.scenarios.cc4.red_fsm import fsm_red_init_states
@@ -34,6 +35,7 @@ from jaxborg.scenarios.cc4.topology import (
 )
 from jaxborg.scenarios.config import ScenarioConfig
 from jaxborg.state import SimulatorConst, SimulatorState, create_initial_state
+from jaxborg.training_topology_sampling import sample_training_topology_indices
 
 
 def apply_all_actions(
@@ -45,6 +47,7 @@ def apply_all_actions(
     red_keys: jnp.ndarray,
     red_overrides: RedAgentOverrides | None = None,
     blue_keys: jnp.ndarray = None,
+    red_creation_visible_sessions_override: jnp.ndarray | None = None,
 ) -> SimulatorState:
     """Apply one CybORG step in CybORG's deterministic priority order.
 
@@ -63,6 +66,7 @@ def apply_all_actions(
     """
     n_blue = blue_actions.shape[0]
     n_red = red_actions.shape[0]
+    state = state.replace(blue_recovered_this_step=jnp.zeros_like(state.blue_recovered_this_step))
 
     if red_overrides is None:
         red_overrides = RedAgentOverrides.identity(n_red)
@@ -105,6 +109,11 @@ def apply_all_actions(
     # --- Phase 3: Red agents (deterministic order matching CybORG) ---
     # red_order = arange so r == i; n_red is small (6) and static — unroll directly.
     for r in range(n_red):
+        creation_visible_sessions = (
+            pre_green_visible_sessions[r]
+            if red_creation_visible_sessions_override is None
+            else red_creation_visible_sessions_override[r]
+        )
         state = process_red_with_duration(
             state,
             const,
@@ -114,7 +123,7 @@ def apply_all_actions(
             forced_primary_host=red_overrides.primary_hosts[r],
             forced_primary_pid=red_overrides.primary_pids[r],
             run_session_check=False,
-            creation_visible_sessions_override=pre_green_visible_sessions[r],
+            creation_visible_sessions_override=creation_visible_sessions,
         )
 
     # --- Post-step processing ---
@@ -162,6 +171,7 @@ def apply_all_actions(
         axis=0,
     )
 
+    state = update_blue_observation_memory(state, const)
     return state.replace(
         fsm_host_entered=fsm_host_entered,
         red_impact_attempted=red_impact_attempted,
@@ -188,6 +198,7 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
     red_abstract_host_rank = state.red_abstract_host_rank
     red_next_abstract_rank = state.red_next_abstract_rank
     red_scanned_source_hosts = state.red_scanned_source_hosts
+    red_scanned_ports = state.red_scanned_ports
     red_scan_source_pid = state.red_scan_source_pid
     red_session_pids = state.red_session_pids
     red_session_abstract_pids = state.red_session_abstract_pids
@@ -196,6 +207,9 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
 
     # Only red_agent_0 is active at reset; others activate via session reassignment
     red_agent_active = state.red_agent_active.at[0].set(True)
+    initial_observed_ports = jax.vmap(lambda h: observed_exploit_ports(state, h))(
+        jnp.arange(state.host_services.shape[0], dtype=jnp.int32)
+    )
 
     n_red = state.red_agent_active.shape[0]
     for r in range(n_red):
@@ -254,6 +268,15 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         red_scanned_source_hosts = red_scanned_source_hosts.at[r, :, start_host].set(
             jnp.where(is_active, initially_scanned, prior_scan_col)
         )
+        prior_scanned_ports = red_scanned_ports[r]
+        initial_scanned_ports = jnp.where(
+            initially_scanned[:, None],
+            initial_observed_ports,
+            prior_scanned_ports,
+        )
+        red_scanned_ports = red_scanned_ports.at[r].set(
+            jnp.where(is_active, initial_scanned_ports, prior_scanned_ports)
+        )
         # Record scan-owning PID for initial knowledge sourced from start_host.
         has_initial_scan = jnp.any(initially_scanned)
         red_scan_source_pid = red_scan_source_pid.at[r, start_host].set(
@@ -278,6 +301,7 @@ def _init_red_state(const: SimulatorConst, state: SimulatorState) -> SimulatorSt
         red_discovered_hosts=red_discovered,
         red_scanned_hosts=red_scanned,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_pid=red_primary_pid,
@@ -314,13 +338,81 @@ class ScenarioEnv(MultiAgentEnv):
         topology_path: str | Path | Sequence[str | Path] | None = None,
         scenario_config: ScenarioConfig = CC4_CONFIG,
         op_zone_min_servers: int | None = None,
+        mission_bank: Sequence[Sequence[float]] | None = None,
+        mission_bank_amplify: float = 1.0,
+        phase_boundary_bank: Sequence[Sequence[int]] | None = None,
+        phase_rewards_bank: Sequence | None = None,
+        red_reward: str = "zero_sum",
+        blue_block_policy: str = "cc4",
+        cage4_enhanced_obs: bool = False,
     ):
+        if red_reward not in ("zero_sum", "damage"):
+            raise ValueError(f"unknown red_reward {red_reward!r}")
+        if blue_block_policy not in ("cc4", "mission_safe"):
+            raise ValueError(f"unknown blue_block_policy {blue_block_policy!r}")
+        # Both default to the stock CC4 contract; see GameVariant for what the
+        # alternatives change and why they are opt-in.
+        self.red_reward = red_reward
+        self.blue_block_policy = blue_block_policy
+        self.cage4_enhanced_obs = cage4_enhanced_obs
         self.cfg = scenario_config
         self.num_steps = num_steps if num_steps is not None else scenario_config.max_steps
         self.training_mode = training_mode
         self.op_zone_min_servers = op_zone_min_servers
         self._const_bank = None
         self._const_bank_size = 0
+
+        # Phase 6 axis B — per-reset CIA-component multiplier bank.  When
+        # ``mission_bank`` is None or empty, we behave exactly as before
+        # (no per-reset variation, multipliers are implicitly (1, 1, 1)).
+        # Otherwise stack the bank as a (N, 3) float32 array on self and
+        # sample an index in ``_select_const``.  ``mission_bank_amplify``
+        # scales the *entire* sampled triple element-wise — so amplify=10
+        # with bank entry (1, 3, 1) yields (10, 30, 10), not (1, 30, 1).
+        if mission_bank is None or len(mission_bank) == 0:
+            self._mission_bank = None
+            self._mission_bank_size = 0
+        else:
+            arr = jnp.asarray(mission_bank, dtype=jnp.float32)
+            if arr.ndim != 2 or arr.shape[1] != 3:
+                raise ValueError(f"mission_bank must be a sequence of 3-tuples (LWF, ASF, RIA); got shape {arr.shape}")
+            amplify = float(mission_bank_amplify)
+            self._mission_bank = arr * amplify
+            self._mission_bank_size = int(arr.shape[0])
+
+        # Phase 6 P2 — phase-boundary jitter bank. Per-reset sample of
+        # (phase0_start, phase1_start, phase2_start). Replaces
+        # ``const.phase_boundaries`` so phase transitions, allow-list flips,
+        # and phase_rewards index switches all move with the sampled split.
+        # Empty/None → fast path, behavior unchanged.
+        if phase_boundary_bank is None or len(phase_boundary_bank) == 0:
+            self._phase_boundary_bank = None
+            self._phase_boundary_bank_size = 0
+        else:
+            pb_arr = jnp.asarray(phase_boundary_bank, dtype=jnp.int32)
+            if pb_arr.ndim != 2 or pb_arr.shape[1] != 3:
+                raise ValueError(f"phase_boundary_bank must be a sequence of 3-tuples; got shape {pb_arr.shape}")
+            self._phase_boundary_bank = pb_arr
+            self._phase_boundary_bank_size = int(pb_arr.shape[0])
+
+        # Phase 6 P3 — phase_rewards bank (crown-jewel rotation). Per-reset
+        # sample of an entire (MISSION_PHASES, NUM_SUBNETS, 3) phase_rewards
+        # array. Each entry rotates which subnet is "high-value" in which
+        # phase, so the same physical topology generates different reward
+        # gradients per episode and the policy must read state instead of
+        # memorizing subnet indices. Empty/None → fast path, unchanged.
+        if phase_rewards_bank is None or len(phase_rewards_bank) == 0:
+            self._phase_rewards_bank = None
+            self._phase_rewards_bank_size = 0
+        else:
+            pr_arr = jnp.asarray(phase_rewards_bank, dtype=jnp.float32)
+            if pr_arr.ndim != 4:
+                raise ValueError(
+                    "phase_rewards_bank entries must be (MISSION_PHASES, NUM_SUBNETS, 3) "
+                    f"arrays; got shape {pr_arr.shape}"
+                )
+            self._phase_rewards_bank = pr_arr
+            self._phase_rewards_bank_size = int(pr_arr.shape[0])
         if topology_path is not None:
             if topology_mode != "generative":
                 raise ValueError(
@@ -345,36 +437,126 @@ class ScenarioEnv(MultiAgentEnv):
 
         self.blue_agents = [f"blue_{i}" for i in range(self.cfg.num_blue_agents)]
         self.red_agents = [f"red_{i}" for i in range(self.cfg.num_red_agents)]
-        self.agents = self.blue_agents + self.red_agents
 
         super().__init__(num_agents=self.cfg.num_blue_agents + self.cfg.num_red_agents)
+        # JaxMARL initialises ``agents`` to generic ``agent_N`` names. Keep
+        # the simulator's public action/observation keys aligned with the
+        # domain-specific names used throughout JAXborg.
+        self.agents = self.blue_agents + self.red_agents
 
         for agent in self.blue_agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(
+                low=0.0,
+                high=2.0 if cage4_enhanced_obs else 1.0,
+                shape=(blue_obs_size(cage4_enhanced_obs),),
+                dtype=jnp.float32,
+            )
         for agent in self.red_agents:
             self.action_spaces[agent] = Discrete(RED_WITHDRAW_END)
             self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(self.cfg.blue_obs_size,), dtype=jnp.float32)
 
-    def _select_const(self, key: chex.PRNGKey) -> SimulatorConst:
+    def _select_const(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array | None = None,
+    ) -> SimulatorConst:
+        # Split the input key so each bank's index sample is independent of
+        # (and reproducible from) the same input key — same input key →
+        # same const + same triples + same boundaries + same crown-jewel.
+        key_const, key_mission, key_pb, key_pr = jax.random.split(key, 4)
+
         if self._const_bank is None:
-            return build_topology(
-                key,
+            if topology_index is not None:
+                raise ValueError("topology_index requires a configured topology snapshot bank")
+            const = build_topology(
+                key_const,
                 num_steps=self.num_steps,
                 training_mode=self.training_mode,
                 op_zone_min_servers=self.op_zone_min_servers,
             )
+        else:
+            if topology_index is None:
+                bank_idx = jax.random.randint(key_const, (), 0, self._const_bank_size)
+            else:
+                bank_idx = jnp.asarray(topology_index)
+                if bank_idx.ndim != 0 or not jnp.issubdtype(bank_idx.dtype, jnp.integer):
+                    raise TypeError("topology_index must be a scalar integer")
+                # Traced indices come from validated internal enumerations and
+                # cannot be converted to Python here. Concrete Python/JAX
+                # scalar callers receive an immediate range error.
+                if not isinstance(bank_idx, jax.core.Tracer):
+                    concrete_index = int(bank_idx)
+                    if not 0 <= concrete_index < self._const_bank_size:
+                        raise IndexError(
+                            f"topology_index must be in [0, {self._const_bank_size}), got {concrete_index}"
+                        )
+                bank_idx = bank_idx.astype(jnp.int32)
+            const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)
+            # Snapshots save the ``max_steps`` they were generated against
+            # (e.g. 500), but the env's caller may want a different episode
+            # length via ``num_steps``.  Override here so ``done = state.time
+            # >= max_steps`` honours the env's configuration rather than the
+            # snapshot's default.
+            const = const.replace(max_steps=jnp.int32(self.num_steps))
 
-        bank_idx = jax.random.randint(key, (), 0, self._const_bank_size)
-        const = jax.tree.map(lambda x: x[bank_idx], self._const_bank)
-        # Snapshots save the ``max_steps`` they were generated against (e.g.
-        # 500), but the env's caller may want a different episode length via
-        # ``num_steps``.  Override here so ``done = state.time >= max_steps``
-        # honours the env's configuration rather than the snapshot's default.
-        return const.replace(max_steps=jnp.int32(self.num_steps))
+        # Phase 6 P3 — crown-jewel rotation. Replace ``const.phase_rewards``
+        # with a sampled bank entry BEFORE the mission-bank multiplier so
+        # both transformations compose: bank picks "which subnet is the
+        # crown jewel this episode," then multiplier scales the per-component
+        # weights. Skipped on fast path when no bank is configured.
+        if self._phase_rewards_bank is not None:
+            pr_idx = jax.random.randint(key_pr, (), 0, self._phase_rewards_bank_size)
+            const = const.replace(phase_rewards=self._phase_rewards_bank[pr_idx])
+
+        # Phase 6 axis B — post-multiply ``const.phase_rewards`` by a sampled
+        # ``(LWF, ASF, RIA)`` triple.  Mirrors the diversity-branch approach
+        # (topology.py:540–555): keeps SimulatorState shape unchanged and
+        # leaves rewards.py untouched.  Skipped on the fast path when no
+        # bank was configured.
+        if self._mission_bank is not None:
+            mp_idx = jax.random.randint(key_mission, (), 0, self._mission_bank_size)
+            mp_multipliers = self._mission_bank[mp_idx]  # (3,) float32
+            phase_rewards = const.phase_rewards * mp_multipliers[None, None, :]
+            const = const.replace(phase_rewards=phase_rewards)
+
+        # Phase 6 P2 — phase-boundary jitter. Replace ``const.phase_boundaries``
+        # with a sampled bank entry. Phase transitions, allow-list flips,
+        # and per-phase reward emphasis all reindex against the sampled split.
+        if self._phase_boundary_bank is not None:
+            pb_idx = jax.random.randint(key_pb, (), 0, self._phase_boundary_bank_size)
+            const = const.replace(phase_boundaries=self._phase_boundary_bank[pb_idx])
+
+        return const
 
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
-        const = self._select_const(key)
+        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
+        return self._reset_from_const(const)
+
+    @property
+    def topology_bank_size(self) -> int:
+        return self._const_bank_size
+
+    @partial(jax.jit, static_argnums=[0])
+    def reset_batch(self, keys: chex.Array, topology_key: chex.PRNGKey):
+        """Reset a parallel training batch with unique topology-bank entries."""
+        if self._const_bank is None:
+            return jax.vmap(self.reset)(keys)
+        indices = sample_training_topology_indices(topology_key, self._const_bank_size, keys.shape[0])
+        return jax.vmap(self.reset_at_topology)(keys, indices)
+
+    def reset_at_topology(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
+        """Reset on one exact snapshot-bank entry while retaining dynamic RNG."""
+        const = self._select_const(key, topology_index=topology_index).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs
+        )
+        return self._reset_from_const(const)
+
+    def _reset_from_const(self, const: SimulatorConst) -> Tuple[Dict[str, chex.Array], ScenarioEnvState]:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=jnp.array(const.initial_services),
@@ -389,7 +571,23 @@ class ScenarioEnv(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def _reset_state(self, env_state: ScenarioEnvState, key: chex.PRNGKey) -> ScenarioEnvState:
         """Reset with a new random topology (for auto-reset)."""
-        const = self._select_const(key)
+        const = self._select_const(key).replace(cage4_enhanced_obs=self.cage4_enhanced_obs)
+        return self._reset_state_from_const(const)
+
+    @partial(jax.jit, static_argnums=[0])
+    def _reset_state_at_topology(
+        self,
+        env_state: ScenarioEnvState,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> ScenarioEnvState:
+        """Auto-reset state on one exact topology while retaining dynamic RNG."""
+        const = self._select_const(key, topology_index=topology_index).replace(
+            cage4_enhanced_obs=self.cage4_enhanced_obs
+        )
+        return self._reset_state_from_const(const)
+
+    def _reset_state_from_const(self, const: SimulatorConst) -> ScenarioEnvState:
         state = create_initial_state(self.cfg)
         state = state.replace(
             host_services=const.initial_services,
@@ -397,6 +595,19 @@ class ScenarioEnv(MultiAgentEnv):
         )
         state = _init_red_state(const, state)
         return ScenarioEnvState(state=state, const=const)
+
+    @partial(jax.jit, static_argnums=[0])
+    def _reset_state_batch(
+        self,
+        env_states: ScenarioEnvState,
+        keys: chex.Array,
+        topology_key: chex.PRNGKey,
+    ) -> ScenarioEnvState:
+        """Auto-reset a training batch, sampling bank entries without replacement."""
+        if self._const_bank is None:
+            return jax.vmap(self._reset_state)(env_states, keys)
+        indices = sample_training_topology_indices(topology_key, self._const_bank_size, keys.shape[0])
+        return jax.vmap(self._reset_state_at_topology)(env_states, keys, indices)
 
     @partial(jax.jit, static_argnums=[0])
     def step(
@@ -433,6 +644,7 @@ class ScenarioEnv(MultiAgentEnv):
         key: chex.PRNGKey,
         env_state: ScenarioEnvState,
         actions: Dict[str, chex.Array],
+        red_creation_visible_sessions_override: jnp.ndarray | None = None,
     ) -> Tuple[Dict[str, chex.Array], ScenarioEnvState, Dict[str, float], Dict[str, bool], Dict]:
         state = env_state.state
         const = env_state.const
@@ -469,6 +681,7 @@ class ScenarioEnv(MultiAgentEnv):
             red_keys,
             red_overrides=RedAgentOverrides.identity(n_red),
             blue_keys=blue_keys,
+            red_creation_visible_sessions_override=red_creation_visible_sessions_override,
         )
 
         reward_breakdown = compute_reward_breakdown(
@@ -491,9 +704,17 @@ class ScenarioEnv(MultiAgentEnv):
         rewards = {}
         for agent in self.blue_agents:
             rewards[agent] = reward
-        neg_reward = -reward
+        # Blue's payoff is the CC4 contract and never varies. Red's does:
+        # under `zero_sum` it is the exact negation, which pays Red for
+        # `asf_reward` (only Blue's BlockTraffic can trigger ASF) and for
+        # Blue's Restore `action_cost`. `damage` pays Red only for harm Red
+        # can actually cause. See docs/cotraining_collapse.md.
+        if self.red_reward == "damage":
+            red_reward = -(reward_breakdown.ria_reward + reward_breakdown.lwf_reward)
+        else:
+            red_reward = -reward
         for agent in self.red_agents:
-            rewards[agent] = neg_reward
+            rewards[agent] = red_reward
 
         dones = {agent: done for agent in self.agents}
         dones["__all__"] = done
@@ -525,7 +746,9 @@ class ScenarioEnv(MultiAgentEnv):
     def get_avail_actions(self, env_state: ScenarioEnvState) -> Dict[str, chex.Array]:
         masks = {}
         for i in range(self.cfg.num_blue_agents):
-            masks[f"blue_{i}"] = compute_blue_action_mask(env_state.const, i, env_state.state)
+            masks[f"blue_{i}"] = compute_blue_action_mask(
+                env_state.const, i, env_state.state, blue_block_policy=self.blue_block_policy
+            )
         for agent in self.red_agents:
             masks[agent] = jnp.ones(RED_WITHDRAW_END, dtype=jnp.bool_)
         return masks

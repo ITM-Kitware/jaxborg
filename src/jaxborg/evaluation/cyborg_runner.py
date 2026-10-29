@@ -21,8 +21,10 @@ import numpy as np
 import torch
 from CybORG.Agents.Wrappers import EnterpriseMAE
 
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.evaluation.cyborg_env_factory import CyborgReset, make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.policies import make_torch_policy
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
@@ -36,7 +38,7 @@ EPISODE_LENGTH = 500
 
 
 def _pad_obs_mask(obs_dict, info_dict):
-    obs = np.zeros((NUM_AGENTS, OBS_DIM), dtype=np.float32)
+    obs = np.zeros((NUM_AGENTS, max(OBS_DIM, max(len(o) for o in obs_dict.values()))), dtype=np.float32)
     mask = np.zeros((NUM_AGENTS, ACT_DIM), dtype=np.float32)
     for i, aid in enumerate(AGENT_IDS):
         raw_o = np.asarray(obs_dict[aid], dtype=np.float32)
@@ -53,9 +55,14 @@ def rollout_episode(
     agent,
     *,
     deterministic: bool,
+    policy_seed: int | None = None,
     on_reset: Callable[[Any, CyborgReset], None] | None = None,
     on_complete: Callable[[float, int], None] | None = None,
 ) -> float:
+    if policy_seed is None:
+        torch.manual_seed(ep_seed)
+    else:
+        torch.random.default_generator.manual_seed(policy_seed)
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
     if on_reset is not None:
         on_reset(env, r)
@@ -88,7 +95,7 @@ def torch_policy_configuration(recipe: dict[str, Any]) -> dict[str, Any]:
     arch = recipe["arch"]
     return {
         "name": arch["name"],
-        "obs_dim": OBS_DIM,
+        "obs_dim": blue_obs_size(enhanced_obs_enabled(recipe)),
         "action_dim": ACT_DIM,
         "hidden_dim": int(arch.get("hidden_dim", 256)),
         "hidden_layers": int(arch.get("hidden_layers", 2)),
@@ -133,31 +140,53 @@ def load_torch_policy(model_path: str | Path):
     """
     import warnings
 
+    from jaxborg.checkpoint import load_torch_policy as load_bundle_policy
     from jaxborg.checkpoint import read_sidecar
 
     model_path = Path(model_path)
-    state_dict = torch.load(model_path, map_location="cpu", weights_only=True)
+    entry = load_bundle_policy(
+        model_path,
+        "blue",
+        expected_obs_dim=None,
+        expected_action_dim=ACT_DIM,
+    )
+    state_dict = entry.weights
     try:
         recipe = read_sidecar(model_path)
     except FileNotFoundError:
-        warnings.warn(
-            f"No recipe sidecar next to {model_path}; falling back to "
-            "key-based arch detection. Re-train under the new layout to "
-            "remove this fallback.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
+        if not entry.arch.get("name"):
+            warnings.warn(
+                f"No recipe sidecar next to {model_path}; falling back to "
+                "key-based arch detection. Re-train under the new layout to "
+                "remove this fallback.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         is_separate = any(k.startswith("actor_features.") for k in state_dict)
-        recipe = {
-            "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
-            "algorithm": "ippo",
-            "arch": {
+        arch = (
+            dict(entry.arch)
+            if entry.arch.get("name")
+            else {
                 "name": "separate" if is_separate else "shared",
                 "hidden_dim": 256,
                 "hidden_layers": 2,
                 "activation": "tanh",
-            },
+            }
+        )
+        recipe = {
+            "meta": {"name": "legacy", "source": "fallback (no sidecar)"},
+            "algorithm": "ippo",
+            "cage4_enhanced_obs": entry.obs_dim == blue_obs_size(True),
+            "arch": arch,
         }
+    if entry.arch.get("name"):
+        recipe = dict(recipe)
+        recipe["arch"] = dict(entry.arch)
+    expected_obs_dim = blue_obs_size(enhanced_obs_enabled(recipe))
+    if entry.obs_dim not in (0, expected_obs_dim):
+        raise ValueError(
+            f"Blue checkpoint observation dimension {entry.obs_dim} disagrees with recipe {expected_obs_dim}"
+        )
     agent = load_torch_policy_from_recipe(recipe, state_dict)
     return agent, recipe
 
@@ -187,6 +216,8 @@ def _run_torch_items(
 ):
     with _policy_rng(construction_seed):
         policy, recipe = load_torch_policy(model_path)
+    if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+        raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
     if on_policy is not None:
         on_policy(policy, recipe)
     out = []
@@ -198,7 +229,7 @@ def _run_torch_items(
 
         def completion_observer(reward, steps):
             if on_complete is not None:
-                on_complete(index, seed, policy_seed, reward, steps)
+                on_complete(index, seed, seed if policy_seed is None else policy_seed, reward, steps)
 
         with _policy_rng(policy_seed):
             env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
@@ -208,6 +239,7 @@ def _run_torch_items(
                 ep_seed=seed,
                 agent=policy,
                 deterministic=deterministic,
+                policy_seed=policy_seed,
                 on_reset=reset_observer if on_reset is not None else None,
                 on_complete=completion_observer if on_complete is not None else None,
             )
@@ -243,7 +275,7 @@ def run_torch_episodes(
     """Execute an ordered explicit episode schedule with optional serial observers.
 
     Supplied policy seeds isolate CPU Torch randomness during construction and
-    each episode. Omitting them preserves ambient randomness.
+    each episode. Omitting them seeds policy sampling from each environment seed.
 
     Observers run synchronously and require serial execution. Policy observation
     runs after loading, outside RNG isolation; reset and completion observers
@@ -309,12 +341,12 @@ def evaluate_on_cyborg(
     progress: bool = True,
     policy_seed: int | None = None,
 ) -> tuple[list[float], list[int]]:
-    """Expand each root into consecutive episode seeds, preserving duplicates.
+    """Expand roots with the shared unique episode-seed mapping.
 
     Returns rewards and environment seeds in expanded order. An optional policy
     seed assigns consecutive CPU Torch seeds by global episode index.
     """
-    flat = [seed + episode for seed in seeds for episode in range(episodes_per_seed)]
+    flat = expand_episode_seeds(seeds, episodes_per_seed)
     if policy_seed is not None:
         _validate_policy_seed(policy_seed)
     policy_seeds = None if policy_seed is None else [policy_seed + index for index in range(len(flat))]

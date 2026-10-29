@@ -120,9 +120,12 @@ def test_make_jax_env_rejects_resilience_variant_with_too_few_op_zone_servers():
     with pytest.raises(ValueError, match="op_zone_servers=0"):
         make_jax_env(bad)
 
-    # Sanity: a sensible variant constructs without error. The CIA metric
-    # needs at least 3 op-zone server candidates per episode.
-    make_jax_env(GameVariant(name="ok", resilience_roles=True, op_zone_servers=1))
+    with pytest.raises(ValueError, match="op_zone_servers=1"):
+        make_jax_env(GameVariant(name="still-too-small", resilience_roles=True, op_zone_servers=1))
+
+    # Two servers in each of the two operational zones guarantees four role
+    # candidates and is therefore the smallest valid exact count.
+    make_jax_env(GameVariant(name="ok", resilience_roles=True, op_zone_servers=2))
 
 
 def test_make_jax_env_rejects_snapshot_without_enough_op_zone_servers(tmp_path):

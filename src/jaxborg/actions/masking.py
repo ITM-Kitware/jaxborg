@@ -33,7 +33,35 @@ def _decoy_compat_vectorized(flat_services: jnp.ndarray, flat_decoys: jnp.ndarra
     return per_type.any(axis=0)
 
 
-def compute_blue_action_mask(const: SimulatorConst, agent_id: int, state: SimulatorState | None = None) -> jnp.ndarray:
+def mission_permitted_block_mask(const: SimulatorConst, agent_id: int, mission_phase: jnp.ndarray) -> jnp.ndarray:
+    """Return, per BlockTraffic slot, whether the pair carries green traffic now.
+
+    A blocked pair (src, dst) fails ``GreenAccessService`` in either direction,
+    and green only ever routes pairs in ``const.allowed_subnet_pairs[phase]``
+    (see ``actions/green.py``), so those are exactly the blocks that cost ASF.
+    Blocking anything else still gates Red lateral movement for free.
+
+    Shape is ``(BLUE_TRAFFIC_SLOTS,)``, laid out as
+    ``src_offset * BLUE_MAX_OBSERVED_SUBNETS + relative_dst`` with the
+    self-loop compressed out — the same encoding ``decode_blue_action`` uses.
+    """
+    abs_dst = const.blue_obs_subnets[agent_id]  # (BLUE_MAX_OBSERVED_SUBNETS,) int, -1 = unused
+    safe_dst = jnp.clip(abs_dst, 0, NUM_SUBNETS - 1)
+    allowed = const.allowed_subnet_pairs[mission_phase]  # (NUM_SUBNETS, NUM_SUBNETS) bool
+    src_offsets = jnp.arange(NUM_SUBNETS - 1)[:, None]  # (NUM_SUBNETS-1, 1)
+    # decode_blue_action skips src == dst by shifting offsets at or above dst.
+    abs_src = jnp.where(src_offsets >= safe_dst[None, :], src_offsets + 1, src_offsets)
+    permitted = allowed[abs_src, safe_dst[None, :]] | allowed[safe_dst[None, :], abs_src]
+    return (permitted & (abs_dst[None, :] >= 0)).reshape(-1)
+
+
+def compute_blue_action_mask(
+    const: SimulatorConst,
+    agent_id: int,
+    state: SimulatorState | None = None,
+    *,
+    blue_block_policy: str = "cc4",
+) -> jnp.ndarray:
     """Return bool mask of valid actions for a blue agent.
 
     Uses agent-relative encoding: host slots index into the agent's 3 observed
@@ -45,7 +73,18 @@ def compute_blue_action_mask(const: SimulatorConst, agent_id: int, state: Simula
     based on pending-action (busy) state.  This matches CybORG, where the
     wrapper returns the same mask every tick and silently discards any action
     submitted while a multi-tick action is in progress.
+
+    ``blue_block_policy="mission_safe"`` is the one exception to that: it drops
+    the BlockTraffic entries for pairs the current mission phase's comms policy
+    permits, which makes the mask phase-dependent and *narrower* than CybORG's.
+    It is off by default and every parity path leaves it off; see
+    ``GameVariant``.  It needs ``state`` for the mission phase, so passing
+    ``state=None`` with it is an error rather than a silent no-op.
     """
+    if blue_block_policy not in ("cc4", "mission_safe"):
+        raise ValueError(f"unknown blue_block_policy {blue_block_policy!r}")
+    if blue_block_policy == "mission_safe" and state is None:
+        raise ValueError("blue_block_policy='mission_safe' needs `state` to read the mission phase")
     agent_obs_subnets = const.blue_obs_subnets[agent_id]  # (3,) int, -1 = unused
 
     # Build (BLUE_MAX_OBSERVED_SUBNETS, OBS_VECTOR_HOSTS_PER_SUBNET) validity array
@@ -92,6 +131,10 @@ def compute_blue_action_mask(const: SimulatorConst, agent_id: int, state: Simula
     dst_active = abs_dst >= 0
     traffic_flat = jnp.broadcast_to(dst_active, (NUM_SUBNETS - 1, BLUE_MAX_OBSERVED_SUBNETS)).reshape(-1)
 
+    block_flat = traffic_flat
+    if blue_block_policy == "mission_safe":
+        block_flat = block_flat & ~mission_permitted_block_mask(const, agent_id, state.mission_phase)
+
     mask = jnp.concatenate(
         [
             jnp.array([True, True]),  # sleep + monitor
@@ -99,7 +142,7 @@ def compute_blue_action_mask(const: SimulatorConst, agent_id: int, state: Simula
             slot_valid_flat,  # remove
             slot_valid_flat,  # restore
             decoy_mask,  # decoys (1 per host slot)
-            traffic_flat,  # block traffic
+            block_flat,  # block traffic
             traffic_flat,  # allow traffic
         ]
     )
