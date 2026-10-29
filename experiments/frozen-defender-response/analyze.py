@@ -477,7 +477,20 @@ def figures(destination, summary, curves, order, config):
     plt.close(fig)
 
 
-def source_record():
+def analysis_files(include_helpers=False):
+    files = [
+        PROJECT / name
+        for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "experiments/README.md")
+    ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")]
+    sources = {path.relative_to(PROJECT).as_posix(): path for path in files}
+    if include_helpers:
+        from jaxborg.experiment_producers.source import analysis_source_files
+
+        sources.update(analysis_source_files(__file__))
+    return sources
+
+
+def source_record(include_helpers=False):
     def git(*args):
         try:
             result = subprocess.run(["git", "-C", str(PROJECT), *args], text=True, capture_output=True)
@@ -485,17 +498,14 @@ def source_record():
             return None
         return result.stdout.strip() if result.returncode == 0 else None
 
-    files = [
-        PROJECT / name
-        for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "experiments/README.md")
-    ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")]
+    files = analysis_files(include_helpers)
     checkout = git("rev-parse", "--show-toplevel")
     is_checkout = checkout is not None and Path(checkout).resolve() == PROJECT
     status = git("status", "--porcelain", "--untracked-files=all", "--", ".") if is_checkout else None
     return {
         "git_commit": git("rev-parse", "HEAD") if is_checkout else None,
         "dirty": bool(status) if status is not None else None,
-        "files": {path.relative_to(PROJECT).as_posix(): digest(path) for path in files},
+        "files": {name: digest(path) for name, path in files.items()},
         "python": platform.python_version(),
         "platform": platform.platform(),
         "dependencies": {item.metadata["Name"]: item.version for item in importlib.metadata.distributions()},
@@ -511,6 +521,17 @@ def run(args):
     )
     require(not output.is_relative_to(PROJECT), "Generated reports must be outside the source checkout")
     index, references = verified_bundle(root)
+    if getattr(args, "selection", None):
+        from jaxborg.experiment_producers.selection import verify_frozen_selection
+
+        saved_selection = load_json(args.selection)
+        verify_frozen_selection(saved_selection, root)
+        from jaxborg.experiment_producers.source import analysis_source_identity
+
+        require(
+            saved_selection["analysis"]["source"] == analysis_source_identity(__file__),
+            "Analyzer source differs from saved selection",
+        )
     protocol, state, evaluations, finals, curves, training_rows, training_seconds = validate(references, index)
     config_path = args.config.resolve() if args.config else root / index["configuration"]
     supplied = load_json(config_path)
@@ -522,6 +543,11 @@ def run(args):
         }
     }
     config = resolve_config(protocol, supplied, overrides)
+    if getattr(args, "selection", None):
+        require(
+            config == load_json(args.selection)["analysis"]["configuration"],
+            "Resolved analysis configuration differs from saved selection",
+        )
     summary = summarize(finals, config)
     reference_path, _ = artifact(references, index["reference_summary"])
     reference = load_json(reference_path)
@@ -571,7 +597,7 @@ def run(args):
         }
         for name, row in evaluations.items()
     ]
-    source = source_record()
+    source = source_record(include_helpers=bool(getattr(args, "selection", None)))
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=".response-report-", dir=output.parent) as temporary:
         destination = Path(temporary) / "report"
@@ -579,6 +605,8 @@ def run(args):
         write_json(destination / "summary.json", summary)
         write_json(destination / "resolved-config.json", config)
         write_json(destination / "selection.json", state["selection"])
+        if getattr(args, "selection", None):
+            write_json(destination / "collation.json", load_json(args.selection))
         write_csv(destination / "per-episode.csv", episodes)
         write_csv(destination / "validation.csv", validation)
         write_csv(destination / "learning-curves.csv", curves)
@@ -612,7 +640,7 @@ def run(args):
         for name in source["files"]:
             copied = destination / "analysis-source" / name
             copied.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(PROJECT / name, copied)
+            shutil.copyfile(analysis_files(include_helpers=bool(getattr(args, "selection", None)))[name], copied)
         write_json(destination / "input-index.json", index)
         report = f"""# Frozen Blue response report
 
@@ -692,6 +720,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path, help="Verified offline input bundle")
     parser.add_argument("--output", required=True, type=Path, help="New output directory outside the checkout")
+    parser.add_argument("--selection", type=Path, help="Saved common-record collation selecting this bundle")
     parser.add_argument("--config", type=Path, help="Optional external JSON analysis settings")
     parser.add_argument("--bootstrap-seed", type=int)
     parser.add_argument("--bootstrap-resamples", type=int)
