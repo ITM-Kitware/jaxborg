@@ -3,20 +3,44 @@
 See the [experiment guide](../experiments/README.md) for workflow and recipe
 conventions, or [historical import](local-evidence-producers.md) for saved results.
 
-`python -m jaxborg.evaluation.capture` evaluates a Torch `.pt` checkpoint against
-scripted Red in CybORG, retaining evidence around the same checkpoint loader,
-settings resolver, and episode executor as `scripts/eval/eval_recipe.py`.
-The checkpoint requires an adjacent `recipe_<tag>.yaml` or `.yml` sidecar.
+`scripts/eval/eval_recipe.py` records research evaluation by default. Supply an
+evidence root outside the checkout and an explicit protocol/trial identity:
 
-Capture runs serially with unique explicit environment seeds, a 1-500 step
-horizon, and policy seed `--policy-seed + episode_index`. Recipe evaluation uses
-`s * episodes_per_seed + episode_index` and defaults policy randomness to that
-episode seed. Match the checkpoint, resolved variant, horizon, sampling mode,
-and both seed schedules when comparing results. Programmatic recipe evaluation
-accepts an explicit `policy_seed` and preserves results across worker counts.
+```bash
+python scripts/eval/eval_recipe.py --model /inputs/model_policy.pt \
+  --evidence-root /evidence/action-selection --protocol /inputs/protocol.json \
+  --trial stochastic:cohort-1 --seeds 17,18 --episodes-per-seed 1 \
+  --horizon 500 --policy-seed 100
+```
 
-Capture does not train, attach to MLflow, resume attempts, reuse evaluations, or
-support JAX checkpoints and custom environment builders.
+The command requires a native Torch `.pt` checkpoint with adjacent
+`recipe_<tag>.yaml` or `.yml`. Recording is serial; omitted workers means one,
+and other worker counts fail before execution. The JSON receipt contains the
+attempt/evaluation identities, including retained execution failures. Research
+mode does not write legacy result rows or attach metrics to a training run.
+
+Root seeds expand as `s * episodes_per_seed + episode_index`. Use
+`--episode-seeds 17 18` for exact ordered episode seeds instead. Research policy
+seeds start at `--policy-seed` (default zero) and advance by global episode index.
+`--horizon` defaults to 500; `--eval-red` overrides the evaluation selector while
+retaining the original recipe. The command retains its entrypoint source and pins
+HEAD at invocation; use `--source-revision` to verify a revision chosen earlier
+at submission. Capture stores the resolved settings and raw
+observations. Condition labels do not validate these settings; study-specific
+checks must establish treatment membership.
+
+Use `--development-no-capture` explicitly for unrecorded development or the
+currently unsupported JAX-to-CybORG recording path. That mode retains legacy
+result/MLflow behavior and seeds native policy sampling from each expanded
+environment seed unless `--policy-seed` is supplied. It cannot be combined with
+protocol membership. Existing custom post-training entries must explicitly
+supply research membership or choose the development opt-out; the runner does
+not silently disable recording. Programmatic evaluation retains its existing
+API and is not automatically a recorded research invocation.
+
+The Python `run_evaluation` API takes unique explicit episode seeds. Capture
+does not train, resume, reuse evaluations, or support custom builders on this
+native Torch path.
 
 ## Declare scientific cells
 
@@ -78,15 +102,15 @@ protocol. A changed protocol needs a new root and revision.
 ## Run and retain an attempt
 
 ```bash
-python -m jaxborg.evaluation.capture run \
-  --root /evidence/action-selection --protocol /inputs/protocol.json \
+python scripts/eval/eval_recipe.py \
+  --evidence-root /evidence/action-selection --protocol /inputs/protocol.json \
   --trial stochastic:cohort-1 --model /inputs/model_policy.pt \
-  --seeds 17 18 --horizon 500 --policy-seed 100
+  --seeds 17,18 --episodes-per-seed 1 --horizon 500 --policy-seed 100
 
-python -m jaxborg.evaluation.capture run \
-  --root /evidence/action-selection --protocol /inputs/protocol.json \
+python scripts/eval/eval_recipe.py \
+  --evidence-root /evidence/action-selection --protocol /inputs/protocol.json \
   --trial deterministic:cohort-1 --model /inputs/model_policy.pt \
-  --seeds 17 18 --horizon 500 --policy-seed 100 --deterministic
+  --seeds 17,18 --episodes-per-seed 1 --horizon 500 --policy-seed 100 --deterministic
 ```
 
 Condition labels do not select or validate settings: `stochastic:cohort-1` does

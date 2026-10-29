@@ -105,12 +105,12 @@ uv run pytest tests/cotraining/test_recurrent_mappo.py
 ./scripts/train/run_seeds.sh cleanrl default 3 0
 ./scripts/train/run_seeds.sh jax default 3 0
 
-# Legacy contract evaluation: learned Blue vs scripted Red in CybORG
-uv run python scripts/eval/eval_recipe.py \
+# Development evaluation without retained research records; see docs/evaluation-capture.md
+uv run python scripts/eval/eval_recipe.py --development-no-capture \
     --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
     --episodes-per-seed 1 --seeds 42-141
 
-uv run python scripts/eval/eval_recipe.py \
+uv run python scripts/eval/eval_recipe.py --development-no-capture \
     --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
     --episodes-per-seed 1 --seeds 42-141
 

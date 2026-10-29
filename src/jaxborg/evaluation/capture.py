@@ -81,6 +81,9 @@ def run_evaluation(
     deterministic: bool = False,
     policy_seed: int = 0,
     allow_dirty: bool = False,
+    eval_red: str | None = None,
+    entrypoint: Path | None = None,
+    expected_revision: str | None = None,
 ) -> Capture:
     """Retain and evaluate a checkpoint, sealing failures before re-raising them.
 
@@ -110,9 +113,12 @@ def run_evaluation(
     _metric_contract(protocol)
     recipe_path = sidecar_path(model)
     recipe = _read_recipe(recipe_path)
-    settings = resolve_torch_evaluation_settings(recipe, deterministic=deterministic, horizon=horizon)
+    resolved_recipe = {**recipe, "eval": dict(recipe.get("eval") or {})}
+    if eval_red is not None:
+        resolved_recipe["eval"]["red"] = eval_red
+    settings = resolve_torch_evaluation_settings(resolved_recipe, deterministic=deterministic, horizon=horizon)
     variant = settings.variant
-    provenance = collect_provenance(allow_dirty=allow_dirty)
+    provenance = collect_provenance(allow_dirty=allow_dirty, entrypoint=entrypoint, expected_revision=expected_revision)
     policy_seeds = [policy_seed + index for index in range(len(seeds))]
     config = {
         "schema_version": 1,
@@ -121,6 +127,7 @@ def run_evaluation(
         "model_filename": model.name,
         "recipe_filename": recipe_path.name,
         "recipe": recipe,
+        "overrides": {"eval_red": eval_red},
         "policy": settings.policy,
         "variant": asdict(variant),
         "horizon": horizon,
@@ -299,17 +306,6 @@ def _protocol(path):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    run = commands.add_parser("run", help="Evaluate and retain one attempt for an explicitly named trial")
-    run.add_argument("--root", required=True, type=Path)
-    run.add_argument("--protocol", required=True, type=Path)
-    run.add_argument("--trial", required=True)
-    run.add_argument("--model", required=True, type=Path)
-    run.add_argument("--seeds", required=True, nargs="+", type=int)
-    run.add_argument("--horizon", required=True, type=int)
-    run.add_argument("--retry-of")
-    run.add_argument("--deterministic", action="store_true")
-    run.add_argument("--policy-seed", type=int, default=0)
-    run.add_argument("--allow-dirty", action="store_true")
     export = commands.add_parser("export", help="Export records after verifying every retained artifact")
     export.add_argument("--root", required=True, type=Path)
     export.add_argument("--output", required=True, type=Path)
@@ -318,26 +314,7 @@ def main(argv=None):
     declare.add_argument("--protocol", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
-        if args.command == "run":
-            capture = run_evaluation(
-                root=args.root,
-                protocol=_protocol(args.protocol),
-                trial_id=args.trial,
-                model=args.model,
-                seeds=args.seeds,
-                horizon=args.horizon,
-                retry_of=args.retry_of,
-                deterministic=args.deterministic,
-                policy_seed=args.policy_seed,
-                allow_dirty=args.allow_dirty,
-            )
-            result = {
-                "attempt_id": capture.attempt_id,
-                "evaluation_id": capture.evaluation_id,
-                "status": "succeeded",
-                "completed_episodes": len(args.seeds),
-            }
-        elif args.command == "export":
+        if args.command == "export":
             records = export_records(root=args.root, output=args.output)
             result = {"output": str(args.output.expanduser().resolve()), "records": len(records)}
         else:

@@ -127,12 +127,17 @@ def test_eval_red_cli_flag_overrides_recipe(monkeypatch, tmp_path):
 
     captured: dict = {}
 
-    def fake_evaluate_on_cyborg(model_path, *, variant, seeds, episodes_per_seed, deterministic, workers):
+    def fake_evaluate_on_cyborg(
+        model_path, *, variant, seeds, episodes_per_seed, deterministic, workers, policy_seed=None
+    ):
         captured["variant"] = variant
         return ([0.0], [0])
 
     fake_runner = types.ModuleType("jaxborg.evaluation.cyborg_runner")
+    from jaxborg.evaluation.cyborg_runner import resolve_torch_evaluation_settings
+
     fake_runner.evaluate_on_cyborg = fake_evaluate_on_cyborg
+    fake_runner.resolve_torch_evaluation_settings = resolve_torch_evaluation_settings
 
     fake_model = tmp_path / "model.pt"
     fake_model.write_bytes(b"")
@@ -147,6 +152,7 @@ def test_eval_red_cli_flag_overrides_recipe(monkeypatch, tmp_path):
     # Run the CLI with --eval-red cia_a.
     argv = [
         "eval_recipe.py",
+        "--development-no-capture",
         "--model",
         str(fake_model),
         "--episodes-per-seed",
@@ -184,12 +190,17 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
 
     captured: dict = {}
 
-    def fake_evaluate_on_cyborg(model_path, *, variant, seeds, episodes_per_seed, deterministic, workers):
+    def fake_evaluate_on_cyborg(
+        model_path, *, variant, seeds, episodes_per_seed, deterministic, workers, policy_seed=None
+    ):
         captured["variant"] = variant
         return ([0.0], [0])
 
     fake_runner = types.ModuleType("jaxborg.evaluation.cyborg_runner")
+    from jaxborg.evaluation.cyborg_runner import resolve_torch_evaluation_settings
+
     fake_runner.evaluate_on_cyborg = fake_evaluate_on_cyborg
+    fake_runner.resolve_torch_evaluation_settings = resolve_torch_evaluation_settings
 
     fake_model = tmp_path / "model.pt"
     fake_model.write_bytes(b"")
@@ -205,6 +216,7 @@ def test_eval_red_cli_flag_unset_uses_recipe_red(monkeypatch, tmp_path):
 
     argv = [
         "eval_recipe.py",
+        "--development-no-capture",
         "--model",
         str(fake_model),
         "--episodes",
