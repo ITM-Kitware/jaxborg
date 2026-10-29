@@ -718,3 +718,47 @@ def test_http_lost_publication_response_reuses_verified_bytes(tmp_path, mlflow_h
     assert recovered["reused"] is True
     fetched = _fetch(tmp_path / "consumer", mlflow_http, recovered, tmp_path / "consumer/evidence")
     assert Path(fetched["paths"]["records"]).read_bytes() == (package / "records.json").read_bytes()
+
+
+def test_http_live_execution_navigation_preserves_terminal_package_boundary(tmp_path, mlflow_http, monkeypatch):
+    from mlflow import MlflowClient
+
+    from jaxborg.experiment_discovery.mlflow import search_packages
+    from jaxborg.experiment_discovery.package import prepare_package
+
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", mlflow_http)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "live-execution")
+    root, _, _, _, _, begin = _capture_fixture(tmp_path / "producer")
+    capture = begin(track=True)
+    client = MlflowClient(tracking_uri=mlflow_http)
+    experiment = client.get_experiment_by_name("live-execution")
+    runs = client.search_runs(
+        [experiment.experiment_id],
+        f"tags.`jaxborg.discovery.attempt_id` = '{capture.attempt_id}'",
+    )
+    assert len(runs) == 1
+    run_id = runs[0].info.run_id
+    assert runs[0].info.status == "RUNNING"
+    assert runs[0].data.tags["jaxborg.discovery.state"] == "unverified"
+    assert search_packages(mlflow_http, "live-execution") == {"publications": []}
+    with pytest.raises(ValueError, match="Running capture"):
+        prepare_package("evaluation-capture", root, tmp_path / "unfinished")
+    record_episode(capture, episode_index=0, seed=1, reward=-2, steps=2)
+    finish_evaluation(capture, status="failed", error=RuntimeError("stopped after one episode"))
+    failed = client.get_run(run_id)
+    assert failed.info.status == "FAILED"
+    assert failed.data.tags["jaxborg.discovery.budget.0.completed"] == "1"
+    retry = begin(track=True, retry_of=capture.attempt_id)
+    for index in range(2):
+        record_episode(retry, episode_index=index, seed=index, reward=-2, steps=2)
+    finish_evaluation(retry, status="succeeded")
+    final = client.get_run(retry.tracking.run_id)
+    assert final.info.status == "FINISHED"
+    assert final.data.tags["jaxborg.discovery.retry_of"] == capture.attempt_id
+    assert final.data.tags["jaxborg.discovery.scientific_status"] == "succeeded"
+    assert final.data.tags["jaxborg.discovery.budget.0.completed"] == "2"
+    downloaded = Path(client.download_artifacts(final.info.run_id, "execution.json", str(tmp_path)))
+    snapshot = json.loads(downloaded.read_text())
+    assert snapshot["records"][0]["id"] == retry.attempt_id
+    assert snapshot["records"][0]["status"] == "succeeded"
+    assert search_packages(mlflow_http, "live-execution") == {"publications": []}

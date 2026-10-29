@@ -511,13 +511,13 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_fac
             provenance.verify_sources()
             finish_training(capture, status="succeeded")
             sealed = True
-        _finish_training_outputs(recipe, configs, save_dir, outputs)
+        _finish_training_outputs(recipe, configs, save_dir, outputs, capture=capture)
         return capture
     except BaseException as error:
         if capture is not None:
             error._evaluation_capture = capture
         try:
-            if capture is not None and not sealed:
+            if capture is not None and not sealed and not (capture.directory / "terminal.json").exists():
                 from jaxborg.evaluation.capture_store import finish_training
 
                 finish_training(
@@ -525,8 +525,10 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_fac
                 )
         finally:
             active = mlflow.active_run()
-            if active is not None and (
-                previous_tracking_run is None or active.info.run_id != previous_tracking_run.info.run_id
+            if (
+                capture is None
+                and active is not None
+                and (previous_tracking_run is None or active.info.run_id != previous_tracking_run.info.run_id)
             ):
                 try:
                     mlflow.end_run(status="FAILED")
@@ -590,8 +592,13 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
     print("=" * 60, flush=True)
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
-    run = start_run(recipe, backend="jax", seed=args.seed)
-    train_run_id = run.info.run_id
+    tracking = mlflow if capture is None else capture.tracking
+    if capture is None:
+        train_run_id = start_run(recipe, backend="jax", seed=args.seed).info.run_id
+    else:
+        train_run_id = tracking.run_id if tracking is not None else None
+        if tracking is not None:
+            tracking.start_training(recipe, seed=args.seed)
     t0 = time.perf_counter()
     env, obs, env_state, init_states, collect_and_update = make_joint_train(
         configs,
@@ -775,14 +782,15 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                 from jaxborg.evaluation.capture_store import record_training_update
 
                 record_training_update(capture, row)
-            mlflow.log_metrics(
-                {
-                    key: value
-                    for key, value in row.items()
-                    if isinstance(value, (int, float)) and not isinstance(value, bool) and key != "update_idx"
-                },
-                step=env_steps,
-            )
+            if tracking is not None:
+                tracking.log_metrics(
+                    {
+                        key: value
+                        for key, value in row.items()
+                        if isinstance(value, (int, float)) and not isinstance(value, bool) and key != "update_idx"
+                    },
+                    step=env_steps,
+                )
             if (update_idx + 1) % 50 == 0 or update_idx == num_updates - 1:
                 print(
                     f"  upd {update_idx + 1}/{num_updates} step {env_steps:,} "
@@ -851,17 +859,20 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
     }
 
 
-def _finish_training_outputs(recipe, configs, save_dir, outputs):
+def _finish_training_outputs(recipe, configs, save_dir, outputs, *, capture=None):
     elapsed, final_reward = outputs["elapsed"], outputs["final_reward"]
     metrics_path, final_model, sidecar = (outputs[name] for name in ("metrics_path", "final_model", "sidecar"))
     sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
-    mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
-    mlflow.log_artifact(str(metrics_path))
-    if final_model.exists():
-        mlflow.log_artifact(str(final_model))
-    if sidecar.exists():
-        mlflow.log_artifact(str(sidecar))
-    mlflow.end_run()
+    tracking = mlflow if capture is None else capture.tracking
+    if tracking is not None:
+        tracking.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
+        tracking.log_artifact(str(metrics_path))
+        if final_model.exists():
+            tracking.log_artifact(str(final_model))
+        if sidecar.exists():
+            tracking.log_artifact(str(sidecar))
+    if capture is None:
+        mlflow.end_run()
     print(f"\nDone in {elapsed:.1f}s ({sps:,.0f} sps). Blue score: {final_reward:.1f}")
     print(f"Saved to: {save_dir}")
 

@@ -322,3 +322,50 @@ def test_numeric_initial_state_is_owned_and_readable_without_pickle(tmp_path):
         np.testing.assert_array_equal(by_path["['normalizer']['blue']['count']"], [0])
         assert all(list(arrays[leaf["key"]].shape) == leaf["shape"] for leaf in leaves)
     assert value["exact_continuation_supported"] is False
+
+
+def test_reconciliation_repairs_existing_tracking_and_terminal_sync_is_retryable(tmp_path, monkeypatch):
+    import hashlib
+
+    import mlflow
+
+    from jaxborg.experiment_discovery.execution import sync_execution
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert child.wait() == 0
+    root = tmp_path / "evidence"
+    capture = train(
+        root, track=True, resolved_config={"execution": {"writer": {**writer_identity(), "pid": child.pid}}}
+    )
+    update(capture, 1)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    deliver = mlflow.MlflowClient.log_dict
+
+    def failed_delivery(*args, **kwargs):
+        raise OSError("offline projection")
+
+    monkeypatch.setattr(mlflow.MlflowClient, "log_dict", failed_delivery)
+    records = reconcile_interrupted(root, capture.attempt_id, reason="writer has exited")
+    assert next(record for record in records if record["id"] == capture.attempt_id)["status"] == "cancelled"
+    before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*") if path.is_file()}
+    with pytest.raises(OSError, match="unchanged"):
+        sync_execution(root, capture.attempt_id)
+    monkeypatch.setattr(mlflow.MlflowClient, "log_dict", deliver)
+    receipt = sync_execution(root, capture.attempt_id)
+    assert receipt["run_id"] == capture.tracking.run_id
+    assert receipt["delivery"] == "current" and receipt["data_incomplete"] is False
+    repaired = client.get_run(receipt["run_id"])
+    assert repaired.info.status == "KILLED"
+    assert repaired.data.tags["jaxborg.discovery.scientific_status"] == "cancelled"
+    assert repaired.data.tags["jaxborg.discovery.delivery"] == "current"
+    assert repaired.data.tags["jaxborg.discovery.data_incomplete"] == "false"
+    assert before == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*") if path.is_file()
+    }
+    # Ambiguous publication never chooses one of the matches or creates another.
+    client.create_run(repaired.info.experiment_id, tags=dict(repaired.data.tags))
+    with pytest.raises(ValueError, match="Multiple execution runs"):
+        sync_execution(root, capture.attempt_id)
+    assert len(client.search_runs([repaired.info.experiment_id])) == 2

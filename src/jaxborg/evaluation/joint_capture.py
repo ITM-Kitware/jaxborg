@@ -189,8 +189,11 @@ def run_matchup(
         "seeds": fact(expanded),
         "step_accounting": fact("Actual completed transitions in each retained episode"),
     }
+    from jaxborg.experiment_discovery.execution import destination_configured
+
     capture = start_evaluation(
         root,
+        track=destination_configured(),
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,
@@ -265,7 +268,8 @@ def run_matchup(
         return capture, result
     except BaseException as error:
         error._evaluation_capture = capture
-        finish_evaluation(
-            capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error
-        )
+        if not (capture.directory / "terminal.json").exists():
+            finish_evaluation(
+                capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error
+            )
         raise
