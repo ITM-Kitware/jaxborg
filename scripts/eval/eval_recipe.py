@@ -103,11 +103,11 @@ def main():
     seeds = _parse_seeds(args.seeds)
 
     if trained_backend == "cyborg":
-        from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
-        from jaxborg.recipe import eval_variant
+        from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg, resolve_torch_evaluation_settings
 
         recipe = read_sidecar(model_path)
-        variant = eval_variant(recipe)
+        settings = resolve_torch_evaluation_settings(recipe, deterministic=args.deterministic)
+        variant = settings.variant
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
             f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
@@ -121,7 +121,7 @@ def main():
             variant=variant,
             seeds=seeds,
             episodes_per_seed=args.episodes,
-            deterministic=args.deterministic,
+            deterministic=settings.deterministic,
             workers=args.workers,
         )
         wall = time.perf_counter() - t0
