@@ -116,6 +116,11 @@ JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
 
 Training output goes to `$JAXBORG_EXP_DIR` (defaults to `../jaxborg-exp/`).
 
+For retained Torch evaluation inputs, episode results, failures and retries, use
+[evaluation capture](docs/evaluation-capture.md). It shares recipe settings and
+native episode execution with the Torch recipe evaluator. The guide explains
+the different seed contracts so comparisons use equivalent settings.
+
 ## Recipes
 
 A recipe is a single YAML under `recipes/` that drives both backends. The `algorithm:` key picks the trainer (`scripts/train/algorithms/<algorithm>_<backend>.py`); `arch.name` picks the policy from the `src/jaxborg/policies/` registry; `core` / `train` / `jax` / `cleanrl` sections project to backend-specific PPO config.
