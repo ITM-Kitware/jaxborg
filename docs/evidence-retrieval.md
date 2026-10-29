@@ -29,6 +29,25 @@ referenced file. Later attempts require a new package/digest. Record IDs,
 original artifact locators, unknown-fact reasons, and unretained checkpoint
 references are preserved.
 
+To include a collation plot and its analyzer source, add both `--selection` and
+`--report` to capture preparation:
+
+```bash
+python -m jaxborg.experiment_discovery prepare \
+  --kind evaluation-capture --input "$STORE" --selection "$COLLATION" \
+  --report "$REPORT" --output "$PACKAGE"
+```
+
+The report must match the selected collation, archived analyzer identity and
+authoritative evidence bytes. Its manifest, figures, tables, missing/excluded
+cells and exact analyzer source are retained unchanged. Package format 2 stores
+evidence once under `input/`; report format 2 contains outputs and analyzer
+source, with no embedded evidence copy. Independent reconstruction requires the
+complete package.
+Additional, missing, changed or linked files reject preparation. This option supports the
+collation report produced by `scripts/eval/plot_results.py`, including study
+checks; it does not accept arbitrary report directories.
+
 Successful commands write one JSON object to stdout. Save the publication's
 `run_id` and `sha256`; readable names do not identify revisions. Search returns
 `{"publications": [...]}` and accepts exact `--protocol`, `--trial`, and `--record`
@@ -74,6 +93,30 @@ Returned paths are absolute:
 ```
 
 `selection` is null if none was supplied. Fetch does not execute bundled source.
+An attached report adds absolute `report` and `analysis_source` paths to the
+receipt. For a generic collation plot, explicitly run its saved analyzer after
+fetching. Its archived `pyproject.toml` and `uv.lock` specify dependencies; the
+partial source snapshot does not need to be installed as a project. Keep the
+environment, caches and rebuilt report outside the immutable downloaded package:
+
+```bash
+ARCHIVE="$DOWNLOADED/report/analysis-source"
+REPLAY_WORK="$(mktemp -d)"
+REPLAY_ENV="$REPLAY_WORK/venv"
+UV_PROJECT_ENVIRONMENT="$REPLAY_ENV" UV_CACHE_DIR="$REPLAY_WORK/uv-cache" \
+  uv sync --project "$ARCHIVE" --frozen --no-install-project --extra cpu
+PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR="$REPLAY_WORK/matplotlib" \
+  PYTHONPATH="$ARCHIVE/src:$ARCHIVE" "$REPLAY_ENV/bin/python" "$ARCHIVE/scripts/eval/plot_results.py" \
+  --collation "$DOWNLOADED/selection.json" --evidence-root "$DOWNLOADED/input" \
+  --output "$REBUILT_REPORT"
+```
+
+For a study-specific collation, invoke its archived study entrypoint so its
+scientific checks and declared configuration still apply. Package verification
+checks identity and closure without executing archived source. Report generation
+validates a temporary verified evidence copy, then retains only its outputs and
+analyzer source.
+
 To [rebuild the frozen report](../experiments/frozen-defender-response/README.md),
 use the returned paths and the analyzer/helper source identity from its saved
 collation:

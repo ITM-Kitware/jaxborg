@@ -302,6 +302,183 @@ def _fetch(cwd, uri, receipt, output, ok=True):
     )
 
 
+def _capture_report(tmp_path):
+    from scripts.eval.plot_results import REPORT_CONFIGURATION, analysis_identity, write_collation_report
+
+    root, records, selection, *_ = _capture_fixture(tmp_path / "producer")
+    selection = collate(
+        records,
+        protocol_id=selection["protocol_id"],
+        selected_attempts=selection["selected_attempts"],
+        selected_evaluations=selection["selected_evaluations"],
+        analysis={"source": analysis_identity(), "configuration": REPORT_CONFIGURATION},
+    )
+    selected = root.parent / "selection.json"
+    selected.write_text(json.dumps(selection))
+    report = root.parent / "report"
+    write_collation_report(selected, root, report)
+    return root, selected, report
+
+
+def test_http_collation_report_replays_only_fetched_sources_after_producer_disappears(tmp_path, mlflow_http):
+    from jaxborg.experiment_discovery.package import _identity, verify_package
+
+    root, selection, report = _capture_report(tmp_path)
+    sentinel = tmp_path / "archived-source-executed"
+    script = report / "analysis-source/scripts/eval/plot_results.py"
+    script.write_text(script.read_text() + f"\nPath({str(sentinel)!r}).write_text('explicit execution')\n")
+    manifest_path = report / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["analysis-source/scripts/eval/plot_results.py"] = _identity(script)
+    hashes = {
+        name.removeprefix("analysis-source/"): identity["sha256"]
+        for name, identity in manifest["files"].items()
+        if name.startswith("analysis-source/")
+    }
+    saved = json.loads(selection.read_text())
+    saved["analysis"]["source"] = (
+        "sha256:" + hashlib.sha256(json.dumps(hashes, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    )
+    saved = collate(
+        **{
+            key: saved[key]
+            for key in ("records", "protocol_id", "selected_attempts", "selected_evaluations", "analysis")
+        }
+    )
+    selection.write_text(json.dumps(saved))
+    (report / "collation.json").write_text(json.dumps(saved))
+    manifest.update(collation_id=saved["id"], analysis=saved["analysis"])
+    manifest["files"]["collation.json"] = _identity(report / "collation.json")
+    manifest_path.write_text(json.dumps(manifest))
+    expected = {name: (report / name).read_bytes() for name in ("joined.json", "joined.csv", "selection-status.json")}
+    original_selection = selection.read_bytes()
+    package = tmp_path / "prepared"
+    _cli(
+        tmp_path,
+        "prepare",
+        "--kind",
+        "evaluation-capture",
+        "--input",
+        root,
+        "--selection",
+        selection,
+        "--report",
+        report,
+        "--output",
+        package,
+    )
+    receipt = _publish(tmp_path, package, mlflow_http, "collation report retrieval")
+    root.parent.rename(tmp_path / "unavailable producer")
+    package.rename(tmp_path / "unavailable prepared package")
+    consumer = tmp_path / "consumer"
+    inspected = _cli(
+        consumer, "inspect", "--tracking-uri", mlflow_http, "--run-id", receipt["run_id"], "--sha256", receipt["sha256"]
+    )
+    assert inspected["report"] == {"path": "report", "collation_id": saved["id"], "analysis": saved["analysis"]}
+    fetched = _fetch(consumer, mlflow_http, receipt, consumer / "evidence")
+    paths = fetched["paths"]
+    retained = Path(paths["report"])
+    archive = Path(paths["analysis_source"])
+    assert not (retained / "evidence").exists()
+    assert json.loads((Path(paths["materialization"])).read_text())["schema_version"] == 2
+    assert Path(paths["selection"]).read_bytes() == original_selection
+    assert {name: (retained / name).read_bytes() for name in expected} == expected
+    assert not sentinel.exists(), "Preparation, publication and fetch must not execute archived source"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(archive / "scripts/eval/plot_results.py"),
+            "--collation",
+            paths["selection"],
+            "--evidence-root",
+            paths["input"],
+            "--output",
+            str(consumer / "rebuilt"),
+        ],
+        cwd=consumer,
+        env=os.environ
+        | {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": os.pathsep.join((str(archive / "src"), str(archive))),
+            "MPLCONFIGDIR": str(consumer / "matplotlib"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert sentinel.read_text() == "explicit execution"
+    assert verify_package(consumer / "evidence", fetched["sha256"])["sha256"] == fetched["sha256"]
+    assert {name: (consumer / "rebuilt" / name).read_bytes() for name in expected} == expected
+    status = json.loads(expected["selection-status.json"])
+    assert status["missing"][0]["trial_id"] == "trial:c"
+    assert any(row["status"] == "failed" for row in status["excluded"])
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["source", "evidence", "selection", "extra", "listed-extra", "symlink", "deleted", "correction", "version"],
+)
+def test_collation_report_rejects_incomplete_or_mismatched_closure(tmp_path, damage):
+    from jaxborg.experiment_discovery.package import prepare_package
+
+    root, selection, report = _capture_report(tmp_path)
+    manifest = json.loads((report / "manifest.json").read_text())
+    name = "analysis-source/scripts/eval/plot_results.py"
+    if damage == "evidence":
+        target = next(root.rglob("model.pt"))
+        target.write_bytes(target.read_bytes() + b"changed")
+    target = report / name
+    if damage == "source":
+        target.write_bytes(target.read_bytes() + b"changed")
+        manifest["files"][name] = {
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "size_bytes": target.stat().st_size,
+        }
+    elif damage == "version":
+        manifest["schema_version"] = 1
+    elif damage == "selection":
+        manifest["collation_id"] = "another-collation"
+    elif damage in {"extra", "listed-extra"}:
+        (report / "unexpected.txt").write_bytes(b"unrelated")
+        if damage == "listed-extra":
+            manifest["files"]["unexpected.txt"] = {"sha256": hashlib.sha256(b"unrelated").hexdigest(), "size_bytes": 9}
+    elif damage == "symlink":
+        external = tmp_path / "external-source"
+        target.rename(external)
+        target.symlink_to(external)
+    elif damage == "deleted":
+        target.unlink()
+    elif damage == "correction":
+        manifest["corrections"] = {"invented-evaluation": {"reason": "invented correction"}}
+    (report / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        prepare_package("evaluation-capture", root, tmp_path / "rejected", selection=selection, report=report)
+    assert not (tmp_path / "rejected").exists()
+
+
+def test_collation_report_requires_selection_and_rejects_rehashed_source_change(tmp_path):
+    from jaxborg.experiment_discovery.package import _digest, _identity, prepare_package, verify_package
+
+    root, selection, report = _capture_report(tmp_path)
+    with pytest.raises(ValueError, match="explicit selection"):
+        prepare_package("evaluation-capture", root, tmp_path / "unselected", report=report)
+    package = tmp_path / "package"
+    manifest = prepare_package("evaluation-capture", root, package, selection=selection, report=report)
+    report_manifest_path = package / "report/manifest.json"
+    report_manifest = json.loads(report_manifest_path.read_text())
+    name = "analysis-source/scripts/eval/plot_results.py"
+    path = package / "report" / name
+    path.write_bytes(path.read_bytes() + b"changed source")
+    report_manifest["files"][name] = _identity(path)
+    report_manifest_path.write_text(json.dumps(report_manifest))
+    for changed in ("report/" + name, "report/manifest.json"):
+        manifest["files"][changed] = _identity(package / changed)
+    manifest["sha256"] = _digest(manifest)
+    (package / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="analyzer source differs"):
+        verify_package(package)
+
+
 def test_http_frozen_report_rebuild_uses_unchanged_selection_after_producer_disappears(tmp_path, mlflow_http):
     producer = tmp_path / "producer files"
     producer.mkdir()
