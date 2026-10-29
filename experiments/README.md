@@ -10,6 +10,18 @@ and logging conventions are tracked separately in
 [#25](https://github.com/ITM-Kitware/jaxborg/issues/25); broader integration is
 tracked in [#28](https://github.com/ITM-Kitware/jaxborg/issues/28).
 
+## Choose a workflow
+
+- [Capture a checkpoint evaluation](../docs/evaluation-capture.md): run a Torch
+  policy in CybORG and retain inputs, source, episode results, and execution status.
+- [Import existing evidence](../docs/local-evidence-producers.md): read a retained
+  frozen-defender bundle or co-training SQLite store into version 1 records.
+- [Rebuild the frozen-defender report](frozen-defender-response/README.md): analyze
+  that study's saved evidence with its scientific checks and explicit selection.
+
+Capture and import both use the shared record contract. Select attempts and
+evaluations explicitly when collating them; retries do not create new replicates.
+
 ## What to check in
 
 ```text
@@ -39,9 +51,10 @@ code or an intentionally versioned preset follows the ordinary review process.
 Each execution should retain its fully resolved settings, including defaults and
 overrides, with the code/environment identity, input references, measurements,
 and outputs. The saved configuration records what ran; it is not another editable
-copy of a preset. The frozen-defender example implements this capture for its
-analysis command. Applying it to shared training/evaluation entrypoints is a
-follow-up.
+copy of a preset. The frozen-defender example retains this evidence for its
+analysis command. The checkpoint evaluation workflow above captures it for Torch
+policies evaluated in CybORG. Live training capture and JAX checkpoint evaluation
+capture remain follow-up work.
 
 For example, population-based training would need shared code for population
 updates and study settings for its budget and replacement rules. Its runs would

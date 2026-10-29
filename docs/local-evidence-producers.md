@@ -1,5 +1,9 @@
 # Retained local evidence producers
 
+See the [experiment guide](../experiments/README.md) for the workflow entry points.
+To record a new checkpoint evaluation as it runs, use
+[evaluation capture](evaluation-capture.md).
+
 `python -m jaxborg.experiment_producers --frozen-bundle /absolute/bundle --smoke-store /absolute/smoke --output /outside/checkout/records.json`
 imports two local producers into the common version 1 record contract. The output
 must be new and outside both the checkout and the original evidence directories.
