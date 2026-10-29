@@ -212,6 +212,7 @@ def test_evaluate_matchup_expands_seeds_and_reports_zero_sum_returns(monkeypatch
         topology_path=None,
         env=None,
         topology_index=None,
+        **observers,
     ):
         episode_calls.append((set(policies), variant.name, seed, deterministic, env, topology_index))
         return float(seed)
@@ -267,6 +268,7 @@ def test_evaluate_matchup_forwards_and_reports_held_out_topology_bank(tmp_path, 
         topology_path=None,
         env=None,
         topology_index=None,
+        **observers,
     ):
         episode_assignments.append((env, topology_index))
         return 0.0
@@ -330,6 +332,7 @@ def test_evaluate_matchup_can_sample_held_out_bank_randomly(tmp_path, monkeypatc
         topology_path=None,
         env=None,
         topology_index=None,
+        **observers,
     ):
         episode_assignments.append((env, topology_index))
         return 0.0

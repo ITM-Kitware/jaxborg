@@ -474,8 +474,10 @@ def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
     return dict(team_recipe(sidecar, team)["arch"])
 
 
-def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
+def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_factory=None, recording=None):
     """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
+    if recording is not None and recipe.get("train", {}).get("topology_generation"):
+        raise ValueError("Recorded training requires explicit topology snapshots, not bank generation")
     trainable_teams = training_teams(recipe)
     configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
     for config in configs.values():
@@ -484,6 +486,56 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         if topology_bank:
             validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
+    capture = provenance = None
+    if recording is not None:
+        from jaxborg.evaluation.joint_capture import outside_source
+        from jaxborg.evaluation.training_capture import begin_training
+
+        outside_source(save_dir)
+
+        capture, provenance = begin_training(
+            args=args, recipe=recipe, configs=configs, env_factory=env_factory, **recording
+        )
+    sealed = False
+    previous_tracking_run = mlflow.active_run()
+    try:
+        save_dir.mkdir(parents=True, exist_ok=True)
+        if provenance is not None:
+            provenance.verify_sources()
+        outputs = _execute_joint_training(
+            args, recipe, tag, save_dir, configs, trainable_teams, env_factory=env_factory, capture=capture
+        )
+        if capture is not None:
+            from jaxborg.evaluation.capture_store import finish_training
+
+            provenance.verify_sources()
+            finish_training(capture, status="succeeded")
+            sealed = True
+        _finish_training_outputs(recipe, configs, save_dir, outputs)
+        return capture
+    except BaseException as error:
+        if capture is not None:
+            error._evaluation_capture = capture
+        try:
+            if capture is not None and not sealed:
+                from jaxborg.evaluation.capture_store import finish_training
+
+                finish_training(
+                    capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error
+                )
+        finally:
+            active = mlflow.active_run()
+            if active is not None and (
+                previous_tracking_run is None or active.info.run_id != previous_tracking_run.info.run_id
+            ):
+                try:
+                    mlflow.end_run(status="FAILED")
+                except Exception as cleanup_error:
+                    error.add_note(f"Tracking cleanup failed: {cleanup_error}")
+        raise
+
+
+def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_teams, *, env_factory, capture):
     opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
     dims = {
         "blue": (blue_obs_size(enhanced_obs_enabled(recipe)), BLUE_ALLOW_TRAFFIC_END),
@@ -546,6 +598,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         networks,
         trainable_teams=trainable_teams,
         initial_params=initial_params,
+        env_factory=env_factory,
     )
     del env
     rng = jax.random.PRNGKey(args.seed + 1)
@@ -588,6 +641,43 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 "seed": int(args.seed),
                 "total_steps": int(env_steps),
                 "train_run_id": train_run_id,
+            },
+        )
+
+    if capture is not None:
+        from jaxborg.evaluation.capture_store import record_facts
+        from jaxborg.evaluation.training_capture import retain_checkpoint, retain_initial_state
+
+        initial_model = save_dir / "initial.safetensors"
+        save_bundle(initial_model, 0)
+        initial_sidecar = write_sidecar(
+            save_dir / "recipe_initial.yaml",
+            recipe,
+            seed=args.seed,
+            total_steps=0,
+            backend="jax",
+            train_run_id=train_run_id,
+        )
+        retain_checkpoint(capture, initial_model, initial_sidecar, steps=0, initial=True)
+        retain_initial_state(
+            capture,
+            train_states=train_states,
+            reward_norm_states=reward_norm_states,
+            rng=rng,
+            env_state=env_state,
+            obs=obs,
+        )
+        record_facts(
+            capture,
+            {
+                "policy_contract": {
+                    "value": {
+                        team: {"obs_dim": dims[team][0], "action_dim": dims[team][1], "arch": arches[team]}
+                        for team in ("blue", "red")
+                    },
+                    "source": "initial checkpoint bundle metadata",
+                },
+                "hardware": {"value": [str(device) for device in jax.devices()], "source": "JAX device discovery"},
             },
         )
 
@@ -681,6 +771,10 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 row[f"team.{team}.trainable"] = team in trainable_teams
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
+            if capture is not None:
+                from jaxborg.evaluation.capture_store import record_training_update
+
+                record_training_update(capture, row)
             mlflow.log_metrics(
                 {
                     key: value
@@ -720,6 +814,8 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                         "model": name,
                     },
                 )
+                if capture is not None:
+                    retain_checkpoint(capture, checkpoint_path, sidecar_path, steps=env_steps)
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {env_steps:,}; "
@@ -745,12 +841,22 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                             sidecar_path.unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - start
-    sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
     final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
+    return {
+        "elapsed": elapsed,
+        "final_reward": final_reward,
+        "metrics_path": metrics_path,
+        "final_model": save_dir / f"model_{tag}.safetensors",
+        "sidecar": save_dir / f"recipe_{tag}.yaml",
+    }
+
+
+def _finish_training_outputs(recipe, configs, save_dir, outputs):
+    elapsed, final_reward = outputs["elapsed"], outputs["final_reward"]
+    metrics_path, final_model, sidecar = (outputs[name] for name in ("metrics_path", "final_model", "sidecar"))
+    sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
     mlflow.log_artifact(str(metrics_path))
-    final_model = save_dir / f"model_{tag}.safetensors"
-    sidecar = save_dir / f"recipe_{tag}.yaml"
     if final_model.exists():
         mlflow.log_artifact(str(final_model))
     if sidecar.exists():
@@ -773,9 +879,28 @@ def main(*, expected_algorithm: str | None = None):
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
     parser.add_argument("--total-timesteps", type=int, default=None, help="Override recipe.train.total_timesteps")
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
+    parser.add_argument("--evidence-root", type=Path)
+    parser.add_argument("--protocol", type=Path)
+    parser.add_argument("--trial")
+    parser.add_argument("--retry-of")
+    parser.add_argument("--expected-revision")
+    parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--development-no-recording", action="store_true")
     args = parser.parse_args()
+    if not args.development_no_recording and not all(
+        (args.evidence_root, args.protocol, args.trial, args.expected_revision)
+    ):
+        parser.error(
+            "research training requires --evidence-root, --protocol, --trial and --expected-revision; "
+            "use --development-no-recording for development"
+        )
+    if args.development_no_recording and any(
+        (args.evidence_root, args.protocol, args.trial, args.retry_of, args.expected_revision)
+    ):
+        parser.error("development opt-out cannot be combined with evidence arguments")
 
     recipe = copy.deepcopy(load_recipe(args.recipe))
+    supplied_recipe = copy.deepcopy(recipe)
     if expected_algorithm is not None and recipe["algorithm"] != expected_algorithm:
         parser.error(f"this launcher requires algorithm: {expected_algorithm}")
     teams = training_teams(recipe)
@@ -796,15 +921,8 @@ def main(*, expected_algorithm: str | None = None):
         recipe["train"]["total_timesteps"] = int(args.total_timesteps)
     if args.num_envs is not None:
         recipe.setdefault("jax", {})["num_envs"] = int(args.num_envs)
-    config = project_jax(recipe)
-    config["SEED"] = args.seed
-    topology_bank = config.get("TOPOLOGY_BANK") or ()
-    if topology_bank:
-        validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
-
     tag = args.tag or f"{recipe['meta']['name']}_seed{args.seed}"
     save_dir = EXP_DIR / f"{recipe['algorithm']}_jax" / tag
-    save_dir.mkdir(parents=True, exist_ok=True)
 
     cache_dir = os.environ.get("JAX_COMPILATION_CACHE_DIR", "")
     if cache_dir:
@@ -812,8 +930,44 @@ def main(*, expected_algorithm: str | None = None):
         print(f"XLA compilation cache: {cache_dir}", flush=True)
 
     if learned_red:
-        _run_joint_training(args, recipe, tag, save_dir)
+        recording = (
+            None
+            if args.development_no_recording
+            else {
+                "root": args.evidence_root,
+                "protocol": json.loads(args.protocol.read_text()),
+                "trial_id": args.trial,
+                "retry_of": args.retry_of,
+                "expected_revision": args.expected_revision,
+                "allow_dirty": args.allow_dirty,
+                "supplied_recipe": supplied_recipe,
+                "overrides": {"seed": args.seed, "total_timesteps": args.total_timesteps, "num_envs": args.num_envs},
+                "entrypoint": Path(__file__),
+            }
+        )
+        capture, receipt_stream = None, sys.stdout
+        try:
+            capture = _run_joint_training(args, recipe, tag, save_dir, recording=recording)
+        except BaseException as error:
+            capture = getattr(error, "_evaluation_capture", None)
+            receipt_stream = sys.stderr
+            raise
+        finally:
+            if capture is not None:
+                print(
+                    json.dumps({"evidence_root": str(capture.root), "attempt_id": capture.attempt_id}),
+                    file=receipt_stream,
+                )
         return
+    if not args.development_no_recording:
+        parser.error("retained training currently supports fresh joint Blue/Red training only")
+
+    save_dir.mkdir(parents=True, exist_ok=True)
+    config = project_jax(recipe)
+    config["SEED"] = args.seed
+    topology_bank = config.get("TOPOLOGY_BANK") or ()
+    if topology_bank:
+        validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
     # Build a throwaway env to get action_dim for network init.
     variant: GameVariant = config["TRAIN_VARIANT"]

@@ -7,6 +7,8 @@ Keep generated data, checkpoints, logs, figures, and reports outside Git.
 
 - [Capture a checkpoint evaluation](../docs/evaluation-capture.md): evaluate a
   Torch policy in CybORG and retain inputs, source, episodes, and execution status.
+- [Record joint training and evaluation](../docs/joint-execution-records.md):
+  retain JAX training updates, owned checkpoints, matchups and trajectories.
 - [Import existing evidence](../docs/local-evidence-producers.md): read a retained
   frozen-defender bundle or co-training SQLite store into version 1 records.
 - [Retrieve retained evidence](../docs/evidence-retrieval.md): find an exact MLflow
@@ -14,8 +16,7 @@ Keep generated data, checkpoints, logs, figures, and reports outside Git.
 - [Rebuild the frozen-defender report](frozen-defender-response/README.md): analyze
   that study's saved evidence with its scientific checks and explicit selection.
 
-Live training capture and JAX checkpoint evaluation capture remain follow-up
-work. Shared training launch and logging conventions are tracked in
+Shared training launch and logging conventions are tracked in
 [#25](https://github.com/ITM-Kitware/jaxborg/issues/25), with broader integration in
 [#28](https://github.com/ITM-Kitware/jaxborg/issues/28).
 

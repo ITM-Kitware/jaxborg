@@ -67,6 +67,17 @@ class Provenance:
         _check_local_imports(root, self.source_files)
 
 
+def writer_identity():
+    """Identify the process namespace in which a writer PID can be checked."""
+    identity = {"hostname": socket.gethostname(), "pid": os.getpid()}
+    try:
+        identity["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        identity["pid_namespace"] = os.readlink("/proc/self/ns/pid")
+    except OSError:
+        pass
+    return identity
+
+
 def collect_provenance(*, allow_dirty=False, expected_revision=None, entrypoint=None, source_roots=()):
     """Capture the executing checkout, without credentials or unrelated files.
 
@@ -120,7 +131,7 @@ def collect_provenance(*, allow_dirty=False, expected_revision=None, entrypoint=
         "working_tree_patch": _git(root, "diff", "HEAD", "--", *files) if dirty else "",
         "command": list(sys.argv),
         "working_directory": str(Path.cwd()),
-        "writer": {"hostname": socket.gethostname(), "pid": os.getpid()},
+        "writer": writer_identity(),
         "dependencies": _dependencies(),
         "runtime": {
             "python": platform.python_version(),
