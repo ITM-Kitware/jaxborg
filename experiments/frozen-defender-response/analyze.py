@@ -521,11 +521,16 @@ def run(args):
     )
     require(not output.is_relative_to(PROJECT), "Generated reports must be outside the source checkout")
     index, references = verified_bundle(root)
+    materialization = getattr(args, "materialization", None)
+    if materialization:
+        from jaxborg.experiment_discovery.package import frozen_materialization
+
+        frozen_materialization(root, materialization)
     if getattr(args, "selection", None):
         from jaxborg.experiment_producers.selection import verify_frozen_selection
 
         saved_selection = load_json(args.selection)
-        verify_frozen_selection(saved_selection, root)
+        verify_frozen_selection(saved_selection, root, materialization=materialization)
         from jaxborg.experiment_producers.source import analysis_source_identity
 
         require(
@@ -721,6 +726,7 @@ def main():
     parser.add_argument("--input", required=True, type=Path, help="Verified offline input bundle")
     parser.add_argument("--output", required=True, type=Path, help="New output directory outside the checkout")
     parser.add_argument("--selection", type=Path, help="Saved common-record collation selecting this bundle")
+    parser.add_argument("--materialization", type=Path, help="Verified evidence package manifest for relocated input")
     parser.add_argument("--config", type=Path, help="Optional external JSON analysis settings")
     parser.add_argument("--bootstrap-seed", type=int)
     parser.add_argument("--bootstrap-resamples", type=int)
