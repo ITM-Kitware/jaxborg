@@ -33,13 +33,13 @@ def status(value):
     return statuses[value]
 
 
-def file_record(path, identity, producer=None, role="retained evidence"):
+def file_record(path, identity, producer=None, role="retained evidence", *, locator=None):
     path = Path(path).resolve()
     return record(
         "artifact",
         identity,
         producer_id=producer,
-        uri=path.as_uri(),
+        uri=(Path(locator) if locator is not None else path).as_uri(),
         sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
         size_bytes=path.stat().st_size,
         role=role,
@@ -89,9 +89,22 @@ def frozen_cells(protocol, state, pid):
     return trials, cells, episode_budgets
 
 
-def frozen_bundle(root):
-    """Import indexed bytes and explicit manifest relationships from one bundle."""
+def frozen_bundle(root, *, materialization=None):
+    """Import verified bytes, retaining original locators after explicit materialization."""
+    if materialization is not None:
+        from jaxborg.experiment_discovery.package import frozen_materialization
+
+        return frozen_materialization(root, materialization)
+    return _frozen_bundle(root, Path(root).resolve())
+
+
+def _frozen_bundle(root, provenance_root):
     root = Path(root).resolve()
+    provenance_root = Path(provenance_root)
+
+    def locator(path):
+        return provenance_root / path.relative_to(root)
+
     index = json.loads((root / "index.json").read_text())
     if index["format"] != "frozen-defender-response-v1":
         raise ValueError("Unsupported bundle")
@@ -101,7 +114,7 @@ def frozen_bundle(root):
         path = (root / name).resolve()
         if not path.is_relative_to(root):
             raise ValueError("Bundle path escapes root")
-        artifact = file_record(path, f"{namespace}:artifact:{name}")
+        artifact = file_record(path, f"{namespace}:artifact:{name}", locator=locator(path))
         if artifact["sha256"] != entry["sha256"] or artifact["size_bytes"] != entry["size"]:
             raise ValueError(f"Bundle hash mismatch: {name}")
         artifacts.append(artifact)
@@ -130,7 +143,7 @@ def frozen_bundle(root):
         tid = (
             cell["id"]
             if cell
-            else unknown("Source/report evidence is not an independent scientific trial", str(paths[ref][0]))
+            else unknown("Source/report evidence is not an independent scientific trial", str(locator(paths[ref][0])))
         )
         inputs = [
             paths[item["canonical_reference"]][1]["id"]
@@ -138,15 +151,15 @@ def frozen_bundle(root):
             if item.get("canonical_reference") in paths
         ]
         facts = {
-            key: known(owner[key], f"{paths[ref][0]}#/{key}")
+            key: known(owner[key], f"{locator(paths[ref][0])}#/{key}")
             for key in ("seed", "source", "environment", "effective_config", "game_contract", "seed_contract")
             if owner.get(key) is not None
         }
         facts["unretained_inputs"] = known(
             [item for item in owner.get("inputs", []) if item.get("canonical_reference") not in paths],
-            f"{paths[ref][0]}#/inputs",
+            f"{locator(paths[ref][0])}#/inputs",
         )
-        facts["source_store"] = known(index["source_store"], f"{root / 'index.json'}#/source_store")
+        facts["source_store"] = known(index["source_store"], f"{provenance_root / 'index.json'}#/source_store")
         attempts.append(
             record(
                 "attempt",
@@ -156,7 +169,8 @@ def frozen_bundle(root):
                 status=status(owner["status"]),
                 execution_kind=owner["kind"],
                 retry_of=unknown(
-                    "Retained protocol/state select this run but do not record retry genealogy", str(paths[ref][0])
+                    "Retained protocol/state select this run but do not record retry genealogy",
+                    str(locator(paths[ref][0])),
                 ),
                 facts=facts,
                 budgets=[
@@ -164,10 +178,10 @@ def frozen_bundle(root):
                         "unit": "environment_steps",
                         "requested": owner.get("requested_steps")
                         if owner.get("requested_steps") is not None
-                        else unknown("Not recorded in manifest", str(paths[ref][0])),
+                        else unknown("Not recorded in manifest", str(locator(paths[ref][0]))),
                         "completed": owner.get("actual_steps")
                         if owner.get("actual_steps") is not None
-                        else unknown("Not recorded in manifest", str(paths[ref][0])),
+                        else unknown("Not recorded in manifest", str(locator(paths[ref][0]))),
                     }
                 ],
                 inputs=inputs,
@@ -191,14 +205,14 @@ def frozen_bundle(root):
             path, raw = paths[result_ref]
             result = json.loads(path.read_text())
             efacts = {
-                key: known(result[key], f"{path}#/{key}")
+                key: known(result[key], f"{locator(path)}#/{key}")
                 for key in ("seeds", "policies", "eval_env", "policy_backend", "variant")
                 if key in result
             }
-            efacts["game_contract"] = known(owner["game_contract"], f"{paths[ref][0]}#/game_contract")
+            efacts["game_contract"] = known(owner["game_contract"], f"{locator(paths[ref][0])}#/game_contract")
             efacts["unretained_inputs"] = facts["unretained_inputs"]
             for key in ("blue_mean_return", "blue_std_return", "n_episodes", "total_episodes"):
-                efacts[key] = known(result[key], f"{path}#/{key}")
+                efacts[key] = known(result[key], f"{locator(path)}#/{key}")
             returns = result["per_episode_blue_returns"]
             if len(returns) < 2 or not math.isclose(
                 statistics.stdev(returns), result["blue_std_return"], rel_tol=1e-12
@@ -219,7 +233,7 @@ def frozen_bundle(root):
                             "unit": "episodes",
                             "requested": episode_budgets.get(
                                 owner["run_id"],
-                                unknown("No authoritative requested episode budget", str(protocol_path)),
+                                unknown("No authoritative requested episode budget", str(locator(protocol_path))),
                             ),
                             "completed": len(returns),
                         }
@@ -264,12 +278,12 @@ def frozen_bundle(root):
             extensions={
                 "frozen_bundle": {
                     "schema_version": 1,
-                    "source": str(root / "index.json"),
+                    "source": str(provenance_root / "index.json"),
                     "values": {
-                        "bundle_root": str(root),
+                        "bundle_root": str(provenance_root),
                         "bundle_index_sha256": hashlib.sha256((root / "index.json").read_bytes()).hexdigest(),
-                        "protocol_source": str(protocol_path),
-                        "state_source": str(state_path),
+                        "protocol_source": str(locator(protocol_path)),
+                        "state_source": str(locator(state_path)),
                     },
                 }
             },
@@ -277,7 +291,7 @@ def frozen_bundle(root):
         *attempts,
         *evaluations,
         *artifacts,
-        file_record(root / "index.json", f"{namespace}:bundle-index"),
+        file_record(root / "index.json", f"{namespace}:bundle-index", locator=provenance_root / "index.json"),
     ]
 
 

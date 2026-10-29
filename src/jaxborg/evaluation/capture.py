@@ -31,15 +31,6 @@ def _outside_source(path: Path) -> Path:
     return path
 
 
-def _sidecar_path(model: Path) -> Path:
-    stem = model.stem.removeprefix("model_")
-    candidates = [model.with_name(f"recipe_{stem}.{suffix}") for suffix in ("yaml", "yml")]
-    for path in candidates:
-        if path.is_file():
-            return path
-    raise FileNotFoundError(f"Required recipe sidecar not found next to {model}")
-
-
 def _read_recipe(path: Path) -> dict:
     import yaml
 
@@ -97,6 +88,7 @@ def run_evaluation(
     declared. Once started, input-copy, model-load, and rollout failures are
     retained. The protocol's trial identities and selection remain explicit.
     """
+    from jaxborg.checkpoint import sidecar_path
     from jaxborg.constants import BLUE_OBS_SIZE
     from jaxborg.evaluation.cyborg_runner import torch_policy_configuration
     from jaxborg.evaluation.provenance import collect_provenance
@@ -118,7 +110,7 @@ def run_evaluation(
         raise ValueError("Environment seeds must be unique")
     _integer(policy_seed + len(seeds) - 1, "last policy seed", maximum=2**63 - 1)
     _metric_contract(protocol)
-    recipe_path = _sidecar_path(model)
+    recipe_path = sidecar_path(model)
     recipe = _read_recipe(recipe_path)
     variant = replace(eval_variant(recipe), num_steps=horizon)
     provenance = collect_provenance(allow_dirty=allow_dirty)
