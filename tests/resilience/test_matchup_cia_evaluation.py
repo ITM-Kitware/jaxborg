@@ -44,6 +44,7 @@ def test_matchup_uses_shared_fixed_cases_and_returns_structured_cia(tmp_path, mo
         env,
         topology_index,
         host_resilience_role,
+        **observers,
     ):
         del policies, variant, deterministic
         assert env is sentinel_env

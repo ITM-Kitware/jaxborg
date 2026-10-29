@@ -199,6 +199,27 @@ def validate_records(records):
                 for metric in record["metrics"]:
                     _require(metric["name"] in definitions, "undefined metric")
                     _require(metric["unit"] == definitions[metric["name"]]["unit"], "metric unit mismatch")
+        correction = record.get("extensions", {}).get("evaluation_correction")
+        if correction is not None:
+            _require(kind == "evaluation" and correction["schema_version"] == 1, "invalid evaluation correction")
+            values = correction["values"]
+            _fields(values, {"evaluation_id": str, "reason": str, "changes": dict}, "evaluation correction")
+            _require(bool(values["changes"]), "correction must declare changed procedure or inputs")
+            seen = {record["id"]}
+            cursor = record
+            while (edge := cursor.get("extensions", {}).get("evaluation_correction")) is not None:
+                cursor = link(edge["values"]["evaluation_id"], {"evaluation"})
+                _require(cursor["id"] not in seen, "evaluation correction cycle")
+                seen.add(cursor["id"])
+                _require(cursor["status"] in {"succeeded", "failed", "cancelled"}, "correction target must be terminal")
+                original = link(cursor["attempt_id"], {"attempt"})
+                current = link(record["attempt_id"], {"attempt"})
+                _require(
+                    isinstance(original["trial_id"], str)
+                    and original["trial_id"] == current["trial_id"]
+                    and original["protocol_id"] == current["protocol_id"],
+                    "evaluation correction must retain protocol and trial",
+                )
         if kind in {"attempt", "evaluation"}:
             for identity in record["inputs"] + record.get("raw_artifacts", []):
                 link(identity, {"artifact"})
@@ -272,6 +293,11 @@ def collate(records, *, protocol_id, selected_attempts, selected_evaluations, an
                 "attempt_id": attempt["id"],
                 "evaluation_id": identity,
                 "metrics": evaluation["metrics"],
+                **(
+                    {"correction": evaluation["extensions"]["evaluation_correction"]}
+                    if "evaluation_correction" in evaluation.get("extensions", {})
+                    else {}
+                ),
             }
         )
     for identity, record in sorted(index.items()):
