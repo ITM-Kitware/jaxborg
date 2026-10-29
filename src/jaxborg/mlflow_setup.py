@@ -1,7 +1,7 @@
 """MLflow run setup and periodic frozen-checkpoint evaluation.
 
 Both algorithm scripts call `start_run(recipe, backend=...)` to:
-- point MLflow at `$JAXBORG_EXP_DIR/mlflow.db`
+- use `$MLFLOW_TRACKING_URI` or the local `$JAXBORG_EXP_DIR/mlflow.db`
 - start a run named `<algorithm>-<backend>-<recipe_name>-seed<n>`
 - tag the run with recipe.{name,source,path}, algorithm, backend,
   arch.name, git.{commit,branch}
@@ -190,31 +190,34 @@ def _exp_dir() -> Path:
     return Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
 
 
-def _git(arg: str) -> str:
+def _git(*arguments: str) -> str:
     try:
-        return subprocess.check_output(["git", "rev-parse", arg], stderr=subprocess.DEVNULL).decode().strip()
+        return subprocess.check_output(["git", "rev-parse", *arguments], stderr=subprocess.DEVNULL).decode().strip()
     except Exception:
         return ""
 
 
-def configure(experiment: str | None = None) -> Path:
-    """Initialize the shared SQLite store under a process lock; return its path."""
+def tracking_client():
+    """Use an explicit destination, or initialize the existing local store under its lock."""
+    explicit = os.environ.get("MLFLOW_TRACKING_URI")
+    if explicit:
+        return mlflow.MlflowClient(tracking_uri=explicit)
     exp_dir = _exp_dir()
     exp_dir.mkdir(parents=True, exist_ok=True)
     db_path = exp_dir / "mlflow.db"
     # Parallel seeds can otherwise run the same schema migration at once.
-    # Keep the lock file in place: unlinking it could let waiters lock different
-    # inodes. Closing the handle releases the lock, including on exceptions.
     with db_path.with_suffix(".db.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        tracking_uri = f"sqlite:///{db_path}"
-        mlflow.set_tracking_uri(tracking_uri)
-        # set_tracking_uri is lazy. Force store initialization while locked,
-        # including for evaluation callers that do not select an experiment.
-        mlflow.MlflowClient(tracking_uri=tracking_uri)
-        if experiment:
-            mlflow.set_experiment(experiment)
-    return db_path
+        return mlflow.MlflowClient(tracking_uri=f"sqlite:///{db_path}")
+
+
+def configure(experiment: str | None = None):
+    """Select the configured tracking destination and optional experiment."""
+    client = tracking_client()
+    mlflow.set_tracking_uri(client.tracking_uri)
+    if experiment:
+        mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME") or experiment)
+    return client.tracking_uri
 
 
 def start_run(
@@ -226,15 +229,30 @@ def start_run(
     extra_params: dict[str, Any] | None = None,
 ):
     """Start an MLflow run and stamp it with recipe + git tags. Returns ActiveRun."""
+    configure(experiment=f"{recipe.get('algorithm', 'ippo')}-cc4")
+    tags, params = training_run_metadata(recipe, backend=backend, seed=seed, extra_params=extra_params)
+    run = mlflow.start_run(run_name=tags["mlflow.runName"])
+    if extra_tags:
+        tags.update(extra_tags)
+    mlflow.set_tags(tags)
+    mlflow.log_params(params)
+
+    src = recipe.get("__source_path__")
+    if src and Path(src).exists():
+        try:
+            mlflow.log_artifact(src)
+        except Exception:
+            pass
+    return run
+
+
+def training_run_metadata(recipe, *, backend, seed, extra_params=None):
+    """Build the same training labels and parameters for either tracking owner."""
     name = recipe.get("meta", {}).get("name", "unnamed")
     algorithm = recipe.get("algorithm", "ippo")
     arch_name = recipe.get("arch", {}).get("name", "shared")
-
-    configure(experiment=f"{algorithm}-cc4")
-    run_name = f"{algorithm}-{backend}-{name}-seed{seed}"
-    run = mlflow.start_run(run_name=run_name)
-
     tags = {
+        "mlflow.runName": f"{algorithm}-{backend}-{name}-seed{seed}",
         "recipe.name": name,
         "recipe.source": recipe.get("meta", {}).get("source", ""),
         "recipe.path": str(recipe.get("__source_path__", "")),
@@ -243,14 +261,9 @@ def start_run(
         "arch.name": arch_name,
         "seed": str(seed),
         "git.commit": _git("HEAD"),
-        "git.branch": _git("--abbrev-ref HEAD"),
+        "git.branch": _git("--abbrev-ref", "HEAD"),
     }
-    if extra_tags:
-        tags.update(extra_tags)
-    mlflow.set_tags(tags)
-
-    flat = flatten_for_logging(recipe)
-    params = {f"recipe.{k}": v for k, v in flat.items()}
+    params = {f"recipe.{k}": v for k, v in flatten_for_logging(recipe).items()}
     if extra_params:
         params.update(extra_params)
     # MLflow caps param values at 500 chars and rejects unknown types.
@@ -262,16 +275,7 @@ def start_run(
         if len(s) > 500:
             s = s[:497] + "..."
         safe[k] = s
-    mlflow.log_params(safe)
-
-    src = recipe.get("__source_path__")
-    if src and Path(src).exists():
-        try:
-            mlflow.log_artifact(src)
-        except Exception:
-            pass
-
-    return run
+    return tags, safe
 
 
 def attach_eval_metrics(

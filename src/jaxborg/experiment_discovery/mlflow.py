@@ -116,6 +116,62 @@ def _verify_remote(client, run_id, sha256, directory):
     return _download_package(client, run_id, sha256, directory)
 
 
+def execution_tags(record, records):
+    """Project scientific identities and observed status without claiming artifact availability."""
+    index = {r["id"]: r for r in records}
+    attempt_id = record.get("attempt_id")
+    attempt = record if record["kind"] == "attempt" else index.get(attempt_id) if isinstance(attempt_id, str) else None
+    protocol_id = attempt.get("protocol_id") if attempt else None
+    protocol = index.get(protocol_id) if isinstance(protocol_id, str) else None
+    tags = {
+        TAG_PREFIX + "schema_version": "1",
+        TAG_PREFIX + "record_id": record["id"],
+        TAG_PREFIX + "record_kind": record["kind"],
+        TAG_PREFIX + "scientific_status": record["status"],
+    }
+    for key, value in {
+        "study_id": protocol["study_id"] if protocol else None,
+        "protocol_id": protocol_id,
+        "trial_id": attempt.get("trial_id") if attempt else None,
+        "attempt_id": attempt["id"] if attempt else None,
+        "retry_of": attempt.get("retry_of") if attempt else None,
+        "execution_kind": attempt.get("execution_kind") if attempt else None,
+    }.items():
+        if isinstance(value, str):
+            tags[TAG_PREFIX + key] = value
+    facts = record["facts"]
+    for key in ("policy_backend", "eval_env"):
+        fact = facts.get(key)
+        if fact and isinstance(fact.get("value"), (str, int, float, bool)):
+            tags[TAG_PREFIX + key] = str(fact["value"])
+    backend = facts.get("backend", facts.get("policy_backend", {})).get("value")
+    source = facts.get("source", {}).get("value")
+    revision = (
+        facts["source_revision"].get("value")
+        if "source_revision" in facts
+        else source.get("git_commit")
+        if isinstance(source, dict)
+        else None
+    )
+    for key, value in (("backend", backend), ("source_revision", revision)):
+        if isinstance(value, (str, int, float, bool)):
+            tags[TAG_PREFIX + key] = str(value)
+    for number, budget in enumerate(record["budgets"]):
+        tags[f"{TAG_PREFIX}budget.{number}.unit"] = budget["unit"]
+        for key in ("requested", "completed"):
+            if isinstance(budget[key], (int, float)):
+                tags[f"{TAG_PREFIX}budget.{number}.{key}"] = str(budget[key])
+    correction = record.get("extensions", {}).get("evaluation_correction")
+    if correction:
+        tags[TAG_PREFIX + "corrects_evaluation_id"] = correction["values"]["evaluation_id"]
+    if protocol and attempt and isinstance(attempt.get("trial_id"), str):
+        cell = next(cell for cell in protocol["trials"] if cell["id"] == attempt["trial_id"])
+        for key in ("condition_id", "replicate_id", "matched_unit_id"):
+            if cell[key] is not None:
+                tags[TAG_PREFIX + key] = cell[key]
+    return tags
+
+
 def publish_package(package, tracking_uri, experiment):
     """Publish once under a single-writer policy, or verify an exact prior run."""
     client = _client(tracking_uri)

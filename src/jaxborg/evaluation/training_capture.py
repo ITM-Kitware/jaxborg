@@ -144,6 +144,7 @@ def begin_training(
         condition_check(config)
     capture = start_training(
         outside_source(root),
+        track=True,
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,

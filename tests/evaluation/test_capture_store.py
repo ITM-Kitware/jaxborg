@@ -532,3 +532,110 @@ def test_batched_source_failure_retains_every_copied_file(begin, tmp_path):
     assert evaluation["status"] == "failed"
     assert {row["id"] for row in retained} <= set(evaluation["inputs"])
     assert "source_files" not in evaluation["facts"]
+
+
+def test_live_projection_uses_independent_client_and_preserves_caller_run(tmp_path, monkeypatch, protocol, begin):
+    import mlflow
+
+    from jaxborg.experiment_discovery.mlflow import search_packages
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "live-study")
+    mlflow.set_tracking_uri(uri)
+    mlflow.set_experiment("caller")
+    with mlflow.start_run() as caller:
+        capture = begin(track=True)
+        client = mlflow.MlflowClient(tracking_uri=uri)
+        experiment = client.get_experiment_by_name("live-study")
+        runs = client.search_runs([experiment.experiment_id], "tags.`jaxborg.discovery.study_id` = 'study'")
+        assert len(runs) == 1
+        run = runs[0]
+        assert run.info.status == "RUNNING"
+        assert run.data.tags["jaxborg.discovery.attempt_id"] == capture.attempt_id
+        assert run.data.tags["jaxborg.discovery.evaluation_id"] == capture.evaluation_id
+        assert run.data.tags["jaxborg.discovery.state"] == "unverified"
+        assert run.data.tags["jaxborg.discovery.budget.0.completed"] == "0"
+        assert mlflow.active_run().info.run_id == caller.info.run_id
+        record_episode(capture, episode_index=0, seed=1, reward=-2, steps=2)
+        assert client.get_run(run.info.run_id).data.tags["jaxborg.discovery.budget.0.completed"] == "1"
+        record_episode(capture, episode_index=1, seed=2, reward=-4, steps=2)
+        finish_evaluation(capture, status="succeeded")
+        final = client.get_run(run.info.run_id)
+        assert final.info.status == "FINISHED"
+        assert final.data.tags["jaxborg.discovery.scientific_status"] == "succeeded"
+        assert final.data.tags["jaxborg.discovery.budget.0.completed"] == "2"
+        assert final.data.tags["jaxborg.discovery.delivery"] == "current"
+        assert mlflow.active_run().info.run_id == caller.info.run_id
+        assert search_packages(uri, "live-study") == {"publications": []}
+
+
+def test_early_retention_failure_has_joinable_terminal_run(tmp_path, monkeypatch, begin):
+    import mlflow
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    with pytest.raises(ValueError, match="not a file") as failure:
+        begin(track=True, inputs={"missing": tmp_path / "absent"})
+    capture = failure.value._evaluation_capture
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    run = client.get_run(capture.tracking.run_id)
+    assert run.info.status == "FAILED"
+    assert run.data.tags["jaxborg.discovery.attempt_id"] == capture.attempt_id
+    assert run.data.tags["jaxborg.discovery.scientific_status"] == "failed"
+    retained = {record["id"]: record for record in load_records(capture.root)}
+    assert retained[capture.attempt_id]["status"] == "failed"
+
+
+def test_tracking_failure_cannot_change_sealed_scientific_result(tmp_path, monkeypatch, begin, caplog):
+    import mlflow
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    capture = begin(track=True)
+    for index in range(2):
+        record_episode(capture, episode_index=index, seed=index, reward=-2, steps=2)
+
+    def fail_upload(*args, **kwargs):
+        raise OSError("deliberate artifact delivery failure")
+
+    monkeypatch.setattr(capture.tracking.client, "log_dict", fail_upload)
+    finish_evaluation(capture, status="succeeded")
+    records = {record["id"]: record for record in load_records(capture.root)}
+    assert records[capture.attempt_id]["status"] == "succeeded"
+    run = mlflow.MlflowClient(tracking_uri=uri).get_run(capture.tracking.run_id)
+    assert run.info.status == "FAILED"
+    assert run.data.tags["jaxborg.discovery.scientific_status"] == "succeeded"
+    assert run.data.tags["jaxborg.discovery.delivery"] == "failed"
+    assert "tracking delivery failed" in caplog.text
+
+
+def test_raw_store_remains_offline_with_configured_destination(tmp_path, monkeypatch, begin):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", f"sqlite:///{tmp_path / 'unused.db'}")
+    capture = begin()
+    assert capture.tracking is None
+    assert not (tmp_path / "unused.db").exists()
+
+
+def test_first_execution_handles_exact_experiment_creation_collision(tmp_path, monkeypatch, begin):
+    import mlflow
+    from mlflow.exceptions import MlflowException
+    from mlflow.protos.databricks_pb2 import RESOURCE_ALREADY_EXISTS
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "parallel-study")
+    create = mlflow.MlflowClient.create_experiment
+
+    def concurrent_create(self, name, *args, **kwargs):
+        create(self, name, *args, **kwargs)
+        raise MlflowException("Experiment was concurrently created", RESOURCE_ALREADY_EXISTS)
+
+    monkeypatch.setattr(mlflow.MlflowClient, "create_experiment", concurrent_create)
+    capture = begin(track=True)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    experiment = client.get_experiment_by_name("parallel-study")
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 1
+    assert runs[0].data.tags["jaxborg.discovery.attempt_id"] == capture.attempt_id
+    finish_evaluation(capture, status="cancelled")

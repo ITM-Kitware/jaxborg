@@ -90,7 +90,53 @@ identity rejects reconciliation.
 A checkpoint file never establishes successful completion. A retry uses a new
 attempt and `--retry-of` with the terminal attempt of that same trial.
 
-Scientific training completion is sealed before final tracking delivery. A later
-tracking failure is still reported to the caller and does not rewrite completed
-training as a failed scientific execution. During-training failures retain partial
-work and release the owned tracking run so an explicit retry can proceed.
+Scientific training completion is sealed before final tracking delivery. Tracking
+creation, metric or artifact delivery failures are logged and do not abort training
+or change its retained scientific status. During-training scientific failures retain
+partial work so an explicit retry can proceed.
+
+## Live tracking navigation
+
+Recorded training uses one owned MLflow run for its retained attempt, training
+labels, parameters, curves and artifacts. Recorded native and joint evaluations
+do so when `MLFLOW_TRACKING_URI` or
+`JAXBORG_EXP_DIR` explicitly selects a destination. Without either setting,
+evaluation still retains complete local evidence. `MLFLOW_EXPERIMENT_NAME`
+optionally selects the experiment; an explicit tracking URI takes precedence over
+the local store. These settings do not create or deploy a shared service.
+
+In native MLflow views or `MlflowClient.search_runs`, use this filter:
+
+```text
+tags.`jaxborg.discovery.role` = 'execution' AND tags.`jaxborg.discovery.study_id` = '<study-id>'
+```
+
+`attempt_id`, `evaluation_id`, `protocol_id`, `trial_id`, `retry_of`, condition,
+source and budget tags retain scientific identities and observed progress.
+`configuration.json` and `execution.json` provide the resolved settings and
+current protocol/attempt/evaluation projection. The full artifact graph remains
+in retained evidence and verified packages.
+
+Execution runs always have `state=unverified`. `scientific_status` reflects the
+retained execution; `delivery=current`, `pending` or `failed` describes tracking
+delivery. `data_incomplete=true` retains a known gap in training
+metadata, curves or artifacts. Terminal synchronization refreshes the execution
+projection without replaying those data; a known gap keeps delivery and the
+tracking run failed even when scientific completion is synchronized. Live
+views are mutable and may be stale after interruption
+or delivery failure. Package search/fetch continues to require completed verified
+evidence and never treats these runs as available packages.
+
+With the original destination configured, interruption reconciliation also
+refreshes the uniquely matching execution run. If delivery fails after local
+cancellation, retry only the projection from unchanged terminal evidence:
+
+```bash
+python -m jaxborg.evaluation.reconcile /evidence/study \
+  --attempt '<store-qualified-attempt-id>' --sync-tracking
+```
+
+Projection-only failures can recover to `delivery=current`. This operation
+neither reseals nor resumes execution. Missing or ambiguous
+tracking matches fail explicitly; it never creates a replacement run. Raw store
+operations and reconciliation without a configured destination stay offline.
