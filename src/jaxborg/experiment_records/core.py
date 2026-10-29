@@ -153,9 +153,12 @@ def validate_records(records):
                     else:
                         _require(_number(budget[key]) and budget[key] >= 0, f"invalid {key} budget")
             if kind == "evaluation":
+                names = set()
                 for metric in record["metrics"]:
                     _fields(metric, {"name": str, "value": object, "unit": str}, "metric")
                     _require(_number(metric["value"]), "invalid metric value")
+                    _require(metric["name"] not in names, "duplicate evaluation metric")
+                    names.add(metric["name"])
 
     _require(not (set(trials) & set(index)), "trial and record IDs collide")
 

@@ -196,6 +196,36 @@ def test_frozen_relocation_keeps_original_collation_and_rebuilds_report(tmp_path
     assert manifest["unretained_references"]
 
 
+def test_materialized_report_without_selection_retains_replayable_source(tmp_path):
+    from jaxborg.experiment_producers.source import analysis_source_files
+
+    fixture = runpy.run_path(str(ANALYZER.with_name("test_analyze.py")))["SyntheticBundle"]
+    bundle = fixture(tmp_path / "inputs")
+    package = tmp_path / "package"
+    prepare_package("frozen-defender", bundle.root, package)
+    arguments = ["--input", str(package / "input"), "--materialization", str(package / "manifest.json")]
+    report = tmp_path / "report"
+    snapshot = report / "analysis-source"
+    for script, output, pythonpath in (
+        (ANALYZER, report, PROJECT / "src"),
+        (snapshot / ANALYZER.relative_to(PROJECT), tmp_path / "replayed", snapshot / "src"),
+    ):
+        result = subprocess.run(
+            [sys.executable, str(script), *arguments, "--output", str(output)],
+            cwd=tmp_path,
+            env=os.environ | {"PYTHONPATH": str(pythonpath), "MPLCONFIGDIR": str(tmp_path / "mpl")},
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        source = read(output / "manifest.json")["analysis_source"]
+        for name, path in analysis_source_files(ANALYZER).items():
+            assert (output / "analysis-source" / name).read_bytes() == path.read_bytes()
+            assert source["files"][name] == hashlib.sha256(path.read_bytes()).hexdigest()
+    for name in ("summary.json", "per-episode.csv", "validation.csv", "resolved-config.json"):
+        assert (report / name).read_bytes() == (tmp_path / "replayed" / name).read_bytes()
+
+
 @pytest.mark.parametrize(
     "damage", ["truncate", "delete", "extra", "symlink", "traversal", "duplicate", "map", "version"]
 )

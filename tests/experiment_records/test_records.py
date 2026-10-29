@@ -149,6 +149,10 @@ def test_evaluation_retains_metric_meaning_and_artifact_origin():
     assert result["included"] == ["a", "e"]
     assert result["rows"][1]["metrics"] == [{"name": "return", "value": 3.0, "unit": "score"}]
     assert result["metric_definitions"][0]["sampling_unit"] == "episode"
+    data[-1]["metrics"].append({"name": "return", "value": 999.0, "unit": "score"})
+    with pytest.raises(RecordError, match="duplicate evaluation metric"):
+        collate(data, **{**selection(), "selected_evaluations": ["e"]})
+    data[-1]["metrics"].pop()
     data[-1]["metrics"][0]["unit"] = "shaped_score"
     with pytest.raises(RecordError, match="metric unit mismatch"):
         validate_records(data)
