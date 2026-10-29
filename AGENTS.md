@@ -1,5 +1,11 @@
 # CLAUDE.md
 
+## Study workflow
+
+For experiment work, start with the [study guide](studies/README.md).
+It links the supported evaluation capture, historical evidence import, and
+saved-analysis workflows. Read the relevant workflow before running it.
+
 ## Commands
 
 ```bash

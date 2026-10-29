@@ -11,6 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 import multiprocessing as mp
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -19,7 +20,7 @@ import torch
 from CybORG.Agents.Wrappers import EnterpriseMAE
 
 from jaxborg.constants import BLUE_OBS_SIZE
-from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.cyborg_env_factory import CyborgReset, make_cyborg_env, reset_cyborg_env
 from jaxborg.policies import make_torch_policy
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
@@ -43,11 +44,23 @@ def _pad_obs_mask(obs_dict, info_dict):
     return obs, mask
 
 
-def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool) -> float:
+def rollout_episode(
+    env,
+    variant: GameVariant,
+    ep_seed: int,
+    agent,
+    *,
+    deterministic: bool,
+    on_reset: Callable[[Any, CyborgReset], None] | None = None,
+    on_complete: Callable[[float, int], None] | None = None,
+) -> float:
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    if on_reset is not None:
+        on_reset(env, r)
     obs_d, info_d = r.obs, r.info
     total = 0.0
-    for _ in range(EPISODE_LENGTH):
+    steps = 0
+    for _ in range(variant.num_steps):
         obs, mask = _pad_obs_mask(obs_d, info_d)
         with torch.no_grad():
             obs_t = torch.from_numpy(obs)
@@ -59,21 +72,29 @@ def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, determini
                 act = a.cpu().numpy()
         action_dict = {AGENT_IDS[i]: int(act[i]) for i in range(NUM_AGENTS)}
         obs_d, rew_d, term_d, trunc_d, info_d = env.step(action_dict)
+        steps += 1
         total += float(rew_d[AGENT_IDS[0]])
         if any(term_d.values()) or any(trunc_d.values()):
             break
+    if on_complete is not None:
+        on_complete(total, steps)
     return total
 
 
-def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, torch.Tensor]):
+def torch_policy_configuration(recipe: dict[str, Any]) -> dict[str, Any]:
+    """Resolve exactly the factory arguments consumed by the checkpoint loader."""
     arch = recipe["arch"]
-    agent = make_torch_policy(
-        arch["name"],
-        obs_dim=OBS_DIM,
-        action_dim=ACT_DIM,
-        hidden_dim=int(arch.get("hidden_dim", 256)),
-        hidden_layers=int(arch.get("hidden_layers", 2)),
-    )
+    return {
+        "name": arch["name"],
+        "obs_dim": OBS_DIM,
+        "action_dim": ACT_DIM,
+        "hidden_dim": int(arch.get("hidden_dim", 256)),
+        "hidden_layers": int(arch.get("hidden_layers", 2)),
+    }
+
+
+def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, torch.Tensor]):
+    agent = make_torch_policy(**torch_policy_configuration(recipe))
     agent.load_state_dict(state_dict)
     agent.eval()
     return agent
