@@ -1,0 +1,272 @@
+meta:
+  name: cotraining_mappo_env_diversity_pbt_5050
+  source: "Both-team MAPPO counterpart to cotraining_env_diversity_pbt_adaptive_updates_5050"
+  added: 2026-10-31
+  notes: |
+    Blue and Red each use separate local actor and centralized critic MLPs,
+    with two 256-unit hidden layers and global_state critic inputs.
+    Actor and critic parameters are disjoint; agents within each team share
+    that team's networks. Blue and Red have independent weights.
+    Blue samples 50% cotrained Red / 50% FSM, once per episode.
+    Both teams update every rollout; adaptive Red gating is disabled.
+    Red learns only from cotrained-opponent games; its batch is not supplemented.
+    Uses 100 training topologies and the existing PBT 100M-step budget and evaluation suites.
+    Requires the JAX joint trainer. See docs/mappo.md for architecture details.
+
+algorithm: mappo
+cage4_enhanced_obs: true
+
+# During-training evaluation is disabled. Reward and CIA are measured after
+# training by the enabled built-in suites and explicit eval.after_training list.
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 1
+    seed: null  # Defaults to the training seed + 100000.
+    deterministic: false
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  # Constant learning rate; assess progress against fixed scripted Reds.
+
+# Both team overrides replace this fallback with separate MAPPO networks.
+arch:
+  name: separate
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  teams: both
+  team_overrides:
+    blue:
+      arch:
+        name: mappo
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+        # Centralized features are training-only; actor inputs remain local.
+        critic_input: global_state
+      core:
+        # JaxMARL MAPPO uses a clipped value objective.
+        clip_value_loss: true
+    red:
+      arch:
+        name: mappo
+        team: red
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+        # Centralized features are training-only; actor inputs remain local.
+        critic_input: global_state
+      core:
+        clip_value_loss: true
+  # Percentages apply to Blue's training games; select a Red once per episode.
+  # Also supported: cia_c, cia_i, cia_a (require role-capable topologies).
+  opponent_population:
+    enabled: true
+    preserve_red_batch_size: false  # true adds a full learned-Red batch per rollout.
+    blue:
+      - opponent: cotrained
+        percentage: 50
+      - opponent: fsm
+        percentage: 50
+  # No adaptive gating or delayed Red updates.
+  update_every: {blue: 1, red: 1}
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 100000000
+  variant: cc4_stock
+
+  # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 100
+    cache_dir: .bank_cache/topologies/cotraining/train
+
+eval:
+  variant: cia_resilience
+
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+
+  # Shared by checkpoint and final suites: held-out topology seeds 100-109.
+  # Development budget; use count: 50 and cross_play.max_checkpoints: 6 for final comparisons.
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+
+  # Five Blue checkpoints (including the exact final model) against every
+  # other training seed's fixed final Red. Runs after all seeds finish.
+  # The multi-seed launcher supplies all held-out Reds; needs at least two seeds.
+  cross_seed_play:
+    enabled: true
+    max_checkpoints: 5
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Multi-seed launcher: compare both Blue conditions against both Red pools.
+  # Excludes same-training-seed opponents; runs once after all seeds finish.
+  env_diversity:
+    enabled: true
+    baseline_recipe: cotraining_mappo_pbt_5050
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+
+  # Built-in post-training history suites, scheduled before after_training.
+  # Run adjacent-checkpoint comparisons as well as the full cross-play matrix.
+  play_priors:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 5
+
+  # Every sampled historical Blue vs every sampled historical Red in this run.
+  # Five checkpoints -> 25 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
+  # Includes adjacent pairs and self-play; reports worst_vs_history and
+  # forgetting_rate. This compares within-run history; cross_seed_play uses held-out Reds.
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 5
+    include_final: true
+    required: false
+
+  # Replay up to 20 saved Blues against fixed FSM and CIA Reds after training.
+  # Log Blue reward and CIA at each checkpoint's original training step.
+  checkpoint_scripted_reds:
+    enabled: true
+    reds: [fsm, cia_c, cia_i, cia_a]
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    max_checkpoints: 20
+    required: false
+
+  # Explicit final-model scripts, run after the enabled built-in suites above.
+  # The learned matchup selects both policies from the exact final bundle.
+  # The scripted sweep then selects its trained Blue
+  # policy and evaluates it against FSM and CIA Red agents in the same JAX
+  # topology bank with fixed per-topology role assignments.
+  after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 4
+
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null  # eval_matchup accepts separate Blue/Red model flags.
+      args:
+        - --recipe
+        - "{recipe}"
+        - --policy-backend
+        - "{backend}"
+        - --blue-path
+        - "{model}"
+        - --red-path
+        - "{model}"
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        # One line per vmapped batch. Without it a Red in flight prints
+        # nothing until it finishes, so a slow sweep looks hung.
+        - --progress
+
+    # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
+    - name: hmarl-reds
+      script: scripts/eval/eval_hmarl_reds.py
+      args:
+        - --recipe
+        - "{recipe}"
+        - --reds
+        - aggressive
+        - stealthy
+        - impact
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+    # Pretrained H-MARL Blues face the exact final cotrained Red bundle.
+    # Each variant uses the same held-out topology bank as this recipe.
+    - name: hmarl-expert-vs-cotrained-red
+      script: scripts/eval/eval_hmarl.py
+      model_arg: --red-model
+      required: true
+      args:
+        - --recipe
+        - hmarl_expert
+        - --learned-only
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+    - name: hmarl-meta-vs-cotrained-red
+      script: scripts/eval/eval_hmarl.py
+      model_arg: --red-model
+      required: true
+      args:
+        - --recipe
+        - hmarl_meta
+        - --learned-only
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+jax:
+  num_envs: 96  # Both centralized critics add memory; use --num-envs 48 for a smaller pilot.
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20  # Save every 960,000 environment steps.

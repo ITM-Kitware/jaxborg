@@ -1,37 +1,28 @@
 meta:
-  name: cotraining_lstm_env_diversity_pbt_adaptive_updates
-  source: "LSTM twin of cotraining_rnn_env_diversity"
-  added: 2026-09-11
+  name: cotraining_mappo_pbt_5050
+  source: "Both-team MAPPO counterpart to cotraining_pbt_adaptive_updates_5050"
+  added: 2026-10-31
   notes: |
-    Population variant: Blue samples 75% cotrained Red / 25% FSM.
-    Adaptive Red gating includes returns against every sampled opponent.
-    Schedule adapted from arXiv:2511.17879, section 3.3 / Algorithm 1;
-    the 50-rollout forced update is an additional experiment setting.
-    Two-phase adaptive-update copy of cotraining_lstm_env_diversity (2026-10-07).
-    Blue learns every rollout; Red learns every fourth rollout for the first
-    200 Blue updates (50 Red updates), then follows the raw Blue return gate.
-    This update schedule requires the JAX backend.
-    Both Blue and Red use a LSTM policy with memory across timesteps.
-    The training budget, stock CC4 rules and 100 training topologies match
-    cotraining_env_diversity. cotraining_rnn_env_diversity differs only in the
-    recurrent cell and metadata.
-    Recurrent updates use sixteen minibatches of whole sequences; the
-    feedforward control uses sixteen minibatches of shuffled transitions, so
-    both take 64 optimizer steps per rollout and cross-architecture
-    comparisons are not confounded by optimizer budget.
-    The runs completed in September 2026 predate this and used eight
-    minibatches (32 optimizer steps per rollout); re-run before comparing
-    them against the feedforward or MAPPO families.
-    See docs/training.md for architecture provenance and hidden-state handling.
+    Blue and Red each use separate local actor and centralized critic MLPs,
+    with two 256-unit hidden layers and global_state critic inputs.
+    Actor and critic parameters are disjoint; agents within each team share
+    that team's networks. Blue and Red have independent weights.
+    Blue samples 50% cotrained Red / 50% FSM, once per episode.
+    Both teams update every rollout; adaptive Red gating is disabled.
+    Red learns only from cotrained-opponent games; its batch is not supplemented.
+    Uses 1 training topology and the existing PBT 100M-step budget and evaluation suites.
+    Requires the JAX joint trainer. See docs/mappo.md for architecture details.
 
-algorithm: ippo
+algorithm: mappo
 cage4_enhanced_obs: true
 
+# During-training evaluation is disabled. Reward and CIA are measured after
+# training by the enabled built-in suites and explicit eval.after_training list.
 mlflow:
   checkpoint_eval:
     every_steps: 0
     episodes_per_seed: 1
-    seed: null
+    seed: null  # Defaults to the training seed + 100000.
     deterministic: false
 
 core:
@@ -43,50 +34,64 @@ core:
   max_grad_norm: 0.5
   ent_coef: 0.01
   norm_rewards: true
+  # Constant learning rate; assess progress against fixed scripted Reds.
 
-# Recurrent IPPO adapted from JaxMARL; hidden_layers counts pre-cell layers.
+# Both team overrides replace this fallback with separate MAPPO networks.
 arch:
-  name: recurrent
+  name: separate
   hidden_dim: 256
-  hidden_layers: 1
+  hidden_layers: 2
   activation: tanh
-  cell: lstm         # gru | lstm
-  trunk: shared      # shared | separate
 
 train:
   teams: both
+  team_overrides:
+    blue:
+      arch:
+        name: mappo
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+        # Centralized features are training-only; actor inputs remain local.
+        critic_input: global_state
+      core:
+        # JaxMARL MAPPO uses a clipped value objective.
+        clip_value_loss: true
+    red:
+      arch:
+        name: mappo
+        team: red
+        hidden_dim: 256
+        hidden_layers: 2
+        activation: tanh
+        # Centralized features are training-only; actor inputs remain local.
+        critic_input: global_state
+      core:
+        clip_value_loss: true
   # Percentages apply to Blue's training games; select a Red once per episode.
   # Also supported: cia_c, cia_i, cia_a (require role-capable topologies).
-  # The adaptive gate uses Blue returns from the entire sampled mix.
   opponent_population:
     enabled: true
     preserve_red_batch_size: false  # true adds a full learned-Red batch per rollout.
     blue:
       - opponent: cotrained
-        percentage: 75
+        percentage: 50
       - opponent: fsm
-        percentage: 25
-  # Phase 1: 200 Blue PPO updates and 50 Red PPO updates, at unchanged LR.
-  update_every: {blue: 1, red: 4}
-  adaptive_updates:
-    phase_switch_blue_updates: 200  # Phase 2 starts on Blue update 201.
-    reward_threshold: -2000.0      # Open when mean raw Blue return > threshold.
-    window_blue_updates: 5        # Current rollout and the previous four.
-    max_frozen_blue_rollouts: 50   # Force one Red update on the 50th closed rollout.
-  # Phase 2: Red updates every rollout while open, otherwise skips PPO.
-  # Every Red update resets the frozen counter; skipped data is discarded.
+        percentage: 50
+  # No adaptive gating or delayed Red updates.
+  update_every: {blue: 1, red: 1}
   episode_length: 500
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 50000000
+  total_timesteps: 100000000
   variant: cc4_stock
 
-  # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
+  # One fixed training topology; num_envs controls rollout parallelism.
   topology_generation:
     generator: jax
     seed_start: 0
-    count: 100
+    count: 1
     cache_dir: .bank_cache/topologies/cotraining/train
 
 eval:
@@ -107,20 +112,12 @@ eval:
     cache_dir: .bank_cache/topologies/cotraining/eval_ops3
   topology_sampling: exhaustive
 
-  # One final Blue vs the next training seed's final Red (cyclic seed order).
-  # The multi-seed launcher supplies the opponent after all training finishes.
-  # Disabled for the single-seed PBT launcher; enable with at least two training seeds.
+  # Five Blue checkpoints (including the exact final model) against every
+  # other training seed's fixed final Red. Runs after all seeds finish.
+  # The multi-seed launcher supplies all held-out Reds; needs at least two seeds.
   cross_seed_play:
-    enabled: false
-    seeds: 1000-1009
-    episodes_per_seed: 1
-    deterministic: false
-
-  # Multi-seed launcher: compare both Blue conditions against both Red pools.
-  # Excludes same-training-seed opponents; runs once after all seeds finish.
-  env_diversity:
     enabled: true
-    baseline_recipe: cotraining_lstm_pbt_adaptive_updates
+    max_checkpoints: 5
     seeds: 1000-1009
     episodes_per_seed: 1
     deterministic: false
@@ -132,18 +129,19 @@ eval:
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 3
+    max_checkpoints: 5
 
   # Every sampled historical Blue vs every sampled historical Red in this run.
-  # Three checkpoints -> 9 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
+  # Five checkpoints -> 25 matchups x 30 episodes (3 seeds x 1 episode x 10 topologies).
   # Includes adjacent pairs and self-play; reports worst_vs_history and
-  # forgetting_rate. Unlike cross_seed_play, this measures change over time.
+  # forgetting_rate. This compares within-run history; cross_seed_play uses held-out Reds.
   cross_play:
     enabled: true
     seeds: 1000-1002
     episodes_per_seed: 1
     deterministic: false
-    max_checkpoints: 3
+    max_checkpoints: 5
+    include_final: true
     required: false
 
   # Replay up to 20 saved Blues against fixed FSM and CIA Reds after training.
@@ -152,7 +150,7 @@ eval:
     enabled: true
     reds: [fsm, cia_c, cia_i, cia_a]
     seeds: 1000-1009
-    episodes_per_seed: 3
+    episodes_per_seed: 1
     max_checkpoints: 20
     required: false
 
@@ -212,10 +210,6 @@ eval:
         # nothing until it finishes, so a slow sweep looks hung.
         - --progress
 
-# The CybORG/CleanRL backend cannot train `arch.name: recurrent` -- it
-# shuffles transitions across the time axis -- so this recipe is JAX-only and
-# carries no `cleanrl:` block; project_cleanrl's defaults keep the smoke tests
-# well-formed.
     # H-MARL Aggressive, Stealthy and Impact; Default/FSM is in scripted-reds.
     - name: hmarl-reds
       script: scripts/eval/eval_hmarl_reds.py
@@ -232,12 +226,38 @@ eval:
         - 1
         - --progress
 
+    # Pretrained H-MARL Blues face the exact final cotrained Red bundle.
+    # Each variant uses the same held-out topology bank as this recipe.
+    - name: hmarl-expert-vs-cotrained-red
+      script: scripts/eval/eval_hmarl.py
+      model_arg: --red-model
+      required: true
+      args:
+        - --recipe
+        - hmarl_expert
+        - --learned-only
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+    - name: hmarl-meta-vs-cotrained-red
+      script: scripts/eval/eval_hmarl.py
+      model_arg: --red-model
+      required: true
+      args:
+        - --recipe
+        - hmarl_meta
+        - --learned-only
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
 jax:
-  num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.
-  # Preserve whole trajectories: 30 Blue / 36 Red sequences per minibatch.
-  # env x agent is 480 Blue and 576 Red, both divisible by 16, so whole
-  # sequences survive the split. Four epochs give 64 optimizer steps per
-  # rollout for each team, matching cotraining and cotraining_mappo.
+  num_envs: 96  # Both centralized critics add memory; use --num-envs 48 for a smaller pilot.
   num_minibatches: 16
   update_epochs: 4
   checkpoint_every_updates: 20  # Save every 960,000 environment steps.
