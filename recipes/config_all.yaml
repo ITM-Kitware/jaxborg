@@ -159,17 +159,17 @@ eval:
   # YAML key order does not change the built-in order. Only
   # mlflow.checkpoint_eval above runs evaluations DURING training.
 
-  # Final Blue vs one other training seed's final Red; requires train.teams: both.
-  # run_cotraining.sh assigns the next seed cyclically after all training jobs:
-  # 42 -> 100, 100 -> 200, 200 -> 42 (three matchups, not a nine-cell matrix).
-  # Manual: run_after_training.py --model BLUE_FINAL --cross-seed-red RED_FINAL.
-  # Both final bundles need sidecars with distinct run.seed values. Without an
-  # explicit opponent this suite prints a skip message. No history is loaded.
-  # Records reward and, when eval.cia.enabled is true, C/I/A in result JSON and
-  # on the Blue run in MLflow: eval.after_training.cross-seed-play.jax_matchup.
-  # Uses the shared eval.variant/topology/CIA settings; no max_checkpoints field.
+  # Each Blue faces every other training seed's fixed final Red after training.
+  # run_cotraining.sh supplies all held-out Reds; three seeds give six final pairs.
+  # Repeat --cross-seed-red RED_FINAL with run_after_training.py for each opponent.
+  # Sidecars must record distinct run.seed values; duplicate Red seeds are rejected.
+  # max_checkpoints: 1 uses final Blue only; 5 samples Blue history including final.
+  # Curves log reward/CIA per Red seed and mean/worst reward across the pool at
+  # each Blue step, under eval.cross_seed_play. No Red is updated during evaluation.
+  # Without explicit opponents this suite prints a skip message.
   cross_seed_play:
     enabled: false
+    max_checkpoints: 1  # PBT recipes use 5; the exact final Blue is always included.
     seeds: 1000-1009  # Environment dynamics seeds, not training seeds.
     episodes_per_seed: 1  # With 10 exhaustive topologies: 100 episodes per matchup.
     deterministic: false
