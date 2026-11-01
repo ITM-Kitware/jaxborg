@@ -306,6 +306,49 @@ def test_collation_report_requires_selection_and_rejects_rehashed_source_change(
         verify_package(package)
 
 
+def test_native_run_download_retains_failure_retry_and_ignores_unrelated_running_work(
+    tmp_path, mlflow_http, monkeypatch
+):
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", mlflow_http)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "native-executions")
+    root, _, _, _, _, begin = _capture_fixture(tmp_path / "producer")
+    unrelated = begin()
+    failed = begin(track=True)
+    record_episode(failed, episode_index=0, seed=1, reward=-2, steps=2)
+    finish_evaluation(failed, status="failed", error=RuntimeError("partial work"))
+    retry = begin(track=True, retry_of=failed.attempt_id)
+    for index in range(2):
+        record_episode(retry, episode_index=index, seed=index, reward=-2, steps=2)
+    unrelated.inputs["checkpoint"].write_bytes(b"unrelated incomplete work")
+    finish_evaluation(retry, status="succeeded")
+
+    client = MlflowClient(tracking_uri=mlflow_http)
+    experiment = client.get_experiment_by_name("native-executions")
+    runs = client.search_runs([experiment.experiment_id], "tags.`jaxborg.discovery.study_id` = 'retrieval'")
+    assert {run.info.run_id for run in runs} == {failed.tracking.run_id, retry.tracking.run_id}
+    selected = client.get_run(retry.tracking.run_id)
+    assert selected.info.status == "FINISHED"
+    assert selected.data.tags["jaxborg.discovery.retry_of"] == failed.attempt_id
+    assert selected.data.tags["jaxborg.discovery.evidence_path"] == "evidence"
+    assert selected.data.tags["jaxborg.discovery.scientific_status"] == "succeeded"
+
+    root.parent.rename(tmp_path / "unavailable-producer")
+    destination = tmp_path / "consumer"
+    destination.mkdir()
+    downloaded = Path(client.download_artifacts(selected.info.run_id, "evidence", str(destination)))
+    records = load_records(downloaded)
+    attempts = [record for record in records if record["kind"] == "attempt"]
+    assert {record["id"] for record in attempts} == {failed.attempt_id, retry.attempt_id}
+    assert {record["status"] for record in attempts} == {"failed", "succeeded"}
+    assert next(record for record in attempts if record["id"] == failed.attempt_id)["budgets"][0]["completed"] == 1
+    original = next(record for record in records if record["id"] == failed.evaluation_id)
+    assert original["metrics"] == []
+    artifact = next(record for record in records if record.get("role") == "checkpoint")
+    (downloaded / artifact["uri"]).write_bytes(b"corrupt download")
+    with pytest.raises(ValueError):
+        load_records(downloaded)
+
+
 def test_http_optional_frozen_archive_rebuilds_after_producer_disappears(tmp_path, mlflow_http):
     producer = tmp_path / "producer"
     producer.mkdir()

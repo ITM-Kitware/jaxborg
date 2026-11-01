@@ -12,6 +12,12 @@ from jaxborg.evaluation.training_capture import begin_training
 from scripts.train.algorithms import ippo_jax as trainer
 
 
+@pytest.fixture(autouse=True)
+def isolated_tracking_destination(monkeypatch):
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    monkeypatch.delenv("JAXBORG_EXP_DIR", raising=False)
+
+
 @pytest.mark.parametrize(
     ("setting", "value"),
     [
@@ -138,3 +144,58 @@ def test_training_cli_prints_attempt_receipt_for_retry(tmp_path, monkeypatch, ca
     receipt = json.loads((output.err if failed else output.out).splitlines()[-1])
     assert receipt == {"evidence_root": str(capture.root), "attempt_id": capture.attempt_id}
     assert not (tmp_path / "runtime").exists()
+
+
+def test_joint_evaluation_without_recipe_indexes_failure_before_policy_loading(tmp_path, monkeypatch):
+    import subprocess
+
+    import mlflow
+    import numpy as np
+
+    from jaxborg.scenarios.cc4.game_variants import CC4_STOCK
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "joint-evaluation")
+    model = tmp_path / "model_fixture.safetensors"
+    model.write_bytes(b"invalid policy")
+    model.with_name("recipe_fixture.yaml").write_text("{}\n")
+    topology = tmp_path / "topology.npz"
+    np.savez(topology, fixture=np.asarray([1]))
+    protocol = {
+        "schema_version": 1,
+        "kind": "protocol",
+        "id": "p",
+        "study_id": "joint",
+        "revision": "1",
+        "selection_rule": "explicit",
+        "required_facts": {"attempt": [], "evaluation": []},
+        "metric_definitions": [],
+        "trials": [{"id": "t", "condition_id": "control", "replicate_id": "1", "matched_unit_id": None}],
+    }
+    revision = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+    with pytest.raises(Exception) as failure:
+        joint_capture.run_matchup(
+            model,
+            model,
+            root=tmp_path / "evidence",
+            protocol=protocol,
+            trial_id="t",
+            expected_revision=revision,
+            variant=CC4_STOCK,
+            seeds=[1],
+            topology_path=topology,
+            allow_dirty=True,
+            entrypoint=Path(__file__),
+            source_roots=(Path(__file__).resolve().parents[2] / "scripts/train/algorithms",),
+        )
+    assert hasattr(failure.value, "_evaluation_capture"), str(failure.value)
+    capture = failure.value._evaluation_capture
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    experiment = client.get_experiment_by_name("joint-evaluation")
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 1
+    assert runs[0].info.status == "FAILED"
+    assert runs[0].data.tags["jaxborg.discovery.attempt_id"] == capture.attempt_id
+    assert runs[0].data.tags["jaxborg.discovery.evaluation_id"] == capture.evaluation_id
+    assert runs[0].data.tags["jaxborg.discovery.scientific_status"] == "failed"

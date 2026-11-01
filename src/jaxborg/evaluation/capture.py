@@ -158,8 +158,11 @@ def run_evaluation(
         "step_accounting": _fact("Step counts cover completed episodes; partial episode steps are not retained"),
         "policy_device": _fact("cpu"),
     }
+    from jaxborg.evaluation.tracking import destination_configured
+
     capture = start_evaluation(
         root,
+        track=destination_configured(),
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,

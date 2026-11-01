@@ -8,7 +8,7 @@ import math
 import os
 import statistics
 import uuid
-from dataclasses import asdict, dataclass, field, is_dataclass
+from dataclasses import asdict, dataclass, field, is_dataclass, replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -26,6 +26,7 @@ class Capture:
     evaluation_id: str | None
     inputs: dict[str, Path]
     input_ids: dict[str, str] = field(default_factory=dict)
+    tracking: object | None = None
 
 
 def json_configuration(value):
@@ -163,6 +164,11 @@ def _save(capture, records, *, terminal=False):
     _write_json(capture.root, relative / ("terminal.json" if terminal else "current.json"), records, exclusive=terminal)
 
 
+def _project(capture, records):
+    if capture.tracking is not None:
+        capture.tracking.update(records)
+
+
 def _record(kind, identity, **fields):
     return {"schema_version": 1, "kind": kind, "id": identity, **fields}
 
@@ -210,11 +216,13 @@ def start_evaluation(
     source_files: dict[str, Path],
     retained_inputs=None,
     correction=None,
+    track=False,
 ):
     """Persist an evaluation identity before copying or loading its inputs."""
     _positive_integer(requested_episodes, "Requested episodes")
     return _start(
         root,
+        track=track,
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,
@@ -241,12 +249,14 @@ def start_training(
     source_files: dict[str, Path],
     facts=None,
     retry_of=None,
+    track=False,
 ):
     """Persist a training attempt before initialization or checkpoint creation."""
     _positive_integer(requested_steps, "Requested steps")
     _positive_integer(requested_updates, "Requested updates")
     return _start(
         root,
+        track=track,
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,
@@ -276,6 +286,7 @@ def _start(
     source_files,
     retained_inputs=None,
     correction=None,
+    track=False,
 ):
     resolved_config = json_configuration(resolved_config)
     declare_protocol(root, protocol)
@@ -348,6 +359,11 @@ def _start(
     os.rename(pending, directory)
     _sync_directory(directory.parent)
     try:
+        if track:
+            from jaxborg.evaluation.tracking import start_execution
+
+            capture = replace(capture, tracking=start_execution(protocol, records, resolved_config, root=root))
+            _project(capture, records)
         relative = directory.relative_to(root)
         config_path = _write_json(root, relative / "configuration.json", resolved_config)
         config = _artifact(capture, config_path, f"resolved {execution_kind} configuration", capture.attempt_id)
@@ -415,6 +431,7 @@ def _start(
             owner["inputs"].append(input_map["id"])
             owner["facts"]["input_artifacts"] = {"value": dict(capture.input_ids), "source": input_map["uri"]}
         _save(capture, records)
+        _project(capture, records)
         return capture
     except BaseException as error:
         error._evaluation_capture = capture
@@ -564,6 +581,7 @@ def record_episode(capture, *, episode_index, seed, reward, policy_seed=None, st
     for owner in _owners(records):
         owner["budgets"] = _episode_budget_transition(owner["budgets"], observation)
     _save(capture, records)
+    _project(capture, records)
 
 
 def _retain_terminal_fact(capture, records, name, value):
@@ -603,11 +621,15 @@ def _seal(capture, records, status, error):
     for owner in _owners(records):
         owner["status"] = status
     _save(capture, records, terminal=True)
+    _project(capture, records)
 
 
 def fail_evaluation(capture, error):
     error._evaluation_capture = capture
-    finish_evaluation(capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error)
+    if not (capture.directory / "terminal.json").exists():
+        finish_evaluation(
+            capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error
+        )
 
 
 def finish_evaluation(capture, *, status, error=None):
@@ -677,6 +699,47 @@ def load_records(root, verify=True):
                 raise ValueError("Successful snapshot lacks its declared episodes")
             _verify_retained_facts(capture, snapshot)
     return [indexed[identity] for identity in sorted(indexed)]
+
+
+def execution_files(root, attempt_id):
+    """Return the immutable files needed to verify a terminal attempt and its dependencies."""
+    root = Path(root).resolve()
+    indexed = {record["id"]: record for record in load_records(root, verify=False)}
+    attempts = {
+        record["id"].rsplit(":", 1)[1]: record["id"] for record in indexed.values() if record["kind"] == "attempt"
+    }
+    pending = [attempt_id]
+    included = set()
+    names = {"store.json", "protocol.json"}
+
+    def owning_attempt(identity):
+        record = indexed[identity]
+        if record["kind"] == "artifact":
+            return attempts[Path(record["uri"]).parts[1]]
+        return record["attempt_id"] if record["kind"] == "evaluation" else record["id"]
+
+    while pending:
+        identity = pending.pop()
+        if identity in included:
+            continue
+        attempt = indexed.get(identity)
+        if attempt is None or attempt["kind"] != "attempt" or attempt["status"] == "running":
+            raise ValueError("Evidence upload requires terminal attempts and dependencies")
+        included.add(identity)
+        relative = Path("attempts") / identity.rsplit(":", 1)[1] / "terminal.json"
+        snapshot = _read_json(root, relative)
+        names.add(relative.as_posix())
+        for record in snapshot:
+            if record["kind"] == "artifact":
+                names.add(record["uri"])
+            references = list(record.get("inputs", []))
+            if isinstance(record.get("retry_of"), str):
+                references.append(record["retry_of"])
+            correction = record.get("extensions", {}).get("evaluation_correction")
+            if correction:
+                references.append(correction["values"]["evaluation_id"])
+            pending.extend(owning_attempt(reference) for reference in references)
+    return [_path(root, name) for name in sorted(names)]
 
 
 def _verify_retained_facts(capture, records):
@@ -877,6 +940,7 @@ def record_training_update(capture, row):
     records.append(_artifact(capture, path, "training update observation", capture.attempt_id))
     records[0]["budgets"] = _training_budgets(records[0]["budgets"], row)
     _save(capture, records)
+    _project(capture, records)
 
 
 def finish_training(capture, *, status, error=None):
