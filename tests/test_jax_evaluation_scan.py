@@ -443,3 +443,45 @@ def test_matchup_context_reuses_compilation_but_uses_each_checkpoints_weights(mo
     assert len(constructed) == 1
     assert len(loaded) == 3
     assert new.policies["blue"]["path"].endswith("new-blue")
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_matchup_observation_and_trajectory_describe_the_same_completed_steps(batched):
+    from jaxborg.evaluation.matchup_runner import _run_jax_matchup_episodes_batched
+
+    env = _JointScanEnv()
+    module = _PolicyModule()
+    policies = {team: _jax_policy(team, module) for team in ("blue", "red")}
+    variant = replace(CIA_RESILIENCE, num_steps=5)
+    observations, traces = [], []
+    if batched:
+        returns, _ = _run_jax_matchup_episodes_batched(
+            policies,
+            variant=variant,
+            env=env,
+            episode_seeds=[7, 8, 9],
+            topology_indices=None,
+            role_arrays=None,
+            deterministic=True,
+            batch_size=2,
+            on_episode=lambda *row: observations.append(row),
+            on_trajectory=lambda index, trace: traces.append((index, trace)),
+        )
+    else:
+        returns = [
+            run_matchup_episode(
+                policies,
+                variant=variant,
+                env=env,
+                seed=7,
+                deterministic=True,
+                on_complete=lambda reward, steps: observations.append((0, 7, reward, steps)),
+                on_trajectory=lambda trace: traces.append((0, trace)),
+            )
+        ]
+    assert returns == [3.0] * len(returns)
+    assert observations == [(index, 7 + index, 3.0, 2) for index in range(len(returns))]
+    for index, trace in traces:
+        assert sum(trace["blue_reward"]) == returns[index]
+        assert len(trace["blue_actions"]) == len(trace["blue_observations"]) == 2
+        assert trace["done"] == [False, True]

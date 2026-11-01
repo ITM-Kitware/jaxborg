@@ -9,6 +9,7 @@ from jaxborg.evaluation.capture_store import (
     finish_evaluation,
     load_records,
     record_episode,
+    record_facts,
     start_evaluation,
 )
 from jaxborg.experiment_records import collate, validate_collation
@@ -167,6 +168,50 @@ def test_nonfinite_or_boolean_rewards_do_not_create_observations(begin, reward):
     with pytest.raises(ValueError, match="finite"):
         record_episode(capture, episode_index=0, seed=42, reward=reward)
     assert not (capture.directory / "episodes").exists()
+
+
+def test_duplicate_episode_with_missing_bytes_does_not_replace_observed_work(begin):
+    capture = begin(requested_episodes=1)
+    record_episode(capture, episode_index=0, seed=42, reward=1)
+    episode = capture.directory / "episodes/0.json"
+    episode.unlink()
+    snapshot = (capture.directory / "current.json").read_bytes()
+    with pytest.raises(FileExistsError):
+        record_episode(capture, episode_index=0, seed=42, reward=2)
+    assert (capture.directory / "current.json").read_bytes() == snapshot
+    assert not episode.exists()
+    finish_evaluation(capture, status="failed")
+    evaluation = next(row for row in load_records(capture.root, verify=False) if row["id"] == capture.evaluation_id)
+    assert evaluation["status"] == "failed"
+    assert evaluation["budgets"][0]["completed"] == 1
+    assert "integrity_error" in evaluation["facts"]
+
+
+@pytest.mark.parametrize(
+    "fact",
+    [
+        1,
+        {"value": 1},
+        {"value": 1, "source": ""},
+        {"value": None, "source": "fixture"},
+        {"value": None, "reason": "", "source": "fixture"},
+        {"value": 1, "source": "fixture", "extra": True},
+        {"value": float("nan"), "source": "fixture"},
+        {"value": float("inf"), "source": "fixture"},
+    ],
+)
+def test_invalid_fact_does_not_change_snapshot_or_prevent_valid_completion(begin, fact):
+    capture = begin(requested_episodes=1)
+    snapshot = (capture.directory / "current.json").read_bytes()
+    with pytest.raises(ValueError):
+        record_facts(capture, {"observation": fact})
+    assert (capture.directory / "current.json").read_bytes() == snapshot
+    record_facts(capture, {"observation": {"value": 1, "source": "fixture"}})
+    record_episode(capture, episode_index=0, seed=42, reward=1)
+    finish_evaluation(capture, status="succeeded")
+    evaluation = next(row for row in load_records(capture.root) if row["id"] == capture.evaluation_id)
+    assert evaluation["status"] == "succeeded"
+    assert evaluation["facts"]["observation"] == {"value": 1, "source": "fixture"}
 
 
 def test_protocol_and_retry_membership_are_explicit(tmp_path, protocol, begin):
@@ -430,23 +475,6 @@ def test_verified_reads_allow_partial_source_capture_before_setup_failure(begin,
     assert "resolved_config" in evaluation["facts"]
     assert "source_files" not in evaluation["facts"]
     assert any(row.get("role") == "evaluation source" for row in records)
-
-
-def test_duplicate_episode_with_missing_bytes_does_not_replace_observed_work(begin):
-    capture = begin(requested_episodes=1)
-    record_episode(capture, episode_index=0, seed=42, reward=1)
-    episode = capture.directory / "episodes/0.json"
-    episode.unlink()
-    snapshot = (capture.directory / "current.json").read_bytes()
-    with pytest.raises(FileExistsError):
-        record_episode(capture, episode_index=0, seed=42, reward=2)
-    assert (capture.directory / "current.json").read_bytes() == snapshot
-    assert not episode.exists()
-    finish_evaluation(capture, status="failed")
-    evaluation = next(row for row in load_records(capture.root, verify=False) if row["id"] == capture.evaluation_id)
-    assert evaluation["status"] == "failed"
-    assert evaluation["budgets"][0]["completed"] == 1
-    assert "integrity_error" in evaluation["facts"]
 
 
 def test_larger_history_appends_locally_and_seals_only_with_complete_evidence(begin):
