@@ -180,6 +180,7 @@ class MatchupEvaluation:
     red_returns: list[float]
     episode_seeds: list[int]
     policies: dict[str, dict[str, Any]]
+    episode_steps: list[int] = field(default_factory=list)
     topology_paths: list[str] = field(default_factory=list)
     episode_topology_paths: list[str | None] = field(default_factory=list)
     topology_sampling: str = "generative"
@@ -301,6 +302,7 @@ def _jax_actions(policy: LoadedMatchupPolicy, obs, mask, key, deterministic: boo
         "deterministic",
         "use_topology_index",
         "score_cia",
+        "record_trajectory",
     ),
 )
 def _run_jax_matchup_episode_scan(
@@ -317,7 +319,8 @@ def _run_jax_matchup_episode_scan(
     deterministic: bool,
     use_topology_index: bool,
     score_cia: bool,
-) -> tuple[jax.Array, jax.Array]:
+    record_trajectory: bool = False,
+):
     """Compile policy inference and all simulator steps as one episode."""
 
     key, reset_key = jax.random.split(key)
@@ -381,19 +384,31 @@ def _run_jax_matchup_episode_scan(
         # Keyed on the pre-step activity, so the first live row after a gap is
         # the one that starts from a blank hidden state.
         next_red_reset = ~current_state.state.red_agent_active if red_recurrent else red_reset
-        return rng, next_obs, next_state, reward, cia, done, carries, next_red_reset
+        trace = None
+        if record_trajectory:
+            trace = {
+                "blue_observations": blue_obs,
+                "red_observations": red_obs,
+                "blue_actions": jnp.stack([actions[name] for name in blue_agents]),
+                "red_actions": jnp.stack([actions[name] for name in red_agents]),
+                "blue_reward": reward,
+                "done": done,
+                "valid": jnp.bool_(True),
+            }
+        return (rng, next_obs, next_state, reward, cia, done, carries, next_red_reset), trace
 
     def _scan_step(carry, _):
         rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps, carries, red_reset = carry
 
         def run_active(_):
-            next_rng, next_obs, next_state, reward, cia, done, next_carries, next_red_reset = _active_step(
+            result, trace = _active_step(
                 rng,
                 current_obs,
                 current_state,
                 dict(carries),
                 red_reset,
             )
+            next_rng, next_obs, next_state, reward, cia, done, next_carries, next_red_reset = result
             return (
                 next_rng,
                 next_obs,
@@ -404,9 +419,20 @@ def _run_jax_matchup_episode_scan(
                 valid_steps + jnp.int32(1),
                 next_carries,
                 next_red_reset,
-            )
+            ), trace
 
         def keep_terminal(_):
+            trace = None
+            if record_trajectory:
+                trace = {
+                    "blue_observations": jnp.stack([current_obs[name] for name in blue_agents]),
+                    "red_observations": jnp.stack([current_obs[name] for name in red_agents]),
+                    "blue_actions": jnp.zeros(len(blue_agents), dtype=jnp.int32),
+                    "red_actions": jnp.zeros(len(red_agents), dtype=jnp.int32),
+                    "blue_reward": jnp.float32(0),
+                    "done": jnp.bool_(True),
+                    "valid": jnp.bool_(False),
+                }
             return (
                 rng,
                 current_obs,
@@ -417,9 +443,9 @@ def _run_jax_matchup_episode_scan(
                 valid_steps,
                 carries,
                 red_reset,
-            )
+            ), trace
 
-        return jax.lax.cond(active, run_active, keep_terminal, operand=None), None
+        return jax.lax.cond(active, run_active, keep_terminal, operand=None)
 
     scan_carry = (
         key,
@@ -435,12 +461,12 @@ def _run_jax_matchup_episode_scan(
         },
         jnp.ones((len(red_agents),), dtype=jnp.bool_),
     )
-    final_carry, _ = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
+    final_carry, trajectory = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
     reward_sum = final_carry[4]
     cia_sum = final_carry[5]
     valid_steps = final_carry[6]
     cia_mean = jnp.where(valid_steps > 0, cia_sum / jnp.maximum(valid_steps, 1), zero_cia)
-    return reward_sum, cia_mean
+    return reward_sum, cia_mean, valid_steps, trajectory
 
 
 DEFAULT_EVAL_BATCH_SIZE = 64
@@ -494,6 +520,8 @@ def _run_jax_matchup_episodes_batched(
     batch_size: int | None = None,
     progress: bool = False,
     progress_label: str = "",
+    on_episode=None,
+    on_trajectory=None,
 ) -> tuple[list[float], list[list[float]]]:
     """Evaluate many episodes per compiled call via ``jax.vmap``.
 
@@ -520,6 +548,7 @@ def _run_jax_matchup_episodes_batched(
         deterministic=deterministic,
         use_topology_index=use_topology_index,
         score_cia=score_cia,
+        record_trajectory=on_trajectory is not None,
     )
     # Weights are shared across the batch; keys, topologies and role maps vary.
     batched = jax.vmap(scan, in_axes=(None, None, 0, 0, 0))
@@ -538,15 +567,28 @@ def _run_jax_matchup_episodes_batched(
     cia_scores: list[list[float]] = []
     for start in range(0, count, chunk):
         stop = min(start + chunk, count)
-        reward_batch, cia_batch = batched(
+        reward_batch, cia_batch, steps_batch, trajectories = batched(
             policies["blue"].weights,
             policies["red"].weights,
             _padded_batch(keys, start, stop, chunk),
             _padded_batch(indices, start, stop, chunk),
             _padded_batch(roles, start, stop, chunk),
         )
-        reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
+        reward_batch, cia_batch, steps_batch, trajectories = jax.device_get(
+            (reward_batch, cia_batch, steps_batch, trajectories)
+        )
         valid = stop - start
+        for offset in range(valid):
+            index = start + offset
+            if on_episode is not None:
+                on_episode(index, int(episode_seeds[index]), float(reward_batch[offset]), int(steps_batch[offset]))
+            if on_trajectory is not None:
+                trace = {
+                    name: np.asarray(values[offset])[: int(steps_batch[offset])].tolist()
+                    for name, values in trajectories.items()
+                    if name != "valid"
+                }
+                on_trajectory(index, trace)
         rewards.extend(float(value) for value in np.asarray(reward_batch)[:valid])
         if score_cia:
             cia_scores.extend([float(value) for value in row] for row in np.asarray(cia_batch)[:valid])
@@ -585,6 +627,8 @@ def run_matchup_episode(
     env: Any | None = None,
     topology_index: int | jax.Array | None = None,
     host_resilience_role: Any | None = None,
+    on_complete=None,
+    on_trajectory=None,
 ) -> float | tuple[float, list[float]]:
     """Run one episode and optionally return its temporal C/I/A means."""
     if set(policies) != {"blue", "red"}:
@@ -609,7 +653,7 @@ def run_matchup_episode(
     if backend == "jax":
         score_cia = host_resilience_role is not None
         role_array = jnp.asarray(host_resilience_role, dtype=jnp.int32) if score_cia else jnp.zeros(1, dtype=jnp.int32)
-        reward, episode_cia = _run_jax_matchup_episode_scan(
+        reward, episode_cia, steps, trajectory = _run_jax_matchup_episode_scan(
             policies["blue"].weights,
             policies["red"].weights,
             jax.random.PRNGKey(seed),
@@ -622,12 +666,25 @@ def run_matchup_episode(
             deterministic=deterministic,
             use_topology_index=topology_index is not None,
             score_cia=score_cia,
+            record_trajectory=on_trajectory is not None,
         )
+        reward, episode_cia, steps, trajectory = jax.device_get((reward, episode_cia, steps, trajectory))
+        if on_complete is not None:
+            on_complete(float(reward), int(steps))
+        if on_trajectory is not None:
+            trace = {
+                name: np.asarray(values)[: int(steps)].tolist()
+                for name, values in trajectory.items()
+                if name != "valid"
+            }
+            on_trajectory(trace)
         reward_value = float(jax.device_get(reward))
         if not score_cia:
             return reward_value
         return reward_value, [float(value) for value in np.asarray(jax.device_get(episode_cia))]
 
+    if on_trajectory is not None:
+        raise ValueError("Policy trajectory observation currently requires JAX policies")
     rng = jax.random.PRNGKey(seed)
     rng, reset_key = jax.random.split(rng)
     if topology_index is None:
@@ -717,6 +774,8 @@ def run_matchup_episode(
         total += float(rewards[team_agents["blue"][0]])
         if bool(dones["__all__"]):
             break
+    if on_complete is not None:
+        on_complete(total, step_idx + 1)
     if host_resilience_role is None:
         return total
 
@@ -741,6 +800,8 @@ def evaluate_matchup(
     cia: Mapping[str, Any] | None = None,
     context: MatchupEvaluationContext | None = None,
     env_factory: JointEnvFactory | None = None,
+    on_episode=None,
+    on_trajectory=None,
 ) -> MatchupEvaluation:
     """Evaluate independently sourced learned policies in the JAX simulator.
 
@@ -789,6 +850,19 @@ def evaluate_matchup(
 
     blue_returns = []
     episode_seeds = []
+    episode_steps = []
+
+    def observe(index, seed, reward, steps):
+        episode_steps.append(steps)
+        if on_episode is not None:
+            on_episode(index, seed, reward, steps)
+
+    def observers(index, seed):
+        return {
+            "on_complete": lambda reward, steps: observe(index, seed, reward, steps),
+            "on_trajectory": (lambda trace: on_trajectory(index, trace)) if on_trajectory is not None else None,
+        }
+
     episode_topology_paths: list[str | None] = []
     cia_episode_scores: list[list[float]] = []
     episode_role_map_ids: list[str] = []
@@ -825,6 +899,8 @@ def evaluate_matchup(
                 role_arrays=[case.role_array for case in cases],
                 deterministic=deterministic,
                 progress=progress,
+                on_episode=observe,
+                on_trajectory=on_trajectory,
             )
         else:
             for idx, case in enumerate(cases, start=1):
@@ -836,6 +912,7 @@ def evaluate_matchup(
                     env=env,
                     topology_index=case.topology_index,
                     host_resilience_role=case.role_array,
+                    **observers(idx - 1, case.episode_seed),
                 )
                 blue_returns.append(score)
                 cia_episode_scores.append(episode_cia)
@@ -879,6 +956,8 @@ def evaluate_matchup(
                 role_arrays=None,
                 deterministic=deterministic,
                 progress=progress,
+                on_episode=observe,
+                on_trajectory=on_trajectory,
             )
         else:
             for idx, (episode_seed, topology_index, topology_label) in enumerate(plan, start=1):
@@ -889,6 +968,7 @@ def evaluate_matchup(
                     deterministic=deterministic,
                     env=env,
                     topology_index=topology_index,
+                    **observers(idx - 1, episode_seed),
                 )
                 blue_returns.append(score)
                 if progress:
@@ -912,6 +992,7 @@ def evaluate_matchup(
         blue_returns=blue_returns,
         red_returns=[-score for score in blue_returns],
         episode_seeds=episode_seeds,
+        episode_steps=episode_steps,
         policies={team: policy.source for team, policy in policies.items()},
         topology_paths=[str(path) for path in topology_paths],
         episode_topology_paths=episode_topology_paths,

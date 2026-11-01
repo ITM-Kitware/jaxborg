@@ -13,6 +13,7 @@ from jaxborg.evaluation.capture_store import (
     Capture,
     add_artifact,
     declare_protocol,
+    fail_evaluation,
     finish_evaluation,
     load_records,
     record_episode,
@@ -274,10 +275,7 @@ def run_evaluation(
         load_records(root, verify=True)
         finish_evaluation(capture, status="succeeded")
     except BaseException as error:
-        error._evaluation_capture = capture
-        finish_evaluation(
-            capture, status="cancelled" if isinstance(error, KeyboardInterrupt) else "failed", error=error
-        )
+        fail_evaluation(capture, error)
         raise
     return capture
 

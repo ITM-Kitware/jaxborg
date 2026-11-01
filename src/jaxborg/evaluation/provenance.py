@@ -22,6 +22,18 @@ def _digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def topology_evidence(paths, hashes, *, sampling):
+    """Describe an ordered bank using hashes already collected for execution inputs."""
+    from jaxborg.scenarios.cc4.topology import load_topology_metadata
+
+    return {
+        "sampling": sampling,
+        "sha256": list(hashes),
+        "metadata": [load_topology_metadata(path) for path in paths],
+        "origin": "imported fixed topology snapshots; generator evidence is retained in snapshot metadata",
+    }
+
+
 def _git(root, *arguments):
     return subprocess.run(
         ["git", "-C", str(root), *arguments], check=True, capture_output=True, text=True
@@ -65,6 +77,17 @@ class Provenance:
         if _git(root, "rev-parse", "HEAD") != self.configuration["source_revision"]:
             raise ValueError("Executing source revision changed during execution")
         _check_local_imports(root, self.source_files)
+
+
+def writer_identity():
+    """Identify the process namespace in which a writer PID can be checked."""
+    identity = {"hostname": socket.gethostname(), "pid": os.getpid()}
+    try:
+        identity["boot_id"] = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        identity["pid_namespace"] = os.readlink("/proc/self/ns/pid")
+    except OSError:
+        pass
+    return identity
 
 
 def collect_provenance(*, allow_dirty=False, expected_revision=None, entrypoint=None, source_roots=()):
@@ -120,7 +143,7 @@ def collect_provenance(*, allow_dirty=False, expected_revision=None, entrypoint=
         "working_tree_patch": _git(root, "diff", "HEAD", "--", *files) if dirty else "",
         "command": list(sys.argv),
         "working_directory": str(Path.cwd()),
-        "writer": {"hostname": socket.gethostname(), "pid": os.getpid()},
+        "writer": writer_identity(),
         "dependencies": _dependencies(),
         "runtime": {
             "python": platform.python_version(),
