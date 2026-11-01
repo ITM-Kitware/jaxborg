@@ -1,0 +1,152 @@
+# Blue-only actor/critic separation. See README.md for the recipe matrix.
+meta:
+  name: cotraining_lstm_separate
+  source: Blue actor-critic separation variant of recipes/cotraining/cotraining_lstm.yaml
+  added: 2026-10-20
+  notes: |
+    Blue uses separate actor and critic encoders, LSTM cells, and memories.
+    Red retains the source architecture. Reward normalization remains enabled.
+    Blue updates every rollout; Red updates every rollout.
+    Uses one training topology and a 50M-step budget.
+
+algorithm: ippo
+
+cage4_enhanced_obs: true
+
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 1
+    seed: null
+    deterministic: false
+
+core:
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: lstm
+  trunk: shared
+
+train:
+  teams: both
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 50000000
+  variant: cc4_stock
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 1
+    cache_dir: .bank_cache/topologies/cotraining/train
+  team_overrides:
+    blue:
+      arch:
+        trunk: separate
+
+eval:
+  variant: cia_resilience
+  cia:
+    enabled: true
+    metric: resilience
+    role_assignment: fixed_per_topology
+  topology_generation:
+    generator: jax
+    seed_start: 100
+    count: 10
+    op_zone_servers: 3
+    cache_dir: .bank_cache/topologies/cotraining/eval_ops3
+  topology_sampling: exhaustive
+  cross_seed_play:
+    enabled: true
+    seeds: 1000-1009
+    episodes_per_seed: 1
+    deterministic: false
+  play_priors:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+  cross_play:
+    enabled: true
+    seeds: 1000-1002
+    episodes_per_seed: 1
+    deterministic: false
+    max_checkpoints: 3
+    required: false
+  checkpoint_scripted_reds:
+    enabled: false
+    reds:
+      - fsm
+      - cia_c
+      - cia_i
+      - cia_a
+    seeds: 1000-1009
+    episodes_per_seed: 3
+    max_checkpoints: 20
+    required: false
+  after_training:
+    - name: cage4-benchmark
+      script: scripts/eval/eval_scripted_reds.py
+      jax_platforms: cpu
+      args:
+        - --eval-name
+        - cage4-benchmark
+        - --reds
+        - fsm
+        - --seeds
+        - 1000-1099
+        - --episodes-per-seed
+        - 1
+        - --workers
+        - 4
+    - name: learned-red-ppo
+      script: scripts/eval/eval_matchup.py
+      model_arg: null
+      args:
+        - --recipe
+        - '{recipe}'
+        - --policy-backend
+        - '{backend}'
+        - --blue-path
+        - '{model}'
+        - --red-path
+        - '{model}'
+        - --episodes-per-seed
+        - 1
+        - --seeds
+        - 1000-1009
+    - name: scripted-reds
+      script: scripts/eval/eval_scripted_reds_jax.py
+      args:
+        - --recipe
+        - '{recipe}'
+        - --reds
+        - fsm
+        - cia_c
+        - cia_i
+        - cia_a
+        - --seeds
+        - 1000-1009
+        - --episodes-per-seed
+        - 1
+        - --progress
+
+jax:
+  num_envs: 96
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20

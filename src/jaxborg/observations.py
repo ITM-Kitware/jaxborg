@@ -19,6 +19,26 @@ JAX_ID_TO_CYBORG_POS = jnp.array(_inv, dtype=jnp.int32)
 SUBNET_BLOCK_SIZE = NUM_SUBNETS * 3 + OBS_VECTOR_HOSTS_PER_SUBNET * 2
 
 
+def update_blue_observation_memory(state: SimulatorState, const: SimulatorConst) -> SimulatorState:
+    """Accumulate observed Monitor flags once, after end-of-step actions.
+
+    The five CC4 Blue agents own disjoint host sets. Memory can therefore be
+    stored per host; get_blue_obs exposes only the receiving agent's slots.
+    A completed recovery clears history on that tick, including aged alerts.
+    """
+    if not const.cage4_enhanced_obs:
+        return state
+    keep = ~state.blue_recovered_this_step & jnp.any(const.blue_agent_hosts, axis=0)
+    return state.replace(
+        blue_process_memory=(state.blue_process_memory | state.host_exploit_detected | state.old_host_exploit_detected)
+        & keep,
+        blue_network_memory=(
+            state.blue_network_memory | state.host_activity_detected | state.old_host_activity_detected
+        )
+        & keep,
+    )
+
+
 def _subnet_block(
     state: SimulatorState,
     const: SimulatorConst,
@@ -90,6 +110,18 @@ def get_blue_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) ->
     obs = obs.at[1 : 1 + n_obs_subnets * SUBNET_BLOCK_SIZE].set(subnet_section)
     message_start = jnp.int32(1) + subnet_len
     obs = jax.lax.dynamic_update_slice(obs, message_section, (message_start,))
+    if const.cage4_enhanced_obs:
+        host_ids = const.obs_host_map[const.blue_obs_subnets[agent_id], :OBS_VECTOR_HOSTS_PER_SUBNET]
+        valid = (const.blue_obs_subnets[agent_id, :, None] >= 0) & (host_ids < const.host_active.size)
+        safe_ids = jnp.clip(host_ids, 0, const.host_active.size - 1)
+        valid &= const.host_active[safe_ids]
+        extras = [
+            valid.astype(jnp.float32),
+            jnp.where(valid, state.blue_file_evidence[safe_ids] / 2.0, 0.0),
+            jnp.where(valid, state.blue_process_memory[safe_ids], False).astype(jnp.float32),
+            jnp.where(valid, state.blue_network_memory[safe_ids], False).astype(jnp.float32),
+        ]
+        obs = jnp.concatenate([obs, *[plane.reshape(-1) for plane in extras]])
     return obs
 
 

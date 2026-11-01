@@ -642,11 +642,24 @@ def _build_trajectory_dict(
     }
 
 
-def load_model(model_path: str) -> PPOAgent:
-    """Load a trained PPO model from a .pt file."""
-    model = PPOAgent(OBS_DIM, ACT_DIM)
-    model.load_state_dict(torch.load(model_path, weights_only=True))
-    model.eval()
+class _TrajectoryPolicyAdapter:
+    """Expose the historical ``get_action`` surface over registry policies."""
+
+    def __init__(self, policy):
+        self.policy = policy
+
+    def get_action(self, obs, action_mask, deterministic=False):
+        if deterministic:
+            return self.policy.deterministic_action(obs, action_mask)
+        return self.policy.get_action_and_value(obs, action_mask)[0]
+
+
+def load_model(model_path: str) -> _TrajectoryPolicyAdapter:
+    """Load legacy or versioned Blue Torch weights for trajectory export."""
+    from jaxborg.evaluation.cyborg_runner import load_torch_policy
+
+    policy, _ = load_torch_policy(model_path)
+    model = _TrajectoryPolicyAdapter(policy)
     print(f"Loaded model from {model_path}")
     return model
 

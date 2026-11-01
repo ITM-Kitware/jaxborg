@@ -30,7 +30,8 @@ from jaxmarl.environments.spaces import Box, Discrete
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.constants import BLUE_OBS_SIZE, GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
+from jaxborg.blue_observation_contract import blue_obs_size
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_BLUE_AGENTS, NUM_RED_AGENTS
 from jaxborg.env import ScenarioEnv, ScenarioEnvState
 from jaxborg.scenarios.cc4.red_fsm import (
     fsm_red_apply_delayed_update,
@@ -95,25 +96,47 @@ class FsmRedCC4Env(MultiAgentEnv):
         red_selector: RedSelector = fsm_selector,
         extras_factory: ExtrasFactory = _empty_extras_factory,
         op_zone_min_servers: int | None = None,
+        mission_bank: Sequence[Sequence[float]] | None = None,
+        mission_bank_amplify: float = 1.0,
+        phase_boundary_bank: Sequence[Sequence[int]] | None = None,
+        phase_rewards_bank: Sequence | None = None,
+        red_reward: str = "zero_sum",
+        blue_block_policy: str = "cc4",
+        cage4_enhanced_obs: bool = False,
         name: Optional[str] = None,
     ):
+        self.blue_block_policy = blue_block_policy
         self._env = ScenarioEnv(
             num_steps=num_steps,
             topology_mode=topology_mode,
             training_mode=training_mode,
             topology_path=topology_path,
             op_zone_min_servers=op_zone_min_servers,
+            mission_bank=mission_bank,
+            mission_bank_amplify=mission_bank_amplify,
+            phase_boundary_bank=phase_boundary_bank,
+            phase_rewards_bank=phase_rewards_bank,
+            red_reward=red_reward,
+            blue_block_policy=blue_block_policy,
+            cage4_enhanced_obs=cage4_enhanced_obs,
         )
         self._red_selector = red_selector
         self._extras_factory = extras_factory
         self._name = name or "FsmRedCC4"
-        self.agents = list(self._env.blue_agents)
 
         super().__init__(num_agents=NUM_BLUE_AGENTS)
+        # JaxMARL's base constructor installs generic ``agent_N`` names.
+        # Restore the Blue-facing API expected by observations and actions.
+        self.agents = list(self._env.blue_agents)
 
         for agent in self.agents:
             self.action_spaces[agent] = Discrete(BLUE_ALLOW_TRAFFIC_END)
-            self.observation_spaces[agent] = Box(low=0.0, high=1.0, shape=(BLUE_OBS_SIZE,), dtype=jnp.float32)
+            self.observation_spaces[agent] = Box(
+                low=0.0,
+                high=2.0 if cage4_enhanced_obs else 1.0,
+                shape=(blue_obs_size(cage4_enhanced_obs),),
+                dtype=jnp.float32,
+            )
 
     # ------------------------------------------------------------------
     # Reset
@@ -121,6 +144,31 @@ class FsmRedCC4Env(MultiAgentEnv):
     def reset(self, key: chex.PRNGKey) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
         key, key_extras = jax.random.split(key)
         obs, inner = self._env.reset(key)
+        return self._wrap_reset(obs, inner, key_extras)
+
+    def reset_at_topology(
+        self,
+        key: chex.PRNGKey,
+        topology_index: int | jax.Array,
+    ) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
+        """Reset on one exact entry of the configured snapshot bank."""
+        key, key_extras = jax.random.split(key)
+        obs, inner = self._env.reset_at_topology(key, topology_index)
+        return self._wrap_reset(obs, inner, key_extras)
+
+    @partial(jax.jit, static_argnums=[0])
+    def reset_batch(self, keys: chex.Array, topology_key: chex.PRNGKey):
+        """Reset parallel training environments without bank-entry duplicates."""
+        split_keys = jax.vmap(jax.random.split)(keys)
+        obs, inner = self._env.reset_batch(split_keys[:, 0], topology_key)
+        return jax.vmap(self._wrap_reset)(obs, inner, split_keys[:, 1])
+
+    def _wrap_reset(
+        self,
+        obs: Dict[str, chex.Array],
+        inner: ScenarioEnvState,
+        key_extras: chex.PRNGKey,
+    ) -> Tuple[Dict[str, chex.Array], FsmRedEnvState]:
         inner = self._strip_inactive_red_reset_knowledge(inner)
         extras = self._extras_factory(key_extras, inner.const)
         blue_obs = {a: obs[a] for a in self.agents}
@@ -156,6 +204,7 @@ class FsmRedCC4Env(MultiAgentEnv):
             red_discovered_hosts=jnp.where(inactive[:, None], False, state.red_discovered_hosts),
             red_scanned_hosts=jnp.where(inactive[:, None], False, state.red_scanned_hosts),
             red_scanned_source_hosts=jnp.where(inactive[:, None, None], False, state.red_scanned_source_hosts),
+            red_scanned_ports=jnp.where(inactive[:, None, None], False, state.red_scanned_ports),
             red_scan_source_pid=jnp.where(inactive[:, None], jnp.int32(-1), state.red_scan_source_pid),
             red_scan_anchor_host=jnp.where(inactive, jnp.int32(-1), state.red_scan_anchor_host),
             red_primary_is_abstract=jnp.where(inactive, True, state.red_primary_is_abstract),
@@ -204,6 +253,37 @@ class FsmRedCC4Env(MultiAgentEnv):
             obs_st,
         )
         return obs, states, rewards, dones, infos
+
+    @partial(jax.jit, static_argnums=[0])
+    def step_batch(self, keys, states, actions, topology_key=None):
+        """Batched training step with coordinated without-replacement resets."""
+        split_keys = jax.vmap(lambda key: jax.random.split(key, 3))(keys)
+        obs, next_states, rewards, dones, info = jax.vmap(self.step_env)(split_keys[:, 0], states, actions)
+        done = dones["__all__"]
+
+        def reset_finished(_):
+            scenario_states = ScenarioEnvState(state=next_states.state, const=next_states.const)
+            if topology_key is None:
+                inner_reset = jax.vmap(self._env._reset_state)(scenario_states, split_keys[:, 1])
+            else:
+                inner_reset = self._env._reset_state_batch(scenario_states, split_keys[:, 1], topology_key)
+            inner_reset = jax.vmap(self._strip_inactive_red_reset_knowledge)(inner_reset)
+            extras = jax.vmap(self._extras_factory)(split_keys[:, 2], inner_reset.const)
+            reset_states = FsmRedEnvState(
+                state=inner_reset.state,
+                const=inner_reset.const,
+                extras=extras,
+            )
+            reset_obs = jax.vmap(self._get_blue_obs)(reset_states)
+
+            def select(reset_value, step_value):
+                mask = done.reshape(done.shape + (1,) * (step_value.ndim - done.ndim))
+                return jnp.where(mask, reset_value, step_value)
+
+            return jax.tree.map(select, (reset_obs, reset_states), (obs, next_states))
+
+        obs, next_states = jax.lax.cond(jnp.any(done), reset_finished, lambda _: (obs, next_states), None)
+        return obs, next_states, rewards, dones, info
 
     @partial(jax.jit, static_argnums=[0])
     def step_env(
@@ -292,7 +372,10 @@ class FsmRedCC4Env(MultiAgentEnv):
     @partial(jax.jit, static_argnums=[0])
     def get_avail_actions(self, env_state: FsmRedEnvState) -> Dict[str, chex.Array]:
         return {
-            f"blue_{i}": compute_blue_action_mask(env_state.const, i, env_state.state) for i in range(NUM_BLUE_AGENTS)
+            f"blue_{i}": compute_blue_action_mask(
+                env_state.const, i, env_state.state, blue_block_policy=self.blue_block_policy
+            )
+            for i in range(NUM_BLUE_AGENTS)
         }
 
     @property

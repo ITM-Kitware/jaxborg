@@ -89,7 +89,6 @@ def run_evaluation(
     retained. The protocol's trial identities and selection remain explicit.
     """
     from jaxborg.checkpoint import sidecar_path
-    from jaxborg.constants import BLUE_OBS_SIZE
     from jaxborg.evaluation.cyborg_runner import resolve_torch_evaluation_settings
     from jaxborg.evaluation.provenance import collect_provenance
 
@@ -130,10 +129,10 @@ def run_evaluation(
         "episodes_per_seed": 1,
         "deterministic": settings.deterministic,
         "policy_device": "cpu",
-        "observation_size": BLUE_OBS_SIZE,
+        "observation_size": settings.policy["obs_dim"],
         "action_size": 242,
         "blue_agents": 5,
-        "observation_contract": "five padded BlueEnterpriseWrapper observations; BLUE_OBS_SIZE entries per agent",
+        "observation_contract": "five padded BlueEnterpriseWrapper observations with the resolved policy input size",
         "action_contract": "242 EnterpriseMAE action indices per Blue agent, masked by the live action mask",
         "reward_contract": "sum of blue_agent_0 rewards returned by EnterpriseMAE.step across completed episode steps",
         "wrapper": "CybORG.Agents.Wrappers.EnterpriseMAE",
@@ -193,7 +192,7 @@ def run_evaluation(
                             "policy_devices": devices,
                             "policy_class": f"{type(policy).__module__}.{type(policy).__qualname__}",
                             "wrapper": f"{EnterpriseMAE.__module__}.{EnterpriseMAE.__qualname__}",
-                            "observation_size": cyborg_runner.OBS_DIM,
+                            "observation_size": settings.policy["obs_dim"],
                             "action_size": cyborg_runner.ACT_DIM,
                             "blue_agents": cyborg_runner.AGENT_IDS,
                             "reward_agent": cyborg_runner.AGENT_IDS[0],

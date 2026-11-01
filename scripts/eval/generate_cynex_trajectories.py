@@ -39,6 +39,9 @@ from export_trajectory import (
     extract_topology,
     get_host_compromise,
 )
+from export_trajectory import (
+    load_model as _load_export_torch_model,
+)
 
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env as _factory_make_cyborg_env
 from jaxborg.recipe import resolve_eval_variant
@@ -56,37 +59,7 @@ ACT_DIM = 242
 
 
 def _load_torch_model(path: str):
-    import torch
-    import torch.nn as nn
-    from torch.distributions import Categorical
-
-    class PPOAgent(nn.Module):
-        def __init__(self, obs_dim, act_dim, hidden_dims=(256, 256)):
-            super().__init__()
-            layers = []
-            in_dim = obs_dim
-            for h in hidden_dims:
-                layers.append(nn.Linear(in_dim, h))
-                layers.append(nn.Tanh())
-                in_dim = h
-            self.features = nn.Sequential(*layers)
-            self.actor = nn.Linear(in_dim, act_dim)
-            self.critic = nn.Linear(in_dim, 1)
-
-        def get_action(self, obs, action_mask, deterministic=False):
-            features = self.features(obs)
-            logits = self.actor(features)
-            logits = logits + (action_mask.float() - 1.0) * 1e10
-            if deterministic:
-                return logits.argmax(dim=-1)
-            dist = Categorical(logits=logits)
-            return dist.sample()
-
-    model = PPOAgent(OBS_DIM, ACT_DIM)
-    model.load_state_dict(torch.load(path, weights_only=True))
-    model.eval()
-    print(f"Loaded PyTorch model from {path}")
-    return model
+    return _load_export_torch_model(path)
 
 
 # ---------------------------------------------------------------------------
@@ -98,20 +71,23 @@ def _load_jax_model(path: str):
     import jax
 
     from jaxborg.evaluation.jax_runner import load_jax_checkpoint
+    from jaxborg.policies import initial_carry, policy_step
     from jaxborg.policies.categorical import Categorical as JaxCategorical
 
     policy, params, recipe = load_jax_checkpoint(path)
     print(f"Loaded JAX checkpoint from {path} (arch={recipe['arch']['name']})")
 
-    def _fwd(o, m):
-        pi, _ = policy.apply(params, o, m)
-        return pi.logits
-
     @jax.jit
-    def batched_step(obs_stack, mask_stack, keys):
-        logits = jax.vmap(_fwd)(obs_stack, mask_stack)
+    def batched_step(obs_stack, mask_stack, keys, carry=None, deterministic=False):
+        import jax.numpy as jnp
+
+        if carry is None:
+            carry = initial_carry(policy, obs_stack.shape[0])
+        pi, _, carry = policy_step(policy, params, obs_stack, mask_stack, carry=carry)
+        logits = pi.logits
         actions = jax.vmap(lambda lg, k: JaxCategorical(logits=lg).sample(seed=k))(logits, keys)
-        return actions, logits
+        actions = jnp.where(deterministic, jnp.argmax(logits, axis=-1), actions)
+        return actions, logits, carry
 
     return batched_step, params
 
@@ -310,6 +286,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
     cumulative_rewards = {a: 0.0 for a in blue_agents}
     actual_steps = 0
     rng = jax.random.PRNGKey(seed)
+    policy_carry = None
 
     for step in range(steps):
         if wrapper.agents:
@@ -325,7 +302,7 @@ def run_episode_jax(seed, episode_num, batched_step_fn, deterministic=False, ste
             obs_stack = jnp.stack([jnp.array(observations[a], dtype=jnp.float32) for a in wrapper.agents])
 
             # JAX policy inference
-            actions_arr, _ = batched_step_fn(obs_stack, masks, act_keys)
+            actions_arr, _, policy_carry = batched_step_fn(obs_stack, masks, act_keys, policy_carry, deterministic)
             actions_np = np.asarray(actions_arr)
 
             # Translate JAX actions -> CybORG actions

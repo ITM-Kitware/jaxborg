@@ -9,12 +9,11 @@ settings resolver, and episode executor as `scripts/eval/eval_recipe.py`.
 The checkpoint requires an adjacent `recipe_<tag>.yaml` or `.yml` sidecar.
 
 Capture runs serially with unique explicit environment seeds, a 1-500 step
-horizon, and policy RNG seed `--policy-seed + episode_index`. Recipe evaluation
-expands each root `s` into `s + episode_index`, allowing overlapping seeds, and
-keeps ambient policy randomness. For reproducible programmatic comparisons,
-`evaluate_on_cyborg` accepts `policy_seed`, which also preserves results across
-worker counts. Match checkpoint, resolved variant/horizon, ordered seeds,
-sampling mode, and policy seed; set `episodes_per_seed=1`.
+horizon, and policy seed `--policy-seed + episode_index`. Recipe evaluation uses
+`s * episodes_per_seed + episode_index` and defaults policy randomness to that
+episode seed. Match the checkpoint, resolved variant, horizon, sampling mode,
+and both seed schedules when comparing results. Programmatic recipe evaluation
+accepts an explicit `policy_seed` and preserves results across worker counts.
 
 Capture does not train, attach to MLflow, resume attempts, reuse evaluations, or
 support JAX checkpoints and custom environment builders.

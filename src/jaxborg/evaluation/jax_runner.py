@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import multiprocessing as mp
+from functools import partial
 from pathlib import Path
 from statistics import mean
 from typing import Any
@@ -23,10 +24,12 @@ import numpy as np
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
-from jaxborg.checkpoint import load_jax_params
+from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.checkpoint import load_jax_policy
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
+from jaxborg.evaluation.episode_seeds import expand_episode_seeds
 from jaxborg.parity.translate import build_mappings_from_cyborg, cyborg_blue_to_jax, jax_blue_to_cyborg
-from jaxborg.policies import make_jax_policy
+from jaxborg.policies import initial_carry, policy_from_arch, policy_step
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.topology import build_const_from_cyborg
 
@@ -43,26 +46,30 @@ def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
     p = Path(path)
     if not p.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {p}")
-    params, action_dim = load_jax_params(p)
+    recipe = read_sidecar(p)
+    entry = load_jax_policy(p, team="blue", expected_obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)))
+    params, action_dim = entry.weights, entry.action_dim
     if action_dim == 0:
         action_dim = BLUE_ALLOW_TRAFFIC_END
 
-    recipe = read_sidecar(p)
-    arch = recipe["arch"]
-    policy = make_jax_policy(
-        arch["name"],
-        action_dim=action_dim,
-        hidden_dim=int(arch.get("hidden_dim", 256)),
-        hidden_layers=int(arch.get("hidden_layers", 2)),
-        activation=arch.get("activation", "tanh"),
-    )
+    arch = entry.arch if entry.arch.get("name") else recipe["arch"]
+    if entry.arch.get("name"):
+        recipe = dict(recipe)
+        recipe["arch"] = dict(entry.arch)
+    policy = policy_from_arch(arch, action_dim=action_dim)
     return policy, params, recipe
 
 
-def _policy_dist(policy: Any, params: dict, obs_jax, mask):
-    """Run actor head on a recipe-driven Flax policy module."""
-    pi, _ = policy.apply(params, obs_jax, mask)
-    return pi
+@partial(jax.jit, static_argnums=(0,))
+def _policy_dist(policy: Any, params: dict, obs_jax, mask, carry=None):
+    """Run actor head on a recipe-driven Flax policy module.
+
+    Returns ``(pi, next_carry)``; ``carry`` is ``None`` for feedforward archs
+    and threads back unchanged. Each Blue agent is stepped on its own here, so
+    a recurrent policy keeps one length-1 sequence per agent.
+    """
+    pi, _, carry = policy_step(policy, params, obs_jax[None], mask[None], carry=carry)
+    return type(pi)(logits=pi.logits[0]), carry
 
 
 def _cyborg_action_to_jax_indices(action, label, agent_name, mappings, const):
@@ -125,6 +132,7 @@ def _raw_step(wrapper, actions):
     observations = {a: wrapper.observation_change(a, obs[a]) for a in wrapper.possible_agents if a in obs}
     rewards = {a: sum(rews[a].values()) for a in wrapper.possible_agents if a in rews}
     terminated = {a: bool(dones[a]) for a in wrapper.possible_agents if a in dones}
+    terminated["__all__"] = bool(wrapper.env.environment_controller.determine_done())
     truncated = terminated.copy()
     wrapper.agents = [a for a in wrapper.possible_agents if not terminated.get(a, False)]
     return observations, rewards, terminated, truncated
@@ -138,14 +146,15 @@ def run_episode(env, variant: GameVariant, ep_seed: int, policy, params, determi
     mappings = build_mappings_from_cyborg(inner)
 
     lookups = {a: _build_action_lookup(env, a, mappings, const) for a in env.agents}
+    carries = {a: initial_carry(policy, 1) for a in env.agents}
 
     total = 0.0
-    for _ in range(EPISODE_LENGTH):
+    for _ in range(variant.num_steps):
         actions = {}
         for agent_idx, agent_name in enumerate(env.agents):
             obs_jax = jnp.array(observations[agent_name], dtype=jnp.float32)
             mask = _live_cyborg_mask_in_jax_space(env, agent_name, lookups[agent_name])
-            pi = _policy_dist(policy, params, obs_jax, mask)
+            pi, carries[agent_name] = _policy_dist(policy, params, obs_jax, mask, carries[agent_name])
             if deterministic:
                 action_idx = int(jnp.argmax(pi.logits))
             else:
@@ -195,14 +204,15 @@ def evaluate_jax_on_cyborg(
     Episodes are independent — set `workers > 1` to fan out across processes
     (each worker spawns a clean Python interpreter and loads the model).
     """
-    flat = [s + ep for s in seeds for ep in range(episodes_per_seed)]
+    flat = expand_episode_seeds(seeds, episodes_per_seed)
     total = len(flat)
-    base_seed = seeds[0] if seeds else 0
-    items = [(idx, env_seed, base_seed * 100003 + idx) for idx, env_seed in enumerate(flat)]
+    items = [(idx, env_seed, env_seed) for idx, env_seed in enumerate(flat)]
     rewards: list[float] = [0.0] * total
     seed_log: list[int] = [0] * total
 
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
+    if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+        raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
 
     if workers <= 1:
         for idx, seed, rng_seed in items:

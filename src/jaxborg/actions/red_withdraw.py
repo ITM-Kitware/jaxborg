@@ -112,6 +112,7 @@ def apply_withdraw(
     )
     red_scanned_hosts = jnp.where(full_clear, False, scan_synced.red_scanned_hosts)
     red_scanned_source_hosts = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_source_hosts)
+    red_scanned_ports = jnp.where(full_clear[:, :, None], False, scan_synced.red_scanned_ports)
     primary_removed = (
         success & (state.red_scan_anchor_host[agent_id] == target_host) & (state.red_primary_pid[agent_id] >= 0)
     )
@@ -149,6 +150,7 @@ def apply_withdraw(
         red_privilege=red_privilege,
         red_scanned_hosts=red_scanned_hosts,
         red_scanned_source_hosts=red_scanned_source_hosts,
+        red_scanned_ports=red_scanned_ports,
         red_scan_source_pid=red_scan_source_pid,
         red_scan_anchor_host=red_scan_anchor_host,
         red_primary_is_abstract=red_primary_is_abstract,

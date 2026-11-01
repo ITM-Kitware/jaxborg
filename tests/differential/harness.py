@@ -19,7 +19,9 @@ from jaxborg.actions.encoding import (
     ACTION_TYPE_DISCOVER,
     ACTION_TYPE_DISCOVER_DECEPTION,
     ACTION_TYPE_EXPLOIT_BLUEKEEP,
+    ACTION_TYPE_EXPLOIT_HARAKA,
     ACTION_TYPE_EXPLOIT_HTTP,
+    ACTION_TYPE_EXPLOIT_HTTPS,
     ACTION_TYPE_EXPLOIT_SQL,
     ACTION_TYPE_EXPLOIT_SSH,
     ACTION_TYPE_IMPACT,
@@ -1622,6 +1624,14 @@ class CC4DifferentialHarness:
                 continue
             if action_type in {ACTION_TYPE_EXPLOIT_SSH, ACTION_TYPE_EXPLOIT_HTTP, ACTION_TYPE_EXPLOIT_SQL}:
                 if usage.random_calls and not usage.choice_sizes and not usage.integer_ranges:
+                    synced_randoms.extend(usage.random_calls)
+                    continue
+                random_sync_report.unsupported_random_actions.append(
+                    f"red_agent_{usage.agent_idx}:{usage.action_type} used {usage.summary()}"
+                )
+                continue
+            if action_type in {ACTION_TYPE_EXPLOIT_HTTPS, ACTION_TYPE_EXPLOIT_HARAKA}:
+                if len(usage.random_calls) == 1 and not usage.choice_sizes and not usage.integer_ranges:
                     synced_randoms.extend(usage.random_calls)
                     continue
                 random_sync_report.unsupported_random_actions.append(

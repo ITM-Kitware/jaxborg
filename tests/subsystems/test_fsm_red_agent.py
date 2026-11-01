@@ -14,7 +14,7 @@ from jaxborg.actions.encoding import (
     RED_EXPLOIT_HTTP_START,
     RED_SLEEP,
 )
-from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS, SERVICE_IDS
+from jaxborg.constants import GLOBAL_MAX_HOSTS, NUM_RED_AGENTS, RED_SCANNED_PORT_IDS, SERVICE_IDS
 from jaxborg.scenarios.cc4.red_fsm import (
     FSM_ACT_AGGRESSIVE_SCAN,
     FSM_ACT_DISCOVER,
@@ -617,7 +617,9 @@ class TestFsmGetAction:
         controller.state.sessions["red_agent_0"][0].ports[ip_address] = [80]
         host_services = jnp.zeros_like(const.initial_services)
         host_services = host_services.at[target_host, SERVICE_IDS["APACHE2"]].set(True)
-        state = create_initial_state().replace(host_services=host_services)
+        state = create_initial_state()
+        scanned_ports = state.red_scanned_ports.at[0, target_host, RED_SCANNED_PORT_IDS[80]].set(True)
+        state = state.replace(host_services=host_services, red_scanned_ports=scanned_ports)
 
         cy_action = DefaultExploitActionSelector().get_exploit_action(
             state=controller.state,
@@ -626,7 +628,7 @@ class TestFsmGetAction:
             ip_address=ip_address,
         )
         assert type(cy_action).__name__ == "HTTPRFI"
-        assert int(_pick_exploit_action(state, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
+        assert int(_pick_exploit_action(state, 0, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
             RED_EXPLOIT_HTTP_START + target_host
         )
 
@@ -654,7 +656,9 @@ class TestFsmGetAction:
         controller.state.sessions["red_agent_0"][0].ports[ip_address] = [25]
         host_services = jnp.zeros_like(const.initial_services)
         host_services = host_services.at[target_host, SERVICE_IDS["SMTP"]].set(True)
-        state = create_initial_state().replace(host_services=host_services)
+        state = create_initial_state()
+        scanned_ports = state.red_scanned_ports.at[0, target_host, RED_SCANNED_PORT_IDS[25]].set(True)
+        state = state.replace(host_services=host_services, red_scanned_ports=scanned_ports)
 
         cy_action = DefaultExploitActionSelector().get_exploit_action(
             state=controller.state,
@@ -663,7 +667,7 @@ class TestFsmGetAction:
             ip_address=ip_address,
         )
         assert type(cy_action).__name__ == "HarakaRCE"
-        assert int(_pick_exploit_action(state, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
+        assert int(_pick_exploit_action(state, 0, jnp.int32(target_host), jax.random.PRNGKey(0))) == (
             RED_EXPLOIT_HARAKA_START + target_host
         )
 

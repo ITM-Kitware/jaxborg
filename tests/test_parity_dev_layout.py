@@ -26,3 +26,8 @@ def test_no_stale_eval_transfer_references():
         if "scripts/eval/transfer.py" in text or "scripts.eval.transfer" in text:
             stale.append(str(path.relative_to(ROOT)))
     assert stale == []
+
+
+def test_no_stale_catalog_integration():
+    assert not (ROOT / "scripts/dev/catalog.py").exists()
+    assert "from catalog import" not in (ROOT / "scripts/dev/parity/transfer_cli.py").read_text()
