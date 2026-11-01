@@ -465,6 +465,7 @@ class ReportCliTests(unittest.TestCase):
             f"studies/frozen-defender-response/{name}"
             for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")
         }
+        expected_files |= {"src/jaxborg/__init__.py", "src/jaxborg/frozen_bundle.py"}
         self.assertEqual(set(source["files"]), expected_files)
         for name in expected_files:
             data = (PROJECT / name).read_bytes()
@@ -481,7 +482,9 @@ class ReportCliTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         snapshot = self.output / "analysis-source"
         replay = self.root / "replayed-report"
-        result = self.run_cli(script=snapshot / SCRIPT.relative_to(PROJECT), output=replay, environment={"PATH": ""})
+        result = self.run_cli(
+            script=snapshot / SCRIPT.relative_to(PROJECT), output=replay, environment={"PATH": "", "PYTHONPATH": ""}
+        )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         original = read_json(self.output / "manifest.json")["analysis_source"]
         copied = read_json(replay / "manifest.json")["analysis_source"]

@@ -14,12 +14,15 @@ import sys
 import tarfile
 import tempfile
 from datetime import datetime, timezone
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import numpy as np
 
 HERE = Path(__file__).resolve().parent
 PROJECT = HERE.parents[1]
+sys.path.insert(0, str(PROJECT / "src"))
+
+from jaxborg.frozen_bundle import verified_bundle  # noqa: E402
 
 
 def require(condition, message):
@@ -48,28 +51,6 @@ def reference_parts(reference):
     run, name = reference[6:].split("/", 1)
     require(bool(run) and bool(name), "Empty artifact reference")
     return run, name
-
-
-def verified_bundle(root):
-    index = load_json(root / "index.json")
-    require(index["format"] == "frozen-defender-response-v1", "Unsupported report bundle")
-    references = {}
-    for name, item in index["files"].items():
-        relative = PurePosixPath(name)
-        require(not relative.is_absolute() and ".." not in relative.parts, f"Invalid bundle path: {name}")
-        path = (root / name).resolve()
-        require(path.is_relative_to(root), f"Bundle file escapes input directory: {name}")
-        require(path.is_file(), f"Missing bundle file: {name}")
-        require(path.stat().st_size == item["size"] and digest(path) == item["sha256"], f"Hash mismatch: {name}")
-        if item.get("reference"):
-            ref = item["reference"]
-            require(ref not in references, f"Duplicate artifact reference: {ref}")
-            references[ref] = path
-    for key in ("protocol", "state", "reference_summary"):
-        require(index[key] in references, f"Missing {key} reference")
-    require(index["configuration"] in index["files"], "Analysis configuration is not indexed")
-    require(bool(index["source_store"]), "Missing original tracking-store identity")
-    return index, references
 
 
 def artifact(references, reference):
@@ -488,6 +469,7 @@ def source_record():
     files = [
         PROJECT / name for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "studies/README.md")
     ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")]
+    files.extend([PROJECT / "src/jaxborg/__init__.py", PROJECT / "src/jaxborg/frozen_bundle.py"])
     checkout = git("rev-parse", "--show-toplevel")
     is_checkout = checkout is not None and Path(checkout).resolve() == PROJECT
     status = git("status", "--porcelain", "--untracked-files=all", "--", ".") if is_checkout else None
@@ -509,7 +491,7 @@ def run(args):
         "Output must be separate from the input bundle",
     )
     require(not output.is_relative_to(PROJECT), "Generated reports must be outside the source checkout")
-    index, references = verified_bundle(root)
+    index, references, _ = verified_bundle(root)
     protocol, state, evaluations, finals, curves, training_rows, training_seconds = validate(references, index)
     config_path = args.config.resolve() if args.config else root / index["configuration"]
     supplied = load_json(config_path)
