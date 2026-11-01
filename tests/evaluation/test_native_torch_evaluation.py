@@ -219,6 +219,9 @@ def test_existing_recipe_cli_writes_one_native_deterministic_result_without_trac
         [
             sys.executable,
             str(PROJECT / "scripts/eval/eval_recipe.py"),
+            "--development-no-capture",
+            "--horizon",
+            "2",
             "--model",
             str(tiny_model),
             "--seeds",
