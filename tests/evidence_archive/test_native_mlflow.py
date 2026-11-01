@@ -1,6 +1,7 @@
 """Browse native runs and download evidence through MLflow's HTTP artifact API."""
 
 import csv
+import hashlib
 import json
 import os
 import runpy
@@ -12,6 +13,7 @@ from urllib.request import urlopen
 import pytest
 from mlflow import MlflowClient
 
+from jaxborg.evaluation.capture_store import finish_evaluation, load_records, record_episode, start_evaluation
 from jaxborg.evidence_archive import package_paths, prepare_package, verify_package
 from jaxborg.experiment_producers import frozen_bundle
 from jaxborg.experiment_producers.source import analysis_source_identity
@@ -103,6 +105,14 @@ def _environment():
     }
 
 
+def _files(root):
+    return {
+        path.relative_to(root).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in root.rglob("*")
+        if path.is_file()
+    }
+
+
 def _analyze(cwd, root, output, selection, materialization=None):
     arguments = [
         sys.executable,
@@ -151,6 +161,151 @@ def _frozen_fixture(root):
     return selection_path, records, protocol
 
 
+def _capture_fixture(root):
+    protocol = {
+        "schema_version": 1,
+        "kind": "protocol",
+        "id": "retrieval:protocol:1",
+        "study_id": "retrieval",
+        "revision": "1",
+        "selection_rule": "explicit",
+        "required_facts": {"attempt": ["resolved_config", "source_files"], "evaluation": ["resolved_config"]},
+        "trials": [
+            {"id": name, "condition_id": condition, "replicate_id": name, "matched_unit_id": None}
+            for name, condition in (("trial:a", "policy:a"), ("trial:b", "policy:b"), ("trial:c", "policy:b"))
+        ],
+        "metric_definitions": [
+            {
+                "name": "blue_return",
+                "unit": "score",
+                "direction": "higher",
+                "aggregation": "arithmetic mean",
+                "sampling_unit": "episode conditional on fixed policy",
+                "uncertainty": "none",
+            }
+        ],
+    }
+    root.mkdir()
+    model = root / "model.pt"
+    model.write_bytes(b"retained checkpoint")
+    source = root / "runner.py"
+    source.write_text("EPISODES = 2\n")
+
+    def begin(trial="trial:b", **overrides):
+        return start_evaluation(
+            root / "store",
+            protocol=protocol,
+            trial_id=trial,
+            requested_episodes=2,
+            resolved_config={"episodes": 2, "stochastic": False},
+            inputs={"checkpoint": model},
+            source_files={"src/runner.py": source},
+            **overrides,
+        )
+
+    first = begin("trial:a")
+    failed = begin()
+    record_episode(failed, episode_index=0, seed=42, reward=-4.0, steps=500)
+    finish_evaluation(failed, status="failed", error=RuntimeError("retained partial evaluation"))
+    retry = begin(retry_of=failed.attempt_id)
+    for capture in (first, retry):
+        for index, reward in enumerate((1.0, 3.0)):
+            record_episode(capture, episode_index=index, seed=42 + index, reward=reward, steps=500)
+        finish_evaluation(capture, status="succeeded")
+    records = load_records(root / "store")
+    selection = collate(
+        records,
+        protocol_id=protocol["id"],
+        selected_attempts={"trial:a": first.attempt_id, "trial:b": retry.attempt_id},
+        selected_evaluations=[first.evaluation_id, retry.evaluation_id],
+        analysis={"source": "retrieval-fixture", "configuration": {}},
+    )
+    return root / "store", records, selection, failed, retry, begin
+
+
+def _capture_report(tmp_path):
+    from scripts.eval.plot_results import REPORT_CONFIGURATION, analysis_identity, write_collation_report
+
+    root, records, selection, *_ = _capture_fixture(tmp_path / "producer")
+    selection = collate(
+        records,
+        protocol_id=selection["protocol_id"],
+        selected_attempts=selection["selected_attempts"],
+        selected_evaluations=selection["selected_evaluations"],
+        analysis={"source": analysis_identity(), "configuration": REPORT_CONFIGURATION},
+    )
+    selected = root.parent / "selection.json"
+    selected.write_text(json.dumps(selection))
+    report = root.parent / "report"
+    write_collation_report(selected, root, report)
+    return root, selected, report
+
+
+@pytest.mark.parametrize(
+    "damage",
+    ["source", "evidence", "selection", "extra", "listed-extra", "symlink", "deleted", "correction", "version"],
+)
+def test_collation_report_rejects_incomplete_or_mismatched_closure(tmp_path, damage):
+    from jaxborg.evidence_archive import prepare_package
+
+    root, selection, report = _capture_report(tmp_path)
+    manifest = json.loads((report / "manifest.json").read_text())
+    name = "analysis-source/scripts/eval/plot_results.py"
+    if damage == "evidence":
+        target = next(root.rglob("model.pt"))
+        target.write_bytes(target.read_bytes() + b"changed")
+    target = report / name
+    if damage == "source":
+        target.write_bytes(target.read_bytes() + b"changed")
+        manifest["files"][name] = {
+            "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "size_bytes": target.stat().st_size,
+        }
+    elif damage == "version":
+        manifest["schema_version"] = 1
+    elif damage == "selection":
+        manifest["collation_id"] = "another-collation"
+    elif damage in {"extra", "listed-extra"}:
+        (report / "unexpected.txt").write_bytes(b"unrelated")
+        if damage == "listed-extra":
+            manifest["files"]["unexpected.txt"] = {"sha256": hashlib.sha256(b"unrelated").hexdigest(), "size_bytes": 9}
+    elif damage == "symlink":
+        external = tmp_path / "external-source"
+        target.rename(external)
+        target.symlink_to(external)
+    elif damage == "deleted":
+        target.unlink()
+    elif damage == "correction":
+        manifest["corrections"] = {"invented-evaluation": {"reason": "invented correction"}}
+    (report / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError):
+        prepare_package("evaluation-capture", root, tmp_path / "rejected", selection=selection, report=report)
+    assert not (tmp_path / "rejected").exists()
+
+
+def test_collation_report_requires_selection_and_rejects_rehashed_source_change(tmp_path):
+    from jaxborg.evidence_archive import _digest, _identity, prepare_package, verify_package
+
+    root, selection, report = _capture_report(tmp_path)
+    with pytest.raises(ValueError, match="explicit selection"):
+        prepare_package("evaluation-capture", root, tmp_path / "unselected", report=report)
+    package = tmp_path / "package"
+    manifest = prepare_package("evaluation-capture", root, package, selection=selection, report=report)
+    report_manifest_path = package / "report/manifest.json"
+    report_manifest = json.loads(report_manifest_path.read_text())
+    name = "analysis-source/scripts/eval/plot_results.py"
+    path = package / "report" / name
+    path.write_bytes(path.read_bytes() + b"changed source")
+    report_manifest["files"][name] = _identity(path)
+    report_manifest_path.write_text(json.dumps(report_manifest))
+    for changed in ("report/" + name, "report/manifest.json"):
+        manifest["files"][changed] = _identity(package / changed)
+    manifest["sha256"] = _digest(manifest)
+    (package / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(ValueError, match="analyzer source differs"):
+        verify_package(package)
+
+
 def test_http_optional_frozen_archive_rebuilds_after_producer_disappears(tmp_path, mlflow_http):
     producer = tmp_path / "producer"
     producer.mkdir()
@@ -180,3 +335,48 @@ def test_http_optional_frozen_archive_rebuilds_after_producer_disappears(tmp_pat
         with (consumer / "rebuilt" / name).open(newline="") as actual, (baseline / name).open(newline="") as expected:
             assert list(csv.DictReader(actual)) == list(csv.DictReader(expected))
     assert len(client.search_runs([experiment_id])) == 1
+
+
+def test_http_optional_report_archive_replays_downloaded_source(tmp_path, mlflow_http):
+    root, selection, report = _capture_report(tmp_path)
+    expected = {name: (report / name).read_bytes() for name in ("joined.json", "joined.csv", "selection-status.json")}
+    archive = tmp_path / "archive"
+    manifest = prepare_package("evaluation-capture", root, archive, selection, report)
+    client = MlflowClient(tracking_uri=mlflow_http)
+    experiment_id = client.create_experiment("collation-report")
+    run = client.create_run(experiment_id, run_name="collation report")
+    client.log_artifacts(run.info.run_id, str(archive), artifact_path="report-evidence")
+    client.set_terminated(run.info.run_id)
+    root.parent.rename(tmp_path / "unavailable-producer")
+    archive.rename(tmp_path / "unavailable-archive")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    downloaded = Path(client.download_artifacts(run.info.run_id, "report-evidence", str(consumer)))
+    verify_package(downloaded, manifest["sha256"])
+    paths = package_paths(downloaded)
+    source = Path(paths["analysis_source"])
+    before = _files(downloaded)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(source / "scripts/eval/plot_results.py"),
+            "--collation",
+            paths["selection"],
+            "--evidence-root",
+            paths["input"],
+            "--output",
+            str(consumer / "rebuilt"),
+        ],
+        cwd=consumer,
+        env=os.environ
+        | {
+            "PYTHONDONTWRITEBYTECODE": "1",
+            "PYTHONPATH": os.pathsep.join((str(source / "src"), str(source))),
+            "MPLCONFIGDIR": str(consumer / "matplotlib"),
+        },
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _files(downloaded) == before
+    assert {name: (consumer / "rebuilt" / name).read_bytes() for name in expected} == expected

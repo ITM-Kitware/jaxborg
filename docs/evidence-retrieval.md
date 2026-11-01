@@ -57,6 +57,30 @@ The [frozen-defender guide](../studies/frozen-defender-response/README.md)
 documents its analyzer and original-provenance materialization inputs. Retained
 inputs do not make unretained checkpoints reevaluable.
 
+## Include the supported collation report
+
+Supply `selection=selection_file, report=report_directory` to `prepare_package`
+for an evaluation-capture archive. The selection, report outputs and exact
+analyzer source accompany one evidence copy under `input/`. Verification checks
+report identity, file closure, correction relationships and source hashes; this
+option supports the maintained collation plot, not arbitrary report directories.
+
+After a native download and verification, `package_paths` also exposes `report`
+and `analysis_source`. Explicitly run the saved analyzer with the retained
+selection and inputs, writing outside the downloaded archive. Its archived
+`pyproject.toml` and `uv.lock` specify dependencies; the partial source snapshot
+does not need to be installed as a project.
+
+```bash
+ARCHIVE="$DOWNLOADED/report/analysis-source"
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH="$ARCHIVE/src:$ARCHIVE" \
+  python "$ARCHIVE/scripts/eval/plot_results.py" \
+  --collation "$DOWNLOADED/selection.json" \
+  --evidence-root "$DOWNLOADED/input" --output "$REBUILT_REPORT"
+```
+
+Use the saved study entrypoint for study-specific checks.
+
 Durable service ownership, authorized access and a real second-client
 demonstration remain acceptance work in
 [#32](https://github.com/ITM-Kitware/jaxborg/issues/32).
