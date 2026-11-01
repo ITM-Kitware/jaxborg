@@ -187,8 +187,11 @@ def run_matchup(
         "seeds": fact(expanded),
         "step_accounting": fact("Actual completed transitions in each retained episode"),
     }
+    from jaxborg.evaluation.tracking import destination_configured
+
     capture = start_evaluation(
         root,
+        track=destination_configured(),
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,

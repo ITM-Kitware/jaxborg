@@ -591,6 +591,28 @@ def _recipe_cli(*arguments):
     )
 
 
+def _assert_recipe_tracking(tmp_path, receipt, native_status):
+    from mlflow import MlflowClient
+
+    destination = tmp_path / "legacy-results"
+    assert not (destination / "eval").exists()
+    client = MlflowClient(tracking_uri=f"sqlite:///{destination / 'mlflow.db'}")
+    experiment = client.get_experiment_by_name("captured-recipe-cli")
+    runs = client.search_runs([experiment.experiment_id])
+    assert len(runs) == 1
+    run = runs[0]
+    assert run.info.status == native_status
+    for name, value in {
+        "role": "execution",
+        "state": "unverified",
+        "attempt_id": receipt["attempt_id"],
+        "evaluation_id": receipt["evaluation_id"],
+        "scientific_status": receipt["status"],
+        "delivery": "current",
+    }.items():
+        assert run.data.tags[f"jaxborg.discovery.{name}"] == value
+
+
 def test_recipe_research_cli_retains_expanded_seeds_and_resolved_override(tmp_path, protocol, tiny_model):
     declaration = tmp_path / "protocol.json"
     declaration.write_text(json.dumps(protocol))
@@ -630,7 +652,7 @@ def test_recipe_research_cli_retains_expanded_seeds_and_resolved_override(tmp_pa
     assert config["overrides"] == {"eval_red": "sleep"}
     assert "eval" not in config["recipe"]
     assert config["variant"]["red_agent"] == "sleep"
-    assert not (tmp_path / "legacy-results").exists()
+    _assert_recipe_tracking(tmp_path, receipt, "FINISHED")
 
 
 @pytest.mark.parametrize(
@@ -682,7 +704,7 @@ def test_recipe_research_cli_failure_returns_retained_identity(tmp_path, protoco
     records = load_records(root)
     assert next(record for record in records if record["id"] == receipt["attempt_id"])["status"] == "failed"
     assert next(record for record in records if record["id"] == receipt["evaluation_id"])["status"] == "failed"
-    assert not (tmp_path / "legacy-results").exists()
+    _assert_recipe_tracking(tmp_path, receipt, "FAILED")
 
 
 def test_recipe_research_cli_rejects_wrong_source_revision_before_execution(tmp_path, protocol, tiny_model):
@@ -707,3 +729,52 @@ def test_recipe_research_cli_rejects_wrong_source_revision_before_execution(tmp_
     assert "revision" in receipt["error"]["message"].lower()
     assert "attempt_id" not in receipt
     assert not root.exists()
+
+
+@pytest.mark.parametrize("interrupt_delivery", [False, True])
+def test_recorded_native_evaluation_indexes_running_and_preserves_terminal_result(
+    tmp_path, protocol, tiny_model, monkeypatch, interrupt_delivery
+):
+    import mlflow
+
+    from jaxborg.evaluation import cyborg_runner
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_EXPERIMENT_NAME", "native-evaluation")
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    execute = cyborg_runner.run_torch_episodes
+    seen = []
+
+    def observe_running(*args, **kwargs):
+        experiment = client.get_experiment_by_name("native-evaluation")
+        runs = client.search_runs([experiment.experiment_id])
+        assert len(runs) == 1
+        assert runs[0].info.status == "RUNNING"
+        assert runs[0].data.tags["jaxborg.discovery.scientific_status"] == "running"
+        seen.append(runs[0].info.run_id)
+        return execute(*args, **kwargs)
+
+    monkeypatch.setattr(cyborg_runner, "run_torch_episodes", observe_running)
+    if interrupt_delivery:
+        deliver = mlflow.MlflowClient.log_dict
+
+        def interrupt_terminal(self, run_id, dictionary, artifact_file):
+            if artifact_file == "execution.json" and dictionary["records"][0]["status"] == "succeeded":
+                raise KeyboardInterrupt("terminal delivery interrupted")
+            return deliver(self, run_id, dictionary, artifact_file)
+
+        monkeypatch.setattr(mlflow.MlflowClient, "log_dict", interrupt_terminal)
+        with pytest.raises(KeyboardInterrupt, match="terminal delivery interrupted"):
+            _run(tmp_path / "evidence", protocol, tiny_model, seeds=[17])
+    else:
+        _run(tmp_path / "evidence", protocol, tiny_model, seeds=[17])
+    records = load_records(tmp_path / "evidence")
+    attempt = next(record for record in records if record["kind"] == "attempt")
+    assert attempt["status"] == "succeeded"
+    assert len(seen) == 1
+    run = client.get_run(seen[0])
+    assert run.data.tags["jaxborg.discovery.attempt_id"] == attempt["id"]
+    assert run.data.tags["jaxborg.discovery.scientific_status"] == "succeeded"
+    assert run.data.tags["jaxborg.discovery.delivery"] == ("failed" if interrupt_delivery else "current")
+    assert run.info.status == ("FAILED" if interrupt_delivery else "FINISHED")

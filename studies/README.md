@@ -15,7 +15,7 @@ evidence outside the checkout.
 - [Import existing evidence](../docs/local-evidence-producers.md): read a retained
   frozen-defender bundle or co-training SQLite store into version 1 records.
 - [Browse runs and download evidence](../docs/evidence-retrieval.md): use native
-  MLflow views/APIs and verify optional evidence archives.
+  MLflow views/APIs, verify downloaded evidence and reconstruct selected reports.
 - [Rebuild the frozen-defender report](frozen-defender-response/README.md): analyze
   that study's saved evidence with its scientific checks and explicit selection.
 

@@ -2,6 +2,7 @@
 
 import copy
 import json
+import shutil
 import subprocess
 import sys
 
@@ -9,6 +10,7 @@ import pytest
 
 from jaxborg.evaluation.capture_store import (
     add_artifact,
+    execution_files,
     finish_evaluation,
     finish_training,
     load_records,
@@ -140,6 +142,13 @@ def test_training_failure_retry_owned_evaluation_and_correction_keep_original_ev
     package = tmp_path / "package"
     manifest = prepare_package("evaluation-capture", root, package)
     assert verify_package(package) == manifest
+    train(root)
+    downloaded = tmp_path / "downloaded-evidence"
+    for source in execution_files(root, corrected.attempt_id):
+        destination = downloaded / source.relative_to(root)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, destination)
+    assert load_records(downloaded) == records
     broken = copy.deepcopy(records)
     current = next(record for record in broken if record["id"] == corrected.evaluation_id)
     current["extensions"]["evaluation_correction"]["values"]["evaluation_id"] = "absent"
@@ -322,3 +331,50 @@ def test_numeric_initial_state_is_owned_and_readable_without_pickle(tmp_path):
         np.testing.assert_array_equal(by_path["['normalizer']['blue']['count']"], [0])
         assert all(list(arrays[leaf["key"]].shape) == leaf["shape"] for leaf in leaves)
     assert value["exact_continuation_supported"] is False
+
+
+def test_reconciliation_repairs_existing_tracking_and_terminal_sync_is_retryable(tmp_path, monkeypatch):
+    import hashlib
+
+    import mlflow
+
+    from jaxborg.evaluation.tracking import sync_execution
+
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    child = subprocess.Popen([sys.executable, "-c", "pass"])
+    assert child.wait() == 0
+    root = tmp_path / "evidence"
+    capture = train(
+        root, track=True, resolved_config={"execution": {"writer": {**writer_identity(), "pid": child.pid}}}
+    )
+    update(capture, 1)
+    client = mlflow.MlflowClient(tracking_uri=uri)
+    deliver = mlflow.MlflowClient.log_dict
+
+    def failed_delivery(*args, **kwargs):
+        raise OSError("offline projection")
+
+    monkeypatch.setattr(mlflow.MlflowClient, "log_dict", failed_delivery)
+    records = reconcile_interrupted(root, capture.attempt_id, reason="writer has exited")
+    assert next(record for record in records if record["id"] == capture.attempt_id)["status"] == "cancelled"
+    before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*") if path.is_file()}
+    with pytest.raises(OSError, match="unchanged"):
+        sync_execution(root, capture.attempt_id)
+    monkeypatch.setattr(mlflow.MlflowClient, "log_dict", deliver)
+    receipt = sync_execution(root, capture.attempt_id)
+    assert receipt["run_id"] == capture.tracking.run_id
+    assert receipt["delivery"] == "current" and receipt["data_incomplete"] is False
+    repaired = client.get_run(receipt["run_id"])
+    assert repaired.info.status == "KILLED"
+    assert repaired.data.tags["jaxborg.discovery.scientific_status"] == "cancelled"
+    assert repaired.data.tags["jaxborg.discovery.delivery"] == "current"
+    assert repaired.data.tags["jaxborg.discovery.data_incomplete"] == "false"
+    assert before == {
+        str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in root.rglob("*") if path.is_file()
+    }
+    # Ambiguous publication never chooses one of the matches or creates another.
+    client.create_run(repaired.info.experiment_id, tags=dict(repaired.data.tags))
+    with pytest.raises(ValueError, match="Multiple execution runs"):
+        sync_execution(root, capture.attempt_id)
+    assert len(client.search_runs([repaired.info.experiment_id])) == 2
