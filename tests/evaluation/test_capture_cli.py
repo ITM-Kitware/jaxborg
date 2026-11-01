@@ -20,6 +20,12 @@ from jaxborg.experiment_records import collate, validate_collation, validate_rec
 from jaxborg.policies import make_torch_policy
 
 
+@pytest.fixture(autouse=True)
+def isolated_tracking_destination(monkeypatch):
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    monkeypatch.delenv("JAXBORG_EXP_DIR", raising=False)
+
+
 @pytest.fixture
 def protocol():
     return {
@@ -114,6 +120,7 @@ def _run(root, protocol, model, **overrides):
                 "deterministic": True,
                 "policy_seed": 100,
                 "allow_dirty": True,
+                "entrypoint": Path(__file__),
             }
             | overrides
         )
@@ -146,19 +153,18 @@ def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, pr
     assert load_records(root) == [protocol]
 
     completed = _result(
-        _cli(
-            "run",
-            "--root",
+        _recipe_cli(
+            "--model",
+            tiny_model,
+            "--evidence-root",
             root,
             "--protocol",
             declaration,
             "--trial",
             "trial:one",
-            "--model",
-            tiny_model,
-            "--seeds",
-            17,
+            "--episode-seeds",
             18,
+            17,
             "--horizon",
             2,
             "--policy-seed",
@@ -168,7 +174,6 @@ def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, pr
         )
     )
     assert completed["status"] == "succeeded"
-    assert completed["completed_episodes"] == 2
     stochastic = _run(root, protocol, tiny_model, trial_id="trial:stochastic", seeds=[17], deterministic=False)
     output = tmp_path / "records.json"
     exported = _result(_cli("export", "--root", root, "--output", output))
@@ -186,7 +191,7 @@ def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, pr
     assert next(budget for budget in evaluation["budgets"] if budget["unit"] == "completed_episode_environment_steps")[
         "completed"
     ] == sum(row["steps"] for row in observations)
-    assert [row["seed"] for row in observations] == [17, 18]
+    assert [row["seed"] for row in observations] == [18, 17]
     assert all(0 < row["steps"] <= 2 for row in observations)
     assert [row["policy_seed"] for row in observations] == [100, 101]
     assert all(math.isfinite(row["reward"]) for row in observations)
@@ -327,17 +332,16 @@ def test_invalid_checkpoint_is_retained_as_failed_execution(tmp_path, protocol, 
         tiny_model.write_bytes(b"invalid checkpoint")
     declaration = tmp_path / "protocol.json"
     declaration.write_text(json.dumps(protocol))
-    completed = _cli(
-        "run",
-        "--root",
+    completed = _recipe_cli(
+        "--model",
+        tiny_model,
+        "--evidence-root",
         root,
         "--protocol",
         declaration,
         "--trial",
         "trial:one",
-        "--model",
-        tiny_model,
-        "--seeds",
+        "--episode-seeds",
         17,
         18,
         "--horizon",
@@ -346,7 +350,7 @@ def test_invalid_checkpoint_is_retained_as_failed_execution(tmp_path, protocol, 
         "--allow-dirty",
     )
     assert completed.returncode != 0
-    result = json.loads(completed.stderr.splitlines()[-1])
+    result = json.loads(completed.stdout.splitlines()[-1])
     assert result["status"] == "failed"
     records = load_records(root)
     executions = [record for record in records if record["kind"] in {"attempt", "evaluation"}]
@@ -465,24 +469,23 @@ def test_invalid_recipe_is_rejected_before_capture_and_cannot_use_loader_fallbac
     root = tmp_path / "store"
     declaration = tmp_path / "protocol.json"
     declaration.write_text(json.dumps(protocol))
-    completed = _cli(
-        "run",
-        "--root",
+    completed = _recipe_cli(
+        "--model",
+        tiny_model,
+        "--evidence-root",
         root,
         "--protocol",
         declaration,
         "--trial",
         "trial:one",
-        "--model",
-        tiny_model,
-        "--seeds",
+        "--episode-seeds",
         17,
         "--horizon",
         2,
         "--allow-dirty",
     )
     assert completed.returncode != 0
-    failure = json.loads(completed.stderr.splitlines()[-1])
+    failure = json.loads(completed.stdout.splitlines()[-1])
     assert failure["status"] == "failed"
     assert failure["error"]["type"] == error_type
     assert message in failure["error"]["message"]
@@ -567,3 +570,140 @@ def test_capture_execution_uses_retained_inputs_after_originals_disappear(tmp_pa
         artifact = next(r for r in records if r.get("role") == role)
         assert artifact["sha256"] == expected
         assert hashlib.sha256((root / artifact["uri"]).read_bytes()).hexdigest() == expected
+
+
+def _recipe_cli(*arguments):
+    checkout = Path(__file__).resolve().parents[2]
+    workspace = Path(arguments[arguments.index("--model") + 1]).parent
+    return subprocess.run(
+        [sys.executable, str(checkout / "scripts/eval/eval_recipe.py"), *map(str, arguments)],
+        cwd=workspace,
+        env=os.environ
+        | {
+            "PYTHONPATH": os.pathsep.join([str(checkout / "src"), str(checkout)]),
+            "JAXBORG_EXP_DIR": str(workspace / "legacy-results"),
+            "MLFLOW_EXPERIMENT_NAME": "captured-recipe-cli",
+            "OMP_NUM_THREADS": "1",
+            "MKL_NUM_THREADS": "1",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_recipe_research_cli_retains_expanded_seeds_and_resolved_override(tmp_path, protocol, tiny_model):
+    declaration = tmp_path / "protocol.json"
+    declaration.write_text(json.dumps(protocol))
+    root = tmp_path / "evidence"
+    completed = _recipe_cli(
+        "--model",
+        tiny_model,
+        "--evidence-root",
+        root,
+        "--protocol",
+        declaration,
+        "--trial",
+        "trial:one",
+        "--seeds",
+        "17,18",
+        "--episodes-per-seed",
+        "2",
+        "--policy-seed",
+        "100",
+        "--horizon",
+        "1",
+        "--eval-red",
+        "sleep",
+        "--allow-dirty",
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    receipt = json.loads(completed.stdout)
+    records = load_records(root)
+    evaluation = next(record for record in records if record["id"] == receipt["evaluation_id"])
+    assert receipt["status"] == evaluation["status"] == "succeeded"
+    config = evaluation["facts"]["resolved_config"]["value"]
+    assert config["seeds"] == [34, 35, 36, 37]
+    assert config["policy_seeds"] == [100, 101, 102, 103]
+    assert config["horizon"] == 1
+    assert config["execution"]["expected_revision"] == config["execution"]["source_revision"]
+    assert "scripts/eval/eval_recipe.py" in evaluation["facts"]["source_files"]["value"]
+    assert config["overrides"] == {"eval_red": "sleep"}
+    assert "eval" not in config["recipe"]
+    assert config["variant"]["red_agent"] == "sleep"
+    assert not (tmp_path / "legacy-results").exists()
+
+
+@pytest.mark.parametrize(
+    "extra, message",
+    [
+        ([], "requires --evidence-root"),
+        (["--evidence-root", "unused", "--protocol", "unused", "--trial", "one", "--workers", "2"], "serial"),
+        (["--development-no-capture", "--trial", "one"], "cannot be combined"),
+        (["--development-no-capture", "--episode-seeds", "17"], "requires research capture"),
+        (["--episode-seeds", "17", "--episodes-per-seed", "2"], "cannot be combined"),
+        (
+            ["--evidence-root", "unused", "--protocol", "unused", "--trial", "one", "--output", "unused"],
+            "immutable store",
+        ),
+    ],
+)
+def test_recipe_research_cli_rejects_ambiguous_or_unsupported_requests(tmp_path, tiny_model, extra, message):
+    completed = _recipe_cli("--model", tiny_model, *extra)
+    assert completed.returncode == 2
+    assert message in completed.stderr
+    assert not (tmp_path / "legacy-results").exists()
+
+
+def test_recipe_research_cli_failure_returns_retained_identity(tmp_path, protocol, tiny_model):
+    declaration = tmp_path / "protocol.json"
+    declaration.write_text(json.dumps(protocol))
+    tiny_model.write_bytes(b"invalid checkpoint")
+    root = tmp_path / "evidence"
+    completed = _recipe_cli(
+        "--model",
+        tiny_model,
+        "--evidence-root",
+        root,
+        "--protocol",
+        declaration,
+        "--trial",
+        "trial:one",
+        "--seeds",
+        "17",
+        "--episodes-per-seed",
+        "1",
+        "--horizon",
+        "1",
+        "--allow-dirty",
+    )
+    assert completed.returncode == 1
+    receipt = json.loads(completed.stdout)
+    assert receipt["status"] == "failed"
+    records = load_records(root)
+    assert next(record for record in records if record["id"] == receipt["attempt_id"])["status"] == "failed"
+    assert next(record for record in records if record["id"] == receipt["evaluation_id"])["status"] == "failed"
+    assert not (tmp_path / "legacy-results").exists()
+
+
+def test_recipe_research_cli_rejects_wrong_source_revision_before_execution(tmp_path, protocol, tiny_model):
+    declaration = tmp_path / "protocol.json"
+    declaration.write_text(json.dumps(protocol))
+    root = tmp_path / "evidence"
+    completed = _recipe_cli(
+        "--model",
+        tiny_model,
+        "--evidence-root",
+        root,
+        "--protocol",
+        declaration,
+        "--trial",
+        "trial:one",
+        "--source-revision",
+        "0" * 40,
+        "--allow-dirty",
+    )
+    assert completed.returncode == 1
+    receipt = json.loads(completed.stdout)
+    assert "revision" in receipt["error"]["message"].lower()
+    assert "attempt_id" not in receipt
+    assert not root.exists()
