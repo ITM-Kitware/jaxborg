@@ -148,9 +148,11 @@ excluding partial episode work.
 
 Terminal evidence rejects further API writes. Hash/size checks before success
 and export detect changed bytes, but do not authenticate a rewritten whole store.
-A hard kill may leave an attempt running. There is no reconciliation or resume
-command; a new attempt may run the same trial but cannot claim an explicit retry
-of an unresolved running predecessor.
+A hard kill may leave an attempt running. Use the shared
+[interruption reconciliation](joint-execution-records.md) command in the original
+writer environment to seal it as cancelled after confirming the writer is absent.
+Resume is unsupported. A new attempt cannot claim an explicit retry of an
+unresolved running predecessor.
 
 ## Export and select
 
