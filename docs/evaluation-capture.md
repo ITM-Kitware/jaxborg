@@ -5,13 +5,27 @@ For existing saved results, use [historical evidence import](local-evidence-prod
 
 `python -m jaxborg.evaluation.capture` retains evidence from a Torch `.pt`
 checkpoint evaluated against scripted Red in CybORG. It uses the maintained
-checkpoint loader, game variants, and rollout. The checkpoint must have its
+checkpoint loader, game variants, and episode execution used by the Torch branch
+of `scripts/eval/eval_recipe.py`. Capture records evidence around that shared
+execution. The checkpoint must have its
 `recipe_<tag>.yaml` or `.yml` sidecar beside `model_<tag>.pt`.
 
 This path runs serially, with one explicit environment seed per episode and
 a configured horizon between 1 and 500 steps. It
 does not train a policy, attach to MLflow, resume an interrupted attempt, reuse
 an evaluation, or support JAX checkpoints and custom environment builders.
+
+The commands retain different seed contracts. Recipe evaluation expands each
+root seed `s` into `s + episode_index`; overlapping roots can produce repeated
+episode seeds. Capture takes one unique, explicit environment seed per episode.
+It also isolates policy randomness using `--policy-seed + episode_index`.
+The recipe command keeps its existing ambient policy randomness; sharing the
+runner does not make those stochastic evaluations identical.
+
+For a reproducible programmatic comparison, `evaluate_on_cyborg` accepts an
+optional `policy_seed`. With `episodes_per_seed=1`, match the checkpoint, resolved
+variant and horizon, ordered environment seeds, policy seed and sampling mode
+to capture. Explicit policy seeds also preserve results across worker counts.
 
 ## Declare the scientific cells first
 
