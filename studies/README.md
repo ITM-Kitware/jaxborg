@@ -1,6 +1,6 @@
-# Experiments
+# Studies
 
-An experiment directory gives a scientific question, its methods, and its analysis
+A study directory gives a scientific question, its methods, and its analysis
 a maintained home alongside the shared code. Repeated runs keep their actual
 settings and generated files in artifact storage outside the checkout.
 
@@ -13,10 +13,10 @@ tracked in [#28](https://github.com/ITM-Kitware/jaxborg/issues/28).
 ## What to check in
 
 ```text
-experiments/<question>/
+studies/<question>/
   README.md          question, method, commands, input/result references
   analyze.py         analysis specific to this question, when needed
-  experiment.yaml    optional maintained settings or sweep definition
+  study.yaml    optional maintained settings or sweep definition
 ```
 
 This is a convention, not a required set of files. Start with a README describing
@@ -46,7 +46,7 @@ follow-up.
 For example, population-based training would need shared code for population
 updates and study settings for its budget and replacement rules. Its runs would
 also retain checkpoint ancestry and actual parameter changes over time. Creating
-an experiment directory alone does not add that training capability.
+a study directory alone does not add that training capability.
 
 ## Analysis and reporting
 

@@ -71,9 +71,9 @@ uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
 # "GPU was allocated but JAX fell back to CPU" trap.
 ```
 
-## Experiments
+## Studies
 
-See [experiment directories](experiments/README.md) for where to keep study
+See [experiment directories](studies/README.md) for where to keep study
 methods, optional maintained configurations, and analysis code. The first example
 reproduces a completed frozen-defender response study from saved measurements.
 

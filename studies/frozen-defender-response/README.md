@@ -11,7 +11,7 @@ project dependencies and lockfile. The analysis does not import JAX, the
 simulator, training code, or MLflow.
 
 The script validates this historical fixture against its retained reference
-summary. It is not the starting analysis for an arbitrary new experiment. Reuse
+summary. It is not the starting analysis for an arbitrary new study. Reuse
 the [directory and configuration conventions](../README.md); choose analysis and
 checks appropriate to a new question.
 
@@ -25,7 +25,7 @@ an `index.json`, `analysis.json`, source evidence, and producer records describe
 From the repository root, run:
 
 ```bash
-uv run --frozen --extra cpu python experiments/frozen-defender-response/analyze.py \
+uv run --frozen --extra cpu python studies/frozen-defender-response/analyze.py \
   --input /path/to/input-bundle --output /path/to/new-report
 ```
 
@@ -51,7 +51,7 @@ Source checkout:
   pyproject.toml          shared project dependencies, including NumPy and Matplotlib
   uv.lock                 exact resolved dependency versions
   .python-version         shared Python version
-  experiments/frozen-defender-response/
+  studies/frozen-defender-response/
     analyze.py           validation, statistics, tables, and figures
     index_bundle.py      index the copied records for this one reference study
     test_analyze.py        synthetic command-line checks
@@ -82,7 +82,7 @@ bootstrap overrides and captures the supplied values, defaults, overrides, and
 fully resolved configuration in the output:
 
 ```bash
-uv run --frozen --extra cpu python experiments/frozen-defender-response/analyze.py \
+uv run --frozen --extra cpu python studies/frozen-defender-response/analyze.py \
   --input /path/to/input-bundle \
   --output /path/to/another-report --bootstrap-seed 3000002
 ```
@@ -119,14 +119,14 @@ To assemble this particular fixture, copy the selected producer files into a new
 `input/producer/<run-id>/artifacts/` tree, preserving their bytes. The original
 report's `results/state.json` identifies all training, validation, and final runs.
 Retain the analysis scripts and instructions at their repository-relative paths,
-plus `experiments/README.md` and the root `pyproject.toml`, `uv.lock`,
+plus `studies/README.md` and the root `pyproject.toml`, `uv.lock`,
 `.python-version`, and `README.md`, in `analysis-source/` beside the producer
 records. Exclude `.venv` and caches. Record
 the snapshot's commit and file hashes in `analysis-source.json`.
 Then index that copied tree once:
 
 ```bash
-uv run --frozen --extra cpu python experiments/frozen-defender-response/index_bundle.py \
+uv run --frozen --extra cpu python studies/frozen-defender-response/index_bundle.py \
   --input /path/to/input-bundle \
   --source-store '<original tracking-store identity>'
 ```
@@ -134,7 +134,7 @@ uv run --frozen --extra cpu python experiments/frozen-defender-response/index_bu
 The indexer is specific to this reference study. It writes the input hash index
 and initial analysis settings, and refuses to overwrite an indexed bundle. The
 source and report run IDs in `index_bundle.py` identify this completed study.
-For another experiment, define its own input contract and analysis. The
+For another study, define its own input contract and analysis. The
 analyzer additionally verifies the producer manifests' completion and hashes;
 indexing alone does not establish scientific validity. A trusted copy of the index
 or its checksum is needed to detect replacement of the entire bundle.
@@ -174,7 +174,7 @@ commands from its `analysis-source/` directory:
 
 ```bash
 uv sync --frozen --extra cpu --no-install-project
-uv run --no-sync python experiments/frozen-defender-response/analyze.py \
+uv run --no-sync python studies/frozen-defender-response/analyze.py \
   --input /path/to/input-bundle --output /path/to/new-report
 ```
 
@@ -184,7 +184,7 @@ From the repository root, use the shared environment:
 
 ```bash
 uv run --frozen --extra cpu \
-  python -m unittest discover -s experiments/frozen-defender-response -p test_analyze.py
+  python -m unittest discover -s studies/frozen-defender-response -p test_analyze.py
 ```
 
 The tests use synthetic files and observe command exit status and saved outputs.

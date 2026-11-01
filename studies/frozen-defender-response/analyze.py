@@ -486,8 +486,7 @@ def source_record():
         return result.stdout.strip() if result.returncode == 0 else None
 
     files = [
-        PROJECT / name
-        for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "experiments/README.md")
+        PROJECT / name for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "studies/README.md")
     ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")]
     checkout = git("rev-parse", "--show-toplevel")
     is_checkout = checkout is not None and Path(checkout).resolve() == PROJECT
