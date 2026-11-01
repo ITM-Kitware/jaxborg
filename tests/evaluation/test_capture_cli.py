@@ -118,7 +118,13 @@ def _run(root, protocol, model, **overrides):
     )
 
 
-def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, protocol, tiny_model):
+@pytest.mark.parametrize("sidecar_suffix", ["yaml", "yml"])
+def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, protocol, tiny_model, sidecar_suffix):
+    sidecar = tiny_model.with_name(f"recipe_tiny.{sidecar_suffix}")
+    original = tiny_model.with_name("recipe_tiny.yaml")
+    if sidecar != original:
+        original.rename(sidecar)
+    sidecar_bytes = sidecar.read_bytes()
     protocol = protocol | {
         "trials": [
             *protocol["trials"],
@@ -186,6 +192,12 @@ def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, pr
         {"name": "blue_return", "unit": "score", "value": sum(row["reward"] for row in observations) / 2}
     ]
     artifacts = [record for record in records if record["kind"] == "artifact"]
+    recipe_artifacts = [record for record in artifacts if record["role"] == "policy recipe"]
+    assert len(recipe_artifacts) == 2
+    for artifact in recipe_artifacts:
+        retained = root / artifact["uri"]
+        assert retained.name == sidecar.name
+        assert retained.read_bytes() == sidecar_bytes
     evaluation_artifacts = [record for record in artifacts if record["producer_id"] == evaluation["id"]]
     assert len([record for record in evaluation_artifacts if record["role"] == "evaluation reset topology"]) == 2
     assert len([record for record in evaluation_artifacts if record["role"] == "evaluation reset metadata"]) == 2
@@ -234,7 +246,7 @@ def test_cli_declares_runs_real_cyborg_and_exports_verified_records(tmp_path, pr
     relocated = tmp_path / "relocated-evidence"
     shutil.move(root, relocated)
     tiny_model.unlink()
-    tiny_model.with_name("recipe_tiny.yaml").unlink()
+    sidecar.unlink()
     assert load_records(relocated) == records
 
 
@@ -425,3 +437,50 @@ def test_source_copy_window_mismatch_fails_before_any_episode(tmp_path, protocol
     assert _observations(root, records, evaluation["id"]) == []
     assert evaluation["metrics"] == []
     assert evaluation["facts"]["error"]["value"] == {"type": "ValueError", "message": message}
+
+
+@pytest.mark.parametrize(
+    "payload,error_type,message",
+    [
+        (None, "FileNotFoundError", "No recipe sidecar found"),
+        ("arch: [", "ParserError", "while parsing"),
+        ("[]", "ValueError", "must contain an arch mapping"),
+        ("{}", "ValueError", "must contain an arch mapping"),
+        ("arch: {}", "ValueError", "must declare arch.name"),
+        ("arch: {name: 7}", "ValueError", "must declare arch.name"),
+    ],
+)
+def test_invalid_recipe_is_rejected_before_capture_and_cannot_use_loader_fallback(
+    tmp_path, protocol, tiny_model, payload, error_type, message
+):
+    sidecar = tiny_model.with_name("recipe_tiny.yaml")
+    if payload is None:
+        sidecar.unlink()
+    else:
+        sidecar.write_text(payload)
+    root = tmp_path / "store"
+    declaration = tmp_path / "protocol.json"
+    declaration.write_text(json.dumps(protocol))
+    completed = _cli(
+        "run",
+        "--root",
+        root,
+        "--protocol",
+        declaration,
+        "--trial",
+        "trial:one",
+        "--model",
+        tiny_model,
+        "--seeds",
+        17,
+        "--horizon",
+        2,
+        "--allow-dirty",
+    )
+    assert completed.returncode != 0
+    failure = json.loads(completed.stderr.splitlines()[-1])
+    assert failure["status"] == "failed"
+    assert failure["error"]["type"] == error_type
+    assert message in failure["error"]["message"]
+    assert "attempt_id" not in failure and "evaluation_id" not in failure
+    assert not root.exists()

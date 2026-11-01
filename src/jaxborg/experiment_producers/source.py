@@ -15,6 +15,7 @@ MODULES = (
     "jaxborg.experiment_producers.local",
     "jaxborg.experiment_producers.selection",
     "jaxborg.experiment_producers.source",
+    "jaxborg.evidence_archive",
 )
 
 
