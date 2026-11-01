@@ -5,11 +5,15 @@ from jaxborg.experiment_records import collate, validate_collation, validate_rec
 from .local import frozen_bundle
 
 
-def verify_frozen_selection(selection, root):
+def verify_frozen_selection(selection, root, *, materialization=None):
+    expected = frozen_bundle(root, materialization=materialization)
+    _verify_frozen_records(selection, expected)
+
+
+def _verify_frozen_records(selection, expected):
     validate_collation(selection)
     records = selection["records"]
     indexed = validate_records(records)
-    expected = frozen_bundle(root)
     protocol = next(r for r in expected if r["kind"] == "protocol")
     if selection["protocol_id"] != protocol["id"]:
         raise ValueError("Selection must identify this frozen bundle protocol")

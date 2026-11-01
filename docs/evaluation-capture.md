@@ -20,6 +20,12 @@ observations, including trials that have not started. An attempt is one executio
 of a trial. Episode seeds are subsamples within an evaluation, not independent
 policy training replicates.
 
+The protocol declares expected cells and a selection rule; attempts record retry
+relationships. Neither is an executable configuration or launcher. Training and
+evaluation settings use the existing recipe schema and loader, including
+study-local recipes passed by path; this capture command reads the checkpoint's
+retained recipe sidecar.
+
 For example, this protocol compares action selection settings on a fixed policy
 and matched episode cohort. Its replicate names describe evaluation cohorts.
 They make no claim about independent training replication.
@@ -86,6 +92,12 @@ python -m jaxborg.evaluation.capture run \
   --trial deterministic:cohort-1 --model /inputs/model_policy.pt \
   --seeds 17 18 --horizon 500 --policy-seed 100 --deterministic
 ```
+
+Condition labels do not select or validate runtime settings. For example, naming
+a trial `stochastic:cohort-1` does not reject `--deterministic`. Capture retains
+the actual resolved settings; study-specific checks must establish that they
+match the intended condition. Required-fact checks establish presence and
+knownness, not that a value matches a treatment or makes conditions comparable.
 
 Every valid invocation creates new store-qualified attempt and evaluation IDs.
 Success and execution-failure responses include both IDs for subsequent selection
