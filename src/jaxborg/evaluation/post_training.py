@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import re
@@ -254,6 +255,7 @@ def run_configured_evaluations_after_training(
     model_path: str | Path,
     recipe: Mapping[str, Any],
     *,
+    capture=None,
     cross_seed_red: str | Path | None = None,
     save_evaluation_recipe: bool = False,
     run_subprocess: Callable[..., Any] = subprocess.run,
@@ -291,6 +293,7 @@ def run_configured_evaluations_after_training(
     if not resolved_model.is_file():
         raise FileNotFoundError(f"final model is missing before post-training evaluation: {resolved_model}")
     sidecar = _sidecar_path(resolved_model)
+    source_sidecar = sidecar
     if resolved_model.suffix == ".pt":
         backend = "cyborg"
     elif resolved_model.suffix in (".safetensors", ".flax", ".orbax"):
@@ -317,6 +320,11 @@ def run_configured_evaluations_after_training(
         sidecar.write_text(yaml.safe_dump(payload, sort_keys=False))
     manifest: dict[str, Any] = {
         "model": str(resolved_model),
+        "model_sha256": hashlib.sha256(resolved_model.read_bytes()).hexdigest(),
+        "source_recipe": str(source_sidecar),
+        "source_recipe_sha256": hashlib.sha256(source_sidecar.read_bytes()).hexdigest(),
+        "effective_recipe_sha256": hashlib.sha256(sidecar.read_bytes()).hexdigest(),
+        "evaluation_pipeline_id": manifest_path.stem,
         "recipe": str(sidecar),
         "backend": backend,
         "jax_platforms": jax_platforms,
@@ -353,6 +361,37 @@ def run_configured_evaluations_after_training(
                 "PYTHONUNBUFFERED": "1",
             }
         )
+        if capture is not None:
+            from jaxborg.evaluation.capture_store import load_records
+
+            records = load_records(capture.root)
+            attempt = next(item for item in records if item["id"] == capture.attempt_id)
+            completed_steps = next(
+                budget["completed"] for budget in attempt["budgets"] if budget["unit"] == "environment_steps"
+            )
+            checkpoint_id = attempt["facts"][f"checkpoint_{completed_steps}"]["value"]["model"]
+            owned = next(item for item in records if item["id"] == checkpoint_id)
+            if (
+                owned["kind"] != "artifact"
+                or owned.get("producer_id") != capture.attempt_id
+                or owned.get("role") != "joint policy checkpoint"
+                or owned.get("sha256") != manifest["model_sha256"]
+            ):
+                raise ValueError("Final checkpoint differs from its retained training identity")
+            configuration = json.loads((capture.directory / "configuration.json").read_text())
+            execution = configuration["execution"]
+            child_env["JAXBORG_SCRIPTED_CAPTURE"] = json.dumps(
+                {
+                    "root": str(capture.root),
+                    "source_recipe": str(source_sidecar),
+                    "effective_recipe": str(sidecar),
+                    "checkpoint": owned["id"],
+                    "training_attempt_id": capture.attempt_id,
+                    "trial_id": attempt["trial_id"],
+                    "revision": execution["expected_revision"],
+                    "allow_dirty": execution.get("development_override", False),
+                }
+            )
         record: dict[str, Any] = {
             "name": evaluation.name,
             "script": str(script),
@@ -360,6 +399,8 @@ def run_configured_evaluations_after_training(
             "required": evaluation.required,
             "jax_platforms": job_jax_platforms,
             "status": "running",
+            "started_at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "recording_scope": "native script outputs; pipeline manifest",
         }
         manifest["evaluations"].append(record)
         _write_manifest(manifest_path, manifest)
@@ -369,9 +410,11 @@ def run_configured_evaluations_after_training(
             f"  {shlex.join(command)}",
             flush=True,
         )
+        started = time.perf_counter()
         try:
             completed = run_subprocess(command, check=True, cwd=_REPO_ROOT, env=child_env)
         except Exception as exc:
+            record["wall_time_s"] = time.perf_counter() - started
             record["status"] = "failed"
             record["error"] = str(exc)
             if isinstance(exc, subprocess.CalledProcessError):
@@ -384,6 +427,7 @@ def run_configured_evaluations_after_training(
                 raise
             print(f"Optional evaluation {evaluation.name!r} failed: {exc}", flush=True)
         else:
+            record["wall_time_s"] = time.perf_counter() - started
             record["status"] = "succeeded"
             record["returncode"] = int(getattr(completed, "returncode", 0))
             _write_manifest(manifest_path, manifest)

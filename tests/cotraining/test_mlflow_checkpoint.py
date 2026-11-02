@@ -290,3 +290,23 @@ def test_checkpoint_structured_result_logs_global_cia_at_checkpoint_step(tmp_pat
             300,
         )
     ]
+
+
+def test_checkpoint_evaluator_uses_delegated_metrics_and_artifact_ownership(tmp_path):
+    fake_mlflow = FakeMlflow()
+    delivered = []
+    evaluator = MlflowCheckpointEvaluator(
+        _recipe(),
+        mlflow_module=fake_mlflow,
+        log_metrics=lambda metrics, *, step: delivered.append((metrics, step)),
+        upload_artifacts=False,
+    )
+    result = evaluator.on_checkpoint(
+        tmp_path / "retained.safetensors",
+        tmp_path / "retained.yaml",
+        env_steps=100,
+        evaluate_fn=lambda _: {"blue": -4.0, "red": 4.0},
+    )
+    assert result == {"blue": -4.0, "red": 4.0}
+    assert fake_mlflow.artifacts == fake_mlflow.metrics == []
+    assert delivered == [({"eval.checkpoint.blue.mean_reward": -4.0, "eval.checkpoint.red.mean_reward": 4.0}, 100)]

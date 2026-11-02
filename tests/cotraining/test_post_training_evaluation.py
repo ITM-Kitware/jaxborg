@@ -142,6 +142,11 @@ def test_runs_scripts_in_order_with_exact_model_and_writes_manifest(tmp_path, mo
 
     manifest = json.loads(manifest_path.read_text())
     assert manifest["model"] == str(model.resolve())
+    import hashlib
+
+    assert manifest["model_sha256"] == hashlib.sha256(model.read_bytes()).hexdigest()
+    assert len(manifest["source_recipe_sha256"]) == 64
+    assert manifest["evaluation_pipeline_id"] == manifest_path.stem
     assert manifest["backend"] == "jax"
     assert manifest["jax_platforms"] == "cuda"
     assert [entry["name"] for entry in manifest["evaluations"]] == ["first-way", "second-way"]
@@ -322,3 +327,42 @@ def test_native_benchmark_can_use_cpu_after_gpu_training(tmp_path, monkeypatch):
     assert len(calls) == 1
     assert calls[0][1] == "cpu"
     assert calls[0][0].count("--model") == 1
+
+
+def test_capture_selects_final_fact_with_duplicate_checkpoint_bytes(tmp_path, monkeypatch):
+    import hashlib
+
+    from jaxborg.evaluation import capture_store
+
+    model = _final_model(tmp_path)
+    script = tmp_path / "eval.py"
+    script.touch()
+    digest = hashlib.sha256(model.read_bytes()).hexdigest()
+    attempt = {
+        "id": "training",
+        "trial_id": "trial",
+        "budgets": [{"unit": "environment_steps", "completed": 20}],
+        "facts": {"checkpoint_20": {"value": {"model": "final"}}},
+    }
+    artifacts = [
+        {"id": name, "kind": "artifact", "sha256": digest, "producer_id": producer, "role": "joint policy checkpoint"}
+        for name, producer in [
+            ("initial", "training"),
+            ("earlier", "training"),
+            ("final", "training"),
+            ("other", "other-training"),
+        ]
+    ]
+    monkeypatch.setattr(capture_store, "load_records", lambda root: [attempt, *artifacts])
+    (tmp_path / "configuration.json").write_text(json.dumps({"execution": {"expected_revision": "a" * 40}}))
+    capture = SimpleNamespace(root=tmp_path, directory=tmp_path, attempt_id="training")
+    contexts = []
+
+    def execute(command, **kwargs):
+        contexts.append(json.loads(kwargs["env"]["JAXBORG_SCRIPTED_CAPTURE"]))
+        return SimpleNamespace(returncode=0)
+
+    run_configured_evaluations_after_training(
+        model, _recipe([{"name": "eval", "script": str(script)}]), capture=capture, run_subprocess=execute
+    )
+    assert contexts[0]["checkpoint"] == "final"

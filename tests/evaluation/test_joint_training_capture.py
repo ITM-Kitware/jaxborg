@@ -140,6 +140,15 @@ def test_recorded_training_completes_independently_of_tracking_delivery(
     tmp_path, monkeypatch, training, synthetic_rollouts, failure, capsys
 ):
     recipe, recording = training
+    recipe["mlflow"] = {"checkpoint_eval": {"every_steps": 2, "episodes_per_seed": 3}}
+    evaluation_calls = []
+
+    def evaluate(path, *, backend, recipe, seed, episodes_per_seed):
+        assert Path(path).is_file()
+        evaluation_calls.append((Path(path).name, episodes_per_seed))
+        return {"blue": -2.0, "red": 2.0}
+
+    monkeypatch.setattr(trainer, "evaluate_training_checkpoint", evaluate)
     client = tracking_client()
     deliveries = []
 
@@ -187,6 +196,12 @@ def test_recorded_training_completes_independently_of_tracking_delivery(
         "red_policy_updates": 2,
     }
     assert synthetic_rollouts == [0, 1]
+    assert evaluation_calls == [("checkpoint_2.safetensors", 3), ("model_trial.safetensors", 3)]
+    assert not (tmp_path / "outputs/checkpoint_2.safetensors").exists()
+    periodic = attempt["facts"]["checkpoint_2"]["value"]
+    periodic_artifact = next(record for record in records if record["id"] == periodic["model"])
+    assert (recording["root"] / periodic_artifact["uri"]).is_file()
+    assert attempt["facts"]["checkpoint_evaluation_2"]["value"]["mean_rewards"] == {"blue": -2.0, "red": 2.0}
     rows = [json.loads(line) for line in (tmp_path / "outputs/metrics.jsonl").read_text().splitlines()]
     assert [row["env_steps"] for row in rows] == [2, 4]
     assert [row["team.blue.update_count"] for row in rows] == [1, 2]
@@ -221,6 +236,9 @@ def test_recorded_training_completes_independently_of_tracking_delivery(
         assert run.data.tags["jaxborg.discovery.delivery"] == "current"
         curve = client.get_metric_history(run.info.run_id, "team.blue.return")
         assert [(metric.step, metric.value) for metric in curve] == [(2, 1.0), (4, 1.0)]
+        periodic_curve = client.get_metric_history(run.info.run_id, "eval.checkpoint.blue.mean_reward")
+        assert [(metric.step, metric.value) for metric in periodic_curve] == [(2, -2.0), (4, -2.0)]
+        assert "checkpoints" not in {artifact.path for artifact in client.list_artifacts(run.info.run_id)}
         destination = tmp_path / "download"
         destination.mkdir()
         evidence = client.download_artifacts(run.info.run_id, "evidence", str(destination))
@@ -274,3 +292,82 @@ def test_unrecorded_training_keeps_fluent_curves_and_completion(tmp_path, traini
     curve = client.get_metric_history(runs[0].info.run_id, "team.blue.return")
     assert [(metric.step, metric.value) for metric in curve] == [(2, 1.0), (4, 1.0)]
     assert trainer.mlflow.active_run() is None
+
+
+@pytest.mark.parametrize("schedule", ["baseline", "quarter", "adaptive"])
+def test_generated_training_retains_schedule_work_and_topology_bytes(
+    tmp_path, monkeypatch, training, synthetic_rollouts, schedule
+):
+    from jaxborg.adaptive_updates import adaptive_red_update
+    from jaxborg.recipe import project_jax
+
+    recipe, recording = training
+    recipe["train"].pop("topology_bank")
+    recipe["train"]["topology_generation"] = {
+        "generator": "jax",
+        "seed_start": 7,
+        "count": 1,
+        "cache_dir": str(tmp_path / "generated"),
+    }
+    recipe["train"]["total_timesteps"] = 10
+    if schedule != "baseline":
+        recipe["train"]["update_every"] = {"blue": 1, "red": 4}
+    if schedule == "adaptive":
+        recipe["train"]["adaptive_updates"] = {
+            "phase_switch_blue_updates": 2,
+            "window_blue_updates": 2,
+            "reward_threshold": 10.0,
+            "max_frozen_blue_rollouts": 2,
+        }
+    # Obtain the ordinary resolved bank before instrumentation and compare bytes.
+    expected_bank = project_jax(recipe)["TOPOLOGY_BANK"]
+    expected_bytes = [Path(path).read_bytes() for path in expected_bank]
+    original_make = trainer.make_joint_train
+
+    def make(configs, *args, **kwargs):
+        result = original_make(configs, *args, **kwargs)
+        collect = result[-1]
+        counts = {"blue": 0, "red": 0}
+        settings = trainer.AdaptiveUpdateSettings.from_config(configs["blue"].get("ADAPTIVE_UPDATES"))
+
+        def measured(*args, update_idx, adaptive_state, **kwargs):
+            values = collect(*args, update_idx=update_idx, **kwargs)
+            metrics = values[-1]
+            for team in counts:
+                updated = (update_idx + 1) % configs[team]["UPDATE_EVERY"] == 0
+                if team == "red" and settings is not None:
+                    updated, adaptive_state, diagnostics = adaptive_red_update(
+                        settings,
+                        adaptive_state,
+                        blue_return=1.0,
+                        rollout_number=update_idx + 1,
+                        warmup_update_every=4,
+                    )
+                    metrics[team].update(diagnostics)
+                counts[team] += int(updated)
+                metrics[team].update(updated=float(updated), update_count=counts[team])
+            return (*values, adaptive_state) if settings is not None else values
+
+        return (*result[:-1], measured)
+
+    monkeypatch.setattr(trainer, "make_joint_train", make)
+    capture = trainer._run_joint_training(
+        SimpleNamespace(seed=42), recipe, "trial", tmp_path / "outputs", recording=recording
+    )
+    records = load_records(recording["root"])
+    attempt = next(record for record in records if record["kind"] == "attempt")
+    budgets = {item["unit"]: item["completed"] for item in attempt["budgets"]}
+    assert budgets["blue_policy_updates"] == 5
+    assert budgets["red_policy_updates"] == {"baseline": 5, "quarter": 1, "adaptive": 1}[schedule]
+    config = json.loads((capture.directory / "configuration.json").read_text())
+    assert config["topology"]["generation"] == recipe["train"]["topology_generation"]
+    assert [
+        path.read_bytes() for role, path in capture.inputs.items() if role.startswith("training topology")
+    ] == expected_bytes
+    rows = [json.loads(path.read_text()) for path in sorted((capture.directory / "updates").glob("*.json"))]
+    assert rows[-1]["team.red.update_count"] == budgets["red_policy_updates"]
+    if schedule == "adaptive":
+        assert [row["team.red.adaptive_phase"] for row in rows] == [1, 1, 2, 2, 2]
+        assert [row["team.red.forced_update"] for row in rows] == [0, 0, 0, 1, 0]
+        assert attempt["facts"]["initial_state"]["value"]["adaptive_schedule"] is True
+    assert attempt["facts"]["training_cost"]["value"]["completed_environment_steps"] == 10

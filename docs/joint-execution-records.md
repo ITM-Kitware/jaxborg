@@ -14,12 +14,36 @@ python scripts/train/algorithms/ippo_jax.py --recipe /inputs/recipe.yaml \
 The CLI prints the evidence root and attempt ID on success or after a retained
 failure. Use that attempt ID for an explicit retry.
 
-The supported recorded path starts both policies fresh, uses zero-sum joint JAX
-training, fixed update schedules and explicit topology snapshots. Prepare banks
-before launching; generated banks, adaptive schedules, frozen opponents and
-resume are rejected. Automatic checkpoint/post-training evaluation suites must
-be disabled. Run independent recorded evaluations over the owned checkpoint
-artifacts. `--development-no-recording` explicitly opts out of research records.
+The supported recorded path starts both policies fresh and uses zero-sum joint
+JAX training. Fixed and adaptive update schedules use the existing trainer.
+Explicit topology snapshots and recipe-generated banks are retained as exact
+input bytes after the ordinary recipe projection materializes them. Generated
+banks retain their generation settings and snapshot metadata; recording does
+not substitute a different generator or sampling procedure. Frozen opponents,
+resume and auxiliary mission banks remain unsupported by this recorded path.
+`--development-no-recording` explicitly opts out of research records.
+
+The configured `scripts/eval/eval_scripted_reds_jax.py` post-training job gets
+its own recorded evaluation over the training-owned final checkpoint. It
+retains the source and effective recipes, topology inputs, evaluator source,
+per-opponent episode results, CIA observations, and policy producer identity.
+Other configured suites keep their existing execution and outputs; they are
+not automatically converted into this recorded evaluation format. Declare
+which suites belong to a study in its recipe instead of assuming every native
+output has the same retention contract.
+
+Periodic checkpoint evaluation keeps its existing cadence and settings. Its
+metrics use the training-owned MLflow run, while training capture owns the
+checkpoint and sidecar bytes, including evaluation-only temporary checkpoints.
+The evaluation still runs if tracking is unavailable; its returned means are
+retained in the training record's `checkpoint_evaluation_<steps>` fact.
+
+Training completion is sealed before post-training evaluation. A subsequent
+evaluation failure does not relabel successful training as failed. Completed
+opponent batches remain available when a later opponent fails; an interrupted
+batch may have no retained observations. Requested evaluation horizon and
+observed episode transitions are distinct: this scripted path records the
+horizon and does not invent an actual transition count when unavailable.
 
 Use `jaxborg.evaluation.joint_capture.run_matchup` for independent evaluation.
 It wraps
@@ -49,6 +73,13 @@ manifest. These diagnostic leaves do not define a resume format. Later policy
 checkpoints remain weights-only outputs; exact continuation is unsupported.
 Environment transitions, joint rollout updates and each team's policy updates
 have distinct budget units.
+
+Team update counts describe PPO rounds, not optimizer minibatch steps. Use the
+existing `updated` flag when interpreting zero losses on skipped updates. The
+adaptive phase, gate state, window statistics and forced updates come from the
+trainer's measurements. Retained timing facts describe their inclusion of
+setup, compilation, recording and evaluation; fewer updates alone do not
+establish reduced runtime.
 
 Set `trajectories=True` on `run_matchup` to retain observations, actions, Blue
 payoffs and terminal flags from the same executed JAX scans. Completed episode
