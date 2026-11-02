@@ -13,8 +13,8 @@ from jaxborg.evaluation.capture_store import (
     record_episode,
     start_evaluation,
 )
-from jaxborg.evaluation.joint_capture import outside_source
-from jaxborg.evaluation.provenance import collect_provenance
+from jaxborg.evaluation.joint_capture import fact, outside_source
+from jaxborg.evaluation.provenance import collect_provenance, topology_evidence
 from jaxborg.evaluation.tracking import destination_configured
 
 
@@ -54,13 +54,23 @@ def run_scripted(model, *, context, **kwargs):
     inputs["effective recipe"] = Path(context["effective_recipe"])
     topology_count = len(kwargs["topology_paths"])
     identities = {role: hashlib.sha256(path.read_bytes()).hexdigest() for role, path in inputs.items()}
+    discovery = {
+        "backend": "jax",
+        "eval_env": "jax_fsm",
+        "procedure": "jaxborg.evaluation.jax_scripted_red.evaluate_jax_scripted_reds",
+        "topology": topology_evidence(
+            kwargs["topology_paths"],
+            [identities[f"topology {i}"] for i in range(topology_count)],
+            sampling="exhaustive",
+        ),
+    }
     capture = start_evaluation(
         root,
         protocol=json.loads((root / "protocol.json").read_text()),
         trial_id=context["trial_id"],
         requested_episodes=(len(kwargs["reds"]) * len(kwargs["seeds"]) * kwargs["episodes_per_seed"] * topology_count),
-        resolved_config=json_configuration({**kwargs, "execution": provenance.configuration}),
-        facts=provenance.facts,
+        resolved_config=json_configuration({**kwargs, **discovery, "execution": provenance.configuration}),
+        facts={**provenance.facts, **{name: fact(value) for name, value in discovery.items()}},
         inputs=inputs,
         retained_inputs={"blue checkpoint": artifact["id"]},
         source_files=provenance.source_files,
@@ -86,6 +96,20 @@ def run_scripted(model, *, context, **kwargs):
                 index += 1
             output = write_results([row], capture.directory / f"scripted-{row['eval_red']}.jsonl")
             add_artifact(capture, output, role="scripted opponent episode results")
+            if capture.tracking is not None:
+                from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
+
+                prefix = f"eval.scripted_red.{row['eval_red']}.blue"
+                metrics = {
+                    f"{prefix}.mean_reward": float(row["mean_reward"]),
+                    f"{prefix}.std_reward": float(row["std_reward"]),
+                    f"{prefix}.episodes": float(row["n_episodes"]),
+                    **cia_mlflow_metrics(f"{prefix}.cia", row["cia_summary"]),
+                }
+                try:
+                    capture.tracking.log_metrics(metrics)
+                except Exception as error:
+                    print(f"MLflow evaluation metrics warning: {error}", flush=True)
 
         rows = evaluate_jax_scripted_reds(capture.inputs["blue checkpoint"], on_row=observe, **kwargs)
         provenance.verify_sources()

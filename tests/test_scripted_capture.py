@@ -32,7 +32,14 @@ def test_completed_opponent_survives_later_failure(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr(recording, "destination_configured", lambda: False)
+    monkeypatch.setattr(
+        recording,
+        "topology_evidence",
+        lambda paths, hashes, **kw: {"sha256": hashes, "metadata": [{"generator": "retained"}]},
+    )
+    metric_calls = []
     capture = SimpleNamespace(
+        tracking=SimpleNamespace(log_metrics=lambda values: metric_calls.append(values)),
         directory=tmp_path,
         evaluation_id="evaluation",
         inputs={
@@ -42,7 +49,13 @@ def test_completed_opponent_survives_later_failure(tmp_path, monkeypatch):
             "effective recipe": topology,
         },
     )
-    monkeypatch.setattr(recording, "start_evaluation", lambda *a, **kw: capture)
+    configurations = []
+
+    def start(*args, **kwargs):
+        configurations.append(kwargs)
+        return capture
+
+    monkeypatch.setattr(recording, "start_evaluation", start)
     episodes, artifacts, failures = [], [], []
     monkeypatch.setattr(recording, "record_episode", lambda *a, **kw: episodes.append(kw))
     monkeypatch.setattr(recording, "add_artifact", lambda c, path, **kw: artifacts.append(json.loads(path.read_text())))
@@ -51,7 +64,17 @@ def test_completed_opponent_survives_later_failure(tmp_path, monkeypatch):
 
     def execute(model, *, on_row, **kwargs):
         assert kwargs["seeds"] == (1, 2)
-        on_row({"eval_red": "fsm", "per_episode_seeds": [1, 2], "per_episode": [3.0, 4.0]})
+        on_row(
+            {
+                "eval_red": "fsm",
+                "per_episode_seeds": [1, 2],
+                "per_episode": [3.0, 4.0],
+                "mean_reward": 3.5,
+                "std_reward": 0.5,
+                "n_episodes": 2,
+                "cia_summary": {"n": 2, **{key: {"mean": 0.75, "std": 0.1} for key in ("c", "i", "a")}},
+            }
+        )
         raise RuntimeError("later opponent failed")
 
     monkeypatch.setattr(jax_scripted_red, "evaluate_jax_scripted_reds", execute)
@@ -72,6 +95,16 @@ def test_completed_opponent_survives_later_failure(tmp_path, monkeypatch):
     assert artifacts[0]["evaluation_id"] == "evaluation"
     assert artifacts[0]["training_checkpoint_artifact_id"] == "checkpoint"
     assert len(failures) == 1
+    assert configurations[0]["facts"]["backend"]["value"] == "jax"
+    assert configurations[0]["facts"]["topology"]["value"]["sha256"] == [
+        hashlib.sha256(topology.read_bytes()).hexdigest()
+    ]
+    assert configurations[0]["facts"]["topology"]["value"]["metadata"] == [{"generator": "retained"}]
+    assert metric_calls[0]["eval.scripted_red.fsm.blue.mean_reward"] == 3.5
+    assert metric_calls[0]["eval.scripted_red.fsm.blue.episodes"] == 2.0
+    assert metric_calls[0]["eval.scripted_red.fsm.blue.cia.c.mean"] == 0.75
+    assert metric_calls[0]["eval.scripted_red.fsm.blue.cia.i.std"] == 0.1
+    assert metric_calls[0]["eval.scripted_red.fsm.blue.cia.a.mean_plus_std"] == 0.85
 
 
 @pytest.mark.parametrize("recorded", [False, True])
