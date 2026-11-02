@@ -28,8 +28,8 @@ def isolated_tracking_destination(monkeypatch):
         ("scripted_red", {"after_training": True}),
     ],
 )
-def test_implicit_automatic_evaluation_is_rejected_before_attempt(tmp_path, setting, value):
-    with pytest.raises(ValueError, match="separate recorded evaluations"):
+def test_automatic_evaluation_settings_preserve_source_pin_guard(tmp_path, setting, value):
+    with pytest.raises(ValueError, match="Executing source revision differs from the pinned request"):
         begin_training(
             root=tmp_path / "evidence",
             protocol={},

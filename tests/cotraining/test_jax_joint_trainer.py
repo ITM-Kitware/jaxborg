@@ -336,7 +336,9 @@ def test_adaptive_training_loop_preserves_schedule_and_logs_decisions(tiny_joint
     monkeypatch.setattr(trainer.mlflow, "end_run", lambda: None)
     monkeypatch.setattr(trainer, "save_jax_bundle", lambda *_a, **_kw: None)
     monkeypatch.setattr(trainer, "write_sidecar", lambda path, *_a, **_kw: path)
-    monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
+    monkeypatch.setattr(
+        "jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a, capture: None
+    )
 
     trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_adaptive", tmp_path)
 
