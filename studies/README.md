@@ -1,81 +1,134 @@
 # Studies
 
-Keep each study's question, methods, and analysis in `studies/<question>/`.
-Keep generated data, checkpoints, logs, figures, reports, and other run
-evidence outside the checkout.
+A study's README is the entry point for its question, methods, current status,
+and results. Keep study definitions and analysis code in this directory; keep
+generated evidence outside the source checkout.
 
-## Choose a workflow
+## Start here
 
-- [Capture a checkpoint evaluation](../docs/evaluation-capture.md): evaluate a
-  Torch policy in CybORG and retain inputs, source, episodes, and execution status.
-- [Record joint training and evaluation](../docs/joint-execution-records.md):
-  retain JAX training updates, owned checkpoints, matchups and trajectories.
-- [Run the payoff/blocking example](reward-offset/README.md): compose four
-  conditions and rebuild a comparison from explicitly selected evidence.
-- [Import existing evidence](../docs/local-evidence-producers.md): read a retained
-  frozen-defender bundle or co-training SQLite store into version 1 records.
-- [Browse runs and download evidence](../docs/evidence-retrieval.md): use native
-  MLflow views/APIs, verify downloaded evidence and reconstruct selected reports.
-- [Rebuild the frozen-defender report](frozen-defender-response/README.md): analyze
-  that study's saved evidence with its scientific checks and explicit selection.
+- [Project setup](../docs/setup.md): environment, storage, and MLflow.
+- [Shared training guide](../docs/training.md): recipes and execution.
+- [Shared evaluation guide](../docs/evaluation.md): evaluators and outputs.
 
-Shared training launch and logging conventions are tracked in
-[#25](https://github.com/ITM-Kitware/jaxborg/issues/25), with broader integration in
-[#28](https://github.com/ITM-Kitware/jaxborg/issues/28).
+## Read an existing study
 
-## Study files and settings
+1. Open its README to understand the question, what was compared, and what ran.
+2. Follow its result references to the report, selected runs, and measurements.
+3. Use its analysis commands and retained source when checking a result.
+
+### Studies and examples
+
+These examples illustrate different research questions and ways to compose
+existing code.
+
+| Study | What it illustrates |
+| --- | --- |
+| [Red update schedules](red-update-schedules/README.md) | Comparing baseline, quarter-rate, and adaptive training recipes with explicit run selection and reconstructable tables. |
+| [Joint payoff and blocking](reward-offset/README.md) | Composing a reward change and a blocking rule in a small four-condition execution example. |
+| [Frozen-defender response](frozen-defender-response/README.md) | Rebuilding a completed study's report from saved measurements. Its reference input bundle must be obtained separately from the study author. |
+
+## Create a study
+
+### Study files and settings
+
+Start with a README in a directory named for the research question. Add analysis
+code and settings as needed; the optional filenames below are examples.
 
 ```text
-studies/<question>/
-  README.md          question, method, commands, input/result references
-  analyze.py         study-specific analysis, when needed
+studies/<short-study-name>/
+  README.md          research summary and links to evidence and commands
+  reproduce.md       optional detailed execution and reproduction instructions
+  analyze.py         optional study-specific analysis
+  recipe.yaml        optional study-specific settings using the existing schema
 ```
 
-Start with the question, conditions, budget, seed/evaluation procedure, and input
-and result references. Add analysis code and settings as needed; no fixed file
-set is required. Use the repository's Python environment and dependencies.
+### What to put in the README
 
-Executable training and evaluation settings use the existing recipe schema and
-loader, including study-local recipes passed by path, plus supported command
-overrides. Keep reusable presets in `recipes/` and reusable simulator, policy,
-trainer, and evaluator behavior in shared modules. Seed or budget changes need
-no new directory or commit; maintained code and presets follow ordinary review.
+Use these as a rough section order. Keep the README readable as a research
+summary; combine sections when a short study does not need separate headings.
 
-A study defines a scientific question, methods, and analysis. Its protocol
-defines expected trials, their conditions, replicate identities, and selection
-rule. Attempts are executions of trials; retries are new attempts linked to an
-earlier attempt. Select attempts and evaluations explicitly when collating them;
-retries and evaluation episodes do not create independent training replicates.
-An MLflow experiment is a tracking container independent of a study. Retain
-fully resolved runtime settings, source/environment identity, inputs,
-measurements, and outputs with each execution. These records describe what ran
-and are not editable presets.
+- **Question:** what are you trying to learn, and what decision would the answer inform?
+- **Method:** which settings are being compared, training budget and seeds,
+  evaluation procedure, measurements, and how runs/checkpoints enter the comparison.
+- **Status and findings:** what has run, what remains incomplete, what the results
+  support, and what remains uncertain. State when results are not yet available.
+- **Evidence:** links or locators for inputs, selected runs, saved reports, and
+  producing source. Include access instructions when evidence is stored elsewhere.
+- **Commands:** a short entry point linking to `reproduce.md` for detailed
+  preparation, execution, analysis, and reconstruction instructions. That
+  companion links to shared setup, training, and evaluation guides as needed.
 
-## Opponent control and learning
+### Study settings
 
-Scripted Red chooses actions inside its environment, including its memory
-updates. Network-controlled Red supplies policy actions through the caller.
-Freezing a network controls whether its parameters update; it still acts.
-The existing `make_joint_train` entrypoint supports training one team against
-a frozen policy or training both teams.
+- Keep settings specific to the study beside its README. See
+  [training recipes](../docs/training.md#recipes-and-teams) for the shared format
+  and reusable presets.
+- Distinguish planned settings from the resolved settings retained with each
+  attempt. Defaults and command overrides can change what actually runs.
 
-Environment factories share variant settings while preserving these execution
-differences. A study can supply a custom environment builder to the supported
-training and evaluation paths. A common opponent interface and any later
-rollout unification are separate work under [#52](https://github.com/ITM-Kitware/jaxborg/issues/52).
+### Where results live
 
-## Analysis and reporting
+- **Source checkout:** the study README, maintained analysis code, and settings.
+- **External results storage:** generated data, checkpoints, logs, tables,
+  figures, and reports. The study README should tell a reader how to find them.
+- **MLflow:** a place to browse runs and retrieve their retained evidence. Its
+  experiment name is a tracking destination, independent of the study's identity.
 
-Analysis takes explicit saved inputs and writes to a new output directory.
-Retain plotted values and settings with figures. Use checks, statistics, and
-presentation appropriate to the question; reports should explain results,
-methods, and interpretation limits, with routine execution details in linked
-records.
+## Understand the study records
 
-Saved selections bind exact analyzer source and repository-relative paths.
-Reconstruct a saved report with its retained source; a different analyzer
-identity cannot replace it.
+### The plan: what should run
 
-The frozen-defender example checks a historical result against a retained
-reference summary, using an input bundle supplied separately by its author.
-Other studies need not copy its validator or report format.
+- **Study:** a scientific question, its methods, and its analysis.
+- **Condition:** one set of settings being compared, such as baseline training
+  or quarter-rate Red updates.
+- **Replicate identity:** a label distinguishing independent repetitions.
+  In a training comparison, this usually identifies a separately trained policy,
+  for example `training-42`. The label alone does not establish independence.
+- **Expected trial:** one planned case under a condition, identified
+  before execution. For example, baseline training with training seed 42.
+  A planned trial remains expected even if it fails or has not started.
+- **Selection rule:** the stated rule for which attempts, checkpoints, and
+  evaluations enter the analysis. For example, use each trial's completed final
+  checkpoint and its declared test evaluations. Record the exact choices.
+- **Protocol:** the saved plan connecting those conditions, expected trials,
+  replicate identities, and selection rule.
+
+For example, two conditions with training seeds 42 and 100 give four expected
+trials. Each condition has two planned training replicates. Matching seed labels
+across conditions do not by themselves establish a paired experiment.
+
+### The execution: what actually happened
+
+- **Attempt:** one execution of a trial, with its own status, settings, source,
+  software environment, inputs, measurements, and outputs.
+- **Retry:** a new attempt at the same trial, linked to the earlier attempt.
+  A retry does not add an independent training replicate.
+- **Evaluation:** measurements of a particular checkpoint under specified test
+  settings. More evaluation episodes do not create more independently trained
+  policies.
+- **Saved selection:** the exact attempt, checkpoint, and evaluation identities
+  used in one comparison. Select them explicitly so a later run or retry does
+  not silently change an existing result.
+
+## Analyze and report results
+
+- Analyze explicit saved inputs and write each report to a new output directory.
+- Explain the results, methods, and interpretation limits. Link routine execution
+  details from the report to the retained records.
+- Retain the numbers and settings used for any figures.
+- Keep the exact analyzer source and its paths relative to the repository root
+  with a saved selection. Reconstruct a saved report using that source;
+  a changed analyzer produces a new analysis.
+
+## Execution and evidence references
+
+Use these instructions for the operations your study needs.
+
+- [Joint training and evaluation records](../docs/joint-execution-records.md):
+  retain JAX training updates, owned checkpoints, matchups, and trajectories.
+- [Checkpoint evaluation capture](../docs/evaluation-capture.md): evaluate a
+  Torch policy in CybORG and retain inputs, source, episodes, and execution status.
+- [MLflow browsing and evidence retrieval](../docs/evidence-retrieval.md):
+  find runs, download evidence, verify its bytes, and reconstruct selected reports.
+- [Existing-evidence import](../docs/local-evidence-producers.md): read a retained
+  frozen-defender bundle or co-training SQLite store into version 1 records.
