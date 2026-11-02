@@ -6,11 +6,24 @@ inspect settings and metrics, and follow recorded input identities. Configure
 for the destination. Scientific `study_id` is independent of the experiment name.
 These settings do not deploy a shared service.
 
-For development against an existing MLflow server on the execution machine,
-select it explicitly and keep the pilot in its own experiment:
+For isolated development, start a dedicated local instance with a new database
+and artifact directory outside the checkout. Choose a new absolute directory
+for `PILOT_TRACKING_ROOT` and run this in its own terminal:
 
 ```sh
-export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+mkdir -p "$PILOT_TRACKING_ROOT"
+uv run mlflow server --host 127.0.0.1 --port 5062 --workers 1 \
+  --backend-store-uri "sqlite:///$PILOT_TRACKING_ROOT/mlflow.db" \
+  --artifacts-destination "$PILOT_TRACKING_ROOT/artifacts" \
+  --default-artifact-root mlflow-artifacts:/ --serve-artifacts
+```
+
+Open `http://127.0.0.1:5062`. Stop this dedicated process with Ctrl-C when it is
+no longer needed; restarting with the same paths preserves its records and
+artifacts. Configure local development runs to use this instance explicitly:
+
+```sh
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5062
 export MLFLOW_EXPERIMENT_NAME=red-update-development
 export JAXBORG_EXP_DIR=/absolute/path/outside-the-checkout/development-runs
 ```
@@ -18,20 +31,21 @@ export JAXBORG_EXP_DIR=/absolute/path/outside-the-checkout/development-runs
 `JAXBORG_EXP_DIR` holds native training outputs; the training command's
 `--evidence-root` selects retained evidence. The explicit tracking URI takes
 precedence over a database beneath `JAXBORG_EXP_DIR`. Keep both output locations
-outside the source checkout. These commands use the existing service without
-starting, stopping, migrating or reconfiguring it.
+outside the source checkout. The isolated instance has its own storage and
+does not require changing another project's service.
 
-When the server runs on another machine, a local SSH forward makes its UI and
-artifact API available to the client:
+If compute runs remotely, forward a private loopback port on that machine back
+to this local instance. Use an available remote port and preserve the tunnel
+for the duration of logging and artifact upload:
 
 ```sh
-ssh -N -L 5001:127.0.0.1:5000 <execution-host>
+ssh -N -R 127.0.0.1:18529:127.0.0.1:5062 <execution-host>
 ```
 
-Open `http://127.0.0.1:5001` and use that URI for client-side downloads. The
-training process on the execution host continues to use port 5000. Verify a
-download through the API below; a browser connection alone does not establish
-that required artifact bytes are available to the client.
+Remote runs use `MLFLOW_TRACKING_URI=http://127.0.0.1:18529`; the local UI and
+downloads use port 5062. No MLflow server is started on the compute host.
+Verify a download through the API below; a browser connection alone does not
+establish that required artifact bytes are available to the client.
 
 Recorded training and evaluation use their existing execution run. At completion,
 they automatically upload a native evidence store under `evidence/`, including
