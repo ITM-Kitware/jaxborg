@@ -26,14 +26,15 @@ evidence belongs outside the checkout.
 Set `JAXBORG_EXP_DIR` outside the checkout and use a fresh tag/store for each pilot.
 Follow the [tracking and retrieval guide](../../docs/evidence-retrieval.md) and
 site launch rules before running commands on a shared machine.
-Use the already running local MLflow service for development, with an explicit
-tracking URI and a separate pilot experiment. These commands do not start or
-reconfigure a service. Run on the service host or use the established tunnel.
+Use a dedicated local MLflow instance with fresh storage for development,
+following the tracking guide. Keep this pilot separate from other projects'
+services. Remote compute can reach this local instance through the documented
+private reverse tunnel; set its tracking URI to the forwarded endpoint.
 
 A small pipeline check, separate from scientific evidence:
 
 ```bash
-export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5062
 export MLFLOW_EXPERIMENT_NAME=red-update-development
 export JAXBORG_EXP_DIR=/absolute/external/smoke/runtime
 uv run python studies/red-update-schedules/analyze.py prepare /absolute/external/smoke/settings \
