@@ -4,13 +4,11 @@ A study's README is the entry point for its question, methods, current status,
 and results. Keep study definitions and analysis code in this directory; keep
 generated evidence outside the source checkout.
 
-## Before composing a study
+## Start here
 
 - [Project setup](../docs/setup.md): environment, storage, and MLflow.
 - [Shared training guide](../docs/training.md): recipes and execution.
 - [Shared evaluation guide](../docs/evaluation.md): evaluators and outputs.
-- This guide explains how those tools compose into a study. Individual study
-  READMEs describe the scientific question, methods, status, and results.
 
 ## Read an existing study
 
@@ -20,9 +18,8 @@ generated evidence outside the source checkout.
 
 ### Studies and examples
 
-These are study examples, not shared tool documentation. They illustrate
-different research questions and ways to compose existing code.
-Reuse the parts that fit a new study.
+These examples illustrate different research questions and ways to compose
+existing code.
 
 | Study | What it illustrates |
 | --- | --- |
@@ -39,12 +36,16 @@ code and settings as needed; the optional filenames below are examples.
 
 ```text
 studies/<short-study-name>/
-  README.md          question, methods, status, commands, input/result references
+  README.md          research summary and links to evidence and commands
+  reproduce.md       optional detailed execution and reproduction instructions
   analyze.py         optional study-specific analysis
   recipe.yaml        optional study-specific settings using the existing schema
 ```
 
 ### What to put in the README
+
+Use these as a rough section order. Keep the README readable as a research
+summary; combine sections when a short study does not need separate headings.
 
 - **Question:** what are you trying to learn, and what decision would the answer inform?
 - **Method:** which settings are being compared, training budget and seeds,
@@ -53,24 +54,17 @@ studies/<short-study-name>/
   support, and what remains uncertain. State when results are not yet available.
 - **Evidence:** links or locators for inputs, selected runs, saved reports, and
   producing source. Include access instructions when evidence is stored elsewhere.
-- **Commands:** how to prepare settings, execute the study, analyze selected
-  results, and reconstruct a saved report, as applicable.
+- **Commands:** a short entry point linking to `reproduce.md` for detailed
+  preparation, execution, analysis, and reconstruction instructions. That
+  companion links to shared setup, training, and evaluation guides as needed.
 
-Scale the detail to the question. An independent assessment or preliminary pilot
-is only needed when it is part of that study's purpose; neither is a standard
-deliverable for every study.
+### Study settings
 
-### Reuse settings and execution code
-
-- Use the existing recipe format and loader. Pass study-local recipes by path
-  and use supported command overrides.
-- Keep reusable recipe presets in `recipes/`. Keep reusable simulator, policy,
-  trainer, and evaluator behavior in shared modules.
-- Use the repository's Python environment and dependencies.
-- Changing a seed or execution budget does not require a new study directory or
-  commit. Changes to maintained code and presets follow ordinary review.
-- Retain the settings after defaults and command overrides have been applied.
-  They describe what actually ran; the recipe is the editable starting point.
+- Keep settings specific to the study beside its README. See
+  [training recipes](../docs/training.md#recipes-and-teams) for the shared format
+  and reusable presets.
+- Distinguish planned settings from the resolved settings retained with each
+  attempt. Defaults and command overrides can change what actually runs.
 
 ### Where results live
 
@@ -106,7 +100,7 @@ across conditions do not by themselves establish a paired experiment.
 ### The execution: what actually happened
 
 - **Attempt:** one execution of a trial, with its own status, settings, source,
-  software/runtime environment identity, inputs, measurements, and outputs.
+  software environment, inputs, measurements, and outputs.
 - **Retry:** a new attempt at the same trial, linked to the earlier attempt.
   A retry does not add an independent training replicate.
 - **Evaluation:** measurements of a particular checkpoint under specified test
@@ -122,9 +116,6 @@ across conditions do not by themselves establish a paired experiment.
 - Explain the results, methods, and interpretation limits. Link routine execution
   details from the report to the retained records.
 - Retain the numbers and settings used for any figures.
-- Use checks, statistics, and presentation appropriate to the research question.
-  The frozen-defender example's historical validator and report format are
-  specific to that study.
 - Keep the exact analyzer source and its paths relative to the repository root
   with a saved selection. Reconstruct a saved report using that source;
   a changed analyzer produces a new analysis.
@@ -141,18 +132,3 @@ Use these instructions for the operations your study needs.
   find runs, download evidence, verify its bytes, and reconstruct selected reports.
 - [Existing-evidence import](../docs/local-evidence-producers.md): read a retained
   frozen-defender bundle or co-training SQLite store into version 1 records.
-
-### Opponent control and learning
-
-- Scripted Red chooses actions inside its environment, including memory updates.
-- Network-controlled Red supplies policy actions through the caller.
-- Freezing a network stops parameter updates; the network still acts.
-- `make_joint_train` supports training one team against a frozen policy or
-  training both teams.
-- Environment factories share variant settings while preserving these execution
-  differences. A study can supply a custom environment builder to the supported
-  training and evaluation paths.
-
-Related design work: [training launch and logging conventions](https://github.com/ITM-Kitware/jaxborg/issues/25),
-[broader integration](https://github.com/ITM-Kitware/jaxborg/issues/28), and
-[opponent interfaces and rollout unification](https://github.com/ITM-Kitware/jaxborg/issues/52).

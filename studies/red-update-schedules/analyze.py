@@ -669,9 +669,7 @@ establish runtime savings. Compare timing only with matching hardware and scope.
 
 Decision: inspect per-seed performance and cost together before choosing a larger study.
 This generated report makes no superiority claim. Missing cells or incomparable cost
-can leave that decision unresolved. No substantive execution or independent reconstruction,
-follow-up exercise, or measured usability improvement is certified by report generation.
-Use the study handoff to record these assessments with their actual evidence.
+can leave that decision unresolved.
 """
     (output / "report.md").write_text(report)
     manifest = {path.name: digest(path.read_bytes()) for path in sorted(output.iterdir())}

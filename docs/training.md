@@ -56,6 +56,18 @@
 - Each model has an adjacent resolved `recipe_<tag>.yaml`. Preserve the bundle
   and sidecar together; recipe evaluation requires the sidecar.
 
+### Opponent control and learning
+
+- Scripted opponents choose actions and update their memory inside the environment.
+- Learned opponents act through a policy network. A frozen network still acts,
+  but its parameters do not update during training.
+- The joint trainer supports training both teams or one team against a frozen
+  policy. The [recorded execution guide](joint-execution-records.md) describes
+  which of these paths support retained research records.
+- Custom environment builders can be used by joint training and evaluation.
+  The [payoff and blocking example](../studies/reward-offset/README.md#construction-contract)
+  documents the builder contract and its supported environment settings.
+
 ## Training budget
 
 - JAX IPPO runs complete rollout batches. Each batch contains the environment
