@@ -9,6 +9,7 @@ case before either policy selects an action.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -485,6 +486,7 @@ def evaluate_jax_scripted_reds(
     progress: bool = False,
     eval_name: str | None = None,
     recipe: Mapping[str, Any] | None = None,
+    on_row: Callable[[dict[str, Any]], None] | None = None,
     policy_loader: Callable[..., LoadedMatchupPolicy] | None = None,
     env_factory: Callable[..., Any] | None = None,
     episode_runner: Callable[..., JaxScriptedRedEpisode] | None = None,
@@ -519,7 +521,10 @@ def evaluate_jax_scripted_reds(
         raise FileNotFoundError(f"model not found: {resolved_model}")
     backend = _backend_from_model(resolved_model)
     load_policy = policy_loader or load_matchup_policy
+    model_sha256 = hashlib.sha256(resolved_model.read_bytes()).hexdigest()
     policy = load_policy(resolved_model, team="blue", backend=backend)
+    if hashlib.sha256(resolved_model.read_bytes()).hexdigest() != model_sha256:
+        raise RuntimeError("model changed while loading evaluation policy")
     if policy.source.get("bundle_trainable") is False:
         raise ValueError(f"model bundle marks Blue as frozen, not trained: {resolved_model}")
     make_env = env_factory or make_jax_env
@@ -577,6 +582,8 @@ def evaluate_jax_scripted_reds(
             "eval_name": eval_name,
             "suite": "scripted_red",
             "model": str(resolved_model),
+            "model_sha256": model_sha256,
+            "status": "succeeded",
             "policy_team": "blue",
             "recipe_name": source_recipe.get("meta", {}).get("name", ""),
             "recipe_path": source_recipe.get("__source_path__", source_recipe.get("meta", {}).get("source_path", "")),
@@ -584,6 +591,7 @@ def evaluate_jax_scripted_reds(
             "policy_backend": backend,
             "eval_env": "jax_fsm",
             "eval_red": red,
+            "episode_horizon": variant.num_steps,
             "base_variant": base_variant.name,
             "variant": variant.name,
             "red_agent": variant.red_agent,
@@ -615,6 +623,8 @@ def evaluate_jax_scripted_reds(
             "topology_role_maps": role_maps,
         }
         rows.append(row)
+        if on_row is not None:
+            on_row(row)
         print(
             f"Blue vs {red}: reward {row['mean_reward']:.2f} +/- {row['std_reward']:.2f}; "
             f"CIA C={cia_summary['c']['mean']:.2f}, I={cia_summary['i']['mean']:.2f}, "
@@ -690,6 +700,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--episodes-per-seed", type=int, default=1)
     parser.add_argument("--deterministic", action="store_true")
     parser.add_argument("--progress", action="store_true")
+    parser.add_argument("--horizon", type=int, help="Override evaluation episode horizon")
     parser.add_argument(
         "--topology-path",
         action="append",
@@ -716,6 +727,10 @@ def main(argv: Sequence[str] | None = None) -> None:
     from jaxborg.topology_banks import validate_eval_topology_override
 
     variant = eval_variant(dict(recipe))
+    if args.horizon is not None:
+        if args.horizon < 1:
+            raise ValueError("horizon must be positive")
+        variant = replace(variant, num_steps=args.horizon)
     if not variant.resilience_roles:
         raise ValueError("eval variant must have resilience_roles=True for CIA evaluation")
     sampling = args.topology_sampling or recipe.get("eval", {}).get("topology_sampling", "exhaustive")
@@ -727,7 +742,13 @@ def main(argv: Sequence[str] | None = None) -> None:
     else:
         topology_paths = tuple(project_eval(dict(recipe), materialize_topologies=True)["TOPOLOGY_BANK"])
 
-    rows = evaluate_jax_scripted_reds(
+    evaluator = evaluate_jax_scripted_reds
+    capture_context = os.environ.get("JAXBORG_SCRIPTED_CAPTURE")
+    if capture_context:
+        from jaxborg.evaluation.scripted_capture import run_scripted
+
+        evaluator = partial(run_scripted, context=json.loads(capture_context))
+    rows = evaluator(
         args.model,
         base_variant=variant,
         topology_paths=topology_paths,
@@ -741,7 +762,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     )
     output = write_results(rows, args.output)
     print(f"Wrote JAX scripted-Red sweep: {output}", flush=True)
-    if not args.no_mlflow:
+    if not args.no_mlflow and not capture_context:
         try:
             attach_results_to_mlflow(rows)
             if rows[0].get("train_run_id"):

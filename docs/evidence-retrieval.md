@@ -6,6 +6,33 @@ inspect settings and metrics, and follow recorded input identities. Configure
 for the destination. Scientific `study_id` is independent of the experiment name.
 These settings do not deploy a shared service.
 
+For development against an existing MLflow server on the execution machine,
+select it explicitly and keep the pilot in its own experiment:
+
+```sh
+export MLFLOW_TRACKING_URI=http://127.0.0.1:5000
+export MLFLOW_EXPERIMENT_NAME=red-update-development
+export JAXBORG_EXP_DIR=/absolute/path/outside-the-checkout/development-runs
+```
+
+`JAXBORG_EXP_DIR` holds native training outputs; the training command's
+`--evidence-root` selects retained evidence. The explicit tracking URI takes
+precedence over a database beneath `JAXBORG_EXP_DIR`. Keep both output locations
+outside the source checkout. These commands use the existing service without
+starting, stopping, migrating or reconfiguring it.
+
+When the server runs on another machine, a local SSH forward makes its UI and
+artifact API available to the client:
+
+```sh
+ssh -N -L 5001:127.0.0.1:5000 <execution-host>
+```
+
+Open `http://127.0.0.1:5001` and use that URI for client-side downloads. The
+training process on the execution host continues to use port 5000. Verify a
+download through the API below; a browser connection alone does not establish
+that required artifact bytes are available to the client.
+
 Recorded training and evaluation use their existing execution run. At completion,
 they automatically upload a native evidence store under `evidence/`, including
 that attempt's exact inputs, source, observations and checkpoints, and the retained

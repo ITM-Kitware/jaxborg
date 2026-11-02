@@ -476,8 +476,6 @@ def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
 
 def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_factory=None, recording=None):
     """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
-    if recording is not None and recipe.get("train", {}).get("topology_generation"):
-        raise ValueError("Recorded training requires explicit topology snapshots, not bank generation")
     trainable_teams = training_teams(recipe)
     configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
     for config in configs.values():
@@ -591,8 +589,15 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
         )
     print("=" * 60, flush=True)
 
-    checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
     tracking = mlflow if capture is None else capture.tracking
+    if capture is None:
+        checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
+    else:
+        checkpoint_evaluator = MlflowCheckpointEvaluator(
+            recipe,
+            log_metrics=tracking.log_metrics if tracking is not None else lambda metrics, *, step: None,
+            upload_artifacts=False,
+        )
     if capture is None:
         train_run_id = start_run(recipe, backend="jax", seed=args.seed).info.run_id
     else:
@@ -673,6 +678,7 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
             rng=rng,
             env_state=env_state,
             obs=obs,
+            adaptive_state=adaptive_state,
         )
         record_facts(
             capture,
@@ -831,7 +837,7 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                         flush=True,
                     )
                     try:
-                        checkpoint_evaluator.on_checkpoint(
+                        checkpoint_means = checkpoint_evaluator.on_checkpoint(
                             checkpoint_path,
                             sidecar_path,
                             env_steps=env_steps,
@@ -843,12 +849,46 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                                 episodes_per_seed=episodes_per_seed,
                             ),
                         )
+                        if capture is not None:
+                            record_facts(
+                                capture,
+                                {
+                                    f"checkpoint_evaluation_{env_steps}": {
+                                        "value": {
+                                            "mean_rewards": checkpoint_means,
+                                            "environment_steps": env_steps,
+                                            "checkpoint": f"checkpoint_{env_steps}",
+                                        },
+                                        "source": "periodic checkpoint evaluator; settings in resolved recipe",
+                                    }
+                                },
+                            )
                     finally:
                         if not is_final and not periodic_checkpoint:
                             checkpoint_path.unlink(missing_ok=True)
                             sidecar_path.unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - start
+    if capture is not None:
+        record_facts(
+            capture,
+            {
+                "training_cost": {
+                    "value": {
+                        "loop_elapsed_seconds": elapsed,
+                        "setup_elapsed_seconds": start - t0,
+                        "completed_environment_steps": num_updates * num_steps * num_envs,
+                        "device_count": len(jax.devices()),
+                        "device_kinds": [device.device_kind for device in jax.devices()],
+                        "scope": (
+                            "setup includes environment/network initialization; loop includes compilation, "
+                            "recording and checkpoint evaluations; excludes topology materialization and final delivery"
+                        ),
+                    },
+                    "source": "trainer perf_counter timers and JAX device discovery",
+                }
+            },
+        )
     final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
     return {
         "elapsed": elapsed,
@@ -880,7 +920,7 @@ def _finish_training_outputs(recipe, configs, save_dir, outputs, *, capture=None
     # and its sidecar exist and the training MLflow run has been closed.
     from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
 
-    run_configured_evaluations_after_training(final_model, recipe)
+    run_configured_evaluations_after_training(final_model, recipe, capture=capture)
 
 
 def main(*, expected_algorithm: str | None = None):

@@ -37,13 +37,7 @@ def begin_training(
     overrides=None,
     entrypoint=None,
 ):
-    """Capture only fresh, fixed-schedule joint training with canonical contracts."""
-    from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
-    from jaxborg.evaluation.cross_play import CrossPlaySettings
-    from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings
-    from jaxborg.evaluation.play_priors import PlayPriorsSettings
-    from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
-
+    """Capture fresh joint training with its resolved scheduling and topology contracts."""
     if not isinstance(expected_revision, str) or len(expected_revision) != 40:
         raise ValueError("Recorded training requires an exact pinned source revision")
     if set(training_teams(recipe)) != {"blue", "red"} or recipe.get("train", {}).get("opponents"):
@@ -51,8 +45,6 @@ def begin_training(
             "Recorded training currently requires fresh Blue and Red initialization; "
             "resume and warm starts are unsupported"
         )
-    if any(config.get("ADAPTIVE_UPDATES") for config in configs.values()):
-        raise ValueError("Recorded training currently requires a fixed update schedule")
     if any(config["TRAIN_VARIANT"].red_reward != "zero_sum" for config in configs.values()):
         raise ValueError("Recorded joint training requires zero_sum reward")
     if any(
@@ -61,24 +53,6 @@ def begin_training(
         for key in ("MISSION_BANK", "PHASE_BOUNDARY_BANK", "PHASE_REWARDS_BANK")
     ):
         raise ValueError("Recorded training supports topology snapshots without auxiliary mission banks")
-    evaluation = recipe.get("eval", {})
-    if (
-        recipe.get("mlflow", {}).get("checkpoint_eval", {}).get("every_steps", 0)
-        or evaluation.get("after_training")
-        or ScriptedRedEvalSettings.from_recipe(recipe).after_training
-        or any(
-            settings.from_recipe(recipe).enabled
-            for settings in (
-                CrossPlaySettings,
-                PlayPriorsSettings,
-                CheckpointScriptedRedsSettings,
-                CrossSeedPlaySettings,
-            )
-        )
-    ):
-        raise ValueError(
-            "Recorded training requires separate recorded evaluations; disable automatic evaluation suites"
-        )
     project = Path(__file__).resolve().parents[3]
     provenance = collect_provenance(
         allow_dirty=allow_dirty,
@@ -101,6 +75,20 @@ def begin_training(
         [input_hashes[f"training topology {index}"] for index in range(len(topology_paths))],
         sampling="without replacement within each parallel reset batch",
     )
+    generation = recipe.get("train", {}).get("topology_generation")
+    if generation:
+        topology["origin"] = "recipe-generated bank materialized by project_jax before training"
+        topology["generation"] = generation
+    measurement_units = {
+        "env_steps": "environment transitions across all parallel environments",
+        "update_idx": "completed joint rollout batches (one-based)",
+        "team.*.update_count": "completed team PPO rounds; optimizer steps divided by minibatches and epochs",
+        "team.*.updated": "whether this rollout performed the team's PPO round",
+        "wall_time_s": (
+            "elapsed training loop time including first-update compilation, recording and checkpoint evaluation"
+        ),
+        "optimization_diagnostics": "skipped team updates may emit zero losses; use team.*.updated",
+    }
     seed_roles = {
         "initialization_root": int(args.seed) + 1,
         "initialization_split": "split root for init_key; split init_key into ordered blue and red parameter keys",
@@ -122,6 +110,7 @@ def begin_training(
             "overrides": overrides or {},
             "team_configs": configs,
             "seed_roles": seed_roles,
+            "measurement_units": measurement_units,
             "topology": topology,
             "planned_updates": requested_updates,
             "planned_environment_steps": requested_updates * rollout_steps,
@@ -154,7 +143,16 @@ def begin_training(
             **provenance.facts,
             **{
                 key: fact(config[key])
-                for key in ("backend", "eval_env", "procedure", "builder", "seed_roles", "topology", "initialization")
+                for key in (
+                    "backend",
+                    "eval_env",
+                    "procedure",
+                    "builder",
+                    "seed_roles",
+                    "topology",
+                    "initialization",
+                    "measurement_units",
+                )
             },
             "game_contract": fact(asdict(configs["blue"]["TRAIN_VARIANT"])),
         },
@@ -202,7 +200,7 @@ def retain_checkpoint(capture, model, sidecar, *, steps, initial=False):
     return {"model": model_id, "sidecar": sidecar_id}
 
 
-def retain_initial_state(capture, *, train_states, reward_norm_states, rng, env_state, obs):
+def retain_initial_state(capture, *, train_states, reward_norm_states, rng, env_state, obs, adaptive_state=None):
     """Save numeric initial-state diagnostics without a pickle or resume format."""
     import tempfile
 
@@ -216,6 +214,7 @@ def retain_initial_state(capture, *, train_states, reward_norm_states, rng, env_
         "rng": rng,
         "environment": env_state,
         "observations": obs,
+        "adaptive_schedule": adaptive_state,
     }
     arrays, manifest = {}, []
     for index, (path, leaf) in enumerate(jax.tree_util.tree_flatten_with_path(state)[0]):
@@ -256,6 +255,7 @@ def retain_initial_state(capture, *, train_states, reward_norm_states, rng, env_
                     "rng": True,
                     "environment": True,
                     "observations": True,
+                    "adaptive_schedule": adaptive_state is not None,
                     "exact_continuation_supported": False,
                 },
                 "owned initial state snapshot and numeric leaf manifest",

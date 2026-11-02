@@ -120,10 +120,19 @@ def _numeric(value: Any) -> bool:
 class MlflowCheckpointEvaluator:
     """Freeze, evaluate, and log portable training checkpoints to MLflow."""
 
-    def __init__(self, recipe: Mapping[str, Any], *, mlflow_module: Any | None = None) -> None:
+    def __init__(
+        self,
+        recipe: Mapping[str, Any],
+        *,
+        mlflow_module: Any | None = None,
+        log_metrics: Callable[..., None] | None = None,
+        upload_artifacts: bool = True,
+    ) -> None:
         self.settings = CheckpointEvalSettings.from_recipe(recipe)
         self.trainable_teams = training_teams(dict(recipe))
         self._mlflow = mlflow if mlflow_module is None else mlflow_module
+        self._log_metrics = self._mlflow.log_metrics if log_metrics is None else log_metrics
+        self._upload_artifacts = upload_artifacts
 
     @property
     def enabled(self) -> bool:
@@ -152,9 +161,10 @@ class MlflowCheckpointEvaluator:
         if isinstance(env_steps, bool) or not isinstance(env_steps, int) or env_steps < 0:
             raise ValueError("env_steps must be a non-negative integer")
 
-        artifact_path = f"checkpoints/step-{env_steps}"
-        self._mlflow.log_artifact(str(checkpoint_path), artifact_path=artifact_path)
-        self._mlflow.log_artifact(str(sidecar_path), artifact_path=artifact_path)
+        if self._upload_artifacts:
+            artifact_path = f"checkpoints/step-{env_steps}"
+            self._mlflow.log_artifact(str(checkpoint_path), artifact_path=artifact_path)
+            self._mlflow.log_artifact(str(sidecar_path), artifact_path=artifact_path)
 
         raw_result = evaluate_fn(self.settings.episodes_per_seed)
         cia_summary = getattr(raw_result, "cia_summary", None)
@@ -182,7 +192,7 @@ class MlflowCheckpointEvaluator:
             from jaxborg.evaluation.cia.reporting import cia_mlflow_metrics
 
             metrics.update(cia_mlflow_metrics("eval.checkpoint.cia", cia_summary))
-        self._mlflow.log_metrics(metrics, step=env_steps)
+        self._log_metrics(metrics, step=env_steps)
         return trained_means
 
 
