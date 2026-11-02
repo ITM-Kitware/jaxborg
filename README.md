@@ -4,8 +4,8 @@ JAX port of [CybORG CAGE Challenge 4 (CC4)](https://github.com/cage-challenge/ca
 
 CybORG CC4 is a multi-agent cybersecurity simulation (9 subnets, ~80 hosts, 5 blue agents, 6 red agents, 3 mission phases). This project re-implements CC4's environment logic as JIT-compilable JAX arrays for massively parallel simulation on GPU. Parity is verified by:
 
-- **Differential testing** — lockstep state comparison after every step
-- **TOST equivalence testing** — statistical comparison of independent rollout rewards across both engines
+- **Differential testing**: lockstep state comparison after every step
+- **TOST equivalence testing**: statistical comparison of independent rollout rewards across both engines
 
 ## Results
 
@@ -35,14 +35,14 @@ We verify that jaxborg reproduces CybORG's behavior using the TOST (two one-side
 
 #### Training Comparison
 
-Matched-hyperparameter training (NUM_ENVS=48, 3 seeds, same shared-trunk actor-critic, identical PPO hparams). Reward is the mean training-time episode reward at 3M steps; each policy is on the env it trained against (the ~145-pt gap between the two columns reflects independent green-RNG host-selection between engines, not a parity bug — see [`docs/parity.md`](docs/parity.md)).
+Matched-hyperparameter training (NUM_ENVS=48, 3 seeds, same shared-trunk actor-critic, identical PPO hparams). Reward is the mean training-time episode reward at 3M steps; each policy is on the env it trained against (the ~145-pt gap between the two columns reflects independent green-RNG host-selection between engines, not a parity bug; see [`docs/parity.md`](docs/parity.md)).
 
 | Run          |          Reward (mean ± σ across 3 seeds) | Steps |
 | ------------ | ----------------------------------------: | ----- |
 | CybORG PPO   | -1,854 ± 46                               | 3M    |
 | jaxborg IPPO | -1,998 ± 118                              | 3M    |
 
-When *both* policies are eval'd on the same env (CybORG) for 100 paired episodes per seed, the cross-policy gap is **+5.4 ± 58 pts** (n=300), TOST-equivalent at Δ=±200 — the two trained policies are statistically interchangeable.
+When *both* policies are eval'd on the same env (CybORG) for 100 paired episodes per seed, the cross-policy gap is **+5.4 ± 58 pts** (n=300), TOST-equivalent at Δ=±200; the two trained policies are statistically interchangeable.
 
 #### Action Distribution
 
@@ -61,275 +61,26 @@ Both engines produce essentially the same learned defensive strategy. Pooled acr
 
 All buckets within ~1.7%. Pooled L1 distribution distance = 0.079 (max 2.0). Action entropy is also matched: jaxborg 1.852 nats / CybORG 1.862 nats (Hill diversity 6.37 / 6.44 effective action types out of 8).
 
-## Setup
+## Start here
 
-```bash
-uv sync --extra cpu          # CPU-only (tests, eval, macOS dev, CI)
-uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
-# Plain `uv sync` (no extra) is also valid but installs jaxlib only via
-# transitive resolution — pick one explicitly to avoid the silent
-# "GPU was allocated but JAX fell back to CPU" trap.
-```
+- [Project setup](docs/setup.md): Python environment, experiment storage, and MLflow.
+- [Training guide](docs/training.md): recipes, launchers, teams, and checkpoint evaluation.
+- [Evaluation guide](docs/evaluation.md): choose an evaluator, run post-training jobs, and inspect results.
+- [Study guide](studies/README.md): compose a scientific comparison and retain its evidence.
+  - [Individual studies and examples](studies/README.md#studies-and-examples) describe their questions, methods, status, and results.
+- Reference topics:
+  - [Environment parity](docs/parity.md).
+  - [Topology generation and held-out banks](docs/topologies.md).
+  - [Recorded joint executions](docs/joint-execution-records.md).
+  - [Checkpoint evaluation capture](docs/evaluation-capture.md).
+  - [Evidence retrieval](docs/evidence-retrieval.md).
 
-## Studies
+## Development
 
-The [study guide](studies/README.md) covers study methods, recipes,
-analysis, and retained evidence. [Evaluation capture](docs/evaluation-capture.md)
-retains Torch checkpoint inputs, source, episodes, failures, and retries around
-the shared recipe evaluator; its guide explains the seed contracts for comparisons.
-
-## Usage
-
-```bash
-# Tests (fast suite ~7 min; slow L3 fuzz excluded by default)
-uv run pytest            # default: -n auto -m 'not slow'
-uv run pytest -m slow    # L3 full-episode differential fuzz + CybORG-trained policy rollouts
-uv run pytest -m ""      # everything
-
-# Red/Blue training, policy, and cotraining evaluation tests live in tests/cotraining/.
-uv run pytest tests/cotraining/test_recurrent_mappo.py
-
-# Train jaxborg IPPO (recipe-driven; see `recipes/`)
-./scripts/train/run.sh jax default 42
-
-# Train CybORG PPO baseline (CPU-only, CleanRL — no slurm)
-./scripts/train/run.sh cleanrl default 42
-
-# Opt-in simultaneous Blue/Red self-play (fresh policy for each team).
-# The recipe automatically runs adjacent-checkpoint prior-opponent cross-play,
-# then evaluates final trained Blue vs FSM + CIA-C/I/A.
-./scripts/train/run.sh jax cotraining 42
-./scripts/train/run.sh cleanrl cotraining 42
-
-# Multi-seed sweep (3 seeds, parallel for cleanrl, sequential under srun for jax)
-./scripts/train/run_seeds.sh cleanrl default 3 0
-./scripts/train/run_seeds.sh jax default 3 0
-
-# Development evaluation without retained research records; see docs/evaluation-capture.md
-uv run python scripts/eval/eval_recipe.py --development-no-capture \
-    --model jaxborg-exp/ippo_cyborg/<tag>/model_<tag>.pt \
-    --episodes-per-seed 1 --seeds 42-141
-
-uv run python scripts/eval/eval_recipe.py --development-no-capture \
-    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-    --episodes-per-seed 1 --seeds 42-141
-
-# Manual unpaired CybORG contract sweep: trained Blue vs scripted Red.
-# This does not replay JAX topology snapshots or fixed CIA role maps.
-JAX_PLATFORMS=cpu uv run python scripts/eval/eval_scripted_reds.py \
-    --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-    --seeds 1000-1099 --episodes-per-seed 1 --workers 8
-
-# Plot all standardized JSONL evaluation results (prints a table too).
-JAXBORG_EXP_DIR=./jaxborg-exp uv run python scripts/eval/plot_results.py
-
-# Compare every run of an MLflow experiment (default: ippo-cc4) as paper-style
-# figures: blue/red = agent, line style or hatch = recipe, seeds aggregated
-# into a mean with a band, mean/std pairs merged, CIA in its own figures.
-# Writes PNG and PDF under jaxborg-exp/plots/ippo-cc4/.
-JAXBORG_EXP_DIR=./jaxborg-exp uv run python plots/plot_mlflow.py ippo-cc4
-
-# Same for the mirror pulled by scripts/sync/pull_runs.sh, selecting exactly
-# the histories needed for one figure (metric globs are supported).
-uv run python plots/plot_mlflow.py ippo-cc4 --remote --name returns \
-    --metric 'team.*.return' \
-    --metric 'eval.after_training.*.scripted_red.*.blue.mean_reward'
-
-# View training and evaluation metrics tracked in MLflow.
-JAXBORG_EXP_DIR=./jaxborg-exp ./scripts/train/view_mlflow.sh
-
-# Learned Blue from one run vs learned Red from another, in JAX CC4
-uv run python scripts/eval/eval_matchup.py \
-    --recipe my_matchup --policy-backend jax \
-    --blue-experiment blue_seed42 --red-experiment red_seed42 \
-    --episodes-per-seed 10 --seeds 42-51
-
-# Dev parity transfer check: independent rollouts on both engines + TOST
-JAX_PLATFORMS=cpu uv run python scripts/dev/transfer.py \
-    --checkpoint jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors \
-    --episodes 100
-```
-
-Training output goes to `$JAXBORG_EXP_DIR` (the launcher defaults to `./jaxborg-exp/`).
-
-## Recipes
-
-A recipe is a single YAML under `recipes/` that drives both backends. The `algorithm:` key picks the trainer (`scripts/train/algorithms/<algorithm>_<backend>.py`); `arch.name` picks the policy from the `src/jaxborg/policies/` registry; `core` / `train` / `jax` / `cleanrl` sections project to backend-specific PPO config.
-
-```yaml
-# recipes/default.yaml — Matched-Training v2 baseline
-algorithm: ippo
-mlflow:
-  checkpoint_eval:
-    every_steps: 0              # 0 disables checkpoint evaluation
-    episodes_per_seed: 10
-    seed: null                  # defaults to the training seed + 100000
-    deterministic: false
-core:    {lr: 3.0e-4, gamma: 0.99, ent_coef: 0.01, ...}
-arch:    {name: shared, hidden_dim: 256, hidden_layers: 2}
-train:   {episode_length: 500, total_timesteps: 3000000}
-jax:     {num_envs: 48, num_minibatches: 16, update_epochs: 4}
-cleanrl: {num_envs: 48, rollout_length: 500, num_rollouts_per_update: 1}
-```
-
-MLflow checkpoint evaluation works in both trainers. At the first completed
-update that crosses each `every_steps` boundary, and again at the final update,
-the trainer freezes the exact portable checkpoint and recipe sidecar as MLflow
-artifacts, evaluates that checkpoint for `episodes_per_seed` episodes generated
-from its configured evaluation seed, and logs
-`eval.checkpoint.blue.mean_reward` and/or
-`eval.checkpoint.red.mean_reward` at the checkpoint's environment step. MLflow
-plots those scalar histories automatically. Only trained teams are evaluated:
-a joint run records both curves, while Blue-only or Red-only training records
-the corresponding single curve. For co-training this periodic curve is the
-learned Blue-vs-learned Red matchup; it is separate from the final
-Blue-vs-scripted-Red sweep.
-
-`plots/plot_mlflow.py` turns one MLflow experiment (`<algorithm>-cc4`, so
-`ippo-cc4` by default) into clean Seaborn paper-style figures that compare
-every recipe trained under it. Color encodes the agent (blue for Blue, red for
-Red, gray for team-less diagnostics) and recipes are told apart by line style
-on curves and hatching on bars. Runs are grouped by their `recipe.name` tag,
-repeated seeds are aggregated into a mean with a 95% confidence band plus faint
-per-seed traces, `<key>.mean`/`<key>.std` pairs (CIA scores, scripted-Red
-rewards) are drawn as one series with the recorded std as the band or error
-bar, single-value metrics become bar panels, and only the newest run per
-recipe/seed is kept. With no options it writes the `training`,
-`checkpoint_eval`, `play_priors`, `cross_play`, `after_training`, `cia`
-(C/I/A over training), and `cia_after_training` figures, skipping any the
-experiment has no metrics for. Pass `--figures` with a YAML file to define
-your own figures (a recipe carrying this optional `plots:` block works too):
-
-```yaml
-plots:
-  title: Co-training diagnostics
-  metrics:
-    - {key: team.*.return, panel: Team returns}
-    - {key: loss_policy, panel: Policy loss, team: blue}
-    - {key: eval.checkpoint_scripted_reds.blue.*reward, panel: Fixed-opponent reward}
-  smoothing: 5
-  confidence: 95
-  formats: [png, pdf]
-```
-
-Command-line `--metric` globs build a single ad-hoc figure instead. Use
-`--list-metrics` to discover keys and `--recipe`, `--backend`, `--seed`, or
-`--run-id` to narrow the runs. See [`docs/plotting.md`](docs/plotting.md) for
-grouping, band semantics, output, and remote tracking examples.
-
-Co-training recipes, including the best-response recipes, live in
-[`recipes/cotraining/`](recipes/cotraining/). Short names such as
-`--recipe cotraining_mappo` continue to work. The loader also accepts
-`--recipe cotraining/cotraining_mappo` or an explicit YAML file path.
-
-`recipes/cotraining/cotraining.yaml` runs `eval.cross_play` over three saved
-Blue and three saved Red checkpoints from the same training seed (9 matchups).
-Fixed scripted-Red checkpoint curves are configured but disabled to save time.
-It then uses `eval.after_training` for two final checks: learned Blue
-versus its co-trained PPO Red in the JAX joint environment, followed by learned
-Blue versus `fsm`, `cia_c`, `cia_i`, and `cia_a` in the JAX FSM environment.
-These evaluations replay the same 10-topology held-out snapshot bank
-and fixed role assignment. The two final jobs use the exact final bundle.
-For full comparisons, use 50 topologies and six checkpoints per team.
-See [cotraining performance](docs/cotraining_performance.md) for the 96-environment
-training default, GPU memory estimates, cache setup, and the joint benchmark. A failed required
-job makes the overall command fail after leaving the model and evaluation
-manifest safely on disk.
-
-MAPPO recipes also enable `eval.cross_seed_play` when the multi-seed launcher
-supplies an opponent: each final Blue faces the next seed's final Red in a
-cycle. With three seeds this is three matchups; it is separate from the
-historical checkpoint matrix and does not cover every ordered seed pair.
-
-For more than one final-checkpoint evaluation, use the ordered
-`eval.after_training` list. Every item launches a fresh Python process after
-the durable model and sidecar have been saved; the exact model is supplied as
-`--model` automatically. For example, this runs a stochastic comparison and
-then an argmax comparison:
-
-```yaml
-eval:
-  after_training:
-    - name: stochastic-reds
-      script: scripts/eval/eval_scripted_reds.py
-      args: [--reds, fsm, cia_c, --seeds, 1000-1099, --workers, 8]
-    - name: deterministic-reds
-      script: scripts/eval/eval_scripted_reds.py
-      args: [--reds, fsm, cia_c, --seeds, 1000-1099, --deterministic, --workers, 8]
-```
-
-Entries execute in list order and are required by default. Set
-`required: false` to record a failure and continue to the next evaluation, or
-`model_arg: --checkpoint` for a script with a different checkpoint flag.
-Arguments may use `{model}`, `{recipe}`, `{backend}`, `{exp_dir}`, `{eval_dir}`, and
-`{name}` placeholders. The legacy `eval.scripted_red.after_training` form is
-still supported, but cannot be combined with the new list.
-
-Re-run the list for an existing checkpoint (using its sidecar configuration):
-
-```bash
-JAX_PLATFORMS=cuda uv run python scripts/eval/run_after_training.py \
-  --model jaxborg-exp/ippo_jax/<tag>/model_<tag>.safetensors
-```
-
-### Post-training environment controls
-
-| Variable | Default | Effect |
-| --- | --- | --- |
-| `JAXBORG_SKIP_POST_TRAINING_EVAL` | unset | Set to exactly `1` on a trainer command to skip `eval.play_priors` and `eval.after_training`. Training metrics, periodic checkpoint saving, the final model/sidecar, and any separately configured in-training checkpoint evaluation are unaffected. |
-| `JAX_PLATFORMS` | `cuda` for a JAX final bundle; `cpu` for a CybORG final bundle | Selects the JAX platform inherited by every configured post-training child. Set `JAX_PLATFORMS=cpu` for a CPU-only run. |
-| `JAXBORG_EVAL_BATCH_SIZE` | `64` | Positive number of episodes per batched JAX learned-policy matchup call, including play-priors. Smaller values reduce peak device memory at the cost of throughput. |
-
-Scope the skip flag to the trainer command instead of exporting it, otherwise a
-later `run_after_training.py` invocation in the same shell will also be skipped:
-
-```bash
-JAXBORG_SKIP_POST_TRAINING_EVAL=1 uv run python scripts/train/algorithms/ippo_jax.py \
-  --recipe cotraining --seed 42 --tag cotraining_seed42
-
-JAX_PLATFORMS=cuda uv run python scripts/eval/run_after_training.py \
-  --model jaxborg-exp/ippo_jax/cotraining_seed42/model_cotraining_seed42.safetensors
-```
-
-Running the two commands separately also ensures the trainer has exited and
-released its GPU allocation before evaluation begins. The skip flag does not
-make evaluation resumable: a later post-training run starts its configured
-evaluation list from the beginning and writes a new manifest.
-
-Built-in evaluators write JSONL under `$JAXBORG_EXP_DIR/eval/`. Ordered runs
-also write a command/status manifest under `eval/manifests/`, and named runs
-attach distinct `eval.after_training.<name>.*` metrics to MLflow. Generate a
-PNG comparison with `scripts/eval/plot_results.py`; plots go to `eval/plots/`.
-For training curves and any evaluation histories attached to MLflow, use the
-experiment-level `plots/plot_mlflow.py` command described in
-[`docs/plotting.md`](docs/plotting.md).
-Start `scripts/train/view_mlflow.sh` and open `http://127.0.0.1:5000` for
-interactive metric curves. See [`docs/evaluation.md`](docs/evaluation.md).
-
-For evaluators that accept a seed list, the rollout-count option is uniformly
-named `--episodes-per-seed`. `eval_recipe.py` and `eval_matchup.py` still accept
-the older `--episodes` spelling as a compatibility alias.
-
-`train.teams` selects `blue`, `red`, or `both` and defaults to `blue`, so
-existing recipes retain Blue-versus-scripted-Red behavior. In `both` mode the
-teams have independent parameter-sharing policies, act from the same pre-step
-state, and update independently. `train.team_overrides.<team>` deep-merges
-team-specific `core` and `arch` values. A one-team run can name a frozen
-learned opponent with `train.opponents`; Red-only training requires a Blue
-opponent, while Blue-only training still defaults to scripted Red.
-
-Model references accept either `path` or `experiment`. A relative path is
-resolved from the recipe directory and takes precedence; an experiment is
-resolved below `$JAXBORG_EXP_DIR/<algorithm>_<backend>/<experiment>/`, using
-the enclosing recipe's `algorithm`. See
-[`recipes/cotraining/cotraining.yaml`](recipes/cotraining/cotraining.yaml) and
-[`docs/training.md`](docs/training.md) for complete examples.
-For reproducible CAGE/JAX topology pools, disjoint train/test seed ranges, and
-held-out evaluation, see [`docs/topologies.md`](docs/topologies.md).
-
-Each training run writes the resolved recipe alongside the model as `recipe_<tag>.yaml`. This sidecar is required for `eval_recipe.py` and the dev transfer parity check — pre-sidecar checkpoints no longer load.
-
-Add a new arch: drop a module under `src/jaxborg/policies/` exporting `JAX_FACTORY` + `TORCH_FACTORY`, register it in `policies/__init__.py`, then reference it as `arch.name: <new>` in any recipe.
+- Run focused tests for the changed behavior, following [repository instructions](AGENTS.md).
+- Add a policy architecture in `src/jaxborg/policies/`, export `JAX_FACTORY` and
+  `TORCH_FACTORY`, register it in `policies/__init__.py`, and select it with
+  `arch.name` in a recipe.
 
 ## Network Architecture
 
@@ -383,7 +134,7 @@ Offline CybORG trajectory scoring remains available separately:
 ```bash
 
 # Training:
-../scripts/traing/run.sh jax resilience 42
+./scripts/train/run.sh jax resilience 42 --development-no-recording
 
 # Evaluation:
 # 1. Record trajectories
