@@ -26,7 +26,7 @@ existing code.
 | [Red update schedules](red-update-schedules/README.md) | Comparing baseline, quarter-rate, and adaptive training recipes with explicit run selection and reconstructable tables. |
 | [Joint payoff and blocking](reward-offset/README.md) | Composing a reward change and a blocking rule in a small four-condition execution example. |
 | [Frozen-defender response](frozen-defender-response/README.md) | Rebuilding a completed study's report from saved measurements. Its reference input bundle must be obtained separately from the study author. |
-| [Nash co-training retrospective](nash-co-training/README.md) | Organizing historical checkpoint and response experiments by research question and replaying their archived analyses. |
+| [Nash co-training retrospective](nash-co-training/README.md) | Replaying unilateral deviations and saved-policy cross-play from archived runs and selections. |
 
 ## Create a study
 
