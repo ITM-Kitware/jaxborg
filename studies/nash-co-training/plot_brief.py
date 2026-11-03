@@ -69,8 +69,8 @@ def fresh_red(row, original_matchup, challenger_matchup):
 
 def saved_red(rows):
     fig, ax = plt.subplots(figsize=(7.9, 3.6), layout="constrained")
-    fig.suptitle("The higher-scoring attacker depends on the defender", fontweight="bold")
-    ax.set_title("Earlier attacker’s reward minus later attacker’s reward", fontsize=11)
+    fig.suptitle("The higher-scoring Red depends on Blue", fontweight="bold")
+    ax.set_title("Co-trained Red 99.84M minus co-trained Red 150M", fontsize=11)
     labels = ("Blue 99.84M", "Blue 124.8M", "Blue 150M")
     for position, row in enumerate(rows):
         mean, low, high = interval(row)
@@ -90,7 +90,7 @@ def saved_red(rows):
         )
     return_axis(ax)
     ax.set_yticks(range(len(labels)), labels)
-    ax.set(xlim=(-54, 54), ylim=(2.48, -0.55), xlabel="← Favors later attacker          Favors earlier attacker →")
+    ax.set(xlim=(-54, 54), ylim=(2.48, -0.55), xlabel="← Favors Red 150M          Favors Red 99.84M →")
     fig.supxlabel("Whiskers show approximate 95% intervals adjusted for multiple comparisons.", fontsize=9.5)
     return fig
 
