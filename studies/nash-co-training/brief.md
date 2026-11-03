@@ -1,11 +1,11 @@
-# How do challenger Red and co-trained Red compare?
+# Challenger Red improved after about 10M training steps
 
-**Can challenger Red outscore co-trained Red against the same Blue?** Against frozen Blue at 150M, challenger Red scored about **530 more points per episode**. In a separate test, which co-trained Red scored higher depended on the Blue checkpoint.
+**Can a challenger Red trained from scratch for about 10M steps outscore co-trained Red against the same frozen Blue?** Against Blue frozen at 150M, the selected challenger Red scored about **530 more points per episode**.
 
 ## Questions
 
-1. Can challenger Red outscore co-trained Red against the same frozen Blue?
-2. Does the same co-trained Red score higher across different Blue checkpoints?
+1. **Fresh response.** Can a short training run produce a challenger Red that beats co-trained Red against the same frozen Blue?
+2. **Saved cross-play.** Does the ranking of co-trained Reds depend on which Blue they face?
 
 ## Method
 
@@ -20,23 +20,17 @@ Both Reds faced Blue frozen at the 150M checkpoint. Co-trained Red from that che
 
 ![Against frozen Blue at 150M, the co-trained Red scored 2,531 points per episode and the challenger Red trained against that Blue scored 3,061.](brief-figures/fresh-red-gain.png)
 
-### Which co-trained Red scored higher depended on Blue
+### Separate test of nine saved Red–Blue matchups
 
-We compared co-trained Red at 99.84M and 150M against each of the three saved Blues. Red 99.84M scored lower against the first two Blue checkpoints and higher against Blue 150M.
-
-![Red 99.84M scored about 29 and 14 points less than Red 150M against the first two Blues, and about 39 points more against Blue 150M.](brief-figures/saved-red-ranking.png)
-
-### Full nine-matchup matrix
-
-Rows show co-trained Blue checkpoints. Columns show co-trained Red checkpoints. The colored cells show average **Blue** reward. Higher values favor Blue. The right panel shows the same Red comparison as the simpler bar chart above.
+Rows show co-trained Blue checkpoints. Columns show co-trained Red checkpoints. The colored cells show average **Blue** reward. The right panel shows that Red 99.84M scored below Red 150M against the first two Blues and above it against Blue 150M.
 
 ![The complete three-by-three CPU payoff matrix and paired Red comparison across three fixed Blue opponents.](brief-figures/cpu-saved-policy-crossplay.png)
 
 ## Discussion
 
-At 150M, Red could improve by switching policies while Blue stayed fixed. The cross-play results show why judging a Red policy across opponents takes more than one Blue checkpoint.
+The fresh response test found a way for Red to improve while Blue stayed fixed. The saved-policy matrix answers a separate question about how rankings change across opponents.
 
-The 150M study also tested earlier saved Blues against frozen Red150. Training a fresh Blue challenger against Red150 remains open for this pair.
+The 150M study tested saved Blues against frozen Red 150M. Training a fresh challenger Blue against that Red remains open.
 
 These results come from one co-training run and one simulated network. How much more a challenger Red could gain, and whether the pattern holds across other runs and networks, remain open questions.
 

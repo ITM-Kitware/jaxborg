@@ -1,4 +1,4 @@
-"""Render the study summary charts from replayed contrasts."""
+"""Render the challenger Red comparison from replayed outcomes."""
 
 import argparse
 import csv
@@ -15,23 +15,13 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from plots.cotraining.style import _style  # noqa: E402
 
-INK = "#202735"
-EARLIER = "#276f86"
-LATER = "#854a91"
+CHALLENGER = "#854a91"
 
 
 def interval(row):
     return tuple(
         float(row[key]) for key in ("own_return_first_minus_second", "simultaneous_95_low", "simultaneous_95_high")
     )
-
-
-def return_axis(ax):
-    ax.spines[["top", "right", "left"]].set_visible(False)
-    ax.tick_params(axis="y", length=0)
-    ax.grid(axis="x", color="#dce2e9", linewidth=0.7)
-    ax.set_axisbelow(True)
-    ax.axvline(0, color=INK, linewidth=1.2)
 
 
 def fresh_red(row, original_matchup, challenger_matchup):
@@ -52,7 +42,7 @@ def fresh_red(row, original_matchup, challenger_matchup):
         ),
         (original, adapted),
         width=0.58,
-        color=("#687587", LATER),
+        color=("#687587", CHALLENGER),
     )
     ax.bar_label(bars, labels=[f"{score:,.0f}" for score in (original, adapted)], padding=5, fontweight="bold")
     ax.spines[["top", "right"]].set_visible(False)
@@ -64,34 +54,6 @@ def fresh_red(row, original_matchup, challenger_matchup):
         f"Gain: {gain:+.2f} points per episode. Approximate adjusted 95% interval: {low:.2f} to {high:.2f}.",
         fontsize=9.5,
     )
-    return fig
-
-
-def saved_red(rows):
-    fig, ax = plt.subplots(figsize=(7.9, 3.6), layout="constrained")
-    fig.suptitle("The higher-scoring Red depends on Blue", fontweight="bold")
-    ax.set_title("Co-trained Red 99.84M minus co-trained Red 150M", fontsize=11)
-    labels = ("Blue 99.84M", "Blue 124.8M", "Blue 150M")
-    for position, row in enumerate(rows):
-        mean, low, high = interval(row)
-        ax.barh(position, mean, height=0.55, color=EARLIER if mean > 0 else LATER)
-        ax.errorbar(
-            mean, position - 0.29, xerr=[[mean - low], [high - mean]], fmt="none", color=INK, capsize=3, linewidth=1.2
-        )
-        ax.text(
-            mean / 2,
-            position,
-            f"{mean:+.0f}".replace("-", "−"),
-            ha="center",
-            va="center",
-            color="white",
-            fontweight="bold",
-            fontsize=11,
-        )
-    return_axis(ax)
-    ax.set_yticks(range(len(labels)), labels)
-    ax.set(xlim=(-54, 54), ylim=(2.48, -0.55), xlabel="← Favors Red 150M          Favors Red 99.84M →")
-    fig.supxlabel("Whiskers show approximate 95% intervals adjusted for multiple comparisons.", fontsize=9.5)
     return fig
 
 
@@ -117,23 +79,11 @@ def main():
         }
     original = confirmation[response["second_eval_reference"]]
     adapted = confirmation[response["first_eval_reference"]]
-    saved = {
-        row["opponent_steps_or_panel"]: row
-        for row in rows
-        if row["family"] == "cpu_crossplay_24"
-        and row["team"] == "red"
-        and row["scope"] == "fixed_opponent"
-        and row["first_policy_steps"] == "99840000"
-        and row["second_policy_steps"] == "150000000"
-    }
     _style()
     args.output.mkdir(parents=True)
-    for name, figure in (
-        ("fresh-red-gain", fresh_red(response, original, adapted)),
-        ("saved-red-ranking", saved_red([saved[steps] for steps in ("99840000", "124800000", "150000000")])),
-    ):
-        figure.savefig(args.output / f"{name}.png", dpi=145)
-        plt.close(figure)
+    figure = fresh_red(response, original, adapted)
+    figure.savefig(args.output / "fresh-red-gain.png", dpi=145)
+    plt.close(figure)
 
 
 if __name__ == "__main__":
