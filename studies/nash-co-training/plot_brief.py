@@ -4,6 +4,7 @@ import argparse
 import csv
 import os
 import sys
+from math import isclose
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -33,18 +34,25 @@ def return_axis(ax):
     ax.axvline(0, color=INK, linewidth=1.2)
 
 
-def fresh_red(row):
-    mean, low, high = interval(row)
-    fig, ax = plt.subplots(figsize=(7.9, 2.65), layout="constrained")
-    fig.suptitle(f"A new attacker scored {mean:.0f} points more", fontweight="bold")
-    ax.set_title("New attacker compared with the original attacker against the same defender", fontsize=11)
-    ax.barh(0, mean, height=0.52, color=LATER)
-    ax.errorbar(mean, 0.38, xerr=[[mean - low], [high - mean]], fmt="none", color=INK, capsize=4, linewidth=1.4)
-    ax.text(mean - 16, 0, f"{mean:+.0f} points", ha="right", va="center", color="white", fontweight="bold")
-    return_axis(ax)
-    ax.set(xlim=(0, 575), ylim=(-0.43, 0.62), yticks=[], xlabel="Gain in attacker reward (points)")
+def fresh_red(row, original, adapted):
+    gain, low, high = interval(row)
+    if not isclose(adapted - original, gain):
+        raise ValueError("Confirmation means disagree with the paired gain")
+
+    fig, ax = plt.subplots(figsize=(7.9, 3.5), layout="constrained")
+    fig.suptitle(f"A new attacker scored {gain:.0f} points more", fontweight="bold")
+    ax.set_title("Same defender and 4,096 matched test episodes", fontsize=11)
+    bars = ax.bar(
+        ("Original attacker", "Newly trained attacker"), (original, adapted), width=0.58, color=("#687587", LATER)
+    )
+    ax.bar_label(bars, labels=[f"{score:,.0f}" for score in (original, adapted)], padding=5, fontweight="bold")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.tick_params(axis="x", length=0)
+    ax.grid(axis="y", color="#dce2e9", linewidth=0.7)
+    ax.set_axisbelow(True)
+    ax.set(ylim=(0, max(original, adapted) * 1.17), ylabel="Average reward per episode")
     fig.supxlabel(
-        f"Approximate adjusted 95% interval {low:.2f} to {high:.2f} points.",
+        f"Gain: {gain:+.2f} points per episode. Approximate adjusted 95% interval: {low:.2f} to {high:.2f}.",
         fontsize=9.5,
     )
     return fig
@@ -90,6 +98,16 @@ def main():
         for row in rows
         if row["family"] == "fresh_response_4" and row["contrast"] == "selected_red_gain_at_blue150000000"
     )
+    with (args.analysis / "matchups.csv").open(encoding="utf-8", newline="") as stream:
+        confirmation_means = {
+            row["source_run_id"]: float(row["red_mean_return"])
+            for row in csv.DictReader(stream)
+            if row["study"] == "matched-red-response"
+            and row["cohort"] == "confirmation"
+            and row["status"] == "complete"
+        }
+    original = confirmation_means[response["second_eval_reference"]]
+    adapted = confirmation_means[response["first_eval_reference"]]
     saved = {
         row["opponent_steps_or_panel"]: row
         for row in rows
@@ -102,7 +120,7 @@ def main():
     _style()
     args.output.mkdir(parents=True)
     for name, figure in (
-        ("fresh-red-gain", fresh_red(response)),
+        ("fresh-red-gain", fresh_red(response, original, adapted)),
         ("saved-red-ranking", saved_red([saved[steps] for steps in ("99840000", "124800000", "150000000")])),
     ):
         figure.savefig(args.output / f"{name}.png", dpi=145)

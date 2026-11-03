@@ -16,9 +16,9 @@
 
 ### A new attacker scored 530 points more against the same defender
 
-Blue stayed fixed. We changed only Red, and the new Red scored higher on the test episodes.
+Against the same Blue defender, the original attacker averaged **2,531** points per episode and the newly trained attacker averaged **3,061**.
 
-![The new attacker gained 530 points over the original Red against the final Blue defender.](brief-figures/fresh-red-gain.png)
+![Two bars compare average rewards against the same defender. The original attacker scored 2,531 and the newly trained attacker scored 3,061.](brief-figures/fresh-red-gain.png)
 
 ### The better saved attacker changed with the defender
 

@@ -82,8 +82,8 @@ draws the retained simultaneous intervals.
 The figures directory must be new. The script writes PNG and SVG versions of
 the fresh Red response contrasts and CPU cross-play comparison.
 
-The [research brief](brief.md) uses two simplified charts from the same
-contrast table. Regenerate the charts in a new directory.
+The [research brief](brief.md) uses the replay’s matchup means and paired
+contrasts. Regenerate the charts in a new directory.
 
 ```bash
 "$PYTHON" studies/nash-co-training/plot_brief.py \
