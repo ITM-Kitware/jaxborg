@@ -80,7 +80,8 @@ draws the retained simultaneous intervals.
 ```
 
 The figures directory must be new. The script writes PNG and SVG versions of
-the fresh Red response contrasts and CPU cross-play comparison.
+the fresh Red response contrasts and CPU cross-play comparison. The CPU PNG
+is also the full matrix shown in the research brief.
 
 The [research brief](brief.md) uses the replay’s matchup means and paired
 contrasts. Regenerate the charts in a new directory.

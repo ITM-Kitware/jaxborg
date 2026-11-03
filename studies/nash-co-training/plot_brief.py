@@ -34,7 +34,10 @@ def return_axis(ax):
     ax.axvline(0, color=INK, linewidth=1.2)
 
 
-def fresh_red(row, original, adapted):
+def fresh_red(row, original_matchup, challenger_matchup):
+    original = float(original_matchup["red_mean_return"])
+    adapted = float(challenger_matchup["red_mean_return"])
+    challenger_steps = int(challenger_matchup["red_steps"])
     gain, low, high = interval(row)
     if not isclose(adapted - original, gain):
         raise ValueError("Confirmation means disagree with the paired gain")
@@ -43,7 +46,10 @@ def fresh_red(row, original, adapted):
     fig.suptitle(f"Challenger Red scored {gain:.0f} points more", fontweight="bold")
     ax.set_title("Both Reds face frozen Blue from the 150M checkpoint\n4,096 matched test episodes", fontsize=11)
     bars = ax.bar(
-        ("Co-trained Red\n150M checkpoint", "Challenger Red\nTrained from scratch against frozen Blue"),
+        (
+            "Co-trained Red\n150M checkpoint",
+            f"Challenger Red\n{challenger_steps / 1e6:g}M steps from scratch\nagainst frozen Blue",
+        ),
         (original, adapted),
         width=0.58,
         color=("#687587", LATER),
@@ -102,15 +108,15 @@ def main():
         if row["family"] == "fresh_response_4" and row["contrast"] == "selected_red_gain_at_blue150000000"
     )
     with (args.analysis / "matchups.csv").open(encoding="utf-8", newline="") as stream:
-        confirmation_means = {
-            row["source_run_id"]: float(row["red_mean_return"])
+        confirmation = {
+            row["source_run_id"]: row
             for row in csv.DictReader(stream)
             if row["study"] == "matched-red-response"
             and row["cohort"] == "confirmation"
             and row["status"] == "complete"
         }
-    original = confirmation_means[response["second_eval_reference"]]
-    adapted = confirmation_means[response["first_eval_reference"]]
+    original = confirmation[response["second_eval_reference"]]
+    adapted = confirmation[response["first_eval_reference"]]
     saved = {
         row["opponent_steps_or_panel"]: row
         for row in rows

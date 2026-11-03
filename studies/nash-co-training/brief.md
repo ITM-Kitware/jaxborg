@@ -9,7 +9,7 @@
 
 ## Method
 
-- **Train a new attacker.** Freeze Blue at the 150M checkpoint and train challenger Reds from scratch against it. Select an attacker from saved and newly trained candidates on separate episodes, then compare it with the original Red on 4,096 matched test episodes.
+- **Train a new attacker.** Freeze Blue at the 150M checkpoint and train challenger Reds from scratch against it. Each challenger completed **9,984,000 simulation steps** of a planned 10 million. Select an attacker from saved and newly trained candidates on separate episodes, then compare it with the original Red on 4,096 matched test episodes.
 - **Swap saved opponents.** Take both Red and Blue from the same three checkpoints in one co-training run, at 99.84M, 124.8M, and 150M simulation steps. Play all nine Red–Blue pairings and run each pairing through the same 4,096 simulation setups.
 
 ## Results
@@ -30,7 +30,18 @@ We compared the same two saved attackers against each defender. The earlier atta
 
 The final co-trained pair still gave Red room to improve by switching strategies. The saved matchups show why a score against one opponent tells us about that matchup. Robustness across opponents takes a wider test.
 
-These results come from one co-training run and one simulated network. Each new attacker trained for about 10M simulation steps. How much more an attacker could gain, and whether the pattern holds across other runs and networks, remain open questions.
+The 150M study also tested earlier saved Blues against frozen Red150. Training a fresh Blue challenger against Red150 remains open for this pair.
+
+These results come from one co-training run and one simulated network. How much more an attacker could gain, and whether the pattern holds across other runs and networks, remain open questions.
+
+<details>
+<summary>Full nine-matchup matrix</summary>
+
+Each row holds one Blue checkpoint fixed. Each column uses one saved Red checkpoint. The colored cells show average **Blue** reward. Higher values favor Blue. The right panel shows the same Red comparison as the simpler bar chart above.
+
+![The complete three-by-three CPU payoff matrix and paired Red comparison across three fixed Blue opponents.](brief-figures/cpu-saved-policy-crossplay.png)
+
+</details>
 
 <details>
 <summary>Exact values and study evidence</summary>
