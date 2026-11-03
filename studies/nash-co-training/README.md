@@ -30,6 +30,7 @@ The completed fresh Red search found a profitable unilateral deviation
 against the 150M pair. The selected attacker gained 530.16 points over
 Red150 against the same Blue, with a corrected interval of [517.54, 542.79].
 That rules out exact equilibrium for this pair in the evaluated setting.
+The ranking of the two Blues also reversed across the two selected attackers.
 
 In the completed CPU matrix, each Red checkpoint pair reversed ranking
 across opponents. The supported better-response graph contained no cycle.

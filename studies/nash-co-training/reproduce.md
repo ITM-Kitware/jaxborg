@@ -67,6 +67,21 @@ Read the original study reports for the earlier screening and behavior
 analyses. Their raw data and scripts remain in the archive. Keep their
 comparison memberships and statistical families separate from these four.
 
+## Render the study figures
+
+Use the project Python environment with the plotting dependencies installed.
+The [figure script](plot.py) reads the replay tables and frozen selection.
+It reuses the [cross-play heatmap](../../plots/plot_cross_play_fsm.py) and
+draws the retained simultaneous intervals.
+
+```bash
+"$PYTHON" studies/nash-co-training/plot.py \
+  --analysis "$DEMO/analysis" --output "$DEMO/figures"
+```
+
+The figures directory must be new. The script writes PNG and SVG versions of
+the fresh Red response contrasts and CPU cross-play comparison.
+
 ## Browse in a separate local MLflow store
 
 Import the original run histories, archived artifact bytes, question groups,
