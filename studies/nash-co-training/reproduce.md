@@ -82,6 +82,14 @@ draws the retained simultaneous intervals.
 The figures directory must be new. The script writes PNG and SVG versions of
 the fresh Red response contrasts and CPU cross-play comparison.
 
+The [research brief](brief.md) uses two simplified charts from the same
+contrast table. Regenerate the charts in a new directory.
+
+```bash
+"$PYTHON" studies/nash-co-training/plot_brief.py \
+  --analysis "$DEMO/analysis" --output "$DEMO/brief-figures"
+```
+
 ## Browse in a separate local MLflow store
 
 Import the original run histories, archived artifact bytes, question groups,

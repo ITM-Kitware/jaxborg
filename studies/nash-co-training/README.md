@@ -1,5 +1,7 @@
 # Nash co-training retrospective
 
+See the [research brief](brief.md) for the questions and findings with charts.
+
 ## Question
 
 Can a unilateral policy replacement improve either team's return against
