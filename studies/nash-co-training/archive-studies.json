@@ -1,0 +1,107 @@
+[
+  {
+    "id": "original-blue-stability-20261028",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/original-blue-stability-20261028",
+    "status": "complete",
+    "summary": "Original seed-42 Blue checkpoint stability against frozen final Red."
+  },
+  {
+    "id": "training-budget-20261028",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/training-budget-20261028",
+    "status": "complete",
+    "summary": "Historical 50M, 75M, and 100M training budget comparisons on fixed opponents."
+  },
+  {
+    "id": "late-checkpoint-dynamics-20261029",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/late-checkpoint-dynamics-20261029",
+    "status": "complete",
+    "summary": "72-cell checkpoint screen and separate descriptive recurrence diagnostics.",
+    "jobs": [4039]
+  },
+  {
+    "id": "checkpoint-confirmation-20261029",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/checkpoint-confirmation-20261029",
+    "status": "complete",
+    "summary": "24-cell confirmation of the selected earlier Blue checkpoints on fresh paired roots.",
+    "jobs": [4040]
+  },
+  {
+    "id": "shared-opponent-comparison-20261029",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/shared-opponent-comparison-20261029",
+    "status": "complete",
+    "summary": "Selected MAPPO and IPPO defenders evaluated against the same twelve Reds.",
+    "jobs": [4045]
+  },
+  {
+    "id": "training-replication-20261029",
+    "group": "checkpoint-progress",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/training-replication-20261029",
+    "status": "complete",
+    "summary": "Fresh seed-43 MAPPO trajectory to 150M, with 37 evaluation cells and 28 corrected contrasts.",
+    "jobs": [4041]
+  },
+  {
+    "id": "final-pair-behavior-20261029",
+    "group": "saved-policy-deviations",
+    "report": "reports/training-results/report.html",
+    "evidence": "reports/training-results/evidence/studies/final-pair-behavior-20261029",
+    "status": "complete",
+    "summary": "Saved-policy deviations and behavior diagnostics for the two seed-42 final pairs."
+  },
+  {
+    "id": "checkpoint-audit-150m-20261101",
+    "group": "saved-policy-deviations",
+    "report": "reports/overnight-experiments/150m-checkpoint-audit/report.html",
+    "evidence": "reports/overnight-experiments/150m-checkpoint-audit/evidence",
+    "status": "complete-archive-recovered",
+    "summary": "Five GPU cells and four corrected contrasts completed before the archive failure.",
+    "jobs": [4057]
+  },
+  {
+    "id": "response-125m-150m-20261101",
+    "group": "matched-red-response",
+    "report": "reports/overnight-experiments/matched-red-response/report.html",
+    "evidence": "reports/overnight-experiments/matched-red-response/evidence",
+    "status": "complete",
+    "summary": "Six fresh Red trainings, 18 validation cells, a frozen selection, and six confirmation cells.",
+    "jobs": [4058]
+  },
+  {
+    "id": "crossplay-100m-125m-150m-20261101",
+    "group": "saved-policy-crossplay",
+    "report": "reports/overnight-experiments/crossplay-100m-125m-150m/report.html",
+    "evidence": "reports/overnight-experiments/crossplay-100m-125m-150m/evidence",
+    "status": "deadline-with-reused-evidence",
+    "summary": "GPU follow-up expired before execution. Five inherited audit cells remain available and four expected cells are missing.",
+    "jobs": [4059]
+  },
+  {
+    "id": "crossplay-100m-125m-150m-cpu-20261102",
+    "group": "saved-policy-crossplay",
+    "report": "reports/overnight-experiments/cpu-crossplay-100m-125m-150m-20261102/report.html",
+    "evidence": "reports/overnight-experiments/cpu-crossplay-100m-125m-150m-20261102/evidence",
+    "status": "complete",
+    "summary": "Separate CPU matrix with all nine newly evaluated cells and 24 corrected contrasts.",
+    "jobs": [4069, 4070, 4071, 4072, 4073]
+  },
+  {
+    "id": "red-search-budget-20261101",
+    "group": "red-search-budget",
+    "report": "reports/overnight-experiments/red-search-budget/report.html",
+    "evidence": "reports/overnight-experiments/red-search-budget/launch-records",
+    "status": "cancelled-before-start",
+    "summary": "Registered continuous 10M-to-20M attacker budget comparison with zero observed outcomes.",
+    "jobs": [4060]
+  }
+]
