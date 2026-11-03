@@ -39,18 +39,21 @@ def fresh_red(row, original, adapted):
     if not isclose(adapted - original, gain):
         raise ValueError("Confirmation means disagree with the paired gain")
 
-    fig, ax = plt.subplots(figsize=(7.9, 3.5), layout="constrained")
-    fig.suptitle(f"A new attacker scored {gain:.0f} points more", fontweight="bold")
-    ax.set_title("Same defender and 4,096 matched test episodes", fontsize=11)
+    fig, ax = plt.subplots(figsize=(7.9, 4.0), layout="constrained")
+    fig.suptitle(f"Challenger Red scored {gain:.0f} points more", fontweight="bold")
+    ax.set_title("Both Reds face frozen Blue from the 150M checkpoint\n4,096 matched test episodes", fontsize=11)
     bars = ax.bar(
-        ("Original attacker", "Newly trained attacker"), (original, adapted), width=0.58, color=("#687587", LATER)
+        ("Co-trained Red\n150M checkpoint", "Challenger Red\nTrained from scratch against frozen Blue"),
+        (original, adapted),
+        width=0.58,
+        color=("#687587", LATER),
     )
     ax.bar_label(bars, labels=[f"{score:,.0f}" for score in (original, adapted)], padding=5, fontweight="bold")
     ax.spines[["top", "right"]].set_visible(False)
     ax.tick_params(axis="x", length=0)
     ax.grid(axis="y", color="#dce2e9", linewidth=0.7)
     ax.set_axisbelow(True)
-    ax.set(ylim=(0, max(original, adapted) * 1.17), ylabel="Average reward per episode")
+    ax.set(ylim=(0, max(original, adapted) * 1.17), ylabel="Average Red reward per episode")
     fig.supxlabel(
         f"Gain: {gain:+.2f} points per episode. Approximate adjusted 95% interval: {low:.2f} to {high:.2f}.",
         fontsize=9.5,

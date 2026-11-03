@@ -9,16 +9,16 @@
 
 ## Method
 
-- **Train a new attacker.** Freeze the final Blue defender and train Red against it. Select an attacker from saved and newly trained candidates on separate episodes, then compare it with the original Red on 4,096 matched test episodes.
+- **Train a new attacker.** Freeze Blue at the 150M checkpoint and train challenger Reds from scratch against it. Select an attacker from saved and newly trained candidates on separate episodes, then compare it with the original Red on 4,096 matched test episodes.
 - **Swap saved opponents.** Take both Red and Blue from the same three checkpoints in one co-training run, at 99.84M, 124.8M, and 150M simulation steps. Play all nine Red–Blue pairings and run each pairing through the same 4,096 simulation setups.
 
 ## Results
 
 ### A new attacker scored 530 points more against the same defender
 
-Against the same Blue defender, the original attacker averaged **2,531** points per episode and the newly trained attacker averaged **3,061**.
+Both attackers faced Blue frozen at the 150M checkpoint. Its original co-trained Red averaged **2,531** points per episode. The challenger Red, trained from scratch against that frozen Blue, averaged **3,061**.
 
-![Two bars compare average rewards against the same defender. The original attacker scored 2,531 and the newly trained attacker scored 3,061.](brief-figures/fresh-red-gain.png)
+![Against frozen Blue at 150M, the co-trained Red scored 2,531 points per episode and the challenger Red trained against that Blue scored 3,061.](brief-figures/fresh-red-gain.png)
 
 ### The better saved attacker changed with the defender
 
