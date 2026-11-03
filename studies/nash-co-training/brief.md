@@ -10,9 +10,7 @@
 ## Method
 
 - **Train a new attacker.** Freeze the final Blue defender and train Red against it. Select an attacker from saved and newly trained candidates on separate episodes, then compare it with the original Red on 4,096 matched test episodes.
-- **Swap saved opponents.** Play three saved Reds against three saved Blues from the same co-training run. Use the same 4,096 test cases for each matchup in this separate experiment.
-
-Blue defends and Red attacks. The charts show differences in Red’s average reward per episode. Higher reward favors the attacker.
+- **Swap saved opponents.** Take both Red and Blue from the same three checkpoints in one co-training run, at 99.84M, 124.8M, and 150M simulation steps. Play all nine Red–Blue pairings and run each pairing through the same 4,096 simulation setups.
 
 ## Results
 
