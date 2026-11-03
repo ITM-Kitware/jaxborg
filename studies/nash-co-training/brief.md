@@ -26,6 +26,12 @@ We compared the same two saved attackers against each defender. The earlier atta
 
 ![The earlier attacker lost by about 29 and 14 points against the first two defenders and won by about 39 points against the final defender.](brief-figures/saved-red-ranking.png)
 
+### Full nine-matchup matrix
+
+Each row holds one Blue checkpoint fixed. Each column uses one saved Red checkpoint. The colored cells show average **Blue** reward. Higher values favor Blue. The right panel shows the same Red comparison as the simpler bar chart above.
+
+![The complete three-by-three CPU payoff matrix and paired Red comparison across three fixed Blue opponents.](brief-figures/cpu-saved-policy-crossplay.png)
+
 ## Discussion
 
 The final co-trained pair still gave Red room to improve by switching strategies. The saved matchups show why a score against one opponent tells us about that matchup. Robustness across opponents takes a wider test.
@@ -33,15 +39,6 @@ The final co-trained pair still gave Red room to improve by switching strategies
 The 150M study also tested earlier saved Blues against frozen Red150. Training a fresh Blue challenger against Red150 remains open for this pair.
 
 These results come from one co-training run and one simulated network. How much more an attacker could gain, and whether the pattern holds across other runs and networks, remain open questions.
-
-<details>
-<summary>Full nine-matchup matrix</summary>
-
-Each row holds one Blue checkpoint fixed. Each column uses one saved Red checkpoint. The colored cells show average **Blue** reward. Higher values favor Blue. The right panel shows the same Red comparison as the simpler bar chart above.
-
-![The complete three-by-three CPU payoff matrix and paired Red comparison across three fixed Blue opponents.](brief-figures/cpu-saved-policy-crossplay.png)
-
-</details>
 
 <details>
 <summary>Exact values and study evidence</summary>
