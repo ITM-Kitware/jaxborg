@@ -276,6 +276,7 @@ def game_variant(kind, bank_id):
         "red_reward": "zero_sum",
         "blue_block_policy": "cc4",
         "cage4_enhanced_obs": True,
+        "blue_observation_version": 2,
     }
 
 

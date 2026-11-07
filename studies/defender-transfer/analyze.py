@@ -235,6 +235,144 @@ def summaries(episodes):
     return output
 
 
+def policy_means(summary):
+    groups = defaultdict(list)
+    for row in summary:
+        groups[tuple(row[key] for key in IDENTITY)].append(row)
+    return [
+        {
+            **dict(zip(IDENTITY, keys)),
+            "n_topologies": len(values),
+            "n_episodes": sum(row["n_episodes"] for row in values),
+            **{
+                metric: statistics.mean(row[metric] for row in values)
+                if all(row[metric] is not None for row in values)
+                else None
+                for metric in METRICS
+            },
+        }
+        for keys, values in sorted(groups.items())
+    ]
+
+
+def html_table(columns, rows):
+    def display(value):
+        if value is None:
+            return "Not measured"
+        if isinstance(value, float):
+            return f"{value:,.2f}"
+        return str(value)
+
+    headings = "".join(f"<th scope='col'>{html.escape(label)}</th>" for _, label in columns)
+    body = "".join(
+        "<tr>" + "".join(f"<td>{html.escape(display(row.get(key)))}</td>" for key, _ in columns) + "</tr>"
+        for row in rows
+    )
+    return f"<div class='scroll'><table><thead><tr>{headings}</tr></thead><tbody>{body}</tbody></table></div>"
+
+
+def render_report(manifest, coverage, means, paired, limitations):
+    gaps = [row for row in coverage if row["status"] != "succeeded"]
+    episodes = sum(row["selected_episode_count"] for row in coverage)
+    parts = [
+        "<!doctype html><html lang='en'><meta charset='utf-8'>",
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>",
+        "<title>Defender screening results</title><style>",
+        "body{font:16px/1.5 system-ui,sans-serif;margin:2rem auto;padding:0 1.2rem;max-width:1400px;color:#17212b}",
+        "h1,h2,h3{line-height:1.2}h2{margin-top:2.5rem}.scroll{overflow-x:auto;margin:1rem 0}",
+        "table{border-collapse:collapse;width:100%;font-size:.9rem}th,td{padding:.55rem;text-align:left;",
+        "border-bottom:1px solid #dce2e8}th{background:#edf2f7}td{font-variant-numeric:tabular-nums}",
+        "a{color:#1260a0}.note{color:#475569}code{overflow-wrap:anywhere}</style><body>",
+        "<h1>Defender screening results</h1>",
+        f"<p><strong>{len(coverage) - len(gaps)} of {len(coverage)} planned cells selected and complete.</strong> "
+        f"{episodes:,} selected episodes; {len(gaps)} gaps. "
+        "Each row retains its trained policy and fixed opponent.</p>",
+        "<p>Reward and CIA means give each topology equal weight. Higher values are better under the declared "
+        "metric. Different banks and scripted versus learned opponents remain separate. These tables describe "
+        "the selected policies; they do not establish a population ranking or causal transfer effect.</p>",
+        "<p><a href='policy-means.csv'>Policy means</a> · <a href='summary.csv'>Per-topology means</a> · "
+        "<a href='episodes.csv'>Episode observations</a> · <a href='paired-contrasts.csv'>All paired contrasts</a> · "
+        "<a href='coverage.csv'>Coverage</a> · <a href='selection.json'>Explicit selection</a></p>",
+    ]
+    mean_columns = [
+        ("blue_id", "Blue policy"),
+        ("condition", "Training condition"),
+        ("training_seed", "Training seed"),
+        ("stage", "Checkpoint"),
+        ("opponent", "Fixed opponent"),
+        ("n_topologies", "Topologies"),
+        ("n_episodes", "Episodes"),
+        ("reward", "Mean reward"),
+        ("c", "Mean C"),
+        ("i", "Mean I"),
+        ("a", "Mean A"),
+    ]
+    contrast_columns = [
+        ("label", "Contrast"),
+        ("candidate_blue_id", "Candidate Blue"),
+        ("reference_blue_id", "Reference Blue"),
+        ("training_seed", "Training seed label"),
+        ("opponent", "Fixed opponent"),
+        ("n_paired_episodes", "Paired episodes"),
+        ("reward_mean_difference", "Reward difference"),
+        ("c_mean_difference", "C difference"),
+        ("i_mean_difference", "I difference"),
+        ("a_mean_difference", "A difference"),
+    ]
+    groups = sorted({(row["kind"], row["bank_id"]) for row in coverage})
+    for kind, bank_id in groups:
+        bank = manifest["topology_banks"][bank_id]
+        rows = sorted(
+            (row for row in means if (row["kind"], row["bank_id"]) == (kind, bank_id)),
+            key=lambda row: (row["stage"] != "final", row["condition"], row["training_seed"], row["opponent"]),
+        )
+        parts.append(f"<h2>{html.escape(bank_id)}: {html.escape(kind)} opponents</h2>")
+        parts.append(f"<p class='note'>{html.escape(str(bank.get('interpretation', bank_id)))}</p>")
+        parts.append("<h3>Policy means across the common topology bank</h3>")
+        parts.append(
+            html_table(mean_columns, rows) if rows else "<p>No completed evaluations selected for this bank.</p>"
+        )
+        deltas = [
+            {
+                **row,
+                "label": "Final minus early" if row["contrast"] == "final_minus_early" else "Diverse minus single",
+            }
+            for row in paired
+            if (row["kind"], row["bank_id"]) == (kind, bank_id)
+            and row["topology_sha256"] == "ALL_EQUAL_TOPOLOGY_WEIGHT"
+        ]
+        parts.append("<h3>Descriptive paired differences</h3>")
+        parts.append(
+            "<p>Candidate minus reference on matching episode cases against the same fixed opponent. "
+            "Positive differences favor the candidate on that metric. Training seed labels identify the "
+            "runs being compared; they do not establish matched training randomness.</p>"
+        )
+        parts.append(
+            html_table(contrast_columns, deltas)
+            if deltas
+            else "<p>No complete early/final or single/diverse comparison selected for this bank.</p>"
+        )
+    parts.append("<h2>Coverage gaps</h2>")
+    parts.append(
+        html_table(
+            [
+                ("trial_id", "Planned cell"),
+                ("stage", "Checkpoint"),
+                ("bank_id", "Bank"),
+                ("status", "Selection status"),
+                ("attempt_count", "Attempts"),
+                ("succeeded_attempt_count", "Completed attempts"),
+                ("blocked_reason", "Declared constraint"),
+            ],
+            gaps,
+        )
+        if gaps
+        else "<p>Every declared cell has an explicitly selected completed evaluation.</p>"
+    )
+    parts.extend(["<h2>Interpretation and evidence</h2><p>", html.escape(limitations), "</p></body></html>"])
+    return "".join(parts)
+
+
 def contrasts(episodes):
     policies = defaultdict(dict)
     metadata = {}
@@ -363,6 +501,7 @@ def analyze(manifest_path, root, selection_path, output):
             }
         )
     summary, paired = summaries(episodes), contrasts(episodes)
+    means = policy_means(summary)
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "manifest-input.json", manifest)
     write_json(output / "selection.json", selection)
@@ -394,6 +533,7 @@ def analyze(manifest_path, root, selection_path, output):
         (*IDENTITY, "topology_sha256", "topology_fingerprint", "role_map_id", "episode_seed", *METRICS),
     )
     table(output / "summary.csv", summary, (*IDENTITY, "topology_sha256", "n_episodes", *METRICS))
+    table(output / "policy-means.csv", means, (*IDENTITY, "n_topologies", "n_episodes", *METRICS))
     table(
         output / "paired-contrasts.csv",
         paired,
@@ -430,9 +570,7 @@ def analyze(manifest_path, root, selection_path, output):
         "disruption and action success are not measured separately here. No attack-free or simple-defense baseline "
         "is inferred. Missing or unselected cells cannot support a contrast. See coverage.csv and gaps.json."
     )
-    (output / "report.html").write_text(
-        "<!doctype html><meta charset='utf-8'><title>Defender screening</title><p>" + html.escape(text) + "</p>"
-    )
+    (output / "report.html").write_text(render_report(manifest, coverage, means, paired, text))
     write_json(
         output / "provenance.json",
         {

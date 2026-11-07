@@ -24,10 +24,19 @@ def update_blue_observation_memory(state: SimulatorState, const: SimulatorConst)
 
     The five CC4 Blue agents own disjoint host sets. Memory can therefore be
     stored per host; get_blue_obs exposes only the receiving agent's slots.
-    A completed recovery clears history on that tick, including aged alerts.
+    V1 recovery clears all history on that tick. V2 uses the shared H-MARL
+    history/delivery semantics, clearing history before adding visible alerts.
     """
     if not const.cage4_enhanced_obs:
         return state
+    if const.blue_observation_version >= 2:
+        from jaxborg.blue_ioc import update_ioc_memory
+
+        if state.blue_ioc_memory is None:
+            raise ValueError("Enhanced v2 state needs initialize_blue_ioc at reset")
+        memory, rows = update_ioc_memory(state, const, state.blue_ioc_memory)
+        codes = jnp.stack([jnp.pad(row.reshape(-1), (0, 48 - row.size)) for row in rows])
+        return state.replace(blue_ioc_memory=memory, blue_ioc_codes=codes)
     keep = ~state.blue_recovered_this_step & jnp.any(const.blue_agent_hosts, axis=0)
     return state.replace(
         blue_process_memory=(state.blue_process_memory | state.host_exploit_detected | state.old_host_exploit_detected)
@@ -115,12 +124,21 @@ def get_blue_obs(state: SimulatorState, const: SimulatorConst, agent_id: int) ->
         valid = (const.blue_obs_subnets[agent_id, :, None] >= 0) & (host_ids < const.host_active.size)
         safe_ids = jnp.clip(host_ids, 0, const.host_active.size - 1)
         valid &= const.host_active[safe_ids]
+        files, process, network = state.blue_file_evidence, state.blue_process_memory, state.blue_network_memory
+        if const.blue_observation_version >= 2:
+            memory = state.blue_ioc_memory
+            if memory is None:
+                raise ValueError("Enhanced v2 state needs initialize_blue_ioc at reset")
+            files = jnp.where(memory["files"] > 0, 3 - memory["files"], 0)
+            process, network = memory["process"], memory["network"]
         extras = [
             valid.astype(jnp.float32),
-            jnp.where(valid, state.blue_file_evidence[safe_ids] / 2.0, 0.0),
-            jnp.where(valid, state.blue_process_memory[safe_ids], False).astype(jnp.float32),
-            jnp.where(valid, state.blue_network_memory[safe_ids], False).astype(jnp.float32),
+            jnp.where(valid, files[safe_ids] / 2.0, 0.0),
+            jnp.where(valid, process[safe_ids], False).astype(jnp.float32),
+            jnp.where(valid, network[safe_ids], False).astype(jnp.float32),
         ]
+        if const.blue_observation_version >= 2:
+            extras.append(state.blue_ioc_codes[agent_id].astype(jnp.float32) / 3.0)
         obs = jnp.concatenate([obs, *[plane.reshape(-1) for plane in extras]])
     return obs
 

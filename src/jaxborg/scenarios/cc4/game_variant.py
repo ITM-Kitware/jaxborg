@@ -39,6 +39,7 @@ class GameVariant:
     red_reward: str = "zero_sum"
     blue_block_policy: str = "cc4"
     cage4_enhanced_obs: bool = False
+    blue_observation_version: int = 2
 
     def __post_init__(self) -> None:
         if self.red_reward not in RED_REWARD_MODES:

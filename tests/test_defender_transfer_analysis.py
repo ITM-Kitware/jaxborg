@@ -81,7 +81,10 @@ def captured_study(tmp_path):
         "source_revision": "a" * 40,
         "policies": {"blue": blues, "red": [red]},
         "topology_banks": {
-            "anchor": {"snapshots": [{"path": str(path), "sha256": sha256(path)} for path in topologies]}
+            "anchor": {
+                "snapshots": [{"path": str(path), "sha256": sha256(path)} for path in topologies],
+                "interpretation": "Seed-matched anchor <fixture> & fixed comparison",
+            }
         },
         "screening": {"horizon": 500, "seeds": [17, 18]},
         "cells": cells,
@@ -223,6 +226,19 @@ def test_selected_capture_store_produces_exact_screening_tables(captured_study, 
     assert all(row["c"] == "0.0" for row in episodes if row["kind"] == "scripted")
     assert all(row["c"] == "" for row in episodes if row["kind"] == "learned")
     assert len(read_csv(output / "summary.csv")) == 16
+    means = read_csv(output / "policy-means.csv")
+    assert len(means) == 8
+    assert all(float(row["reward"]) == 8.5 for row in means if row["blue_id"] == "diverse-final")
+    report = (output / "report.html").read_text()
+    assert "8 of 9 planned cells selected and complete" in report
+    assert "anchor: scripted opponents" in report and "anchor: learned opponents" in report
+    assert "Policy means across the common topology bank" in report
+    assert "Descriptive paired differences" in report and "Coverage gaps" in report
+    assert "Final minus early" in report and "Diverse minus single" in report
+    assert "<td>8.50</td>" in report and "<td>5.00</td>" in report and "<td>2.00</td>" in report
+    assert "Seed-matched anchor &lt;fixture&gt; &amp; fixed comparison" in report
+    assert "<fixture>" not in report
+    assert "no-attempt" in report and "Not measured" in report
     contrasts = read_csv(output / "paired-contrasts.csv")
     assert len(contrasts) == 24
     for row in contrasts:
@@ -260,7 +276,7 @@ def test_relocated_store_preserves_pairing_and_tables(captured_study, tmp_path):
     relocated_output = tmp_path / "relocated-analysis"
     run_analysis(captured_study, relocated_output, root=relocated)
 
-    for filename in ("episodes.csv", "summary.csv", "paired-contrasts.csv", "coverage.csv"):
+    for filename in ("episodes.csv", "summary.csv", "policy-means.csv", "paired-contrasts.csv", "coverage.csv"):
         assert (relocated_output / filename).read_bytes() == (original_output / filename).read_bytes()
 
 

@@ -153,12 +153,20 @@ def _manifest(*, backend: str, policies: Mapping[str, PolicyBundleEntry], proven
 
 
 def _entry_from_manifest(meta: Mapping[str, Any], weights: Any) -> PolicyBundleEntry:
+    from jaxborg.blue_observation_contract import observation_version_from_size
+
+    arch = dict(meta["arch"])
+    if arch.get("name") in ("mappo", "recurrent_mappo"):
+        arch.setdefault(
+            "blue_observation_version",
+            observation_version_from_size(int(meta["obs_dim"])) if meta["team"] == "blue" else 1,
+        )
     return PolicyBundleEntry(
         weights=weights,
         team=str(meta["team"]),
         obs_dim=int(meta["obs_dim"]),
         action_dim=int(meta["action_dim"]),
-        arch=dict(meta["arch"]),
+        arch=arch,
         trainable=bool(meta.get("trainable", True)),
         source=meta.get("source"),
     )
@@ -221,7 +229,10 @@ def write_sidecar(
     if src:
         payload.setdefault("meta", {})["source_path"] = src
 
+    from jaxborg.blue_observation_contract import enhanced_obs_version
+
     payload["run"] = {
+        "blue_observation_version": enhanced_obs_version(recipe),
         "seed": int(seed),
         "total_steps": int(total_steps),
         "backend": backend,

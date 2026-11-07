@@ -49,6 +49,8 @@ def run(manifest_path, root, trial_id, expected_revision, retry_of=None):
 
     def condition_check(configuration):
         actual = configuration["base_variant" if scripted else "variant"]
+        if actual != cell["variant"]:
+            raise ValueError("Resolved game differs from its declared observation and rule contract")
         if actual["num_steps"] != settings["horizon"] or not actual["cage4_enhanced_obs"]:
             raise ValueError("Resolved game differs from declared horizon/observations")
         if actual["blue_block_policy"] != "cc4" or actual["red_reward"] != "zero_sum":

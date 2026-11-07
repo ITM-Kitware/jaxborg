@@ -5,6 +5,11 @@ against a common attacker panel as the network and opponent change. It extends
 the recorded evaluation workflow included in
 [PR #55](https://github.com/ITM-Kitware/jaxborg/pull/55).
 
+The saved policies use the 450-feature version 2 observation contract from
+[Dena's H-MARL work](https://github.com/ITM-Kitware/jaxborg/pull/27).
+The required IOC history and telemetry implementation is included with this study;
+observations are not padded or truncated to load a checkpoint.
+
 The first comparison uses saved policies. New training depends on the diagnostic:
 if fixed-opponent performance is weak, investigate Blue learning; if competence
 is present but opponent coverage is narrow, compare Blue-only learning against
@@ -16,24 +21,25 @@ Those training interventions are not executed by this diagnostic launcher.
 ## Declared comparison
 
 `prepare.py` selects the standard separate-encoder LSTM runs, single/diverse
-training conditions and training seeds42/100, at960,000 steps and the final saved
+training conditions and training seeds 42/100, at 960,000 steps and the final saved
 model. These eight Blue policies face the same four final learned Reds. The
 final-policy stage runs first; the early stage provides learning references.
 Checkpoint ages and evaluation episodes are not additional training replicates.
 
-Every cell uses500 steps, stochastic policy sampling, and16 explicit episode
-roots21000..21015 per topology. There is no score-based checkpoint or topology
+Every cell uses 500 steps, stochastic policy sampling, and 16 explicit episode
+roots 21000..21015 per topology. There is no score-based checkpoint or topology
 selection. These are exploratory screening episodes, not a powered confirmation.
 
 The network panels are:
 
-- `anchor`: reconstructed stock-generator seed0, declared in both training banks.
-- `familiar`: reconstructed seeds1..3, declared only in diverse training.
-- `unseen`: reconstructed seeds200..203, outside both declared training banks.
-- `cia`: seeds100..103 with three operational servers per zone, checked against
+- `anchor`: reconstructed stock-generator seed 0, declared in both training banks.
+- `familiar`: reconstructed seeds 1..3, declared only in diverse training.
+- `unseen`: reconstructed seeds 200..203, outside both declared training banks.
+- `cia`: seeds 100..103 with three operational servers per zone, checked against
   archived canonical fingerprints and role assignments.
 
-Original stock training snapshots and their generator source were unavailable.
+Original stock training snapshots and the exact training source revision were unavailable.
+The published generator implementation matches the current generator semantics.
 The first three panels therefore establish seed membership only. They cannot
 establish a verified seen-versus-unseen memorization gap. The CIA panel changes
 server-count constraints and is a separate benchmark.
@@ -55,7 +61,7 @@ Red or Sleep-Blue condition is claimed.
 
 Use a clean checkout of the recorded revision. Read the host's shared-machine
 instructions and the shared experiment store's README first. All GPU execution
-uses Slurm `community`, one GPU, eight CPU cores and32GiB memory. The launcher
+uses Slurm `community`, one GPU, eight CPU cores and 32 GiB memory. The launcher
 preserves Slurm's device assignment and caps each submitted job at six hours.
 
 ```bash
