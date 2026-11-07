@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "id": "lstm-learning-20261107",
+  "question": "Do the archived LSTM defenders improve from early to final checkpoints, and does diversity help against common opposite-seed Red lineages?",
+  "frozen_at_utc": "2026-11-07T17:02:33Z",
+  "producing_source_revision": "1545af8cb381ab2027c79814353b4b4963c7754c",
+  "protocol_sha256": "efa4a741ddb23c0df127990408f621406ed91f0e96c6c742f042980df3a2fee2",
+  "selection": {
+    "file": "selection.json",
+    "sha256": "34b3232840b970e9203c1666e20c0a14312f15d9e089ce773f901b557e9a5926"
+  },
+  "expected_coverage": {
+    "selected_cells": 69,
+    "planned_cells": 96,
+    "episodes": 4480,
+    "final_cells": 48,
+    "early_scripted_cells": 16,
+    "early_learned_cells": 5,
+    "missing_early_learned_cells": 27,
+    "scripted_learning_contrasts": 28
+  },
+  "comparisons": {
+    "conditions": [
+      "single",
+      "diverse"
+    ],
+    "training_seeds": [
+      42,
+      100
+    ],
+    "early_checkpoint_steps": 960000,
+    "final_checkpoint_steps": 49968000,
+    "learning_bank": "unseen",
+    "learning_opponent": "fsm",
+    "opponent_exposure": {
+      "banks": [
+        "anchor",
+        "unseen"
+      ],
+      "opponents_by_blue_seed": {
+        "42": [
+          "red-single-100-final",
+          "red-diverse-100-final"
+        ],
+        "100": [
+          "red-single-42-final",
+          "red-diverse-42-final"
+        ]
+      },
+      "interpretation": "Opponents common to both Blues, excluding both Blues' own co-trained Red lineages; still a related archive, not an independent holdout population."
+    }
+  },
+  "evaluation": {
+    "episode_steps": 500,
+    "episode_roots_per_topology": 16,
+    "reserved_stock_topologies": 4,
+    "policy_sampling": "stochastic",
+    "reward": "Unmodified stock team return; larger is better",
+    "green_traffic": "Existing game behavior unchanged",
+    "scripted_cia": "Temporal role-host impact proxies; larger is better",
+    "rng": "Within-case pairing uses the maintained analyzer's identity checks; scripted and learned evaluation have different RNG contracts."
+  },
+  "analysis_runtime": {
+    "python": "3.11.13",
+    "dependencies": "standard library",
+    "gpu_required": false,
+    "rollouts_required": false
+  },
+  "evidence": {
+    "authoritative_study": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4",
+    "authoritative_analysis": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/reviews/lstm-check-20261107T170233Z/analysis",
+    "raw_evidence": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/evidence",
+    "manifest": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/manifest.json",
+    "local_wsl_analysis": "/home/paulhax/src/itm/cyber/experiments/defender-transfer-20261107/lstm-check-20261107T170233Z/analysis",
+    "local_windows_analysis": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\lstm-check-20261107T170233Z\\analysis",
+    "original_summary": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\LSTM-CHECK-20261107.md",
+    "scheduler_snapshot": "../slurm-status.txt",
+    "scheduler_observation_at_snapshot": {
+      "job_4105": "COMPLETED, exit 0, elapsed 1:51:27",
+      "job_4107": "RUNNING, elapsed 43:39; this is a historical observation, not current status"
+    }
+  },
+  "stable_rebuild_files": [
+    "analyze.py",
+    "episodes.csv",
+    "manifest-input.json",
+    "paired-contrasts.csv",
+    "policy-means.csv",
+    "selection.json",
+    "summary.csv"
+  ],
+  "limitations": [
+    "Only two archived training seeds per condition; the 28 overlapping scripted contrasts are not independent training replications.",
+    "Original exact training-source revision and stock training-layout bytes are unavailable; reserved seed labels alone do not prove topology novelty.",
+    "This checkpoint comparison establishes learning under this evaluation protocol, not a fresh audit of the current trainer or faithful SOTA benchmark replication.",
+    "The opposite-seed learned Red pool is related archive material, not an independent held-out agent population.",
+    "Early learned-Red coverage is incomplete in this frozen selection; the complete final-stage comparison does not depend on it.",
+    "CIA values are scripted-evaluation role-host impact proxies, not measured exfiltration or corruption; reward gains need not improve every proxy.",
+    "Full raw-evidence reconstruction needs the external retained study store; Git contains the check, selection and evidence identities, not weights or raw episodes."
+  ],
+  "recorded_analysis_sha256": {
+    "analysis-inputs.json": "8bf0119736a3942b4099361d7293efaa40b814cd3610d13f76e6804125e9f56b",
+    "analyze.py": "5112ef970a7b87ce9dcbb73f359a43fdc5f732f0c44898082f654daf0a8fcb8a",
+    "coverage.csv": "94e19f1b747f298666452c0fc2d06abc2d58ad54cc32823062c8a840466de995",
+    "episodes.csv": "a75cd2b32c84d35b453a82b5cf019e7fb760c90287e12a6bdb929401addc3cf8",
+    "gaps.json": "16ce357d1ae65142e17c4f508d1fe9b50ce8eb2c473652a9e38436a89481659d",
+    "manifest-input.json": "6946f7d164155d321c82e748149938a421d4c5b0b05cce0807db85ec7eba7562",
+    "paired-contrasts.csv": "253048e70c33c3c899dc4254e96c1f55d777612abe3311c35e8b39f9eb173afc",
+    "policy-means.csv": "6777a073589b5376ca078ba8e842d7afa4af7595365cc8db150d8d9f93ddf7f0",
+    "provenance.json": "37bf4123b3e1a4eadf6ac6e3e4c99225006889a52c1eee43abd641e36852ff2c",
+    "report.html": "7b436a7a300d611d067ff78582ddd5dfa9f3d2cd0c40663ef740e7c97a826a10",
+    "selection.json": "34b3232840b970e9203c1666e20c0a14312f15d9e089ce773f901b557e9a5926",
+    "summary.csv": "d8ac321bf70d782b6822c54dbd15c0ea9f10525057872e4bd2296858058f1235"
+  }
+}

@@ -117,3 +117,18 @@ including diverse-minus-single and final-minus-early comparisons. Two training
 runs per condition do not support a precise population-level method claim.
 A topology score drop can reflect intrinsic difficulty; the report does not
 interpret that drop alone as a transfer failure.
+
+## Recorded checks
+
+- [Archived LSTM learning check, 2026-11-07](checks/lstm-learning-20261107/README.md):
+  early/final learning and final Blue comparisons against common opposite-seed
+  Red lineages. Includes the frozen 69-cell selection, evidence hashes, results
+  and a CPU-only verification command. Keep later checks in separate named
+  subdirectories while sharing the study's maintained analyzer.
+
+## Matched reference screen
+
+The [matched defender system screen](benchmark.md) compares the saved LSTMs and
+released H-MARL systems under one current stock-game contract. Its protocol,
+runner, evidence capture and interpretation limits are maintained here. It is
+a separate named check within this study, with no new training.
