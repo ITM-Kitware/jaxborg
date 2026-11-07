@@ -3,6 +3,7 @@
 import csv
 import hashlib
 import json
+import runpy
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from jaxborg.evaluation.capture_store import (
 )
 
 ANALYZER = Path(__file__).resolve().parents[1] / "studies/defender-transfer/analyze.py"
+PREPARE = ANALYZER.with_name("prepare.py")
 
 
 def sha256(path):
@@ -77,6 +79,8 @@ def captured_study(tmp_path):
         for kind in ("scripted", "learned")
     ]
     cells.append({**cells[0], "trial_id": "no-attempt"})
+    for cell in cells:
+        cell.update(id=cell["trial_id"], condition_id=cell["trial_id"], replicate_id="42", matched_unit_id=None)
     manifest = {
         "source_revision": "a" * 40,
         "policies": {"blue": blues, "red": [red]},
@@ -89,40 +93,10 @@ def captured_study(tmp_path):
         "screening": {"horizon": 500, "seeds": [17, 18]},
         "cells": cells,
     }
-    protocol = {
-        "schema_version": 1,
-        "kind": "protocol",
-        "id": "defender-screening-test",
-        "study_id": "defender-screening-test",
-        "revision": "1",
-        "selection_rule": "explicit",
-        "required_facts": {"attempt": ["resolved_config"], "evaluation": ["resolved_config"]},
-        "trials": [
-            {"id": cell["trial_id"], "condition_id": cell["trial_id"], "replicate_id": "42", "matched_unit_id": None}
-            for cell in cells
-        ],
-        "metric_definitions": [
-            {
-                "name": "blue_return",
-                "unit": "score",
-                "direction": "higher",
-                "aggregation": "arithmetic mean",
-                "sampling_unit": "episode conditional on fixed policy",
-                "uncertainty": "none",
-            }
-        ],
-        "extensions": {
-            "defender_transfer": {
-                "schema_version": 1,
-                "source": "manifest.json",
-                "values": {
-                    "manifest_sha256": hashlib.sha256(
-                        json.dumps(manifest, sort_keys=True, allow_nan=False).encode()
-                    ).hexdigest()
-                },
-            }
-        },
-    }
+    prepare = runpy.run_path(str(PREPARE))
+    manifest_path, selection_path = tmp_path / "manifest.json", tmp_path / "selection.json"
+    prepare["write_json"](manifest_path, manifest)
+    protocol = prepare["protocol_for"](manifest)
     selection = {}
     for cell in cells[:-1]:
         blue = next(item for item in blues if item["id"] == cell["blue_id"])
@@ -151,6 +125,7 @@ def captured_study(tmp_path):
             trial_id=cell["trial_id"],
             requested_episodes=4,
             resolved_config=configuration,
+            facts={"source_identity": {"value": "synthetic-measurements", "source": "test fixture"}},
             inputs=retained_inputs,
             source_files={"studies/defender-transfer/analyze.py": ANALYZER},
         )
@@ -190,8 +165,6 @@ def captured_study(tmp_path):
 
     records = load_records(root)
     assert len([record for record in records if record["kind"] == "evaluation"]) == 8
-    manifest_path, selection_path = tmp_path / "manifest.json", tmp_path / "selection.json"
-    manifest_path.write_text(json.dumps(manifest))
     selection_path.write_text(json.dumps(selection))
     return {"root": root, "manifest": manifest_path, "selection": selection_path, "selections": selection}
 
@@ -253,6 +226,19 @@ def test_selected_capture_store_produces_exact_screening_tables(captured_study, 
     assert (output / "analyze.py").read_bytes() == ANALYZER.read_bytes()
     for filename, expected in json.loads((output / "hashes.json").read_text()).items():
         assert sha256(output / filename) == expected
+
+
+def test_prepare_protocol_binds_manifest_file_bytes(captured_study, tmp_path):
+    prepare = runpy.run_path(str(PREPARE))
+    manifest = json.loads(captured_study["manifest"].read_text())
+    protocol = prepare["protocol_for"](manifest)
+    assert protocol == json.loads((captured_study["root"] / "protocol.json").read_text())
+    assert protocol["extensions"]["defender_transfer"]["values"]["manifest_sha256"] == sha256(
+        captured_study["manifest"]
+    )
+    output = tmp_path / "prepared-protocol-analysis"
+    run_analysis(captured_study, output)
+    assert len(read_csv(output / "episodes.csv")) == 32
 
 
 def test_completed_evaluations_require_explicit_selection(captured_study, tmp_path):

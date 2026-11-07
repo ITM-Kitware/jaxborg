@@ -438,7 +438,7 @@ def analyze(manifest_path, root, selection_path, output):
         raise ValueError("Generated analysis belongs outside the source checkout")
     manifest, selection = read_json(manifest_path), read_json(selection_path)
     protocol = read_json(root / "protocol.json")
-    manifest_identity = hashlib.sha256(json.dumps(manifest, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    manifest_identity = digest(manifest_path)
     declared_identity = (
         protocol.get("extensions", {}).get("defender_transfer", {}).get("values", {}).get("manifest_sha256")
     )
