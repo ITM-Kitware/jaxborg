@@ -18,7 +18,7 @@ from jaxborg.evaluation.provenance import collect_provenance, topology_evidence
 from jaxborg.evaluation.tracking import destination_configured
 
 
-def run_scripted(model, *, context, **kwargs):
+def run_scripted(model, *, context, return_capture=False, **kwargs):
     root = outside_source(context["root"])
     records = load_records(root)
     artifact = next(record for record in records if record["id"] == context["checkpoint"])
@@ -33,12 +33,12 @@ def run_scripted(model, *, context, **kwargs):
         raise ValueError("Requested model differs from owned checkpoint")
     project = Path(__file__).resolve().parents[3]
     provenance = collect_provenance(
-        entrypoint=project / "scripts/eval/eval_scripted_reds_jax.py",
-        source_roots=(project / "scripts/eval",),
+        entrypoint=context.get("entrypoint") or project / "scripts/eval/eval_scripted_reds_jax.py",
+        source_roots=(project / "scripts/eval", *context.get("source_roots", ())),
         expected_revision=context["revision"],
         allow_dirty=context.get("allow_dirty", False),
     )
-    _, rows = _run_scripted(
+    capture, rows = _run_scripted(
         root=root,
         protocol=json.loads((root / "protocol.json").read_text()),
         trial_id=context["trial_id"],
@@ -46,10 +46,11 @@ def run_scripted(model, *, context, **kwargs):
         source_recipe=context["source_recipe"],
         effective_recipe=context["effective_recipe"],
         retained_inputs={"blue checkpoint": artifact["id"]},
+        condition_check=context.get("condition_check"),
         training={"training_checkpoint_artifact_id": artifact["id"], "training_attempt_id": owner["id"]},
         kwargs=kwargs,
     )
-    return rows
+    return (capture, rows) if return_capture else rows
 
 
 def run_frozen_scripted(

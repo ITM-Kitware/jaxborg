@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "kind": "protocol",
+  "id": "lstm-fsm-competence-v1",
+  "study_id": "lstm-fsm-competence",
+  "revision": "1",
+  "selection_rule": "explicit",
+  "required_facts": {"attempt": [], "evaluation": []},
+  "metric_definitions": [],
+  "trials": [
+    {"id": "smoke-seed42", "condition_id": "implementation-smoke", "replicate_id": "smoke-42", "matched_unit_id": null},
+    {"id": "fsm-seed42", "condition_id": "fixed-stock-fsm", "replicate_id": "training-42", "matched_unit_id": null},
+    {"id": "fsm-seed100", "condition_id": "fixed-stock-fsm", "replicate_id": "training-100", "matched_unit_id": null}
+  ],
+  "extensions": {
+    "lstm_fsm_competence": {
+      "schema_version": 1,
+      "source": "studies/lstm-fsm-competence/README.md",
+      "values": {
+        "question": "Can the current separate actor/critic LSTM learn effective stock-game defense against the fixed standard FSM attacker?",
+        "training_seeds": [42, 100],
+        "requested_environment_steps_per_seed": 50000000,
+        "completed_environment_steps_per_seed": 49968000,
+        "rollout_updates_per_seed": 1041,
+        "rollout_environment_steps": 48000,
+        "smoke_updates": 3,
+        "smoke_environment_steps": 144000,
+        "checkpoint_stride_updates": 20,
+        "training_topology_seeds": "0..99, stock generator, unchanged subnet scaffold and game rules",
+        "evaluation_topology_seeds": [200, 201, 202, 203],
+        "evaluation_episode_roots": "21000..21015 for the archived transfer panel",
+        "primary_evaluation": "Last planned checkpoint versus initialization under fixed stock FSM, averaged equally over the four reserved stock layouts and 16 episode roots per layout, with separate results for each training seed.",
+        "secondary_evaluation": "Same checkpoints against four fixed archived learned Reds. These related archive opponents are excluded from new Blue training but are not a verified independent holdout population.",
+        "selection": "Use the explicitly selected successful attempt and its initial and final planned checkpoints. Retain failed/cancelled attempts and partial checkpoints as incomplete; never substitute a best-scoring checkpoint. Smoke is excluded from scientific replicate and episode counts.",
+        "stop_rule": "Budget-limited training; no outcome-based stopping or tuning. All allocated work ends before 2026-11-09T13:00:00Z (Monday 08:00 America/New_York).",
+        "comparison_limit": "Historical co-trained policies are contextual references because exact historical training source is unavailable. This diagnostic does not identify the causal effect of co-training or nonstationarity, nor establish SOTA."
+      }
+    }
+  }
+}

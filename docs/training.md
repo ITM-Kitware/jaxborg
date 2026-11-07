@@ -22,7 +22,8 @@
   - The JAX development opt-out above deliberately omits research records.
     Research training instead supplies `--evidence-root`, `--protocol`, `--trial`,
     and `--expected-revision`; see [recorded joint executions](joint-execution-records.md)
-    for the supported fresh, zero-sum joint path and its restrictions.
+    for supported fresh joint training and Blue-only training against stock FSM
+    Red, including their restrictions.
   - Logs go under `$JAXBORG_EXP_DIR/logs`; model bundles and resolved recipe
     sidecars go under `<algorithm>_<backend>/<tag>/` in that output root.
 - [The multi-seed launcher](../scripts/train/run_seeds.sh) accepts backend,

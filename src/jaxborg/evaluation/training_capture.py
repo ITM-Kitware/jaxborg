@@ -1,4 +1,4 @@
-"""Evidence at the maintained joint trainer's outer execution boundary."""
+"""Evidence at the maintained JAX trainers' outer execution boundary."""
 
 from __future__ import annotations
 
@@ -37,14 +37,24 @@ def begin_training(
     overrides=None,
     entrypoint=None,
 ):
-    """Capture fresh joint training with its resolved scheduling and topology contracts."""
+    """Capture fresh joint or Blue/FSM training with its resolved contracts."""
     if not isinstance(expected_revision, str) or len(expected_revision) != 40:
         raise ValueError("Recorded training requires an exact pinned source revision")
-    if set(training_teams(recipe)) != {"blue", "red"} or recipe.get("train", {}).get("opponents"):
+    teams = set(training_teams(recipe))
+    scripted_red = teams == {"blue"} and not recipe.get("train", {}).get("opponents")
+    if teams not in ({"blue", "red"}, {"blue"}) or recipe.get("train", {}).get("opponents"):
         raise ValueError(
-            "Recorded training currently requires fresh Blue and Red initialization; "
-            "resume and warm starts are unsupported"
+            "Recorded training requires fresh initialization; frozen learned opponents and resume are unsupported"
         )
+    if scripted_red:
+        if set(configs) != {"blue"} or configs["blue"]["TRAIN_VARIANT"].red_agent != "finite_state":
+            raise ValueError("Recorded Blue-only training requires stock finite_state scripted Red")
+        if configs["blue"].get("ADAPTIVE_UPDATES") or configs["blue"].get("UPDATE_EVERY", 1) != 1:
+            raise ValueError("Recorded Blue-only training requires a Blue update every rollout")
+        if configs["blue"].get("GRAD_CLIP_MODE", "global") != "global":
+            raise ValueError("Recorded Blue-only training supports global gradient clipping only")
+        if configs["blue"]["NUM_STEPS"] != configs["blue"]["TRAIN_VARIANT"].num_steps:
+            raise ValueError("Blue-only rollout length must equal the episode horizon for recurrent reset alignment")
     if any(config["TRAIN_VARIANT"].red_reward != "zero_sum" for config in configs.values()):
         raise ValueError("Recorded joint training requires zero_sum reward")
     if any(
@@ -60,7 +70,14 @@ def begin_training(
         entrypoint=entrypoint or project / "scripts/train/algorithms/ippo_jax.py",
         source_roots=(project / "scripts/train/algorithms", *source_roots),
     )
-    builder = builder_identity(env_factory, provenance)
+    if scripted_red:
+        from jaxborg.evaluation.jax_env_factory import make_jax_env
+
+        if env_factory is not None:
+            raise ValueError("Recorded Blue/FSM training uses the maintained make_jax_env builder only")
+        builder = builder_identity(make_jax_env, provenance)
+    else:
+        builder = builder_identity(env_factory, provenance)
     inputs = {}
     recipe_source = recipe.get("__source_path__")
     if recipe_source:
@@ -81,7 +98,7 @@ def begin_training(
         topology["generation"] = generation
     measurement_units = {
         "env_steps": "environment transitions across all parallel environments",
-        "update_idx": "completed joint rollout batches (one-based)",
+        "update_idx": "completed rollout batches (one-based); legacy budget unit joint_rollout_updates",
         "team.*.update_count": "completed team PPO rounds; optimizer steps divided by minibatches and epochs",
         "team.*.updated": "whether this rollout performed the team's PPO round",
         "wall_time_s": (
@@ -95,6 +112,8 @@ def begin_training(
         "environment_reset_root": int(args.seed),
         "policy_and_rollout_root": int(args.seed) + 1,
     }
+    if scripted_red:
+        seed_roles["initialization_split"] = "split root; second key initializes Blue parameters directly"
     requested_steps = int(configs["blue"]["TOTAL_TIMESTEPS"])
     rollout_steps = int(configs["blue"]["NUM_ENVS"]) * int(configs["blue"]["NUM_STEPS"])
     requested_updates = requested_steps // rollout_steps
@@ -116,7 +135,15 @@ def begin_training(
             "planned_environment_steps": requested_updates * rollout_steps,
             "backend": "jax",
             "eval_env": "jax",
-            "procedure": "scripts.train.algorithms.ippo_jax._run_joint_training",
+            "procedure": (
+                "scripts.train.algorithms.ippo_jax._run_single_training"
+                if scripted_red
+                else "scripts.train.algorithms.ippo_jax._run_joint_training"
+            ),
+            "trainable_teams": sorted(teams),
+            "opponents": {"red": {"kind": "scripted", "agent": "finite_state", "trainable": False}}
+            if scripted_red
+            else {},
             "initialization": {
                 "kind": "fresh",
                 "state_retention": "initial numeric optimizer, normalizer, RNG, environment and observation state",
@@ -152,6 +179,8 @@ def begin_training(
                     "topology",
                     "initialization",
                     "measurement_units",
+                    "trainable_teams",
+                    "opponents",
                 )
             },
             "game_contract": fact(asdict(configs["blue"]["TRAIN_VARIANT"])),
@@ -176,13 +205,15 @@ def begin_training(
         raise
 
 
-def retain_checkpoint(capture, model, sidecar, *, steps, initial=False):
+def retain_checkpoint(capture, model, sidecar, *, steps, initial=False, joint=True):
     """Retain exact checkpoint and sidecar bytes under this training attempt."""
     directory = "initial" if initial else f"checkpoints/{steps}"
     model_id = add_artifact(
         capture,
         model,
-        role="initial joint policy" if initial else "joint policy checkpoint",
+        role=("initial joint policy" if initial else "joint policy checkpoint")
+        if joint
+        else ("initial blue policy" if initial else "blue policy checkpoint"),
         name=f"{directory}/{Path(model).name}",
     )
     sidecar_id = add_artifact(

@@ -14,12 +14,22 @@ python scripts/train/algorithms/ippo_jax.py --recipe /inputs/recipe.yaml \
 The CLI prints the evidence root and attempt ID on success or after a retained
 failure. Use that attempt ID for an explicit retry.
 
-The supported recorded path starts both policies fresh and uses zero-sum joint
-JAX training. Fixed and adaptive update schedules use the existing trainer.
+Recorded training supports fresh zero-sum joint JAX training and fresh Blue-only
+training against the native stock FSM Red. Fixed and adaptive update schedules
+use the existing joint trainer; Blue-only training updates Blue every rollout,
+uses global gradient clipping, and requires rollout length to equal the episode
+horizon. Blue team architecture overrides apply to both training and checkpoint
+metadata. The legacy `joint_rollout_updates` budget unit denotes outer rollout
+batches for either path; Blue-only records retain zero Red policy updates.
+
+Blue-only checkpoints retain an initial policy, periodic policies, numeric
+initial state, and exact effective observation/architecture metadata. Its legacy
+inline checkpoint evaluator uses CybORG; disable inline evaluation and run a
+separately recorded JAX evaluator when native JAX measurements are required.
 Explicit topology snapshots and recipe-generated banks are retained as exact
 input bytes after the ordinary recipe projection materializes them. Generated
 banks retain their generation settings and snapshot metadata; recording does
-not substitute a different generator or sampling procedure. Frozen opponents,
+not substitute a different generator or sampling procedure. Frozen learned opponents,
 resume and auxiliary mission banks remain unsupported by this recorded path.
 `--development-no-recording` explicitly opts out of research records.
 
