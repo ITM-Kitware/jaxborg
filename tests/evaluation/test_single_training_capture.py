@@ -5,8 +5,12 @@ import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
+from typing import NamedTuple
 
+import jax
+import jax.numpy as jnp
 import numpy as np
+import optax
 import pytest
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END
@@ -18,6 +22,19 @@ from jaxborg.recipe import load, project_jax, team_recipe
 from scripts.train.algorithms import ippo_jax as trainer
 
 PROJECT = Path(__file__).resolve().parents[2]
+
+
+class CoreState(NamedTuple):
+    time: object
+    episodes: object
+
+
+class InnerState(NamedTuple):
+    state: CoreState
+
+
+class WrappedState(NamedTuple):
+    env_state: InnerState
 
 
 @pytest.fixture
@@ -83,14 +100,16 @@ def test_single_training_records_owned_state_budget_and_failures(tmp_path, monke
             observation_space=lambda agent: SimpleNamespace(shape=(recipe_blue_obs_size(recipe),)),
             action_space=lambda agent: SimpleNamespace(n=BLUE_ALLOW_TRAFFIC_END),
         )
-        state = SimpleNamespace(params={"weight": np.zeros(1, np.float32)}, opt_state={"count": 0}, step=0)
+        state = trainer.TrainState.create(
+            apply_fn=network.apply, params={"weight": np.zeros(1, np.float32)}, tx=optax.sgd(0.1)
+        )
 
         def collect(state, env_state, obs, rng, normalizer):
             if failure == "second_update" and calls:
                 raise RuntimeError("second update failed")
             calls.append(len(calls))
-            new_state = SimpleNamespace(
-                params={"weight": np.full(1, len(calls), np.float32)}, opt_state={"count": len(calls)}, step=len(calls)
+            new_state = state.replace(
+                params={"weight": np.full(1, len(calls), np.float32)}, step=np.asarray(len(calls), np.int32)
             )
             metrics = dict.fromkeys(
                 [
@@ -121,7 +140,7 @@ def test_single_training_records_owned_state_budget_and_failures(tmp_path, monke
         return (
             env,
             {"blue_agent_0": np.zeros((1, recipe_blue_obs_size(recipe)))},
-            {"time": 0},
+            WrappedState(InnerState(CoreState(np.zeros(1, np.int32), np.zeros(1, np.int32)))),
             lambda key: state,
             collect,
         )
@@ -243,3 +262,133 @@ def test_single_team_cli_retains_receipt_and_selects_single_path(
         "evidence_root": str(capture.root),
         "attempt_id": capture.attempt_id,
     }
+
+
+def test_recorded_resume_preserves_state_and_counts_only_new_work(tmp_path, monkeypatch, single_training):
+    from jaxborg.evaluation.resume_state import inspect_training_state
+
+    recipe, recording = single_training
+    recipe["train"]["total_timesteps"] = 1501
+    recipe["jax"]["checkpoint_every_updates"] = 0
+    recording["supplied_recipe"] = copy.deepcopy(recipe)
+    recording["protocol"]["trials"].append(
+        {"id": "resume", "condition_id": "fsm", "replicate_id": "42-resume", "matched_unit_id": None}
+    )
+
+    def make_train(config, network):
+        config["NUM_UPDATES"] = config["TOTAL_TIMESTEPS"] // 500
+        env = SimpleNamespace(
+            agents=["blue_agent_0"],
+            observation_space=lambda agent: SimpleNamespace(shape=(recipe_blue_obs_size(recipe),)),
+            action_space=lambda agent: SimpleNamespace(n=BLUE_ALLOW_TRAFFIC_END),
+        )
+        state = trainer.TrainState.create(apply_fn=network.apply, params={"weight": jnp.zeros(1)}, tx=optax.adam(0.03))
+        env_state = WrappedState(InnerState(CoreState(jnp.zeros(1, jnp.int32), jnp.zeros(1, jnp.int32))))
+        obs = {"blue_agent_0": jnp.zeros((1, recipe_blue_obs_size(recipe)))}
+
+        def collect(state, env_state, obs, rng, normalizer):
+            rng, draw = jax.random.split(rng)
+            state = state.apply_gradients(grads={"weight": jax.random.normal(draw, (1,))})
+            env_state = WrappedState(
+                InnerState(CoreState(env_state.env_state.state.time, env_state.env_state.state.episodes + 1))
+            )
+            obs = jax.tree.map(lambda leaf: leaf + 1, obs)
+            normalizer = normalizer._replace(returns=normalizer.returns + 2, count=normalizer.count + 1)
+            metrics = dict.fromkeys(
+                [
+                    "actor_loss",
+                    "critic_loss",
+                    "entropy",
+                    "total_loss",
+                    "approx_kl",
+                    "clip_frac",
+                    "explained_var",
+                    "grad_norm",
+                    "pre_clip_grad_norm",
+                    "raw_rollout_return",
+                    "mean_rollout_return",
+                ],
+                1.0,
+            )
+            metrics.update(
+                parameters_finite=True,
+                optimizer_state_finite=True,
+                reward_normalizer_finite=True,
+                rollout_boundary_time=0,
+            )
+            return state, env_state, obs, rng, normalizer, metrics
+
+        return env, obs, env_state, lambda key: state, collect
+
+    monkeypatch.setattr(trainer, "make_train", make_train)
+    original = tmp_path / "original"
+    first = trainer._run_single_training(
+        SimpleNamespace(seed=42, checkpoint_update=[2]), recipe, "original", original, recording=recording
+    )
+    resume_path = original / "training_state_1000.npz"
+    resumed = tmp_path / "resumed"
+    continuation = {**recording, "trial_id": "resume"}
+    second = trainer._run_single_training(
+        SimpleNamespace(seed=42, checkpoint_update=[2], resume_state=resume_path),
+        recipe,
+        "resumed",
+        resumed,
+        recording=continuation,
+    )
+    original_state = inspect_training_state(original / "training_state_1500.npz")
+    resumed_state = inspect_training_state(resumed / "training_state_1500.npz")
+    assert original_state["state_sha256"] == resumed_state["state_sha256"]
+    assert original_state["metadata"]["training_origin"] == resumed_state["metadata"]["training_origin"]
+    assert original_state["metadata"]["producer_attempt_id"] == first.attempt_id
+    assert resumed_state["metadata"]["producer_attempt_id"] == second.attempt_id
+    attempts = {r["id"]: r for r in load_records(recording["root"]) if r["kind"] == "attempt"}
+    resumed_attempt = attempts[second.attempt_id]
+    assert {b["unit"]: b["completed"] for b in resumed_attempt["budgets"]} == {
+        "environment_steps": 500,
+        "joint_rollout_updates": 1,
+        "blue_policy_updates": 1,
+        "red_policy_updates": 0,
+    }
+    assert resumed_attempt["facts"]["initial_checkpoint"]["value"]["environment_steps"] == 1000
+    assert resumed_attempt["facts"]["training_origin"]["value"]["attempt_id"] == first.attempt_id
+    assert "training_state" in resumed_attempt["facts"]["checkpoint_1500"]["value"]
+    row = json.loads((resumed / "metrics.jsonl").read_text())
+    assert (row["update_idx"], row["env_steps"]) == (1, 500)
+    assert (row["cumulative_update_idx"], row["cumulative_environment_steps"]) == (3, 1500)
+    assert row["team.blue.cumulative_update_count"] == 3
+    changed = copy.deepcopy(recipe)
+    changed["core"]["lr"] *= 2
+    with pytest.raises(ValueError, match="contract differs"):
+        trainer._run_single_training(
+            SimpleNamespace(seed=42, resume_state=resume_path),
+            changed,
+            "invalid",
+            tmp_path / "invalid",
+            recording=continuation,
+        )
+
+    resume_args = SimpleNamespace(seed=42, resume_state=resume_path)
+    original_metrics = (original / "metrics.jsonl").read_bytes()
+    with pytest.raises(ValueError, match="fresh output"):
+        trainer._run_single_training(resume_args, recipe, "original", original, recording=continuation)
+    assert (original / "metrics.jsonl").read_bytes() == original_metrics
+    with pytest.raises(ValueError, match="same evidence store"):
+        trainer._run_single_training(
+            resume_args,
+            recipe,
+            "foreign",
+            tmp_path / "foreign-output",
+            recording={**continuation, "root": tmp_path / "foreign-store"},
+        )
+    records = {r["id"]: r for r in load_records(recording["root"])}
+    sidecar_id = original_state["metadata"]["training_origin"]["checkpoint"]["sidecar"]
+    original_sidecar = recording["root"] / records[sidecar_id]["uri"]
+    original_bytes = original_sidecar.read_bytes()
+    try:
+        original_sidecar.write_bytes(original_bytes + b"\n# corrupted lineage input\n")
+        with pytest.raises(ValueError, match="[Aa]rtifact"):
+            trainer._run_single_training(
+                resume_args, recipe, "corrupt", tmp_path / "corrupt-output", recording=continuation
+            )
+    finally:
+        original_sidecar.write_bytes(original_bytes)

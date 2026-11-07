@@ -15,9 +15,11 @@ from prepare import PROJECT, sha256, verify, write_json
 def trial_name(phase, seed):
     if phase == "smoke" and seed == 42:
         return "smoke-seed42"
+    if phase == "smoke-resume" and seed == 42:
+        return "smoke-resume-seed42"
     if phase == "full" and seed in (42, 100):
         return f"fsm-seed{seed}"
-    raise ValueError("Expected smoke seed 42 or full seed 42/100")
+    raise ValueError("Expected smoke/smoke-resume seed42 or full seed42/100")
 
 
 def execute(root, expected_revision, phase, seed):
@@ -28,17 +30,19 @@ def execute(root, expected_revision, phase, seed):
         acceptance = json.loads((root / "runs/smoke-seed42/production-ready.json").read_text())
         if (
             acceptance.get("passed") is not True
+            or acceptance.get("resume_equivalence", {}).get("passed") is not True
             or acceptance.get("source_revision") != expected_revision
             or acceptance.get("manifest_sha256") != sha256(root / "inputs/manifest.json")
         ):
             raise ValueError("Production requires accepted smoke evidence from these exact inputs and source")
+    recipe_phase = "smoke" if phase.startswith("smoke") else "full"
     run_dir = root / "runs" / trial
     run_dir.mkdir(parents=True, exist_ok=False)
     command = [
         sys.executable,
         str(PROJECT / "scripts/train/algorithms/ippo_jax.py"),
         "--recipe",
-        str(root / "inputs" / f"recipe-{phase}.yaml"),
+        str(root / "inputs" / f"recipe-{recipe_phase}.yaml"),
         "--seed",
         str(seed),
         "--tag",
@@ -52,6 +56,20 @@ def execute(root, expected_revision, phase, seed):
         "--expected-revision",
         expected_revision,
     ]
+    command.extend(["--checkpoint-update", "1041" if phase == "full" else "2"])
+    if phase == "smoke-resume":
+        from jaxborg.evaluation.capture_store import load_records
+
+        parent = json.loads((root / "runs/smoke-seed42/receipt.json").read_text())
+        indexed = {record["id"]: record for record in load_records(root / "evidence")}
+        original = indexed[parent["attempt_id"]]
+        if original["status"] != "succeeded" or original["trial_id"] != "smoke-seed42":
+            raise ValueError("Resume smoke requires a completed uninterrupted parent smoke")
+        state_id = original["facts"]["checkpoint_96000"]["value"]["training_state"]
+        state = indexed[state_id]
+        if state["producer_id"] != original["id"]:
+            raise ValueError("Resume state must be owned by the uninterrupted smoke")
+        command.extend(["--resume-state", str(root / "evidence" / state["uri"])])
     write_json(run_dir / "command.json", command)
     receipt = None
     interrupted = False
@@ -91,7 +109,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--study-root", required=True, type=Path)
     parser.add_argument("--expected-revision", required=True)
-    parser.add_argument("--phase", choices=("smoke", "full"), required=True)
+    parser.add_argument("--phase", choices=("smoke", "smoke-resume", "full"), required=True)
     parser.add_argument("--seed", type=int, required=True)
     args = parser.parse_args()
     execute(args.study_root, args.expected_revision, args.phase, args.seed)

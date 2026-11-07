@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict
 from pathlib import Path
 
@@ -11,12 +12,58 @@ from jaxborg.evaluation.capture_store import (
     add_artifact,
     finish_training,
     json_configuration,
+    load_records,
     record_facts,
     start_training,
 )
 from jaxborg.evaluation.joint_capture import fact, outside_source
 from jaxborg.evaluation.provenance import builder_identity, collect_provenance, topology_evidence
-from jaxborg.recipe import training_teams
+from jaxborg.recipe import team_recipe, training_teams
+
+
+def _validate_resume_lineage(root, metadata, archive_sha256):
+    """Require an owned full state and its original zero-step policies in this store."""
+    root = outside_source(root)
+    if not (root / "protocol.json").is_file():
+        raise ValueError("Resume requires a producing attempt in the same evidence store")
+    records = {record["id"]: record for record in load_records(root)}
+    producer = records.get(metadata["producer_attempt_id"])
+    if producer is None or producer["kind"] != "attempt":
+        raise ValueError(
+            "Resume requires a producing attempt in the same evidence store; cross-store resume is unsupported"
+        )
+    checkpoint = producer["facts"].get(f"checkpoint_{metadata['environment_steps']}", {}).get("value", {})
+
+    def owned_artifact(identity, owner, role):
+        artifact = records.get(identity)
+        if (
+            artifact is None
+            or artifact["kind"] != "artifact"
+            or artifact["producer_id"] != owner
+            or artifact["role"] != role
+        ):
+            raise ValueError("Resume lineage requires the exact owned checkpoint artifact")
+        path = (root / artifact["uri"]).resolve()
+        if (
+            not path.is_relative_to(root)
+            or not path.is_file()
+            or hashlib.sha256(path.read_bytes()).hexdigest() != artifact["sha256"]
+        ):
+            raise ValueError("Owned resume lineage artifact bytes differ from their recorded identity")
+        return artifact
+
+    state = owned_artifact(checkpoint.get("training_state"), producer["id"], "full numeric training state")
+    if state["sha256"] != archive_sha256:
+        raise ValueError("Resume input is not the selected producing attempt's owned full-state checkpoint")
+    origin = metadata["training_origin"]
+    original_attempt = records.get(origin["attempt_id"])
+    if original_attempt is None or original_attempt["kind"] != "attempt":
+        raise ValueError("Resume origin must belong to the same evidence store")
+    original_checkpoint = original_attempt["facts"].get("initial_checkpoint", {}).get("value")
+    if original_checkpoint != origin["checkpoint"] or original_checkpoint.get("environment_steps") != 0:
+        raise ValueError("Resume origin differs from the owned original zero-step checkpoint")
+    owned_artifact(original_checkpoint["model"], original_attempt["id"], "initial blue policy")
+    owned_artifact(original_checkpoint["sidecar"], original_attempt["id"], "checkpoint recipe sidecar")
 
 
 def begin_training(
@@ -40,12 +87,15 @@ def begin_training(
     """Capture fresh joint or Blue/FSM training with its resolved contracts."""
     if not isinstance(expected_revision, str) or len(expected_revision) != 40:
         raise ValueError("Recorded training requires an exact pinned source revision")
+    resume_path = getattr(args, "resume_state", None)
     teams = set(training_teams(recipe))
     scripted_red = teams == {"blue"} and not recipe.get("train", {}).get("opponents")
     if teams not in ({"blue", "red"}, {"blue"}) or recipe.get("train", {}).get("opponents"):
         raise ValueError(
             "Recorded training requires fresh initialization; frozen learned opponents and resume are unsupported"
         )
+    if resume_path is not None and not scripted_red:
+        raise ValueError("Full-state resume is supported only for recorded Blue/FSM training")
     if scripted_red:
         if set(configs) != {"blue"} or configs["blue"]["TRAIN_VARIANT"].red_agent != "finite_state":
             raise ValueError("Recorded Blue-only training requires stock finite_state scripted Red")
@@ -86,6 +136,8 @@ def begin_training(
     if not topology_paths:
         raise ValueError("Recorded joint training requires an explicit fixed topology bank")
     inputs.update({f"training topology {index}": path for index, path in enumerate(topology_paths)})
+    if resume_path is not None:
+        inputs["resume training state"] = Path(resume_path).resolve()
     input_hashes = {role: hashlib.sha256(path.read_bytes()).hexdigest() for role, path in inputs.items()}
     topology = topology_evidence(
         topology_paths,
@@ -97,7 +149,9 @@ def begin_training(
         topology["origin"] = "recipe-generated bank materialized by project_jax before training"
         topology["generation"] = generation
     measurement_units = {
-        "env_steps": "environment transitions across all parallel environments",
+        "env_steps": "new environment transitions executed by this attempt across all parallel environments",
+        "cumulative_environment_steps": "total transitions through the selected full-state continuation lineage",
+        "cumulative_update_idx": "total rollout updates through the selected full-state continuation lineage",
         "update_idx": "completed rollout batches (one-based); legacy budget unit joint_rollout_updates",
         "team.*.update_count": "completed team PPO rounds; optimizer steps divided by minibatches and epochs",
         "team.*.updated": "whether this rollout performed the team's PPO round",
@@ -119,6 +173,66 @@ def begin_training(
     requested_updates = requested_steps // rollout_steps
     if requested_updates < 1:
         raise ValueError("Requested budget must cover at least one complete joint rollout")
+    resume_contract = None
+    resume_metadata = None
+    completed_updates = 0
+    if scripted_red:
+        # Paths and checkpoint cadence do not affect numerical continuation.
+        # Everything affecting the learner, game, RNG or original horizon does.
+        resume_contract = json_configuration(
+            {
+                "schema_version": 1,
+                "source_revision": expected_revision,
+                "source_identity": provenance.facts["source_identity"]["value"],
+                "dependencies": provenance.configuration["dependencies"],
+                "algorithm": recipe["algorithm"],
+                "blue_arch": team_recipe(recipe, "blue")["arch"],
+                "config": {
+                    key: value
+                    for key, value in configs["blue"].items()
+                    if key not in {"TOPOLOGY_BANK", "CHECKPOINT_EVERY_UPDATES"}
+                },
+                "topology_sha256": [input_hashes[f"training topology {index}"] for index in range(len(topology_paths))],
+                "runtime_environment": {
+                    key: os.environ.get(key)
+                    for key in (
+                        "JAX_ENABLE_X64",
+                        "JAX_DEFAULT_MATMUL_PRECISION",
+                        "XLA_FLAGS",
+                        "JAX_PLATFORMS",
+                    )
+                },
+            }
+        )
+        if resume_path is not None:
+            from jaxborg.evaluation.resume_state import read_training_state_metadata
+
+            resume_metadata = read_training_state_metadata(
+                resume_path,
+                expected_sha256=input_hashes["resume training state"],
+            )
+            if resume_metadata.get("contract") != resume_contract:
+                raise ValueError("Resume checkpoint source/configuration/topology contract differs")
+            completed_updates = resume_metadata.get("completed_updates")
+            if type(completed_updates) is not int or not 0 < completed_updates < requested_updates:
+                raise ValueError("Resume checkpoint must have completed work and remaining declared updates")
+            if resume_metadata.get("environment_steps") != completed_updates * rollout_steps:
+                raise ValueError("Resume checkpoint update and environment-step counts disagree")
+            if (
+                not isinstance(resume_metadata.get("producer_attempt_id"), str)
+                or not resume_metadata["producer_attempt_id"]
+            ):
+                raise ValueError("Resume checkpoint must retain its producing attempt identity")
+            origin = resume_metadata.get("training_origin")
+            if (
+                not isinstance(origin, dict)
+                or not isinstance(origin.get("attempt_id"), str)
+                or not isinstance(origin.get("checkpoint"), dict)
+                or origin["checkpoint"].get("environment_steps") != 0
+                or not all(isinstance(origin["checkpoint"].get(key), str) for key in ("model", "sidecar"))
+            ):
+                raise ValueError("Resume checkpoint must preserve its original zero-step policy lineage")
+            _validate_resume_lineage(root, resume_metadata, input_hashes["resume training state"])
     config = json_configuration(
         {
             "schema_version": 1,
@@ -133,6 +247,11 @@ def begin_training(
             "topology": topology,
             "planned_updates": requested_updates,
             "planned_environment_steps": requested_updates * rollout_steps,
+            "planned_attempt_updates": requested_updates - completed_updates,
+            "planned_attempt_environment_steps": (requested_updates - completed_updates) * rollout_steps,
+            "resume_contract": resume_contract,
+            "resume": resume_metadata,
+            "resume_archive_sha256": input_hashes.get("resume training state"),
             "backend": "jax",
             "eval_env": "jax",
             "procedure": (
@@ -145,10 +264,12 @@ def begin_training(
             if scripted_red
             else {},
             "initialization": {
-                "kind": "fresh",
+                "kind": "full_state_resume" if resume_metadata is not None else "fresh",
                 "state_retention": "initial numeric optimizer, normalizer, RNG, environment and observation state",
                 "seed_roots_retained": True,
-                "checkpoint_continuation": "weights only; resume unsupported",
+                "checkpoint_continuation": "full numeric Blue/FSM state at aligned rollout boundaries"
+                if scripted_red
+                else "weights only; resume unsupported",
             },
             "execution": provenance.configuration,
         }
@@ -161,8 +282,8 @@ def begin_training(
         protocol=protocol,
         trial_id=trial_id,
         retry_of=retry_of,
-        requested_steps=int(configs["blue"]["TOTAL_TIMESTEPS"]),
-        requested_updates=requested_updates,
+        requested_steps=requested_steps - completed_updates * rollout_steps,
+        requested_updates=requested_updates - completed_updates,
         resolved_config=config,
         inputs=inputs,
         source_files=provenance.source_files,
@@ -182,6 +303,13 @@ def begin_training(
                     "trainable_teams",
                     "opponents",
                 )
+            },
+            "resume": fact(resume_metadata)
+            if resume_metadata is not None
+            else {
+                "value": None,
+                "reason": "Fresh training has no continuation checkpoint",
+                "source": "training invocation",
             },
             "game_contract": fact(asdict(configs["blue"]["TRAIN_VARIANT"])),
         },
@@ -205,7 +333,7 @@ def begin_training(
         raise
 
 
-def retain_checkpoint(capture, model, sidecar, *, steps, initial=False, joint=True):
+def retain_checkpoint(capture, model, sidecar, *, steps, initial=False, joint=True, training_state=None):
     """Retain exact checkpoint and sidecar bytes under this training attempt."""
     directory = "initial" if initial else f"checkpoints/{steps}"
     model_id = add_artifact(
@@ -219,16 +347,24 @@ def retain_checkpoint(capture, model, sidecar, *, steps, initial=False, joint=Tr
     sidecar_id = add_artifact(
         capture, sidecar, role="checkpoint recipe sidecar", name=f"{directory}/{Path(sidecar).name}"
     )
+    checkpoint = {"model": model_id, "sidecar": sidecar_id, "environment_steps": steps}
+    if training_state is not None:
+        checkpoint["training_state"] = add_artifact(
+            capture,
+            training_state,
+            role="full numeric training state",
+            name=f"{directory}/{Path(training_state).name}",
+        )
     record_facts(
         capture,
         {
             "initial_checkpoint" if initial else f"checkpoint_{steps}": fact(
-                {"model": model_id, "sidecar": sidecar_id, "environment_steps": steps},
+                checkpoint,
                 "retained training-owned checkpoint and sidecar artifacts",
             )
         },
     )
-    return {"model": model_id, "sidecar": sidecar_id}
+    return checkpoint
 
 
 def retain_initial_state(capture, *, train_states, reward_norm_states, rng, env_state, obs, adaptive_state=None):

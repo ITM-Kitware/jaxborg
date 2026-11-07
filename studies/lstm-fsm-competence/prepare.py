@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import platform
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -46,7 +47,7 @@ def recipes_with_banks(recipe, training_bank, evaluation_bank):
     return full, smoke
 
 
-def prepare(root, expected_revision):
+def prepare(root, expected_revision, reuse_inputs=None):
     from jaxborg.experiment_records.core import validate_records
     from jaxborg.recipe import load, materialize_topology_bank
 
@@ -62,11 +63,14 @@ def prepare(root, expected_revision):
     recipe.pop("__source_path__", None)
     inputs = root / "inputs"
     inputs.mkdir(parents=True)
-    banks = {}
-    for section in ("train", "eval"):
-        settings = copy.deepcopy(recipe[section])
-        settings["topology_generation"]["cache_dir"] = str(inputs / "topologies" / section)
-        banks[section] = materialize_topology_bank(settings, scope=section, repo_root=PROJECT)
+    if reuse_inputs is not None:
+        banks, reuse = copy_verified_banks(reuse_inputs, root)
+    else:
+        banks, reuse = {}, None
+        for section in ("train", "eval"):
+            settings = copy.deepcopy(recipe[section])
+            settings["topology_generation"]["cache_dir"] = str(inputs / "topologies" / section)
+            banks[section] = materialize_topology_bank(settings, scope=section, repo_root=PROJECT)
     full, smoke = recipes_with_banks(recipe, banks["train"], banks["eval"])
     for phase, effective in (("full", full), ("smoke", smoke)):
         path = inputs / f"recipe-{phase}.yaml"
@@ -88,6 +92,7 @@ def prepare(root, expected_revision):
         "evaluation_topology_count": len(banks["eval"]),
         "topology_generation": {section: recipe[section]["topology_generation"] for section in ("train", "eval")},
         "deadline_utc": "2026-11-09T13:00:00+00:00",
+        "reused_inputs": reuse,
     }
     write_json(inputs / "manifest.json", manifest)
     print(json.dumps({"study_root": str(root), "manifest": str(inputs / "manifest.json"), "source_revision": revision}))
@@ -99,11 +104,60 @@ def verify(root, expected_revision):
     manifest = json.loads((root / "inputs/manifest.json").read_text())
     if manifest["source_revision"] != expected_revision:
         raise ValueError("Inputs were prepared at a different source revision")
+    verify_input_files(root, manifest)
+    return manifest
+
+
+def verify_input_files(root, manifest):
+    root = Path(root).resolve()
     for relative, digest in manifest["input_sha256"].items():
         path = (root / relative).resolve()
         if root not in path.parents or sha256(path) != digest:
             raise ValueError(f"Changed or invalid input: {relative}")
-    return manifest
+
+
+def copy_verified_banks(previous_root, root):
+    """Copy exact old topology bytes without requiring its old checkout revision."""
+    previous_root, root = Path(previous_root).resolve(), Path(root).resolve()
+    if root == previous_root or previous_root in root.parents:
+        raise ValueError("The reused study must remain unchanged; use a separate new study root")
+    manifest_path = previous_root / "inputs/manifest.json"
+    previous = json.loads(manifest_path.read_text())
+    verify_input_files(previous_root, previous)
+    recipe_path = previous_root / "inputs/recipe-full.yaml"
+    if "inputs/recipe-full.yaml" not in previous["input_sha256"]:
+        raise ValueError("Reused recipe was not retained in the previous input manifest")
+    recipe = yaml.safe_load(recipe_path.read_text())
+    banks, copies = {}, []
+    for section, count in (("train", 100), ("eval", 4)):
+        declared = recipe[section]["topology_bank"]
+        if len(declared) != count or len(set(declared)) != count:
+            raise ValueError(f"Expected {count} distinct reused {section} topologies")
+        banks[section] = []
+        for index, name in enumerate(declared):
+            source = Path(name).resolve()
+            if previous_root not in source.parents:
+                raise ValueError("Reused topology lies outside the previous study inputs")
+            relative = source.relative_to(previous_root).as_posix()
+            digest = previous["input_sha256"].get(relative)
+            if digest is None or sha256(source) != digest:
+                raise ValueError("Reused topology is absent from the manifest or changed")
+            destination = root / "inputs/topologies" / section / f"snapshot-{index:03d}.npz"
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if destination.exists():
+                raise FileExistsError("Refusing to overwrite reused topology")
+            shutil.copyfile(source, destination)
+            if sha256(destination) != digest:
+                raise ValueError("Reused topology changed while copying")
+            banks[section].append(destination)
+            copies.append({"source": str(source), "destination": str(destination.relative_to(root)), "sha256": digest})
+    reuse = {
+        "previous_study_root": str(previous_root),
+        "previous_source_revision": previous["source_revision"],
+        "previous_manifest_sha256": sha256(manifest_path),
+        "topologies": copies,
+    }
+    return banks, reuse
 
 
 def main():
@@ -111,10 +165,13 @@ def main():
     parser.add_argument("mode", choices=("prepare", "verify"))
     parser.add_argument("--study-root", type=Path, required=True)
     parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--reuse-inputs", type=Path)
     args = parser.parse_args()
     if args.mode == "prepare":
-        prepare(args.study_root, args.expected_revision)
+        prepare(args.study_root, args.expected_revision, args.reuse_inputs)
     else:
+        if args.reuse_inputs is not None:
+            parser.error("--reuse-inputs is only valid with prepare")
         verify(args.study_root, args.expected_revision)
         print("Frozen inputs verified")
 

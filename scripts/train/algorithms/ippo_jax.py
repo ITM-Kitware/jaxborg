@@ -916,8 +916,9 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
 def _finish_training_outputs(recipe, configs, save_dir, outputs, *, capture=None):
     elapsed, final_reward = outputs["elapsed"], outputs["final_reward"]
     metrics_path, final_model, sidecar = (outputs[name] for name in ("metrics_path", "final_model", "sidecar"))
-    completed_steps = (
-        int(configs["blue"]["NUM_UPDATES"]) * int(configs["blue"]["NUM_ENVS"]) * int(configs["blue"]["NUM_STEPS"])
+    completed_steps = outputs.get(
+        "completed_environment_steps",
+        (int(configs["blue"]["NUM_UPDATES"]) * int(configs["blue"]["NUM_ENVS"]) * int(configs["blue"]["NUM_STEPS"])),
     )
     sps = completed_steps / elapsed if elapsed > 0 else 0.0
     tracking = mlflow if capture is None else capture.tracking
@@ -944,6 +945,10 @@ def _run_single_training(args, recipe, tag, save_dir, *, recording=None):
     """Train fresh Blue against native FSM Red with the ordinary single-team loop."""
     if training_teams(recipe) != ("blue",) or recipe.get("train", {}).get("opponents"):
         raise ValueError("Single-team training requires fresh Blue against scripted Red")
+    if getattr(args, "resume_state", None) is not None and recording is None:
+        raise ValueError("Full-state resume requires the recorded Blue/FSM workflow")
+    if getattr(args, "resume_state", None) is not None and save_dir.exists() and any(save_dir.iterdir()):
+        raise ValueError("Full-state resume requires a fresh output tag/directory")
     config = project_jax(recipe, team="blue")
     config["SEED"] = args.seed
     topology_bank = config.get("TOPOLOGY_BANK") or ()
@@ -1052,8 +1057,45 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
         raise ValueError("total_timesteps must cover at least one complete rollout")
     num_steps = int(config["NUM_STEPS"])
     metrics_path = save_dir / "metrics.jsonl"
+    completed_updates = 0
+    resume_contract = None
+    resume_metadata = None
+    training_origin = None
+    if capture is not None:
+        from jaxborg.evaluation.resume_state import load_training_state, save_training_state
 
-    print(f"Starting training ({num_updates} updates)...", flush=True)
+        recorded_config = json.loads((capture.directory / "configuration.json").read_text())
+        resume_contract = recorded_config["resume_contract"]
+        resume_metadata = recorded_config["resume"]
+        if resume_metadata is not None:
+            template = {
+                "train_state": train_state,
+                "reward_norm_state": reward_norm_state,
+                "rng": rng,
+                "env_state": env_state,
+                "obs": obs,
+            }
+            restored, metadata = load_training_state(
+                capture.inputs["resume training state"],
+                template=template,
+                expected_metadata={"contract": resume_contract},
+                expected_sha256=recorded_config["resume_archive_sha256"],
+            )
+            completed_updates = int(metadata["completed_updates"])
+            train_state, reward_norm_state, rng, env_state, obs = (
+                restored[key] for key in ("train_state", "reward_norm_state", "rng", "env_state", "obs")
+            )
+            expected_optimizer_steps = completed_updates * int(config["NUM_MINIBATCHES"]) * int(config["UPDATE_EPOCHS"])
+            if int(jax.device_get(train_state.step)) != expected_optimizer_steps:
+                raise ValueError("Resume optimizer count differs from checkpoint cumulative updates")
+            if int(jax.device_get(jnp.max(env_state.env_state.state.time))) != 0:
+                raise ValueError("Resume state is not at an aligned environment reset boundary")
+            print(
+                f"Restored full state after {completed_updates} updates / {metadata['environment_steps']:,} steps",
+                flush=True,
+            )
+
+    print(f"Starting training ({num_updates - completed_updates} remaining of {num_updates} updates)...", flush=True)
     start = time.perf_counter()
     final_metric = None
 
@@ -1068,7 +1110,7 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
                     action_dim=action_dim,
                     arch=arch,
                     trainable=True,
-                    source={"kind": "fresh", "seed": int(args.seed)},
+                    source={"kind": "full_state_resume" if completed_updates else "fresh", "seed": int(args.seed)},
                 )
             },
             provenance={
@@ -1084,17 +1126,29 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
         from jaxborg.evaluation.training_capture import retain_checkpoint, retain_initial_state
 
         initial_model = save_dir / "initial.safetensors"
-        save_bundle(initial_model, 0)
+        save_bundle(initial_model, completed_updates * num_steps * num_envs)
         initial_sidecar = write_sidecar(
             save_dir / "recipe_initial.yaml",
             recipe,
             seed=args.seed,
-            total_steps=0,
+            total_steps=completed_updates * num_steps * num_envs,
             backend="jax",
             train_run_id=train_run_id,
             extra={"trainable_teams": ["blue"], "model": initial_model.name},
         )
-        retain_checkpoint(capture, initial_model, initial_sidecar, steps=0, initial=True, joint=False)
+        initial_checkpoint = retain_checkpoint(
+            capture,
+            initial_model,
+            initial_sidecar,
+            steps=completed_updates * num_steps * num_envs,
+            initial=True,
+            joint=False,
+        )
+        training_origin = (
+            resume_metadata.get("training_origin")
+            if resume_metadata is not None
+            else {"attempt_id": capture.attempt_id, "checkpoint": initial_checkpoint}
+        )
         retain_initial_state(
             capture,
             train_states={"blue": train_state},
@@ -1106,6 +1160,10 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
         record_facts(
             capture,
             {
+                "training_origin": {
+                    "value": training_origin,
+                    "source": "original training-owned initial checkpoint or retained resume lineage",
+                },
                 "policy_contract": {
                     "value": {"blue": {"obs_dim": actual_obs_dim, "action_dim": action_dim, "arch": arch}},
                     "source": "initial checkpoint metadata",
@@ -1115,7 +1173,7 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
         )
 
     with metrics_path.open("w") as metrics_file:
-        for update_idx in range(num_updates):
+        for update_idx in range(completed_updates, num_updates):
             train_state, env_state, obs, rng, reward_norm_state, metric = collect_and_update(
                 train_state, env_state, obs, rng, reward_norm_state
             )
@@ -1128,16 +1186,18 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
             if capture is not None and int(metric["rollout_boundary_time"]) != 0:
                 raise ValueError("Blue recurrent rollout boundary does not coincide with environment reset")
             final_metric = metric
-            if update_idx == 0:
+            if update_idx == completed_updates:
                 print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
 
             env_steps = (update_idx + 1) * num_steps * num_envs
             elapsed = time.perf_counter() - start
-            sps = env_steps / elapsed if elapsed > 0 else 0.0
+            attempt_updates = update_idx + 1 - completed_updates
+            attempt_steps = attempt_updates * num_steps * num_envs
+            sps = attempt_steps / elapsed if elapsed > 0 else 0.0
 
             row = make_row(
-                update_idx=update_idx + 1,
-                env_steps=env_steps,
+                update_idx=attempt_updates,
+                env_steps=attempt_steps,
                 wall_time_s=elapsed,
                 throughput_sps=sps,
                 loss_policy=float(metric["actor_loss"]),
@@ -1171,7 +1231,7 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
                 row,
                 "blue",
                 {
-                    "update_count": policy_updates,
+                    "update_count": policy_updates - completed_updates,
                     "updated": 1,
                     "return": float(metric["raw_rollout_return"]),
                     "normalized_return": float(metric["mean_rollout_return"]),
@@ -1181,6 +1241,9 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
             row["team.blue.trainable"] = True
             row["team.red.trainable"] = False
             row["team.blue.lr"] = float(config["LR"])
+            row["cumulative_update_idx"] = update_idx + 1
+            row["cumulative_environment_steps"] = env_steps
+            row["team.blue.cumulative_update_count"] = policy_updates
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             if capture is not None:
@@ -1205,7 +1268,9 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
             is_final = update_idx == num_updates - 1
             previous_steps = update_idx * num_steps * num_envs
             eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
-            periodic_checkpoint = ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0
+            periodic_checkpoint = (ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0) or (
+                update_idx + 1 in (getattr(args, "checkpoint_update", None) or ())
+            )
             if periodic_checkpoint or is_final or eval_due:
                 ckpt_path = save_dir / (
                     f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
@@ -1222,7 +1287,27 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
                     extra={"trainable_teams": ["blue"], "model": ckpt_path.name},
                 )
                 if capture is not None:
-                    retain_checkpoint(capture, ckpt_path, sidecar_path, steps=env_steps, joint=False)
+                    state_path = save_dir / f"training_state_{env_steps}.npz"
+                    save_training_state(
+                        state_path,
+                        state={
+                            "train_state": train_state,
+                            "reward_norm_state": reward_norm_state,
+                            "rng": rng,
+                            "env_state": env_state,
+                            "obs": obs,
+                        },
+                        metadata={
+                            "contract": resume_contract,
+                            "completed_updates": update_idx + 1,
+                            "environment_steps": env_steps,
+                            "producer_attempt_id": capture.attempt_id,
+                            "training_origin": training_origin,
+                        },
+                    )
+                    retain_checkpoint(
+                        capture, ckpt_path, sidecar_path, steps=env_steps, joint=False, training_state=state_path
+                    )
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {env_steps:,}; "
@@ -1271,7 +1356,8 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
                     "value": {
                         "loop_elapsed_seconds": elapsed,
                         "setup_elapsed_seconds": start - t0,
-                        "completed_environment_steps": num_updates * num_steps * num_envs,
+                        "completed_environment_steps": (num_updates - completed_updates) * num_steps * num_envs,
+                        "cumulative_environment_steps": num_updates * num_steps * num_envs,
                         "device_count": len(jax.devices()),
                         "device_kinds": [device.device_kind for device in jax.devices()],
                         "scope": (
@@ -1285,6 +1371,7 @@ def _execute_single_training(args, recipe, tag, save_dir, config, *, capture):
         )
     return {
         "elapsed": elapsed,
+        "completed_environment_steps": (num_updates - completed_updates) * num_steps * num_envs,
         "final_reward": float(final_metric["raw_rollout_return"]),
         "metrics_path": metrics_path,
         "final_model": save_dir / f"model_{tag}.safetensors",
@@ -1303,6 +1390,14 @@ def main(*, expected_algorithm: str | None = None):
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--trial")
     parser.add_argument("--retry-of")
+    parser.add_argument("--resume-state", type=Path, help="Recorded Blue/FSM full numeric state checkpoint")
+    parser.add_argument(
+        "--checkpoint-update",
+        action="append",
+        type=int,
+        default=[],
+        help="Also retain a checkpoint after this cumulative rollout update; repeatable",
+    )
     parser.add_argument("--expected-revision")
     parser.add_argument("--allow-dirty", action="store_true")
     parser.add_argument("--development-no-recording", action="store_true")
@@ -1325,6 +1420,12 @@ def main(*, expected_algorithm: str | None = None):
         parser.error(f"this launcher requires algorithm: {expected_algorithm}")
     teams = training_teams(recipe)
     learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
+    if learned_red and (args.resume_state is not None or args.checkpoint_update):
+        parser.error("full-state resume and explicit checkpoint updates are supported only for Blue/FSM")
+    if args.resume_state is not None and args.development_no_recording:
+        parser.error("full-state resume requires recorded Blue/FSM training")
+    if any(update <= 0 for update in args.checkpoint_update):
+        parser.error("checkpoint-update values must be positive")
     blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
     red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
     modules = {"blue": blue_module, "red": red_module}
@@ -1360,7 +1461,13 @@ def main(*, expected_algorithm: str | None = None):
             "expected_revision": args.expected_revision,
             "allow_dirty": args.allow_dirty,
             "supplied_recipe": supplied_recipe,
-            "overrides": {"seed": args.seed, "total_timesteps": args.total_timesteps, "num_envs": args.num_envs},
+            "overrides": {
+                "seed": args.seed,
+                "total_timesteps": args.total_timesteps,
+                "num_envs": args.num_envs,
+                "resume_state": str(args.resume_state) if args.resume_state is not None else None,
+                "checkpoint_updates": args.checkpoint_update,
+            },
             "entrypoint": Path(__file__),
         }
     )

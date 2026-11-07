@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MODE=${1:?Usage: launch.sh submit ROOT smoke|full SEED [MAX_HOURS]}
+MODE=${1:?Usage: launch.sh submit ROOT smoke|smoke-resume|full SEED [MAX_HOURS]}
 if [ "$MODE" = allocated ]; then
   SOURCE_ROOT=${7:?Pinned source checkout required}
 else
@@ -13,9 +13,9 @@ SEED=${4:?Training seed required}
 MAX_HOURS=${5:-36}
 SOURCE_SHA=$(git rev-parse HEAD)
 case "$ROOT/" in "$SOURCE_ROOT/"*) echo 'Study root must be external' >&2; exit 2;; esac
-case "$PHASE:$SEED" in smoke:42|full:42|full:100) ;; *) echo 'Invalid phase or seed' >&2; exit 2;; esac
+case "$PHASE:$SEED" in smoke:42|smoke-resume:42|full:42|full:100) ;; *) echo 'Invalid phase or seed' >&2; exit 2;; esac
 [[ "$MAX_HOURS" =~ ^[0-9]+$ ]] && [ "$MAX_HOURS" -gt 0 ] && [ "$MAX_HOURS" -le 48 ]
-[ "$PHASE" != smoke ] || MAX_HOURS=1
+[[ "$PHASE" != smoke* ]] || MAX_HOURS=1
 .venv/bin/python studies/lstm-fsm-competence/prepare.py verify --study-root "$ROOT" --expected-revision "$SOURCE_SHA"
 DEADLINE=$(date -d '2026-11-09 13:00:00 UTC' +%s)
 REMAINING=$((DEADLINE - $(date +%s) - 600))
@@ -24,11 +24,11 @@ LIMIT=$((MAX_HOURS * 3600))
 [ "$REMAINING" -ge "$LIMIT" ] || LIMIT=$REMAINING
 if [ "$MODE" = submit ]; then
   if [ "$PHASE" = full ]; then
-    .venv/bin/python studies/lstm-fsm-competence/validate.py \
-      --study-root "$ROOT" --expected-revision "$SOURCE_SHA" --require-cpu-eval
+    JAX_PLATFORMS=cpu .venv/bin/python studies/lstm-fsm-competence/validate.py \
+      --study-root "$ROOT" --expected-revision "$SOURCE_SHA" --require-cpu-eval --require-resume
   fi
   TRIAL="fsm-seed$SEED"
-  [ "$PHASE" != smoke ] || TRIAL="smoke-seed42"
+  [[ "$PHASE" != smoke* ]] || TRIAL="$PHASE-seed42"
   [ ! -e "$ROOT/runs/$TRIAL" ] || { echo 'Trial already attempted; use explicit recorded retry procedure' >&2; exit 2; }
   mkdir -p "$ROOT/logs"
   exec 8>"$ROOT/.submission-$TRIAL.lock"

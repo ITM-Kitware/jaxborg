@@ -74,6 +74,48 @@ def test_checkpoint_selection_rejects_incomplete_or_foreign_inputs(owned, mutati
         study_module().checkpoint_selection(records, root, "fsm-seed42", "training-42")
 
 
+def test_live_training_selects_exact_published_milestone_not_latest(owned):
+    root, records = owned
+    records[0]["status"] = "running"
+    records[0]["budgets"][0]["completed"] = 72000000
+    selected = study_module().checkpoint_selection(
+        records, root, "fsm-seed42", "training-42", target_steps=49968000, allow_running=True
+    )
+    assert [item["steps"] for item in selected] == [0, 49968000]
+    with pytest.raises(ValueError, match="eligible training"):
+        study_module().checkpoint_selection(records, root, "fsm-seed42", "training-42", target_steps=49968000)
+    with pytest.raises(ValueError, match="not yet completed"):
+        study_module().checkpoint_selection(
+            records, root, "fsm-seed42", "training-42", target_steps=124992000, allow_running=True
+        )
+    with pytest.raises(ValueError, match="Missing declared"):
+        study_module().checkpoint_selection(
+            records, root, "fsm-seed42", "training-42", target_steps=72000000, allow_running=True
+        )
+
+
+def test_resumed_training_uses_original_zero_step_owner(owned):
+    import copy
+
+    root, records = owned
+    original = records[0]
+    resumed = copy.deepcopy(original)
+    resumed["id"] = "resumed-42"
+    resumed["facts"]["initial_checkpoint"] = copy.deepcopy(original["facts"]["checkpoint_49968000"])
+    resumed["facts"]["training_origin"] = {
+        "value": {"attempt_id": original["id"], "checkpoint": original["facts"]["initial_checkpoint"]["value"]}
+    }
+    for artifact in records[3:]:
+        artifact["producer_id"] = resumed["id"]
+    records.append(resumed)
+    selected = study_module().checkpoint_selection(records, root, "fsm-seed42", "resumed-42")
+    assert selected[0]["training_attempt"] == "training-42"
+    assert selected[1]["training_attempt"] == "resumed-42"
+    resumed["facts"]["training_origin"]["value"]["attempt_id"] = "missing-origin"
+    with pytest.raises(ValueError, match="verified original"):
+        study_module().checkpoint_selection(records, root, "fsm-seed42", "resumed-42")
+
+
 def test_panel_never_substitutes_or_drops_reserved_topologies(tmp_path):
     study = study_module()
     inputs = []
@@ -92,11 +134,75 @@ def test_panel_never_substitutes_or_drops_reserved_topologies(tmp_path):
         for identity in study.RED_IDS
     ]
     manifest = {"topology_banks": {"unseen": {"snapshots": inputs}}, "policies": {"red": reds}}
-    assert len(study.panel_from_manifest(manifest, "full")[0]) == 4
+    assert len(study.panel_from_manifest(manifest, "primary")[0]) == 4
     assert len(study.panel_from_manifest(manifest, "smoke")[0]) == 1
+    assert study.panel_from_manifest(manifest, "interim")[2] == []
+    assert len(study.panel_from_manifest(manifest, "primary")[2]) == 4
     manifest["topology_banks"]["unseen"]["snapshots"][0]["source_seed"] = 100
     with pytest.raises(ValueError, match="200..203"):
-        study.panel_from_manifest(manifest, "full")
+        study.panel_from_manifest(manifest, "primary")
+
+
+def test_initial_reference_reuse_checks_records_inputs_and_raw_rewards(tmp_path):
+    study = study_module()
+    case = {
+        "checkpoint": "blue",
+        "checkpoint_sha256": "blue-hash",
+        "sidecar_sha256": "sidecar-hash",
+        "variant": {"name": "stock"},
+        "topologies": ["topo-hash"],
+        "seeds": [21000, 21001],
+        "source_revision": "a" * 40,
+        "red_id": "fsm",
+    }
+    receipt = {"case": case, "checkpoint_steps": 0, "evaluation_id": "evaluation:1", "episodes": 2, "mean_return": -2.0}
+    directory = tmp_path / "attempts/1"
+    directory.mkdir(parents=True)
+    config = {
+        "base_variant": case["variant"],
+        "topology": {"sha256": case["topologies"]},
+        "seeds": case["seeds"],
+        "execution": {"source_revision": case["source_revision"]},
+        "deterministic": False,
+        "episodes_per_seed": 1,
+        "reds": ["fsm"],
+    }
+    (directory / "configuration.json").write_text(json.dumps(config))
+    (directory / "input-artifacts.json").write_text(json.dumps({"source recipe": "sidecar"}))
+    records = [
+        {
+            "id": "evaluation:1",
+            "kind": "evaluation",
+            "attempt_id": "attempt:1",
+            "status": "succeeded",
+            "inputs": ["blue"],
+        },
+        {"id": "attempt:1", "kind": "attempt", "status": "succeeded"},
+        {"id": "blue", "kind": "artifact", "sha256": "blue-hash"},
+        {"id": "sidecar", "kind": "artifact", "sha256": "sidecar-hash"},
+    ]
+    for index, reward in enumerate((-1.0, -3.0)):
+        path = directory / f"episode{index}.json"
+        path.write_text(json.dumps({"reward": reward}))
+        records.append(
+            {
+                "id": f"episode:{index}",
+                "kind": "artifact",
+                "producer_id": "evaluation:1",
+                "role": "evaluation episode observation",
+                "uri": str(path.relative_to(tmp_path)),
+                "sha256": study.digest(path),
+            }
+        )
+    assert study.validate_reference(receipt, case, records, tmp_path)["reused"] is True
+    receipt["mean_return"] = 5.0
+    with pytest.raises(ValueError, match="summary differs"):
+        study.validate_reference(receipt, case, records, tmp_path)
+    receipt["mean_return"] = -2.0
+    config["reds"] = ["cia_a"]
+    (directory / "configuration.json").write_text(json.dumps(config))
+    with pytest.raises(ValueError, match="another scripted"):
+        study.validate_reference(receipt, case, records, tmp_path)
 
 
 def test_owned_scripted_capture_retains_caller_closure_and_condition_check(tmp_path, monkeypatch):
@@ -200,3 +306,87 @@ def test_cpu_launcher_uses_explicit_checkout_after_slurm_spooling(tmp_path):
     assert lines[0] == str(checkout)
     assert lines[1] == "studies/lstm-fsm-competence/evaluate.py"
     assert lines[-1] == revision
+
+
+def test_evaluation_can_finish_with_owned_checkpoint_from_running_training(tmp_path, monkeypatch):
+    from jaxborg.evaluation.capture_store import (
+        add_artifact,
+        finish_evaluation,
+        load_records,
+        record_episode,
+        start_evaluation,
+        start_training,
+    )
+
+    monkeypatch.delenv("MLFLOW_TRACKING_URI", raising=False)
+    protocol = {
+        "schema_version": 1,
+        "kind": "protocol",
+        "id": "live-checkpoint",
+        "study_id": "live-checkpoint-test",
+        "revision": "1",
+        "selection_rule": "explicit",
+        "required_facts": {"attempt": [], "evaluation": []},
+        "metric_definitions": [],
+        "trials": [{"id": "trial", "condition_id": "fsm", "replicate_id": "42", "matched_unit_id": None}],
+    }
+    root = tmp_path / "evidence"
+    training = start_training(
+        root,
+        protocol=protocol,
+        trial_id="trial",
+        requested_steps=100,
+        requested_updates=1,
+        resolved_config={},
+        inputs={},
+        source_files={},
+    )
+    model = tmp_path / "model.safetensors"
+    model.write_bytes(b"immutable owned checkpoint")
+    checkpoint = add_artifact(training, model, role="policy checkpoint")
+    evaluation = start_evaluation(
+        root,
+        protocol=protocol,
+        trial_id="trial",
+        requested_episodes=1,
+        resolved_config={},
+        inputs={},
+        source_files={},
+        retained_inputs={"blue checkpoint": checkpoint},
+    )
+    record_episode(evaluation, episode_index=0, seed=21000, reward=-10.0, steps=500)
+    finish_evaluation(evaluation, status="succeeded")
+    records = {record["id"]: record for record in load_records(root)}
+    assert records[training.attempt_id]["status"] == "running"
+    assert records[evaluation.evaluation_id]["status"] == "succeeded"
+    assert checkpoint in records[evaluation.evaluation_id]["inputs"]
+
+
+def test_running_attempt_resolves_without_a_terminal_receipt(owned):
+    root, records = owned
+    records[0]["status"] = "running"
+    records[0]["facts"]["source_revision"] = {"value": "a" * 40}
+    missing = root / "runs/fsm-seed42/receipt.json"
+    assert not missing.exists()
+    assert (
+        study_module().resolve_training_attempt(records, "fsm-seed42", "a" * 40, receipt_path=missing) == "training-42"
+    )
+
+
+def test_attempt_resolver_rejects_ambiguity_and_wrong_source(owned):
+    import copy
+
+    root, records = owned
+    owner = records[0]
+    owner["facts"]["source_revision"] = {"value": "a" * 40}
+    retry = copy.deepcopy(owner)
+    retry["id"] = "retry-42"
+    records.append(retry)
+    study = study_module()
+    with pytest.raises(ValueError, match="multiple training"):
+        study.resolve_training_attempt(records, "fsm-seed42", "a" * 40)
+    assert study.resolve_training_attempt(records, "fsm-seed42", "a" * 40, explicit="retry-42") == "retry-42"
+    with pytest.raises(ValueError, match="different source"):
+        study.resolve_training_attempt(records, "fsm-seed42", "b" * 40, explicit="retry-42")
+    with pytest.raises(ValueError, match="requested trial"):
+        study.resolve_training_attempt(records, "fsm-seed100", "a" * 40, explicit="retry-42")

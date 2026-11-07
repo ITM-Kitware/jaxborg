@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-MODE=${1:?Usage: eval_launch.sh submit ROOT TRAINING_TRIAL smoke|full TRANSFER_MANIFEST [DEPENDENCY_JOB]}
+MODE=${1:?Usage: eval_launch.sh submit ROOT TRAINING_TRIAL smoke|interim|primary|final TRANSFER_MANIFEST [DEPENDENCY_JOB]}
 if [ "$MODE" = allocated ]; then
   SOURCE_ROOT=${7:?Submitted source checkout required}
 else
@@ -11,7 +11,7 @@ STUDY_ROOT=$(realpath -e "${2:?Study root required}")
 TRIAL=${3:?Training trial required}
 STAGE=${4:?Evaluation stage required}
 TRANSFER=$(realpath -e "${5:?Transfer input manifest required}")
-case "$STAGE" in smoke|full) ;; *) exit 2 ;; esac
+case "$STAGE" in smoke|interim|primary|final) ;; *) exit 2 ;; esac
 case "$TRIAL" in smoke-seed42|fsm-seed42|fsm-seed100) ;; *) exit 2 ;; esac
 REVISION=$(git rev-parse HEAD)
 test -z "$(git status --porcelain --untracked-files=all)"
@@ -38,15 +38,15 @@ fi
 [ "$REVISION" = "${6:?Pinned revision required}" ]
 [ -n "${SLURM_JOB_ID:-}" ]
 [ "${SLURM_JOB_PARTITION:-}" = community ]
-exec 9>"$STUDY_ROOT/.eval-$TRIAL-$STAGE.lock"
-flock -n 9 || { echo 'This evaluation is already running' >&2; exit 1; }
+exec 9>"$STUDY_ROOT/.eval-$TRIAL.lock"
+flock -n 9 || { echo 'Another milestone evaluation of this trial is already running' >&2; exit 1; }
 source "$HOME/jaxborg-exp/shared/store.env"
 export MLFLOW_TRACKING_URI="sqlite:///$JAXBORG_EXP_DIR/mlflow.db"
 export MLFLOW_EXPERIMENT_NAME=lstm-fsm-competence
 export JAXBORG_MLFLOW_EXPERIMENT="$MLFLOW_EXPERIMENT_NAME"
 export JAX_PLATFORMS=cpu JAXBORG_EVAL_BATCH_SIZE=1
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 MKL_NUM_THREADS=1
-export JAX_COMPILATION_CACHE_DIR="$STUDY_ROOT/cpu-compilation-cache"
+export JAX_COMPILATION_CACHE_DIR="${JAX_COMPILATION_CACHE_DIR:-$STUDY_ROOT/cpu-compilation-cache}"
 DEADLINE=$(TZ=America/New_York date -d '2026-11-09 08:00:00' +%s)
 REMAINING=$(( DEADLINE - $(date +%s) - 300 ))
 [ "$REMAINING" -gt 0 ] || { echo 'Study resource window has ended' >&2; exit 1; }

@@ -178,7 +178,8 @@ def validate_smoke(root, expected_revision):
             "first_update_seconds_including_compilation": updates[0]["wall_time_s"],
             "warm_update_seconds": warm,
             "warm_median_seconds": median,
-            "estimated_full_training_loop_seconds": updates[0]["wall_time_s"] + median * 1040,
+            "estimated_primary_training_loop_seconds": updates[0]["wall_time_s"] + median * 1040,
+            "estimated_full_training_loop_seconds": updates[0]["wall_time_s"] + median * 2603,
             "limit": (
                 "Two warm samples; estimate excludes preparation and additional production checkpoint retention. "
                 "No performance-improvement requirement is imposed after three updates."
@@ -189,6 +190,92 @@ def validate_smoke(root, expected_revision):
     if target.exists():
         if json.loads(target.read_text()) != result:
             raise ValueError("Refusing to replace a different smoke acceptance result")
+    else:
+        write_json(target, result)
+    print(json.dumps(result))
+    return result
+
+
+def retained_training_state(evidence, indexed, attempt, steps):
+    from jaxborg.evaluation.resume_state import inspect_training_state
+
+    checkpoint = attempt["facts"][f"checkpoint_{steps}"]["value"]
+    if checkpoint["environment_steps"] != steps:
+        raise ValueError("Resume checkpoint step identity differs")
+    artifact = indexed[checkpoint["training_state"]]
+    if artifact["kind"] != "artifact" or artifact["producer_id"] != attempt["id"]:
+        raise ValueError("Resume state must be retained by its training attempt")
+    state = inspect_training_state(evidence / artifact["uri"], expected_sha256=artifact["sha256"])
+    if state["metadata"]["environment_steps"] != steps:
+        raise ValueError("Resume state metadata differs from checkpoint step identity")
+    return {
+        "artifact_id": artifact["id"],
+        "sha256": state["sha256"],
+        "state_sha256": state["state_sha256"],
+        "leaf_count": state["leaf_count"],
+        "metadata": {
+            key: state["metadata"][key] for key in ("environment_steps", "completed_updates", "producer_attempt_id")
+        },
+    }
+
+
+def validate_resume_smoke(root, acceptance):
+    from jaxborg.evaluation.capture_store import load_records
+
+    root = Path(root).resolve()
+    run_dir = root / "runs/smoke-resume-seed42"
+    execution = json.loads((run_dir / "execution.json").read_text())
+    receipt = json.loads((run_dir / "receipt.json").read_text())
+    if execution["returncode"] != 0 or execution["interrupted"] or execution["receipt"] != receipt:
+        raise ValueError("Resumed smoke process did not complete successfully")
+    evidence = root / "evidence"
+    if Path(receipt["evidence_root"]).resolve() != evidence:
+        raise ValueError("Unexpected resumed smoke evidence root")
+    indexed = {record["id"]: record for record in load_records(evidence)}
+    original = indexed[acceptance["attempt_id"]]
+    resumed = indexed[receipt["attempt_id"]]
+    if (
+        resumed["status"] != "succeeded"
+        or resumed["execution_kind"] != "training"
+        or resumed["trial_id"] != "smoke-resume-seed42"
+    ):
+        raise ValueError("Expected successful resumed training smoke")
+    budgets = {item["unit"]: item["completed"] for item in resumed["budgets"]}
+    if budgets != {
+        "environment_steps": 48000,
+        "joint_rollout_updates": 1,
+        "blue_policy_updates": 1,
+        "red_policy_updates": 0,
+    }:
+        raise ValueError(f"Unexpected newly executed resume budgets: {budgets}")
+    parent_state = retained_training_state(evidence, indexed, original, 96000)
+    roles = resumed["facts"]["input_artifacts"]["value"]
+    resume_input = indexed[roles["resume training state"]]
+    if resume_input["sha256"] != parent_state["sha256"]:
+        raise ValueError("Resumed smoke did not consume the original update2 full state")
+    uninterrupted = retained_training_state(evidence, indexed, original, 144000)
+    continuation = retained_training_state(evidence, indexed, resumed, 144000)
+    if uninterrupted["state_sha256"] != continuation["state_sha256"]:
+        raise ValueError("Resumed next update differs from uninterrupted scientific state")
+    if continuation["metadata"]["completed_updates"] != 3:
+        raise ValueError("Resume smoke lacks cumulative update3")
+    result = {
+        "passed": True,
+        "source_revision": acceptance["source_revision"],
+        "manifest_sha256": acceptance["manifest_sha256"],
+        "original_attempt": original["id"],
+        "resumed_attempt": resumed["id"],
+        "new_work_budgets": budgets,
+        "parent_state": parent_state,
+        "uninterrupted_final_state": uninterrupted,
+        "resumed_final_state": continuation,
+        "state_sha256": continuation["state_sha256"],
+        "comparison": "Exact equality of all scientific numeric state leaves, excluding producer metadata identity.",
+    }
+    target = run_dir / "acceptance.json"
+    if target.exists():
+        if json.loads(target.read_text()) != result:
+            raise ValueError("Refusing to replace a different resume acceptance result")
     else:
         write_json(target, result)
     print(json.dumps(result))
@@ -231,8 +318,14 @@ def validate_cpu_smoke(root, acceptance):
             raise ValueError("CPU smoke evaluation did not complete successfully")
         if evaluation["budgets"][0]["completed"] != 1:
             raise ValueError("CPU smoke evaluation lacks its expected completed episode")
+    resume = validate_resume_smoke(root, acceptance)
     ready = {
         "passed": True,
+        "resume_equivalence": {
+            "passed": resume["passed"],
+            "resumed_attempt": resume["resumed_attempt"],
+            "state_sha256": resume["state_sha256"],
+        },
         "source_revision": acceptance["source_revision"],
         "manifest_sha256": acceptance["manifest_sha256"],
         "training_attempt": acceptance["attempt_id"],
@@ -255,10 +348,13 @@ def main():
     parser.add_argument("--study-root", type=Path, required=True)
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--require-cpu-eval", action="store_true")
+    parser.add_argument("--require-resume", action="store_true")
     args = parser.parse_args()
     acceptance = validate_smoke(args.study_root, args.expected_revision)
     if args.require_cpu_eval:
         validate_cpu_smoke(args.study_root, acceptance)
+    elif args.require_resume:
+        validate_resume_smoke(args.study_root, acceptance)
 
 
 if __name__ == "__main__":
