@@ -29,9 +29,29 @@ This tests scalar evaluation. It does not settle GPU `vmap`/batch-16 throughput
 or multiple concurrent CPU workers. Preserve this distinction when choosing
 resources for the larger transfer harness.
 
+## Completed result: job 4113
+
+The same 500-step scalar episode ran with the following wall times:
+
+| Measurement | CPU, eight allowed slots | One RTX A6000 plus eight CPU slots |
+| --- | ---: | ---: |
+| First call, including compilation | 53.941 s | 101.539 s |
+| Warm median, three repeats | 4.086 s | 11.642 s |
+| Warm range | 4.083-4.103 s | 11.635-11.643 s |
+
+CPU was 2.85 times faster on this scalar workload.
+All repeats and both backends produced identical actions and reward (-428).
+Use CPU for this scalar evaluator when practical; batched GPU evaluation and
+parallel CPU-worker throughput remain unmeasured by this check.
+
+The [result record](checks/eval-throughput-20261107/record.json) retains all
+timings, verified artifact hashes and the [exact selection](checks/eval-throughput-20261107/selection.json).
+The host reported Slurm CPU binding unsupported; each worker explicitly limited
+itself to the same eight visible CPU slots. Exclusive CPU cores are not claimed.
+
 ## Execution and records
 
-Status: prepared; no timing result is claimed yet.
+Status: completed, job 4113, exit 0:0, elapsed 00:03:49. Execution source: `11817446f6be690c0848321f1b88a5357a1a8834`.
 
 ```bash
 bash studies/defender-transfer/time_evaluation_launch.sh submit \
@@ -41,7 +61,7 @@ bash studies/defender-transfer/time_evaluation_launch.sh submit \
 
 Use clean committed source and the existing study runtime setup. The launcher
 requests `community`, one GPU, eight CPU slots, 32 GiB, and a 30-minute limit.
-Slurm binds the task to assigned cores; each worker records its actual affinity.
+The launcher requests Slurm binding and each worker records and limits its actual affinity.
 The original device assignment is preserved, with JAX_PLATFORMS selecting CPU or
 CUDA before imports. Outputs are external to the source checkout.
 
