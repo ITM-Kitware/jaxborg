@@ -86,6 +86,27 @@ def test_nonfinite_and_changed_array_bytes_are_rejected(tmp_path):
         inspect_training_state(path)
 
 
+@pytest.mark.parametrize("shape", [(4,), (2, 3)])
+@pytest.mark.parametrize("kind", ["float", "integer"])
+def test_weak_arrays_restore_exact_values_dtype_and_specialization(tmp_path, shape, kind):
+    values = [-3, 0, 7, 12, -9, 21][: int(np.prod(shape))]
+    if kind == "float":
+        values = [-0.0, 1.25, -3.5, 12.125, -9.75, 21.5][: int(np.prod(shape))]
+    original = jnp.stack([jnp.asarray(value) for value in values]).reshape(shape)
+    assert original.weak_type
+    path = tmp_path / "weak-array.npz"
+    saved = save_training_state(path, state={"state": original}, metadata={})
+    template = {"state": jnp.zeros(shape, dtype=original.dtype)}
+    assert not template["state"].weak_type
+    restored, _ = load_training_state(path, template=template, expected_sha256=saved["sha256"])
+    actual = restored["state"]
+    assert actual.weak_type
+    assert actual.dtype == original.dtype and actual.shape == original.shape
+    assert np.asarray(actual).tobytes() == np.asarray(original).tobytes()
+    again = save_training_state(tmp_path / "weak-array-again.npz", state=restored, metadata={})
+    assert again["state_sha256"] == saved["state_sha256"]
+
+
 def _tiny_environment():
     path = Path(__file__).parents[1] / "cotraining/test_fsm_recurrent_jit.py"
     spec = importlib.util.spec_from_file_location("resume_test_environment", path)
@@ -149,13 +170,27 @@ def _update(state, update):
     }, metrics
 
 
-def test_fresh_template_resume_matches_uninterrupted_next_compiled_lstm_update(tmp_path, monkeypatch):
-    environment = _tiny_environment()
+@pytest.mark.parametrize("weak_environment", [False, True])
+def test_fresh_template_resume_matches_uninterrupted_next_compiled_lstm_update(tmp_path, monkeypatch, weak_environment):
+    original_environment = _tiny_environment()
+
+    class WeakEnvironment(original_environment):
+        def reset(self, key):
+            obs, state = super().reset(key)
+            # vmap broadcasts this weak scalar into a weak non-scalar array,
+            # matching the native CC4 constants that exposed the GPU failure.
+            state = state.replace(const=state.const.replace(marker=jnp.asarray(0)))
+            return obs, state
+
+    environment = WeakEnvironment if weak_environment else original_environment
     monkeypatch.setattr(ippo_jax, "make_jax_env", lambda *_args, **_kwargs: environment())
     monkeypatch.setattr(ippo_jax, "compute_blue_action_mask", lambda *_args, **_kwargs: jnp.ones(3, dtype=jnp.bool_))
     with jax.disable_jit(False):
         initial, update = _initialize(43)
         after_one, _ = _update(initial, update)
+        if weak_environment:
+            marker = after_one["env_state"].env_state.const.marker
+            assert marker.shape == (4,) and marker.weak_type
         checkpoint = tmp_path / "after-one.npz"
         saved = save_training_state(checkpoint, state=after_one, metadata={"contract": "same", "completed_updates": 1})
         expected, expected_metrics = _update(after_one, update)

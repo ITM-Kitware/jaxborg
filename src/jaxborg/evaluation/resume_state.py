@@ -38,8 +38,6 @@ def _array(leaf):
     if not np.isfinite(array).all():
         raise ValueError("Training state contains a nonfinite numeric leaf")
     weak = bool(getattr(leaf, "weak_type", False))
-    if weak and array.shape:
-        raise ValueError("Weakly typed nonscalar training leaves are unsupported")
     return array, weak
 
 
@@ -140,7 +138,6 @@ def _read(path, expected_sha256=None):
                 or array.dtype.str != entry["dtype"]
                 or list(array.shape) != entry["shape"]
                 or type(entry["weak_type"]) is not bool
-                or (entry["weak_type"] and array.shape)
                 or not np.isfinite(array).all()
                 or hashlib.sha256(array.tobytes(order="C")).hexdigest() != entry["sha256"]
             ):
@@ -181,9 +178,21 @@ def load_training_state(path, *, template, expected_metadata=None, expected_sha2
         raise ValueError("Training-state tree differs from the initialized template")
     restored = []
     for entry, array in zip(entries, arrays, strict=True):
-        leaf = jnp.asarray(array.item()) if entry["weak_type"] else jnp.asarray(array)
+        leaf = jnp.asarray(array)
+        if entry["weak_type"]:
+            # Public lax.convert_element_type deliberately forces strong typing.
+            # This pinned JAX primitive preserves weak array avals as well as
+            # weak scalars; CC4's vmapped constants can have either form.
+            from jax._src.lax.lax import _convert_element_type
+
+            leaf = _convert_element_type(leaf, array.dtype, weak_type=True)
         actual, weak = _array(leaf)
-        if actual.dtype.str != entry["dtype"] or weak != entry["weak_type"]:
-            raise ValueError("Runtime cannot preserve the checkpoint's scalar/dtype contract")
+        if (
+            actual.dtype.str != entry["dtype"]
+            or list(actual.shape) != entry["shape"]
+            or weak != entry["weak_type"]
+            or hashlib.sha256(actual.tobytes(order="C")).hexdigest() != entry["sha256"]
+        ):
+            raise ValueError("Runtime cannot preserve the checkpoint's array/dtype/weak-type contract")
         restored.append(leaf)
     return jax.tree_util.tree_unflatten(definition, restored), metadata
