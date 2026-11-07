@@ -22,7 +22,7 @@ _SPEC.loader.exec_module(rollout)
 def test_hmarl_initializer_does_not_change_stock_world(jax_const):
     const = jax_const.replace(cage4_enhanced_obs=True, blue_observation_version=2)
     observations, before = rollout._initial_state(rollout._environment(500), const)
-    assert observations["blue_agent_0"].shape == (450,)
+    assert observations[rollout._environment(500).agents[0]].shape == (450,)
     after, _ = HMARLPolicy("expert").initialize(before)
     assert bool(rollout._same_tree(before, after))
     tampered = after.replace(state=after.state.replace(host_services=after.state.host_services + 1))
