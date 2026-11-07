@@ -73,11 +73,71 @@ scenarios are new to this evaluation, but exact historical training-layout novel
 is not established. A diversity claim still requires matched opponent exposure
 and genuinely independent held-out opponents.
 
+## Completed result: job 4112
+
+All six saved systems completed the same 16 scenarios. Mean stock team return
+is shown below; larger (less negative) is better.
+
+| System | Training seed | Scenarios | Mean return |
+| --- | ---: | ---: | ---: |
+| LSTM, single training layout | 42 | 16 | -408.5625 |
+| LSTM, single training layout | 100 | 16 | -573.6250 |
+| LSTM, diverse training layouts | 42 | 16 | -377.3125 |
+| LSTM, diverse training layouts | 100 | 16 | -368.1250 |
+| H-MARL Expert | Imported checkpoint | 16 | -89.6250 |
+| H-MARL Meta | Imported checkpoint | 16 | -107.6250 |
+
+Every archived LSTM is below both system references on this sample. The deficits
+are 278.5-484 points versus Expert and 260.5-466 versus Meta. Together with the
+[early-to-final learning check](checks/lstm-learning-20261107/README.md), this
+supports substantial learning with a remaining performance gap. It does not
+establish a training bug, verify the current trainer, or establish paper-level
+SOTA performance. The system differences described above remain confounds.
+
+Diverse minus single is +31.25 for seed 42 and +205.5 for seed 100. This is a
+descriptive advantage on these stock-FSM scenarios and two saved seed pairs;
+it is not a general diversity effect or evidence of robustness to independent
+held-out learned opponents. No significance claim follows from these means.
+
+The checked-in [result record](checks/matched-system-20261107/record.json) retains
+these values, analysis hashes and the [exact selected evaluations](checks/matched-system-20261107/selection.json).
+Seven downloaded analysis artifacts were independently hash-verified.
+
+The producing analyzer verified the captured records and exact 96-episode
+ledger before writing these results. Authoritative evidence on ITM:
+
+```text
+~/jaxborg-exp/shared/studies/defender-benchmark-20261107/
+  inputs/manifest.json
+  selection-full.json
+  evidence/
+  analysis-full/means.csv
+  analysis-full/paired-scenario-gaps.csv
+  analysis-full/paired-mean-gaps.csv
+  analysis-full/provenance.json
+  analysis-full/hashes.json
+  logs/4112.out
+  logs/4112.err
+```
+
+Reconstruct with the execution revision above and a new output directory:
+
+```bash
+study="$HOME/jaxborg-exp/shared/studies/defender-benchmark-20261107"
+JAX_PLATFORMS=cpu .venv/bin/python studies/defender-transfer/benchmark.py analyze \
+  --manifest "$study/inputs/manifest.json" \
+  --root "$study/evidence" \
+  --selection "$study/selection-full.json" \
+  --stage full \
+  --output "$study/reviews/new-reconstruction"
+```
+
 ## Execute and reconstruct
 
-Status: submitted as **Slurm job 4112**, observed RUNNING at 2026-11-07
-17:35:11 UTC. Results are pending. All 23 focused tests passed on ITM before
-submission. Execution is pinned to revision
+Status: **completed, Slurm job 4112, exit 0:0**, elapsed 25 minutes 31 seconds.
+It finished at 2026-11-07 13:00:22 America/New_York; completion was verified at 13:17:27. All 96 full
+episodes and all three smoke episodes completed. All 23 focused tests passed
+on ITM before submission. Execution is pinned to revision
 `0bc41414c10858503cced002e477279de70567a3` in the separate checkout
 `~/src/cyber/jaxborg/defender-benchmark-20261107`. The active transfer checkout
 and job 4107 were preserved. Shared MLflow experiment:

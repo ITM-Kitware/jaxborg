@@ -1,0 +1,71 @@
+{
+  "analysis_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/analysis-full",
+  "completed_at": "2026-11-07T13:00:22-05:00",
+  "elapsed_seconds": 1531,
+  "evidence_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/evidence",
+  "exit_code": "0:0",
+  "full_episodes": 96,
+  "id": "matched-system-20261107",
+  "input_manifest": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/inputs/manifest.json",
+  "interpretation": "All four saved LSTMs remain below both H-MARL system references on 16 matched stock-FSM scenarios. The system comparison does not establish a training bug, paper SOTA, or unseen-opponent robustness.",
+  "locally_verified_artifacts": [
+    "means.csv",
+    "paired-mean-gaps.csv",
+    "paired-scenario-gaps.csv",
+    "selection.json",
+    "manifest.json",
+    "provenance.json",
+    "benchmark.py"
+  ],
+  "means": [
+    {
+      "mean_return": -368.125,
+      "n_scenarios": 16,
+      "policy_id": "blue-diverse-100-final"
+    },
+    {
+      "mean_return": -377.3125,
+      "n_scenarios": 16,
+      "policy_id": "blue-diverse-42-final"
+    },
+    {
+      "mean_return": -573.625,
+      "n_scenarios": 16,
+      "policy_id": "blue-single-100-final"
+    },
+    {
+      "mean_return": -408.5625,
+      "n_scenarios": 16,
+      "policy_id": "blue-single-42-final"
+    },
+    {
+      "mean_return": -89.625,
+      "n_scenarios": 16,
+      "policy_id": "hmarl-expert"
+    },
+    {
+      "mean_return": -107.625,
+      "n_scenarios": 16,
+      "policy_id": "hmarl-meta"
+    }
+  ],
+  "reproduce": "../../benchmark.md",
+  "retained_analysis_sha256": {
+    "benchmark.py": "bcacdde985f92571734262924a586d6d4eebdff2c16e8b1a61636cb84a57e9d2",
+    "episodes.json": "95bed940591dbce9bec026aa4f51fd2be8bb67cada529e1403e647c4c5de231c",
+    "manifest.json": "c08d7d25ce017936896b91918433d24c28aac578c2fa59d4555c14f5dc85e758",
+    "means.csv": "d82d7874f4e971f54b97c9fdb5cb54b98805e0da6a0bd4ed5ea722a012256635",
+    "paired-mean-gaps.csv": "b782cf9148058e57876c93f91574c92702fbbb44bdf52b0c11b84a698ad91e98",
+    "paired-scenario-gaps.csv": "ae184f905d486c232c6bf58ffc369842c04fafd5edf6a3d6fad3354cea8b8bc8",
+    "provenance.json": "8f036f7c79632da06c8b9ebbea69ac9dda2928d869aaad8faba0b2bc96b80c18",
+    "selection.json": "5f284928854d65f21e52168938ec5f08dc3052935743ddcf70cebdccd7a715e9"
+  },
+  "schema_version": 1,
+  "selection_file": "selection.json",
+  "selection_sha256": "5f284928854d65f21e52168938ec5f08dc3052935743ddcf70cebdccd7a715e9",
+  "slurm_job_id": 4112,
+  "smoke_episodes": 3,
+  "source_revision": "0bc41414c10858503cced002e477279de70567a3",
+  "started_at": "2026-11-07T12:34:51-05:00",
+  "status": "completed"
+}
