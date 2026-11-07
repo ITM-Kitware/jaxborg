@@ -14,12 +14,14 @@ features), separate actor and critic LSTM trunks of width 256, learning rate
 96 environments, 500-step rollouts, 16 minibatches and four epochs: 48,000
 environment transitions per update. Learning rate is constant.
 
-The v2 overnight budget is **125M requested steps: 2,604 complete updates, or
+The protocol-v2 overnight budget is **125M requested steps: 2,604 complete
+updates, or
 124,992,000 actual transitions per seed**. The original primary comparison stays
 at **update 1,041, or 49,968,000 transitions**. Save that exact milestone even
 though it falls between the regular 20-update checkpoints. Retain initialization,
-every twentieth update, the primary milestone and the final overnight checkpoint.
-Each retained checkpoint includes policy weights and a complete numeric training
+every twentieth update (about eight minutes at the measured throughput), the
+primary milestone and the final overnight checkpoint. Each retained checkpoint
+includes policy weights and a complete numeric training
 state that supports exact continuation with the same source and configuration.
 
 The user requested useful overnight work toward Sunday November 8 at 9 a.m.
@@ -88,27 +90,45 @@ are retained. Failed or interrupted attempts remain incomplete. Full-state resum
 creates a new recorded attempt linked to the consumed state; it is not a new
 independent training seed.
 
-The v1 study and its completed smoke are preserved. The new execution root is:
+Protocol version 2 is the scientific design; execution-root suffixes identify
+separate retained implementations. The v1 execution passed its basic smoke. The
+v2 execution failed in the full-state serializer before acceptance. Both remain
+preserved. The v3 execution uses source
+`0aef148bbebb45818e71b20e9b5a52be031f93f1`, which fixes serialization of weakly
+typed nonscalar JAX state, under the same protocol-v2 design:
 
 ```text
-~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v2/
+~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
 ```
 
-Use `--reuse-inputs` to copy and rehash v1 topology bytes into v2. Preparation
-records the previous source revision, input-manifest hash and every copied
-topology hash. It never edits v1. MLflow uses experiment `lstm-fsm-competence`;
-each run retains its protocol and source identity so versions remain distinct.
-See the [recorded training guide](../../docs/joint-execution-records.md).
+At **November 7, 2026, 3:20 p.m. Eastern**, all 60 focused ITM tests had passed,
+along with GPU smoke **4125**, CPU smoke **4126** (3m 48s), and resume smoke
+**4127**. The resumed next update matched all **238 scientific state leaves**
+exactly. See the [retained execution record](checks/20261107-overnight/execution-evidence.json).
+
+Production seed 42 (**4128**) and seed 100 (**4129**) were both **RUNNING** with
+18-hour limits; each first update, including compilation, took about 152 seconds.
+CPU evaluation jobs **4130-4135** were queued for the interim, primary and final
+checkpoints. Status-snapshot job **4136** was scheduled for **6 p.m. Eastern**.
+These independent Slurm jobs continue on ITM after the local Windows machine
+shuts down. This is a timestamped execution snapshot, not a completed result.
+
+`--reuse-inputs` copies and rehashes the exact v1 topology bytes into the new
+root, recording the previous source, manifest and topology hashes without
+changing v1. MLflow uses `lstm-fsm-competence`; protocol and source identities
+distinguish executions. See the [recorded training guide](../../docs/joint-execution-records.md).
 
 ## Commands
 
-Use clean committed source and the frozen runtime. Reusing inputs reads and copies
-verified bytes; it does not regenerate networks:
+Use clean source at the pinned revision and the frozen runtime. These commands
+show the execution workflow; preparation requires a new root, so use a separate
+root when reproducing the already-created v3 execution. Reusing inputs copies
+verified bytes without regenerating networks:
 
 ```bash
 OLD="$HOME/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107"
-ROOT="$HOME/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v2"
-SHA=$(git rev-parse HEAD)
+ROOT="$HOME/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3"
+SHA=0aef148bbebb45818e71b20e9b5a52be031f93f1
 JAX_PLATFORMS=cpu .venv/bin/python studies/lstm-fsm-competence/prepare.py prepare \
   --study-root "$ROOT" --expected-revision "$SHA" --reuse-inputs "$OLD"
 bash studies/lstm-fsm-competence/launch.sh submit "$ROOT" smoke 42
@@ -128,14 +148,15 @@ bash studies/lstm-fsm-competence/eval_launch.sh submit \
   "$ROOT" smoke-seed42 smoke "$TRANSFER_MANIFEST"
 JAX_PLATFORMS=cpu .venv/bin/python studies/lstm-fsm-competence/validate.py \
   --study-root "$ROOT" --expected-revision "$SHA" --require-resume --require-cpu-eval
-bash studies/lstm-fsm-competence/launch.sh submit "$ROOT" full 42 36
-bash studies/lstm-fsm-competence/launch.sh submit "$ROOT" full 100 36
+bash studies/lstm-fsm-competence/launch.sh submit "$ROOT" full 42 18
+bash studies/lstm-fsm-competence/launch.sh submit "$ROOT" full 100 18
 ```
 
 Each training allocation requests community, one GPU, eight CPUs and 32 GiB;
 Slurm's `CUDA_VISIBLE_DEVICES` is preserved. Smoke allocations allow one hour.
-Production defaults to a 36-hour maximum, shortened at submission and allocation
-to finish at least ten minutes before the hard Monday deadline. Launchers refuse
+These overnight production commands request an explicit **18-hour maximum**,
+shortened if needed to finish at least ten minutes before the hard Monday
+deadline. Launchers refuse
 duplicate trial submissions. The two production seeds begin fresh, independently
 of the smoke weights. Review warm update timing again after full-state capture is
 enabled before claiming the overnight completion time.
