@@ -75,9 +75,13 @@ and genuinely independent held-out opponents.
 
 ## Execute and reconstruct
 
-Status: prepared; runtime validation and submission are pending. No new evaluation
-result is claimed here. Use a separate clean checkout of the committed revision;
-leave the checkout pinned by existing transfer jobs unchanged.
+Status: submitted as **Slurm job 4112**, observed RUNNING at 2026-11-07
+17:35:11 UTC. Results are pending. All 23 focused tests passed on ITM before
+submission. Execution is pinned to revision
+`0bc41414c10858503cced002e477279de70567a3` in the separate checkout
+`~/src/cyber/jaxborg/defender-benchmark-20261107`. The active transfer checkout
+and job 4107 were preserved. Shared MLflow experiment:
+`defender-matched-system-benchmark`.
 
 On ITM, read the host and shared-store instructions, then prepare the existing
 pinned CPU/CUDA runtime with `bash studies/defender-transfer/setup.sh`. Submit:
