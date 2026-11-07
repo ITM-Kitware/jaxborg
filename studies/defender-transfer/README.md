@@ -132,7 +132,3 @@ The [matched defender system screen](benchmark.md) compares the saved LSTMs and
 released H-MARL systems under one current stock-game contract. Its protocol,
 runner, evidence capture and interpretation limits are maintained here. It is
 a separate named check within this study, with no new training.
-
-The [CPU/GPU timing check](timing.md) measures the current scalar evaluator to
-guide resource allocation; its repeated episodes are excluded from scientific
-comparison counts.
