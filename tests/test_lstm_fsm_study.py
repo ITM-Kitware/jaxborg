@@ -128,3 +128,49 @@ def test_acceptance_rejects_changed_parameter_contract(validation, tensors):
     updated[name] = updated[name][:1]
     with pytest.raises(ValueError, match="tensor contract changed"):
         validation.compare_parameters(tensors, updated)
+
+
+def test_cpu_gate_is_idempotent_and_refuses_changed_acceptance(tmp_path, monkeypatch, validation):
+    from jaxborg.evaluation import capture_store
+
+    directory = tmp_path / "evaluations/smoke-seed42/smoke"
+    directory.mkdir(parents=True)
+    target = tmp_path / "runs/smoke-seed42/production-ready.json"
+    target.parent.mkdir(parents=True)
+    acceptance = {"attempt_id": "training-42", "source_revision": "a" * 40, "manifest_sha256": "b" * 64}
+    plan = {
+        "training_attempt": "training-42",
+        "source_revision": "a" * 40,
+        "backend": "cpu",
+        "horizon": 500,
+        "stage": "smoke",
+    }
+    selection = {"0:fsm": "eval-initial", "144000:fsm": "eval-final"}
+    summaries = [
+        {"checkpoint_steps": steps, "opponent": "fsm", "evaluation_id": identity, "episodes": 1, "mean_return": -1.0}
+        for steps, identity in ((0, "eval-initial"), (144000, "eval-final"))
+    ]
+    for name, value in (("plan", plan), ("selection", selection), ("summary", summaries)):
+        (directory / f"{name}.json").write_text(json.dumps(value))
+    records = [
+        {"id": identity, "kind": "evaluation", "status": "succeeded", "budgets": [{"completed": 1}]}
+        for identity in selection.values()
+    ]
+    monkeypatch.setattr(capture_store, "load_records", lambda root: records)
+    writes = []
+    original_writer = validation.write_json
+
+    def track_write(path, value):
+        writes.append(path)
+        original_writer(path, value)
+
+    monkeypatch.setattr(validation, "write_json", track_write)
+    first = validation.validate_cpu_smoke(tmp_path, acceptance)
+    before = target.read_bytes()
+    second = validation.validate_cpu_smoke(tmp_path, acceptance)
+    assert first == second
+    assert writes == [target]
+    assert target.read_bytes() == before
+    with pytest.raises(ValueError, match="different production acceptance"):
+        validation.validate_cpu_smoke(tmp_path, {**acceptance, "manifest_sha256": "c" * 64})
+    assert target.read_bytes() == before

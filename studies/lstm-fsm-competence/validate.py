@@ -240,7 +240,12 @@ def validate_cpu_smoke(root, acceptance):
         "cpu_smoke_summary_sha256": sha256(directory / "summary.json"),
         "cpu_smoke_selection_sha256": sha256(directory / "selection.json"),
     }
-    write_json(root / "runs/smoke-seed42/production-ready.json", ready)
+    target = root / "runs/smoke-seed42/production-ready.json"
+    if target.exists():
+        if json.loads(target.read_text()) != ready:
+            raise ValueError("Refusing to replace a different production acceptance result")
+    else:
+        write_json(target, ready)
     print(json.dumps(ready))
     return ready
 
