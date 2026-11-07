@@ -3,16 +3,41 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 import jax
 from prepare import protocol_for
 
 from jaxborg.evaluation.capture_store import load_records
+
+
+def tracking_preflight():
+    from mlflow import MlflowClient
+
+    store = Path(os.environ["JAXBORG_EXP_DIR"]).resolve()
+    expected_uri = f"sqlite:///{store / 'mlflow.db'}"
+    if os.environ.get("MLFLOW_TRACKING_URI") != expected_uri:
+        raise ValueError("Tracking destination must be the explicitly selected shared store")
+    name = os.environ["MLFLOW_EXPERIMENT_NAME"]
+    client = MlflowClient(tracking_uri=expected_uri)
+    experiment = client.get_experiment_by_name(name)
+    expected_artifacts = store / "artifacts" / name
+    if experiment is None:
+        expected_artifacts.mkdir(parents=True, exist_ok=True)
+        identity = client.create_experiment(name, artifact_location=expected_artifacts.as_uri())
+        experiment = client.get_experiment(identity)
+    location = urlparse(experiment.artifact_location)
+    if location.scheme not in ("", "file") or Path(unquote(location.path)).resolve() != expected_artifacts:
+        raise ValueError("Existing experiment artifact location differs from the declared shared artifact directory")
+    if experiment.lifecycle_stage != "active":
+        raise ValueError("The selected tracking experiment is not active")
+    return {"experiment_id": experiment.experiment_id, "artifact_location": experiment.artifact_location}
 
 
 def main():
@@ -28,7 +53,15 @@ def main():
     if not devices or any(device.platform != "gpu" for device in devices):
         raise RuntimeError(f"GPU runtime preflight failed: {devices}")
     args.study_root.mkdir(parents=True, exist_ok=True)
+    source_archive = args.study_root / "source.tar.gz"
+    if not source_archive.exists():
+        subprocess.run(
+            ["git", "archive", "--format=tar.gz", f"--output={source_archive}", args.expected_revision], check=True
+        )
+    tracking = tracking_preflight()
     runtime = {
+        "tracking": tracking,
+        "source_archive_sha256": hashlib.sha256(source_archive.read_bytes()).hexdigest(),
         "devices": [str(device) for device in devices],
         "slurm_job": os.environ["SLURM_JOB_ID"],
         "cuda_visible_devices": os.environ["CUDA_VISIBLE_DEVICES"],

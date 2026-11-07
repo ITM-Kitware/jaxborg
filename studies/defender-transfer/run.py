@@ -22,7 +22,7 @@ def verified(path, digest):
     return path
 
 
-def run(manifest_path, root, trial_id, expected_revision):
+def run(manifest_path, root, trial_id, expected_revision, retry_of=None):
     manifest_path = Path(manifest_path).resolve()
     manifest = json.loads(manifest_path.read_text())
     if manifest["source_revision"] != expected_revision:
@@ -63,6 +63,7 @@ def run(manifest_path, root, trial_id, expected_revision):
         protocol=protocol,
         trial_id=trial_id,
         expected_revision=expected_revision,
+        retry_of=retry_of,
         seeds=settings["seeds"],
         episodes_per_seed=1,
         deterministic=False,
@@ -124,5 +125,6 @@ if __name__ == "__main__":
     parser.add_argument("--root", type=Path, required=True)
     parser.add_argument("--trial", required=True)
     parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--retry-of", help="Terminal predecessor attempt from this protocol and trial")
     args = parser.parse_args()
-    run(args.manifest, args.root, args.trial, args.expected_revision)
+    run(args.manifest, args.root, args.trial, args.expected_revision, args.retry_of)

@@ -299,6 +299,13 @@ def analyze(manifest_path, root, selection_path, output):
     if output.is_relative_to(Path(__file__).resolve().parents[2]):
         raise ValueError("Generated analysis belongs outside the source checkout")
     manifest, selection = read_json(manifest_path), read_json(selection_path)
+    protocol = read_json(root / "protocol.json")
+    manifest_identity = hashlib.sha256(json.dumps(manifest, sort_keys=True, allow_nan=False).encode()).hexdigest()
+    declared_identity = (
+        protocol.get("extensions", {}).get("defender_transfer", {}).get("values", {}).get("manifest_sha256")
+    )
+    if manifest_identity != declared_identity:
+        raise ValueError("Manifest differs from the evidence store's declared protocol")
     cells = {cell["trial_id"]: cell for cell in manifest["cells"]}
     if len(cells) != len(manifest["cells"]) or not isinstance(selection, dict) or set(selection) - set(cells):
         raise ValueError("Selection must map declared trial IDs to exact evaluation IDs")
@@ -320,6 +327,8 @@ def analyze(manifest_path, root, selection_path, output):
             if len(selected) != 1:
                 raise ValueError(f"Selection does not identify one evaluation for {trial_id}")
             attempt = selected[0]
+            if attempt["attempt"]["protocol_id"] != protocol["id"]:
+                raise ValueError("Selected attempt belongs to a different protocol")
             status = attempt["evaluation"]["status"] if attempt["terminal"] else "running"
             if status == "succeeded":
                 config, results, topology_paths = selected_payload(root, attempt, artifacts, cell, manifest)
@@ -357,7 +366,10 @@ def analyze(manifest_path, root, selection_path, output):
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "manifest-input.json", manifest)
     write_json(output / "selection.json", selection)
-    write_json(output / "analysis-inputs.json", {"selected_evidence": retained, "attempt_inventory": attempts})
+    write_json(
+        output / "analysis-inputs.json",
+        {"protocol": protocol, "selected_evidence": retained, "attempt_inventory": attempts},
+    )
     table(
         output / "coverage.csv",
         coverage,
@@ -429,6 +441,7 @@ def analyze(manifest_path, root, selection_path, output):
             "manifest": {"path": str(manifest_path), "sha256": digest(manifest_path)},
             "selection": {"path": str(selection_path), "sha256": digest(selection_path)},
             "evidence_root": str(root),
+            "protocol": {"id": protocol["id"], "sha256": digest(root / "protocol.json")},
             "verification": (
                 "Selected retained artifact bytes checked against capture hashes; not full record-schema validation"
             ),

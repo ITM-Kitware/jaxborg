@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-SOURCE_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
-cd "$SOURCE_ROOT"
 MODE=${1:?Usage: launch.sh submit STUDY_ROOT final|early|smoke [ARCHIVE_ROOT]}
+if [ "$MODE" = allocated ]; then
+  SOURCE_ROOT=${6:?Submitted source checkout required}
+else
+  SOURCE_ROOT=$(cd "$(dirname "$0")/../.." && pwd)
+fi
+cd "$SOURCE_ROOT"
 STUDY_ROOT=$(realpath -m "${2:?Study output root required}")
 STAGE=${3:?Stage required: final, early, smoke}
 ARCHIVE_ROOT=${4:-/data/shared/jaxborg/jaxborg-separate}
@@ -18,7 +22,7 @@ if [ "$MODE" = submit ]; then
   JOB_ID=$(sbatch --parsable --partition=community --gres=gpu:1 --cpus-per-task=8 --mem=32G \
     --time=06:00:00 --job-name="defender-$STAGE" --chdir="$SOURCE_ROOT" \
     --output="$STUDY_ROOT/logs/%j.out" --error="$STUDY_ROOT/logs/%j.err" \
-    "$SOURCE_ROOT/studies/defender-transfer/launch.sh" allocated "$STUDY_ROOT" "$STAGE" "$ARCHIVE_ROOT" "$SOURCE_SHA")
+    "$SOURCE_ROOT/studies/defender-transfer/launch.sh" allocated "$STUDY_ROOT" "$STAGE" "$ARCHIVE_ROOT" "$SOURCE_SHA" "$SOURCE_ROOT")
   printf '%s\n' "$JOB_ID" | tee "$STUDY_ROOT/logs/submitted-$STAGE.job"
   exit 0
 fi
@@ -27,6 +31,8 @@ fi
 [ "${SLURM_JOB_PARTITION:-}" = community ]
 [ "$SOURCE_SHA" = "${5:?Pinned submission source required}" ]
 [ -n "${CUDA_VISIBLE_DEVICES:-}" ]
+exec 9>"$STUDY_ROOT/.execution.lock"
+flock -n 9 || { echo "Another stage holds this study root" >&2; exit 1; }
 source "$HOME/jaxborg-exp/shared/store.env"
 export MLFLOW_TRACKING_URI="sqlite:///$JAXBORG_EXP_DIR/mlflow.db"
 export MLFLOW_EXPERIMENT_NAME=defender-transfer-diagnostic
