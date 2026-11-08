@@ -4,12 +4,17 @@ Use the committed source revision recorded in `inputs/manifest.json` and the
 shared Python environment described in [setup](../../docs/setup.md). Inputs and
 results stay outside the checkout. Preparation copies and verifies the exact
 training layouts and owned Blue checkpoints from the completed competence
-study; it does not regenerate a substitute bank.
+study; it does not regenerate a substitute bank. Choose `--production-updates`
+from 208, 416, 520 or 624 before preparation, based only on timing and the deadline.
+The frozen manifest and materialized protocol retain the chosen common horizon.
+Every production run retains update 208 as the primary comparison; longer final
+checkpoints are secondary. A changed horizon requires a fresh prepared root and
+validation; do not alter an existing run or its resume contract.
 
 ```sh
 python studies/lstm-adaptive-robustness/prepare.py prepare \
   --study-root "$STUDY_ROOT" --baseline-study "$BASELINE_ROOT" \
-  --expected-revision "$REVISION"
+  --expected-revision "$REVISION" --production-updates 208
 python studies/lstm-adaptive-robustness/submit_jobs.py \
   --study-root "$STUDY_ROOT" --expected-revision "$REVISION" --phase validation
 ```
@@ -28,7 +33,12 @@ python studies/lstm-adaptive-robustness/submit_jobs.py \
 
 Each response is followed by recorded CPU cross-play against all four Blue
 checkpoints. Submission records identify which four- or eight-run design was
-actually queued; the protocol continues to list unstarted trials.
+actually queued; the protocol continues to list unstarted trials. Optional Red 149
+trials always stop at 208 updates; `manifest.trial_updates` records each trial
+horizon. They follow all eight main searches and contribute only an additional
+primary-budget replication, separately reported from the two-seed result. The
+8 a.m. Eastern cutoff applies to GPU training; the full CPU cross-play matrix
+may finish later.
 
 Run a declared trial with `run.py --study-root "$STUDY_ROOT"
 --expected-revision "$REVISION" --trial br-blue42-primary-red17`. Use the

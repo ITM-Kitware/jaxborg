@@ -1,0 +1,40 @@
+{
+  "source_revision": "fafee221a68c8c9248ae4c4fd871d7c9edb07373",
+  "job_id": "4151",
+  "xla_flags": "--xla_gpu_exclude_nondeterministic_ops=true",
+  "original_attempt": "evaluation-store:f0fbe34b856f4cf7a9aaaeb0cb357ce9:attempt:ac4e139a848f4084b2aafb6c79b2d6a4",
+  "resumed_attempt": "evaluation-store:f0fbe34b856f4cf7a9aaaeb0cb357ce9:attempt:d93a3346d4b04d599937feea3bee85ba",
+  "parent": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/96000/training_state_96000.npz",
+  "original_final": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/192000/training_state_192000.npz",
+  "resumed_final": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/d93a3346d4b04d599937feea3bee85ba/artifacts/checkpoints/192000/training_state_192000.npz",
+  "elapsed_seconds": 301.8070192337036,
+  "frozen_verification_original": {
+    "blue": {
+      "optimizer_sha256": "9007980b838b39602c003d463e35a8d2be43f6c1af5ebe37153b814e59ef477d",
+      "parameters_sha256": "e5faa274378c1720ac536099527cf340c68d6696c25b86007101b40784a6f31b"
+    },
+    "unchanged": true
+  },
+  "frozen_verification_resumed": {
+    "blue": {
+      "optimizer_sha256": "9007980b838b39602c003d463e35a8d2be43f6c1af5ebe37153b814e59ef477d",
+      "parameters_sha256": "e5faa274378c1720ac536099527cf340c68d6696c25b86007101b40784a6f31b"
+    },
+    "unchanged": true
+  },
+  "exact": true,
+  "leaves": 269,
+  "original_state_sha256": "74d38b2d21fb3a15f254cb597c0732819feeed22934307b80739f0fae948c793",
+  "resumed_state_sha256": "74d38b2d21fb3a15f254cb597c0732819feeed22934307b80739f0fae948c793",
+  "differences": [],
+  "original_update_seconds": [
+    127.25705146137625,
+    145.4021258931607,
+    165.67745818942785,
+    184.02946895267814
+  ],
+  "resumed_update_seconds": [
+    48.76603501942009,
+    67.05462272744626
+  ]
+}

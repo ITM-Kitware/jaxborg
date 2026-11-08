@@ -32,6 +32,9 @@ sha256 = BASELINE_PREPARE.sha256
 source_identity = BASELINE_PREPARE.source_identity
 BASELINE_REVISION = "0aef148bbebb45818e71b20e9b5a52be031f93f1"
 BLUE_STEPS = {"primary": 49968000, "final": 124992000}
+PRODUCTION_UPDATES = (208, 416, 520, 624)
+PRIMARY_UPDATES = 208
+ROLLOUT_STEPS = 48000
 
 
 def read_json(path):
@@ -46,7 +49,9 @@ def write_json(path, value):
         stream.write("\n")
 
 
-def trial_settings(trial):
+def trial_settings(trial, production_updates=PRIMARY_UPDATES):
+    if production_updates not in PRODUCTION_UPDATES:
+        raise ValueError("Production horizon must be 208, 416, 520 or 624 updates")
     for phase in ("smoke-resume", "smoke", "timing"):
         if trial == f"{phase}-blue42-primary-red17":
             return {
@@ -58,21 +63,49 @@ def trial_settings(trial):
             }
     for blue in (42, 100):
         for age in BLUE_STEPS:
-            for red in (17, 83):
+            for red in (17, 83, 149):
                 if trial == f"br-blue{blue}-{age}-red{red}":
-                    return {"phase": "full", "blue_seed": blue, "age": age, "red_seed": red, "updates": 208}
+                    return {
+                        "phase": "full",
+                        "blue_seed": blue,
+                        "age": age,
+                        "red_seed": red,
+                        "updates": PRIMARY_UPDATES if red == 149 else production_updates,
+                    }
     raise ValueError(f"Undeclared training trial: {trial}")
 
 
-def recipe_for_trial(base, trial, checkpoints, training_bank, evaluation_bank):
-    settings = trial_settings(trial)
+def recipe_for_trial(base, trial, checkpoints, training_bank, evaluation_bank, production_updates=PRIMARY_UPDATES):
+    settings = trial_settings(trial, production_updates)
     recipe = copy.deepcopy(base)
     target = f"blue{settings['blue_seed']}-{settings['age']}"
     recipe["train"]["opponents"] = {"blue": {"path": checkpoints[target]["model"]}}
     recipe["train"]["topology_bank"] = [str(Path(path).resolve()) for path in training_bank]
     recipe["eval"]["topology_bank"] = [str(Path(path).resolve()) for path in evaluation_bank]
-    recipe["train"]["total_timesteps"] = 10000000 if settings["phase"] == "full" else settings["updates"] * 48000
+    recipe["train"]["total_timesteps"] = settings["updates"] * ROLLOUT_STEPS
     return recipe
+
+
+def materialized_protocol(template, production_updates):
+    if production_updates not in PRODUCTION_UPDATES:
+        raise ValueError("Production horizon must be 208, 416, 520 or 624 updates")
+    protocol = copy.deepcopy(template)
+    protocol["id"] = f"lstm-adaptive-robustness-v2-u{production_updates}"
+    protocol["revision"] = "2"
+    values = protocol["extensions"]["lstm_adaptive_robustness"]["values"]
+    steps = production_updates * ROLLOUT_STEPS
+    values.update(
+        {
+            "production_updates": production_updates,
+            "rollout_updates": production_updates,
+            "requested_environment_steps": steps,
+            "completed_environment_steps": steps,
+            "primary_updates": PRIMARY_UPDATES,
+            "primary_environment_steps": PRIMARY_UPDATES * ROLLOUT_STEPS,
+            "secondary_environment_steps": steps if production_updates > PRIMARY_UPDATES else None,
+        }
+    )
+    return protocol
 
 
 def verified_owned_checkpoint(records, evidence, attempt_id, trial, age):
@@ -119,7 +152,7 @@ def copy_checkpoints(baseline, root, records):
     return checkpoints
 
 
-def prepare(root, baseline, expected_revision):
+def prepare(root, baseline, expected_revision, production_updates=PRIMARY_UPDATES):
     from jaxborg.evaluation.capture_store import load_records
     from jaxborg.experiment_records.core import validate_records
     from jaxborg.recipe import load
@@ -134,7 +167,7 @@ def prepare(root, baseline, expected_revision):
     if baseline_manifest["source_revision"] != BASELINE_REVISION:
         raise ValueError("Expected the declared baseline training source")
     BASELINE_PREPARE.verify_input_files(baseline, baseline_manifest)
-    protocol = read_json(STUDY / "protocol.json")
+    protocol = materialized_protocol(read_json(STUDY / "protocol.json"), production_updates)
     validate_records([protocol])
     root.mkdir(parents=True)
     banks, reused = BASELINE_PREPARE.copy_verified_banks(baseline, root)
@@ -147,7 +180,7 @@ def prepare(root, baseline, expected_revision):
         if identity.startswith("smoke-resume-"):
             recipes[identity] = recipes[identity.replace("smoke-resume-", "smoke-", 1)]
             continue
-        recipe = recipe_for_trial(base, identity, checkpoints, banks["train"], banks["eval"])
+        recipe = recipe_for_trial(base, identity, checkpoints, banks["train"], banks["eval"], production_updates)
         destination = root / "inputs/recipes" / f"{identity}.yaml"
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_text(yaml.safe_dump(recipe, sort_keys=False))
@@ -170,10 +203,17 @@ def prepare(root, baseline, expected_revision):
         "schema_version": 1,
         "study_id": protocol["study_id"],
         "source_revision": expected_revision,
+        "production_updates": production_updates,
+        "primary_updates": PRIMARY_UPDATES,
+        "production_environment_steps": production_updates * ROLLOUT_STEPS,
+        "primary_environment_steps": PRIMARY_UPDATES * ROLLOUT_STEPS,
         "baseline_study_root": str(baseline),
         "baseline_manifest_sha256": sha256(baseline / "inputs/manifest.json"),
         "blue_checkpoints": checkpoints,
         "recipes": recipes,
+        "trial_updates": {
+            trial["id"]: trial_settings(trial["id"], production_updates)["updates"] for trial in protocol["trials"]
+        },
         "source_files": retained_source,
         "training_topologies": [
             {"path": str(path), "sha256": sha256(path), "source_seed": index}
@@ -211,11 +251,12 @@ def main():
     parser.add_argument("--study-root", required=True, type=Path)
     parser.add_argument("--baseline-study", type=Path)
     parser.add_argument("--expected-revision", required=True)
+    parser.add_argument("--production-updates", type=int, choices=PRODUCTION_UPDATES, default=PRIMARY_UPDATES)
     args = parser.parse_args()
     if args.mode == "prepare":
         if args.baseline_study is None:
             parser.error("prepare requires --baseline-study")
-        prepare(args.study_root, args.baseline_study, args.expected_revision)
+        prepare(args.study_root, args.baseline_study, args.expected_revision, args.production_updates)
     else:
         verify(args.study_root, args.expected_revision)
         print("Frozen study inputs verified")

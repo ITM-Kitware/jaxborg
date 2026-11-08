@@ -276,6 +276,60 @@ def validate_resume(root, indexed, smoke):
     return result
 
 
+def validate_fresh_compilation(root, indexed, smoke):
+    original = indexed[smoke["attempt_id"]]
+    timing = completed_attempt(root, indexed, TIMING, TIMING)
+    budgets = {item["unit"]: item["completed"] for item in timing["budgets"]}
+    if budgets != {
+        "environment_steps": 480000,
+        "joint_rollout_updates": 10,
+        "blue_policy_updates": 0,
+        "red_policy_updates": 10,
+    }:
+        raise ValueError("Fresh compilation check requires the complete ten-update timing trial")
+    configs = [attempt["facts"]["resolved_config"]["value"] for attempt in (original, timing)]
+    if any(attempt["facts"]["source_revision"]["value"] != smoke["source_revision"] for attempt in (original, timing)):
+        raise ValueError("Fresh compilation comparison uses different source revisions")
+    for name in ("trainable_teams", "variant", "seed_roles", "topology", "opponents"):
+        if configs[0][name] != configs[1][name]:
+            raise ValueError(f"Fresh compilation comparison changed scientific inputs: {name}")
+    for config in configs:
+        if config["initialization"]["kind"] != "fresh" or config.get("resume") is not None:
+            raise ValueError("Fresh compilation comparison requires independently initialized runs")
+        if any(team["ANNEAL_LR"] is not False for team in config["team_configs"].values()):
+            raise ValueError("Different-horizon comparison requires constant learning rates")
+    for team in ("blue", "red"):
+        numerical = [
+            {
+                key: value
+                for key, value in config["team_configs"][team].items()
+                if key not in {"TOTAL_TIMESTEPS", "NUM_UPDATES"}
+            }
+            for config in configs
+        ]
+        if numerical[0] != numerical[1]:
+            raise ValueError("Fresh compilation comparison changed learner settings")
+    environments = [config["resume_contract"]["runtime_environment"] for config in configs]
+    if environments[0] != environments[1]:
+        raise ValueError("Fresh compilation comparison changed runtime settings")
+    states = [full_state(root, indexed, attempt, 96000) for attempt in (original, timing)]
+    if states[0]["state_sha256"] != states[1]["state_sha256"]:
+        raise ValueError("Fresh compilation changed scientific numeric state at update 2")
+    result = {
+        "passed": True,
+        "source_revision": smoke["source_revision"],
+        "smoke_attempt_id": original["id"],
+        "timing_attempt_id": timing["id"],
+        "completed_updates": 2,
+        "environment_steps": 96000,
+        "smoke_state": {key: states[0][key] for key in ("artifact_id", "sha256", "state_sha256", "leaf_count")},
+        "timing_state": {key: states[1][key] for key in ("artifact_id", "sha256", "state_sha256", "leaf_count")},
+        "comparison": "Exact equality of all scientific numeric leaves from two fresh runs at update 2.",
+    }
+    save_once(root / "checks/fresh-compilation.json", result)
+    return result
+
+
 def validate_cpu(root, manifest, indexed, smoke):
     marker = read_json(root / "checks/cpu-evaluation.json")
     if (
@@ -316,7 +370,7 @@ def validate_pairs(root, expected_revision):
         "pairs": [],
     }
     for blue in (42, 100):
-        for red in (17, 83):
+        for red in (17, 83, 149):
             trials = [f"br-blue{blue}-{age}-red{red}" for age in ("primary", "final")]
             if not all((root / "runs" / trial / "receipt.json").exists() for trial in trials):
                 continue
@@ -374,7 +428,11 @@ def main():
         if args.require_resume or args.require_cpu_eval:
             result = {**result, "resume_equivalence": validate_resume(root, indexed, result)}
         if args.require_cpu_eval:
-            result = {**result, "cpu_evaluation": validate_cpu(root, manifest, indexed, result)}
+            result = {
+                **result,
+                "fresh_compilation_equivalence": validate_fresh_compilation(root, indexed, result),
+                "cpu_evaluation": validate_cpu(root, manifest, indexed, result),
+            }
             save_once(root / "checks/production-ready.json", result)
     print(json.dumps(result))
 

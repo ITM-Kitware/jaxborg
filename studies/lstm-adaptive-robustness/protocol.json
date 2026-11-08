@@ -4,6 +4,12 @@
       "schema_version": 1,
       "source": "studies/lstm-adaptive-robustness/README.md",
       "values": {
+        "allowed_production_updates": [
+          208,
+          416,
+          520,
+          624
+        ],
         "baseline_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
         "baseline_study_id": "lstm-fsm-competence",
         "blue_seeds": [
@@ -14,6 +20,7 @@
           "final": 124992000,
           "primary": 49968000
         },
+        "budget_selection": "Before production, choose one common horizon of 208, 416, 520 or 624 updates using only measured throughput and the deadline. Preserve all eight crossed trials when an extension fits; do not trade the second Blue lineage for longer first-lineage searches. If only the first four baseline searches fit, keep 208 updates. Record the selected horizon in the frozen input manifest and materialized protocol.",
         "checkpoint_stride_updates": 20,
         "completed_environment_steps": 9984000,
         "deterministic": false,
@@ -61,7 +68,35 @@
             "br-blue100-primary-red83"
           ]
         },
-        "primary_comparison": "Equal-budget own-target Blue returns at early versus late checkpoint, separately for each Red seed and Blue lineage. Also report the complete trained-Red by four-Blue cross-play matrix.",
+        "optional_replication": {
+          "eligibility": "Only after all eight main searches complete successfully, with a main horizon longer than 208 updates. Queue based only on remaining time and measured throughput, never on returns. The fixed deadline may leave unstarted or incomplete trials; preserve those expected cells.",
+          "environment_steps": 9984000,
+          "lanes": {
+            "a": [
+              "br-blue42-primary-red149",
+              "br-blue100-final-red149"
+            ],
+            "b": [
+              "br-blue42-final-red149",
+              "br-blue100-primary-red149"
+            ]
+          },
+          "pairing": "Run both checkpoint ages of one Blue lineage concurrently; select complete age pairs only. Verify initial Red parameter identity across ages. Do not treat a completed member of an incomplete pair as a primary comparison.",
+          "primary_only": true,
+          "red_seed": 149,
+          "selection": "Use the exact 208-update checkpoint for additional replication of the 9.984M primary comparison. This third seed does not enter the longer-budget secondary comparison. Report it separately from the prespecified two-seed comparison and show whether the conclusion changes when included.",
+          "trials": [
+            "br-blue42-primary-red149",
+            "br-blue42-final-red149",
+            "br-blue100-primary-red149",
+            "br-blue100-final-red149"
+          ],
+          "updates": 208
+        },
+        "primary_comparison": "At 208 updates (9.984M), compare own-target Blue returns at early versus late defender checkpoint, separately for each Red seed and Blue lineage. Also report the complete trained-Red by four-Blue cross-play matrix.",
+        "primary_environment_steps": 9984000,
+        "primary_updates": 208,
+        "production_updates": 208,
         "question": "Does longer fixed-FSM training improve defense against equal-budget adaptive Red searches?",
         "red_arch": {
           "activation": "tanh",
@@ -73,12 +108,14 @@
           17,
           83
         ],
-        "requested_environment_steps": 10000000,
+        "requested_environment_steps": 9984000,
         "resume_from_update": 2,
         "rollout_environment_steps": 48000,
         "rollout_updates": 208,
         "second_block": "Four matched searches targeting Blue100; submit only if a measured timing projection supports completing the whole block before the deadline. Unstarted trials remain planned, never silently removed.",
-        "selection": "Explicit successful training attempt and its final 9.984M checkpoint. All intermediate checkpoints remain available for descriptive learning curves; no best-checkpoint selection. Smoke/timing runs are excluded. Retain failed/cancelled attempts and incomplete pairs as missing. Any resumed trial must preserve its original horizon and exact state lineage.",
+        "secondary_comparison": "When the predeclared common budget extends beyond 208 updates, repeat the full comparison at the final 416, 520 or 624 updates (19.968M, 24.96M or 29.952M). This does not replace the primary 10M comparison.",
+        "secondary_environment_steps": null,
+        "selection": "Select explicit successful training attempts. The primary result always uses the 208-update checkpoint (9.984M transitions), regardless of the selected final horizon. If the predeclared horizon is 416, 520 or 624 updates, report that final checkpoint separately as secondary. Intermediate checkpoints remain descriptive; no best-checkpoint selection. Smoke/timing runs are excluded. Retain failed/cancelled attempts and incomplete pairs as missing. Resumed trials preserve the original horizon and exact state lineage.",
         "smoke_updates": 4,
         "stop_rule": "No outcome-based tuning or stopping. All GPU allocations end before 2026-11-09T13:00:00Z (Monday 08:00 America/New_York).",
         "timing_updates": 10,
@@ -187,7 +224,7 @@
       }
     }
   },
-  "id": "lstm-adaptive-robustness-v1",
+  "id": "lstm-adaptive-robustness-v2-u208",
   "kind": "protocol",
   "metric_definitions": [
     {
@@ -203,7 +240,7 @@
     "attempt": [],
     "evaluation": []
   },
-  "revision": "1",
+  "revision": "2",
   "schema_version": 1,
   "selection_rule": "explicit",
   "study_id": "lstm-adaptive-robustness",
@@ -273,6 +310,30 @@
       "id": "timing-blue42-primary-red17",
       "matched_unit_id": null,
       "replicate_id": "timing"
+    },
+    {
+      "condition_id": "frozen-blue42-primary",
+      "id": "br-blue42-primary-red149",
+      "matched_unit_id": "blue42-red149",
+      "replicate_id": "red-search-149"
+    },
+    {
+      "condition_id": "frozen-blue42-final",
+      "id": "br-blue42-final-red149",
+      "matched_unit_id": "blue42-red149",
+      "replicate_id": "red-search-149"
+    },
+    {
+      "condition_id": "frozen-blue100-primary",
+      "id": "br-blue100-primary-red149",
+      "matched_unit_id": "blue100-red149",
+      "replicate_id": "red-search-149"
+    },
+    {
+      "condition_id": "frozen-blue100-final",
+      "id": "br-blue100-final-red149",
+      "matched_unit_id": "blue100-red149",
+      "replicate_id": "red-search-149"
     }
   ]
 }

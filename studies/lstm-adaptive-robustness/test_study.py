@@ -30,7 +30,11 @@ def test_protocol_crossed_design_equal_budget_and_counterbalanced_order():
     protocol = prepare.read_json(HERE / "protocol.json")
     validate_records([protocol])
     values = protocol["extensions"]["lstm_adaptive_robustness"]["values"]
-    full = [trial for trial in protocol["trials"] if trial["id"].startswith("br-")]
+    full = [
+        trial
+        for trial in protocol["trials"]
+        if trial["id"].startswith("br-") and prepare.trial_settings(trial["id"])["red_seed"] in (17, 83)
+    ]
     assert len(full) == 8
     assert (
         values["completed_environment_steps"]
@@ -159,3 +163,171 @@ def test_frozen_input_manifest_detects_mutation_and_path_escape(tmp_path):
     manifest["input_sha256"] = {"../escape": "0" * 64}
     with pytest.raises(ValueError, match="Changed or invalid"):
         prepare.BASELINE_PREPARE.verify_input_files(tmp_path, manifest)
+
+
+@pytest.mark.parametrize("updates", [208, 416, 520, 624])
+def test_extended_horizon_preserves_primary_and_all_crossed_cells(tmp_path, updates):
+    from jaxborg.experiment_records.core import validate_records
+
+    template = prepare.read_json(HERE / "protocol.json")
+    original = copy.deepcopy(template)
+    protocol = prepare.materialized_protocol(template, updates)
+    validate_records([protocol])
+    assert template == original
+    assert protocol["trials"] == template["trials"]
+    values = protocol["extensions"]["lstm_adaptive_robustness"]["values"]
+    assert values["primary_updates"] == 208
+    assert values["primary_environment_steps"] == 9984000
+    assert values["production_updates"] == values["rollout_updates"] == updates
+    assert values["completed_environment_steps"] == values["requested_environment_steps"] == updates * 48000
+    assert values["secondary_environment_steps"] == (updates * 48000 if updates > 208 else None)
+    base = yaml.safe_load((HERE / "recipe.yaml").read_text())
+    checkpoints = {"blue42-primary": {"model": str(tmp_path / "blue.safetensors")}}
+    full = prepare.recipe_for_trial(base, "br-blue42-primary-red17", checkpoints, [], [], updates)
+    smoke = prepare.recipe_for_trial(base, "smoke-blue42-primary-red17", checkpoints, [], [], updates)
+    timing = prepare.recipe_for_trial(base, "timing-blue42-primary-red17", checkpoints, [], [], updates)
+    assert full["train"]["total_timesteps"] == updates * 48000
+    assert smoke["train"]["total_timesteps"] == 4 * 48000
+    assert timing["train"]["total_timesteps"] == 10 * 48000
+
+
+def test_undeclared_production_horizon_rejected():
+    with pytest.raises(ValueError, match="Production horizon"):
+        prepare.materialized_protocol(prepare.read_json(HERE / "protocol.json"), 209)
+    with pytest.raises(ValueError, match="Production horizon"):
+        prepare.trial_settings("br-blue42-primary-red17", 209)
+
+
+@pytest.mark.parametrize("production_updates", [208, 416, 520, 624])
+def test_optional_replication_stays_at_primary_budget_and_covers_paired_ages(tmp_path, production_updates):
+    protocol = prepare.materialized_protocol(prepare.read_json(HERE / "protocol.json"), production_updates)
+    supplementary = protocol["extensions"]["lstm_adaptive_robustness"]["values"]["optional_replication"]
+    assert supplementary["primary_only"] is True
+    assert supplementary["updates"] == 208
+    assert supplementary["environment_steps"] == 9984000
+    declared = {trial["id"] for trial in protocol["trials"]}
+    assert set(supplementary["trials"]) <= declared
+    assert len(supplementary["trials"]) == 4
+    assert set(supplementary["lanes"]["a"] + supplementary["lanes"]["b"]) == set(supplementary["trials"])
+    for index, blue in enumerate((42, 100)):
+        same_wave = [
+            prepare.trial_settings(supplementary["lanes"][lane][index], production_updates) for lane in ("a", "b")
+        ]
+        assert {item["blue_seed"] for item in same_wave} == {blue}
+        assert {item["age"] for item in same_wave} == {"primary", "final"}
+    base = yaml.safe_load((HERE / "recipe.yaml").read_text())
+    checkpoints = {
+        f"blue{blue}-{age}": {"model": str(tmp_path / f"blue{blue}-{age}.safetensors")}
+        for blue in (42, 100)
+        for age in ("primary", "final")
+    }
+    for trial in supplementary["trials"]:
+        assert prepare.trial_settings(trial, production_updates)["updates"] == 208
+        recipe = prepare.recipe_for_trial(base, trial, checkpoints, [], [], production_updates)
+        assert recipe["train"]["total_timesteps"] == 9984000
+
+
+@pytest.fixture
+def fresh_compilation_records(tmp_path):
+    from jaxborg.evaluation.resume_state import save_training_state
+
+    root = tmp_path.resolve()
+    evidence = root / "evidence"
+    evidence.mkdir()
+    indexed = {}
+    for label, trial, updates in (("smoke", validate.SMOKE, 4), ("timing", validate.TIMING, 10)):
+        config = {
+            "trainable_teams": ["red"],
+            "variant": {"name": "cc4_stock"},
+            "seed_roles": {"initialization_root": 18},
+            "topology": {"sha256": ["fixture"]},
+            "opponents": {"blue": {"model_sha256": "frozen"}},
+            "initialization": {"kind": "fresh"},
+            "resume": None,
+            "team_configs": {
+                team: {"ANNEAL_LR": False, "LR": 0.0003, "TOTAL_TIMESTEPS": updates * 48000} for team in ("blue", "red")
+            },
+            "resume_contract": {"runtime_environment": {"JAX_PLATFORMS": "cpu"}},
+        }
+        owner = {
+            "id": label,
+            "status": "succeeded",
+            "execution_kind": "training",
+            "trial_id": trial,
+            "facts": {"resolved_config": {"value": config}, "source_revision": {"value": "1" * 40}},
+            "budgets": [
+                {"unit": unit, "completed": value}
+                for unit, value in {
+                    "environment_steps": updates * 48000,
+                    "joint_rollout_updates": updates,
+                    "blue_policy_updates": 0,
+                    "red_policy_updates": updates,
+                }.items()
+            ],
+        }
+        indexed[label] = owner
+        selected = {"environment_steps": 96000}
+        for role in ("model", "sidecar", "training_state"):
+            identity = f"{label}-{role}"
+            path = evidence / identity
+            if role == "training_state":
+                save_training_state(
+                    path,
+                    state={"weight": np.array([1, 2], dtype=np.float32), "rng": np.array([17, 18], dtype=np.uint32)},
+                    metadata={"environment_steps": 96000, "producer_attempt_id": label},
+                )
+            else:
+                path.write_bytes(role.encode())
+            indexed[identity] = {
+                "id": identity,
+                "kind": "artifact",
+                "producer_id": label,
+                "uri": path.name,
+                "sha256": prepare.sha256(path),
+            }
+            selected[role] = identity
+        owner["facts"]["checkpoint_96000"] = {"value": selected}
+        receipt = {"attempt_id": label, "evidence_root": str(evidence)}
+        prepare.write_json(root / "runs" / trial / "receipt.json", receipt)
+        prepare.write_json(
+            root / "runs" / trial / "execution.json", {"returncode": 0, "interrupted": False, "receipt": receipt}
+        )
+    smoke = {"attempt_id": "smoke", "source_revision": "1" * 40}
+    return root, indexed, smoke
+
+
+def test_fresh_compilation_requires_all_numeric_state_leaves_to_match(fresh_compilation_records):
+    from jaxborg.evaluation.resume_state import save_training_state
+
+    root, indexed, smoke = fresh_compilation_records
+    result = validate.validate_fresh_compilation(root, indexed, smoke)
+    assert result["passed"] is True
+    assert result["smoke_state"]["sha256"] != result["timing_state"]["sha256"]
+    assert result["smoke_state"]["state_sha256"] == result["timing_state"]["state_sha256"]
+    changed = root / "evidence/changed-timing-state"
+    save_training_state(
+        changed,
+        state={"weight": np.array([1, 2], dtype=np.float32), "rng": np.array([17, 19], dtype=np.uint32)},
+        metadata={"environment_steps": 96000, "producer_attempt_id": "timing"},
+    )
+    artifact = indexed["timing-training_state"]
+    artifact.update(uri=changed.name, sha256=prepare.sha256(changed))
+    with pytest.raises(ValueError, match="scientific numeric state"):
+        validate.validate_fresh_compilation(root, indexed, smoke)
+
+
+@pytest.mark.parametrize("change", ["annealing", "learning_rate", "source", "unfinished"])
+def test_fresh_compilation_rejects_noncomparable_or_incomplete_runs(fresh_compilation_records, change):
+    root, indexed, smoke = fresh_compilation_records
+    timing = indexed["timing"]
+    config = timing["facts"]["resolved_config"]["value"]
+    if change == "annealing":
+        config["team_configs"]["red"]["ANNEAL_LR"] = True
+    elif change == "learning_rate":
+        config["team_configs"]["red"]["LR"] = 0.01
+    elif change == "source":
+        timing["facts"]["source_revision"]["value"] = "2" * 40
+    else:
+        timing["status"] = "running"
+    with pytest.raises(ValueError):
+        validate.validate_fresh_compilation(root, indexed, smoke)

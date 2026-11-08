@@ -12,7 +12,6 @@ from pathlib import Path
 from prepare import PROJECT, sha256, verify, write_json
 
 HERE = Path(__file__).resolve().parent
-STEPS = {"smoke": 192000, "full": 9984000}
 
 
 def selected_response(root, run_id, trial, revision, target_steps):
@@ -66,7 +65,9 @@ def evaluate(args):
         raise ValueError("Smoke evaluation uses the prespecified frozen primary defender")
     if not smoke and not args.trial.startswith("br-"):
         raise ValueError("Evaluation requires a production trial or the declared smoke")
-    response = selected_response(root, run_id, args.trial, args.expected_revision, STEPS["smoke" if smoke else "full"])
+    updates = manifest["primary_updates"] if args.stage == "primary" else manifest["trial_updates"][args.trial]
+    target_steps = 192000 if smoke else 48000 * updates
+    response = selected_response(root, run_id, args.trial, args.expected_revision, target_steps)
     blue = manifest["blue_checkpoints"][args.blue]
     for role in ("model", "sidecar"):
         if sha256(blue[role]) != blue[f"{role}_sha256"]:
@@ -92,12 +93,13 @@ def evaluate(args):
         paths.append(path)
     seeds = [990001] if smoke else list(range(21000, 21016))
     variant = GameVariant(name="cc4_stock", cage4_enhanced_obs=True)
-    destination = root / "evaluations" / run_id / args.blue
+    destination = root / "evaluations" / run_id / args.stage / args.blue
     destination.mkdir(parents=True, exist_ok=False)
     plan = {
         "source_revision": args.expected_revision,
         "trial": args.trial,
         "run_id": run_id,
+        "stage": args.stage,
         "response": response,
         "blue": blue,
         "blue_id": args.blue,
@@ -148,6 +150,7 @@ def evaluate(args):
         "evaluation_id": capture.evaluation_id,
         "trial": args.trial,
         "run_id": run_id,
+        "stage": args.stage,
         "blue_id": args.blue,
         "response_environment_steps": response["steps"],
         "episodes": len(returns),
@@ -167,6 +170,7 @@ def main():
     parser.add_argument("--expected-revision", required=True)
     parser.add_argument("--trial", required=True)
     parser.add_argument("--run-id")
+    parser.add_argument("--stage", choices=("primary", "final"), default="primary")
     parser.add_argument(
         "--blue", required=True, choices=("blue42-primary", "blue42-final", "blue100-primary", "blue100-final")
     )

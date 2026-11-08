@@ -18,7 +18,7 @@ SMOKE = "smoke-blue42-primary-red17"
 TIMING = "timing-blue42-primary-red17"
 
 
-def projected_run_seconds(rows):
+def projected_run_seconds(rows, updates=208):
     if len(rows) < 8:
         raise ValueError("Timing requires at least eight completed production-shaped updates")
     elapsed = [float(row["wall_time_s"]) for row in rows]
@@ -26,8 +26,10 @@ def projected_run_seconds(rows):
     if any(not math.isfinite(value) or value <= 0 for value in deltas) or elapsed[0] <= 0:
         raise ValueError("Timing measurements must be finite and increasing")
     steady = statistics.median(deltas[-5:])
-    expected = elapsed[0] + 207 * steady + 300
-    upper = expected * 1.3 + 300
+    if updates not in (208, 416, 520, 624):
+        raise ValueError("Undeclared production horizon")
+    expected = elapsed[0] + (updates - 1) * steady + 300
+    upper = expected * 1.25 + 300
     return {
         "seconds_per_update": steady,
         "first_update_seconds": elapsed[0],
@@ -37,7 +39,7 @@ def projected_run_seconds(rows):
 
 
 def block_count(reserved_seconds, now):
-    available = (DEADLINE - now).total_seconds() - 3600
+    available = (DEADLINE - now).total_seconds() - 600
     if reserved_seconds <= 0 or not math.isfinite(reserved_seconds):
         raise ValueError("Invalid projected duration")
     if reserved_seconds > 6 * 3600 or 2 * reserved_seconds > available:
@@ -67,7 +69,11 @@ def timing_projection(root):
     rows.sort(key=lambda row: row["update_idx"])
     if [row["update_idx"] for row in rows] != list(range(1, 11)):
         raise ValueError("Timing must retain all ten consecutive updates")
-    return {**projected_run_seconds(rows), "attempt_id": owner["id"]}
+    return {
+        **projected_run_seconds(rows, manifest["production_updates"]),
+        "primary_reserved_seconds": projected_run_seconds(rows, 208)["reserved_seconds"],
+        "attempt_id": owner["id"],
+    }
 
 
 def submit(root, revision, kind, trial, minutes, dependencies):
@@ -78,7 +84,6 @@ def submit(root, revision, kind, trial, minutes, dependencies):
         "--cpus-per-task=8",
         "--mem=32G" if kind == "train" else "--mem=24G",
         f"--time={minutes}",
-        "--deadline=2026-11-09T08:00:00",
         "--signal=INT@120",
         f"--job-name=adaptive-{kind}-{trial}",
         f"--chdir={PROJECT}",
@@ -86,11 +91,23 @@ def submit(root, revision, kind, trial, minutes, dependencies):
         f"--error={root}/logs/%j.err",
     ]
     if kind == "train":
-        command.append("--gres=gpu:1")
+        command.extend(["--gres=gpu:1", "--deadline=2026-11-09T08:00:00"])
     if dependencies:
-        command.append("--dependency=afterok:" + ":".join(str(job) for job in dependencies))
+        command.append(
+            "--dependency="
+            + ("afterok:" if kind == "train" else "afterany:")
+            + ":".join(str(job) for job in dependencies)
+        )
     command.extend(
-        [str(PROJECT / "studies/lstm-adaptive-robustness/allocated.sh"), str(root), revision, kind, trial, str(PROJECT)]
+        [
+            str(PROJECT / "studies/lstm-adaptive-robustness/allocated.sh"),
+            str(root),
+            revision,
+            kind,
+            trial,
+            str(PROJECT),
+            str(minutes),
+        ]
     )
     response = subprocess.check_output(command, text=True).strip()
     job = int(response.split(";", 1)[0])
@@ -120,10 +137,13 @@ def queue(args):
                 acceptance.get("passed") is not True
                 or acceptance.get("source_revision") != args.expected_revision
                 or acceptance.get("manifest_sha256") != plan["manifest_sha256"]
+                or acceptance.get("fresh_compilation_equivalence", {}).get("passed") is not True
             ):
                 raise ValueError("Production requires passing validation of these exact inputs and source")
             projection = timing_projection(root)
             blocks = block_count(projection["reserved_seconds"], datetime.now(timezone.utc))
+            if json.loads((root / "inputs/manifest.json").read_text())["production_updates"] > 208 and blocks != 2:
+                raise ValueError("A longer budget requires time for both complete defender blocks")
             plan.update({"projection": projection, "blocks": blocks})
         write_json(plan_path, plan)
         ledger = directory / f"{args.phase}-jobs.jsonl"
@@ -147,12 +167,31 @@ def queue(args):
             protocol = json.loads((root / "inputs/protocol.json").read_text())
             lanes = protocol["extensions"]["lstm_adaptive_robustness"]["values"]["lanes"]
             minutes = math.ceil(plan["projection"]["reserved_seconds"] / 60)
+            lane_ends, eval_ends = [], []
             for lane in ("17", "83"):
                 prior_train, prior_eval = [], []
                 for trial in lanes[lane][: 2 * plan["blocks"]]:
                     training = add("train", trial, minutes, prior_train)
                     evaluation = add("eval", trial, 120, [training, *prior_eval])
                     prior_train, prior_eval = [training], [evaluation]
+                lane_ends.extend(prior_train)
+                eval_ends.extend(prior_eval)
+            if (
+                plan["blocks"] == 2
+                and json.loads((root / "inputs/manifest.json").read_text())["production_updates"] > 208
+            ):
+                extra_minutes = math.ceil(plan["projection"]["primary_reserved_seconds"] / 60)
+                for pair in (
+                    ("br-blue42-primary-red149", "br-blue42-final-red149"),
+                    ("br-blue100-final-red149", "br-blue100-primary-red149"),
+                ):
+                    next_ends, next_evals = [], []
+                    for index, trial in enumerate(pair):
+                        training = add("train", trial, extra_minutes, lane_ends)
+                        evaluation = add("eval", trial, 120, [training, eval_ends[index]])
+                        next_ends.append(training)
+                        next_evals.append(evaluation)
+                    lane_ends, eval_ends = next_ends, next_evals
 
 
 def main():

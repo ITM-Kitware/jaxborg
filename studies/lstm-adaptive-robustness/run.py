@@ -21,6 +21,7 @@ def require_production_acceptance(root, expected_revision):
         or acceptance.get("manifest_sha256") != sha256(root / "inputs/manifest.json")
         or acceptance.get("resume_equivalence", {}).get("passed") is not True
         or acceptance.get("cpu_evaluation", {}).get("passed") is not True
+        or acceptance.get("fresh_compilation_equivalence", {}).get("passed") is not True
     ):
         raise ValueError("Production requires accepted smoke, resume and CPU evaluation from these exact inputs")
 
@@ -46,7 +47,7 @@ def smoke_resume_state(root):
 def execute(root, expected_revision, trial, *, resume_state=None, run_id=None, retry_of=None):
     root = Path(root).resolve()
     manifest = verify(root, expected_revision)
-    settings = trial_settings(trial)
+    settings = trial_settings(trial, manifest["production_updates"])
     if settings["phase"] == "full":
         require_production_acceptance(root, expected_revision)
     if settings["phase"] == "smoke-resume":
@@ -78,7 +79,9 @@ def execute(root, expected_revision, trial, *, resume_state=None, run_id=None, r
         "--expected-revision",
         expected_revision,
     ]
-    if settings["phase"] != "full":
+    if settings["phase"] == "full":
+        command.extend(["--checkpoint-update", str(manifest["primary_updates"])])
+    else:
         command.extend(["--checkpoint-update", "2"])
     if settings["phase"] == "timing":
         command.extend(["--checkpoint-update", "5"])
