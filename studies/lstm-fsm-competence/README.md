@@ -50,6 +50,6 @@ ITM output root:
 /home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
 ```
 
-[Protocol](protocol.json), [recorded snapshot](checks/20261108-overnight-results/status.json),
+[Behavior check](checks/behavior-20261108/README.md), [protocol](protocol.json), [recorded snapshot](checks/20261108-overnight-results/status.json),
 and [reproduction commands](reproduce.md). Producing source:
 `0aef148bbebb45818e71b20e9b5a52be031f93f1`.

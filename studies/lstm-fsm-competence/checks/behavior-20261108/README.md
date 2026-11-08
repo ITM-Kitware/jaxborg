@@ -1,5 +1,13 @@
 # Blue behavior check
 
+The CPU check started November 8 at 12:33 p.m. Eastern. See the
+[launch record](launch-record.json) for the frozen plan and validation results.
+ITM output:
+
+```text
+/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4/
+```
+
 This exploratory check asks what Blue changes between **49.968M and 124.992M** training steps against FSM and the archived diverse-seed100 Red. The original competence evaluations retained returns and FSM CIA summaries, but no action traces; they cannot establish a behavioral explanation.
 
 The frozen [protocol](protocol.json) selects training seed42, all four retained layouts200–203 and episode root21000: **16 episodes**, paired by checkpoint within each opponent. The root was chosen by index before examining its returns. This small panel can explain particular cases, not estimate the behavior of all seeds or opponents. Every archived Red is unseen during this Blue-only FSM training. Cross-opponent episodes use different RNG contracts.
