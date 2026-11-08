@@ -69,3 +69,5 @@ submission record retains the exact deployed helper bytes and SHA-256
 `2577c187f31b6f1687d1f8e4222865c451c324482d330b4db7f5772419af6789`.
 The adjacent Python copy has only repository-lint whitespace normalization; use
 the retained deployed bytes when reproducing this exact hash-pinned recovery.
+
+See the [comparison with archived LSTMs](checks/20261108-overnight-results/archived-lstm-comparison.md) for matched-budget FSM results and transfer to other-lineage learned Reds.
