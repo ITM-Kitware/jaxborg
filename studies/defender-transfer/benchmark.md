@@ -154,12 +154,6 @@ bash studies/defender-transfer/benchmark_launch.sh submit \
   "$HOME/jaxborg-exp/shared/hmarl-native-matched-20261023/inputs/actors.safetensors"
 ```
 
-The launcher requests one GPU, eight CPU cores, 32 GiB and at most two hours in
-`community`, preserves Slurm's device assignment, and activates the shared MLflow
-store without printing its environment. Initial compilation is part of that
-budget. Failed checks stop the run; retries require a new output root and explicit
-selection rather than silently overwriting an attempt.
-
 The launcher writes analysis automatically after the full screen. For manual
 reconstruction, use `python studies/defender-transfer/benchmark.py analyze --help`
 with the retained manifest, capture root, selection and a new output directory.

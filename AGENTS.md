@@ -2,8 +2,18 @@
 
 ## Study workflow
 
-Start with the [study guide](studies/README.md) for execution,
-retained evidence and analysis commands.
+Start with the [study guide](studies/README.md).
+
+Write for a researcher deciding what the result means and what to do next.
+Lead with the question and finding, then the comparison and limitations that
+affect the conclusion. Keep useful ITM result paths and evidence/replay links.
+
+Do not narrate routine execution settings: Slurm partitions, CPU/GPU/RAM
+allocations, wall-time caps, device assignment, or generic launcher safeguards.
+Those settings already exist in configuration. Delete redundant prose; do not
+move it into another document or script comments. Mention an execution detail
+only when it changes the scientific interpretation or is essential to reproduce
+the result. Keep README summaries short; link exact methods and records.
 
 ## Tests
 
