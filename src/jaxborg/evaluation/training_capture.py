@@ -18,10 +18,10 @@ from jaxborg.evaluation.capture_store import (
 )
 from jaxborg.evaluation.joint_capture import fact, outside_source
 from jaxborg.evaluation.provenance import builder_identity, collect_provenance, topology_evidence
-from jaxborg.recipe import team_recipe, training_teams
+from jaxborg.recipe import resolve_train_opponents, team_recipe, training_teams
 
 
-def _validate_resume_lineage(root, metadata, archive_sha256):
+def _validate_resume_lineage(root, metadata, archive_sha256, *, joint=False):
     """Require an owned full state and its original zero-step policies in this store."""
     root = outside_source(root)
     if not (root / "protocol.json").is_file():
@@ -62,7 +62,9 @@ def _validate_resume_lineage(root, metadata, archive_sha256):
     original_checkpoint = original_attempt["facts"].get("initial_checkpoint", {}).get("value")
     if original_checkpoint != origin["checkpoint"] or original_checkpoint.get("environment_steps") != 0:
         raise ValueError("Resume origin differs from the owned original zero-step checkpoint")
-    owned_artifact(original_checkpoint["model"], original_attempt["id"], "initial blue policy")
+    owned_artifact(
+        original_checkpoint["model"], original_attempt["id"], "initial joint policy" if joint else "initial blue policy"
+    )
     owned_artifact(original_checkpoint["sidecar"], original_attempt["id"], "checkpoint recipe sidecar")
 
 
@@ -84,18 +86,30 @@ def begin_training(
     overrides=None,
     entrypoint=None,
 ):
-    """Capture fresh joint or Blue/FSM training with its resolved contracts."""
+    """Capture joint, Blue/FSM, or Red/frozen-Blue training and exact inputs."""
     if not isinstance(expected_revision, str) or len(expected_revision) != 40:
         raise ValueError("Recorded training requires an exact pinned source revision")
     resume_path = getattr(args, "resume_state", None)
     teams = set(training_teams(recipe))
-    scripted_red = teams == {"blue"} and not recipe.get("train", {}).get("opponents")
-    if teams not in ({"blue", "red"}, {"blue"}) or recipe.get("train", {}).get("opponents"):
-        raise ValueError(
-            "Recorded training requires fresh initialization; frozen learned opponents and resume are unsupported"
-        )
-    if resume_path is not None and not scripted_red:
-        raise ValueError("Full-state resume is supported only for recorded Blue/FSM training")
+    opponents = recipe.get("train", {}).get("opponents") or {}
+    scripted_red = teams == {"blue"} and not opponents
+    frozen_blue = teams == {"red"} and set(opponents) == {"blue"}
+    if not (scripted_red or frozen_blue or (teams == {"blue", "red"} and not opponents)):
+        raise ValueError("Recorded training supports fresh joint, Blue/FSM, or Red/frozen-Blue training only")
+    if recipe.get("train", {}).get("initial_weights"):
+        raise ValueError("Recorded training does not support weights-only initialization")
+    if resume_path is not None and not (scripted_red or frozen_blue):
+        raise ValueError("Full-state resume requires recorded Blue/FSM or Red/frozen-Blue training")
+    if frozen_blue:
+        if set(configs) != {"blue", "red"}:
+            raise ValueError("Recorded Red/frozen-Blue training requires both policy configurations")
+        if (
+            any(config.get("ADAPTIVE_UPDATES") for config in configs.values())
+            or configs["red"].get("UPDATE_EVERY", 1) != 1
+        ):
+            raise ValueError("Recorded Red/frozen-Blue training requires a Red update every rollout")
+        if any(config["NUM_STEPS"] != config["TRAIN_VARIANT"].num_steps for config in configs.values()):
+            raise ValueError("Red/frozen-Blue rollout length must equal the episode horizon")
     if scripted_red:
         if set(configs) != {"blue"} or configs["blue"]["TRAIN_VARIANT"].red_agent != "finite_state":
             raise ValueError("Recorded Blue-only training requires stock finite_state scripted Red")
@@ -136,6 +150,12 @@ def begin_training(
     if not topology_paths:
         raise ValueError("Recorded joint training requires an explicit fixed topology bank")
     inputs.update({f"training topology {index}": path for index, path in enumerate(topology_paths)})
+    if frozen_blue:
+        from jaxborg.checkpoint import sidecar_path
+
+        opponent = resolve_train_opponents(recipe, backend="jax", exp_dir=os.environ.get("JAXBORG_EXP_DIR"))["blue"]
+        inputs["frozen blue policy"] = opponent.resolve()
+        inputs["frozen blue sidecar"] = sidecar_path(opponent).resolve()
     if resume_path is not None:
         inputs["resume training state"] = Path(resume_path).resolve()
     input_hashes = {role: hashlib.sha256(path.read_bytes()).hexdigest() for role, path in inputs.items()}
@@ -176,7 +196,19 @@ def begin_training(
     resume_contract = None
     resume_metadata = None
     completed_updates = 0
-    if scripted_red:
+    opponent_contract = (
+        {
+            "blue": {
+                "kind": "checkpoint",
+                "trainable": False,
+                "model_sha256": input_hashes["frozen blue policy"],
+                "sidecar_sha256": input_hashes["frozen blue sidecar"],
+            }
+        }
+        if frozen_blue
+        else {}
+    )
+    if scripted_red or frozen_blue:
         # Paths and checkpoint cadence do not affect numerical continuation.
         # Everything affecting the learner, game, RNG or original horizon does.
         resume_contract = json_configuration(
@@ -204,6 +236,31 @@ def begin_training(
                 },
             }
         )
+        if frozen_blue:
+            resume_contract = json_configuration(
+                {
+                    "schema_version": 1,
+                    "procedure": "red_frozen_blue",
+                    "source_revision": expected_revision,
+                    "source_identity": provenance.facts["source_identity"]["value"],
+                    "dependencies": provenance.configuration["dependencies"],
+                    "algorithm": recipe["algorithm"],
+                    "red_arch": team_recipe(recipe, "red")["arch"],
+                    "team_configs": {
+                        team: {
+                            key: value
+                            for key, value in config.items()
+                            if key not in {"TOPOLOGY_BANK", "CHECKPOINT_EVERY_UPDATES"}
+                        }
+                        for team, config in configs.items()
+                    },
+                    "opponents": opponent_contract,
+                    "topology_sha256": [
+                        input_hashes[f"training topology {index}"] for index in range(len(topology_paths))
+                    ],
+                    "runtime_environment": resume_contract["runtime_environment"],
+                }
+            )
         if resume_path is not None:
             from jaxborg.evaluation.resume_state import read_training_state_metadata
 
@@ -232,7 +289,7 @@ def begin_training(
                 or not all(isinstance(origin["checkpoint"].get(key), str) for key in ("model", "sidecar"))
             ):
                 raise ValueError("Resume checkpoint must preserve its original zero-step policy lineage")
-            _validate_resume_lineage(root, resume_metadata, input_hashes["resume training state"])
+            _validate_resume_lineage(root, resume_metadata, input_hashes["resume training state"], joint=frozen_blue)
     config = json_configuration(
         {
             "schema_version": 1,
@@ -262,13 +319,15 @@ def begin_training(
             "trainable_teams": sorted(teams),
             "opponents": {"red": {"kind": "scripted", "agent": "finite_state", "trainable": False}}
             if scripted_red
-            else {},
+            else opponent_contract,
             "initialization": {
                 "kind": "full_state_resume" if resume_metadata is not None else "fresh",
                 "state_retention": "initial numeric optimizer, normalizer, RNG, environment and observation state",
                 "seed_roots_retained": True,
                 "checkpoint_continuation": "full numeric Blue/FSM state at aligned rollout boundaries"
                 if scripted_red
+                else "full numeric Red/frozen-Blue state at aligned rollout boundaries"
+                if frozen_blue
                 else "weights only; resume unsupported",
             },
             "execution": provenance.configuration,

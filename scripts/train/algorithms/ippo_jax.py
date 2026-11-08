@@ -491,6 +491,11 @@ def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
 def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_factory=None, recording=None):
     """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
     trainable_teams = training_teams(recipe)
+    if getattr(args, "resume_state", None) is not None:
+        if recording is None or trainable_teams != ("red",):
+            raise ValueError("Joint full-state resume requires recorded Red/frozen-Blue training")
+        if save_dir.exists() and any(save_dir.iterdir()):
+            raise ValueError("Full-state resume requires a fresh output tag/directory")
     configs = {team: project_jax(recipe, team=team) for team in ("blue", "red")}
     for config in configs.values():
         config["SEED"] = args.seed
@@ -550,7 +555,12 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path, *, env_fac
 
 
 def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_teams, *, env_factory, capture):
-    opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
+    frozen_blue = capture is not None and "frozen blue policy" in capture.inputs
+    opponent_paths = (
+        {"blue": capture.inputs["frozen blue policy"]}
+        if frozen_blue
+        else resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
+    )
     dims = {
         "blue": (recipe_blue_obs_size(recipe), BLUE_ALLOW_TRAFFIC_END),
         "red": (RED_OBS_SIZE, RED_POLICY_ACTION_DIM),
@@ -643,10 +653,66 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
     num_steps = int(configs["blue"]["NUM_STEPS"])
     num_envs = int(configs["blue"]["NUM_ENVS"])
     metrics_path = save_dir / "metrics.jsonl"
+    completed_updates = 0
+    resume_contract = resume_metadata = training_origin = None
+    frozen_identity = None
+    if frozen_blue:
+        from jaxborg.evaluation.resume_state import load_training_state, numeric_state_sha256, save_training_state
+
+        def frozen_state_identity():
+            return {
+                "parameters_sha256": numeric_state_sha256(train_states["blue"].params),
+                "optimizer_sha256": numeric_state_sha256(
+                    {"opt_state": train_states["blue"].opt_state, "step": train_states["blue"].step}
+                ),
+            }
+
+        frozen_identity = frozen_state_identity()
+        if frozen_identity["parameters_sha256"] != numeric_state_sha256(initial_params["blue"]):
+            raise ValueError("Frozen Blue initialization differs from the retained opponent policy")
+        recorded_config = json.loads((capture.directory / "configuration.json").read_text())
+        resume_contract = recorded_config["resume_contract"]
+        resume_metadata = recorded_config["resume"]
+        if resume_metadata is not None:
+            template = {
+                "train_states": train_states,
+                "reward_norm_states": reward_norm_states,
+                "rng": rng,
+                "env_state": env_state,
+                "obs": obs,
+                "adaptive_state": adaptive_state,
+            }
+            restored, metadata = load_training_state(
+                capture.inputs["resume training state"],
+                template=template,
+                expected_metadata={"contract": resume_contract},
+                expected_sha256=recorded_config["resume_archive_sha256"],
+            )
+            completed_updates = int(metadata["completed_updates"])
+            train_states, reward_norm_states, rng, env_state, obs, adaptive_state = (
+                restored[key]
+                for key in ("train_states", "reward_norm_states", "rng", "env_state", "obs", "adaptive_state")
+            )
+            expected_red_steps = (
+                completed_updates * int(configs["red"]["NUM_MINIBATCHES"]) * int(configs["red"]["UPDATE_EPOCHS"])
+            )
+            if int(jax.device_get(train_states["red"].step)) != expected_red_steps:
+                raise ValueError("Resume Red optimizer count differs from completed rollouts")
+            if frozen_state_identity() != frozen_identity:
+                raise ValueError("Resume state changed the frozen Blue policy or optimizer")
+            if int(jax.device_get(jnp.max(env_state.state.time))) != 0:
+                raise ValueError("Resume state is not at an aligned environment reset boundary")
+            sources["red"] = {"kind": "full_state_resume", "seed": int(args.seed)}
+            print(
+                f"Restored full state after {completed_updates} updates / {metadata['environment_steps']:,} steps",
+                flush=True,
+            )
     start = time.perf_counter()
     final_metrics = None
 
     def save_bundle(path: Path, env_steps: int) -> None:
+        if frozen_blue and frozen_state_identity() != frozen_identity:
+            raise ValueError("Frozen Blue parameters or optimizer changed during Red training")
         policies = {
             team: PolicyBundleEntry(
                 weights=train_states[team].params,
@@ -675,16 +741,25 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
         from jaxborg.evaluation.training_capture import retain_checkpoint, retain_initial_state
 
         initial_model = save_dir / "initial.safetensors"
-        save_bundle(initial_model, 0)
+        initial_steps = completed_updates * num_steps * num_envs
+        save_bundle(initial_model, initial_steps)
         initial_sidecar = write_sidecar(
             save_dir / "recipe_initial.yaml",
             recipe,
             seed=args.seed,
-            total_steps=0,
+            total_steps=initial_steps,
             backend="jax",
             train_run_id=train_run_id,
+            extra={"trainable_teams": list(trainable_teams), "policy_sources": sources, "model": initial_model.name},
         )
-        retain_checkpoint(capture, initial_model, initial_sidecar, steps=0, initial=True)
+        initial_checkpoint = retain_checkpoint(
+            capture, initial_model, initial_sidecar, steps=initial_steps, initial=True
+        )
+        training_origin = (
+            resume_metadata["training_origin"]
+            if resume_metadata is not None
+            else {"attempt_id": capture.attempt_id, "checkpoint": initial_checkpoint}
+        )
         retain_initial_state(
             capture,
             train_states=train_states,
@@ -708,9 +783,30 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
             },
         )
 
-    print(f"Starting joint training ({num_updates} updates)...", flush=True)
+        if frozen_blue:
+            record_facts(
+                capture,
+                {
+                    "training_origin": {
+                        "value": training_origin,
+                        "source": "original zero-step joint bundle or retained resume lineage",
+                    },
+                    "policy_initialization_hashes": {
+                        "value": {team: numeric_state_sha256(train_states[team].params) for team in ("blue", "red")},
+                        "source": "actual initialized policy trees; resumed state when continuing",
+                    },
+                    "frozen_policy_identity": {
+                        "value": {"blue": frozen_identity},
+                        "source": "retained Blue checkpoint and initialized frozen optimizer",
+                    },
+                },
+            )
+
+    print(
+        f"Starting joint training ({num_updates - completed_updates} remaining of {num_updates} updates)...", flush=True
+    )
     with metrics_path.open("w") as metrics_file:
-        for update_idx in range(num_updates):
+        for update_idx in range(completed_updates, num_updates):
             result = collect_and_update(
                 train_states,
                 env_state,
@@ -724,19 +820,30 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
             if adaptive_settings is not None:
                 adaptive_state = result[6]
             metrics = jax.device_get(metrics)
+            if frozen_blue:
+                if any(not math.isfinite(float(value)) for values in metrics.values() for value in values.values()):
+                    raise ValueError("Nonfinite Red/frozen-Blue training metric")
+                if float(metrics["blue"]["updated"]) != 0 or float(metrics["blue"]["update_count"]) != 0:
+                    raise ValueError("Frozen Blue unexpectedly performed a policy update")
+                if float(metrics["red"]["updated"]) != 1 or float(metrics["red"]["update_count"]) != update_idx + 1:
+                    raise ValueError("Red policy update count differs from completed rollouts")
+                if int(jax.device_get(jnp.max(env_state.state.time))) != 0:
+                    raise ValueError("Red/frozen-Blue rollout boundary does not coincide with environment reset")
             final_metrics = metrics
-            if update_idx == 0:
+            if update_idx == completed_updates:
                 print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
 
             env_steps = (update_idx + 1) * num_steps * num_envs
             elapsed = time.perf_counter() - start
-            sps = env_steps / elapsed if elapsed > 0 else 0.0
+            attempt_updates = update_idx + 1 - completed_updates
+            attempt_steps = attempt_updates * num_steps * num_envs
+            sps = attempt_steps / elapsed if elapsed > 0 else 0.0
             primary_team = "blue" if "blue" in trainable_teams else "red"
             primary = metrics[primary_team]
             blue = metrics["blue"]
             row = make_row(
-                update_idx=update_idx + 1,
-                env_steps=env_steps,
+                update_idx=attempt_updates,
+                env_steps=attempt_steps,
                 wall_time_s=elapsed,
                 throughput_sps=sps,
                 loss_policy=float(primary["actor_loss"]),
@@ -775,6 +882,10 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
             }
             for team in ("blue", "red"):
                 values = {metric_names[key]: float(metrics[team][key]) for key in metric_names}
+                if frozen_blue:
+                    row[f"team.{team}.cumulative_update_count"] = values["update_count"]
+                    if team == "red":
+                        values["update_count"] -= completed_updates
                 if team == "red" and adaptive_settings is not None:
                     values.update(
                         {
@@ -796,6 +907,9 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                 )
                 row[f"team.{team}.lr"] = float(configs[team]["LR"])
                 row[f"team.{team}.trainable"] = team in trainable_teams
+            if frozen_blue:
+                row["cumulative_update_idx"] = update_idx + 1
+                row["cumulative_environment_steps"] = env_steps
             metrics_file.write(json.dumps(row) + "\n")
             metrics_file.flush()
             if capture is not None:
@@ -823,7 +937,9 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
             is_final = update_idx == num_updates - 1
             previous_steps = update_idx * num_steps * num_envs
             eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
-            periodic_checkpoint = checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0
+            periodic_checkpoint = (checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0) or (
+                update_idx + 1 in (getattr(args, "checkpoint_update", None) or ())
+            )
             if periodic_checkpoint or is_final or eval_due:
                 name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
                 checkpoint_path = save_dir / name
@@ -843,7 +959,30 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                     },
                 )
                 if capture is not None:
-                    retain_checkpoint(capture, checkpoint_path, sidecar_path, steps=env_steps)
+                    state_path = None
+                    if frozen_blue:
+                        state_path = save_dir / f"training_state_{env_steps}.npz"
+                        save_training_state(
+                            state_path,
+                            state={
+                                "train_states": train_states,
+                                "reward_norm_states": reward_norm_states,
+                                "rng": rng,
+                                "env_state": env_state,
+                                "obs": obs,
+                                "adaptive_state": adaptive_state,
+                            },
+                            metadata={
+                                "contract": resume_contract,
+                                "completed_updates": update_idx + 1,
+                                "environment_steps": env_steps,
+                                "producer_attempt_id": capture.attempt_id,
+                                "training_origin": training_origin,
+                            },
+                        )
+                    retain_checkpoint(
+                        capture, checkpoint_path, sidecar_path, steps=env_steps, training_state=state_path
+                    )
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {env_steps:,}; "
@@ -891,7 +1030,8 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                     "value": {
                         "loop_elapsed_seconds": elapsed,
                         "setup_elapsed_seconds": start - t0,
-                        "completed_environment_steps": num_updates * num_steps * num_envs,
+                        "completed_environment_steps": (num_updates - completed_updates) * num_steps * num_envs,
+                        "cumulative_environment_steps": num_updates * num_steps * num_envs,
                         "device_count": len(jax.devices()),
                         "device_kinds": [device.device_kind for device in jax.devices()],
                         "scope": (
@@ -903,9 +1043,22 @@ def _execute_joint_training(args, recipe, tag, save_dir, configs, trainable_team
                 }
             },
         )
+    if frozen_blue:
+        if frozen_state_identity() != frozen_identity:
+            raise ValueError("Frozen Blue parameters or optimizer changed during Red training")
+        record_facts(
+            capture,
+            {
+                "frozen_policy_verification": {
+                    "value": {"blue": frozen_identity, "unchanged": True},
+                    "source": "exact numeric tree hashes at initialization and every retained checkpoint",
+                }
+            },
+        )
     final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
     return {
         "elapsed": elapsed,
+        "completed_environment_steps": (num_updates - completed_updates) * num_steps * num_envs,
         "final_reward": final_reward,
         "metrics_path": metrics_path,
         "final_model": save_dir / f"model_{tag}.safetensors",
@@ -1390,7 +1543,9 @@ def main(*, expected_algorithm: str | None = None):
     parser.add_argument("--protocol", type=Path)
     parser.add_argument("--trial")
     parser.add_argument("--retry-of")
-    parser.add_argument("--resume-state", type=Path, help="Recorded Blue/FSM full numeric state checkpoint")
+    parser.add_argument(
+        "--resume-state", type=Path, help="Recorded Blue/FSM or Red/frozen-Blue full numeric state checkpoint"
+    )
     parser.add_argument(
         "--checkpoint-update",
         action="append",
@@ -1420,10 +1575,11 @@ def main(*, expected_algorithm: str | None = None):
         parser.error(f"this launcher requires algorithm: {expected_algorithm}")
     teams = training_teams(recipe)
     learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
-    if learned_red and (args.resume_state is not None or args.checkpoint_update):
-        parser.error("full-state resume and explicit checkpoint updates are supported only for Blue/FSM")
+    frozen_blue = teams == ("red",) and set(recipe.get("train", {}).get("opponents") or {}) == {"blue"}
+    if learned_red and not frozen_blue and (args.resume_state is not None or args.checkpoint_update):
+        parser.error("full-state resume and explicit checkpoint updates require Blue/FSM or Red/frozen-Blue")
     if args.resume_state is not None and args.development_no_recording:
-        parser.error("full-state resume requires recorded Blue/FSM training")
+        parser.error("full-state resume requires recorded training")
     if any(update <= 0 for update in args.checkpoint_update):
         parser.error("checkpoint-update values must be positive")
     blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
