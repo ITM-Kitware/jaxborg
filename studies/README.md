@@ -43,21 +43,24 @@ studies/<short-study-name>/
   recipe.yaml        optional study-specific settings using the existing schema
 ```
 
-### What to put in the README
+### Write the research summary
 
-Use these as a rough section order. Keep the README readable as a research
-summary; combine sections when a short study does not need separate headings.
+Lead with the question and finding. Explain what the result means and the next
+research decision. For unfinished work, say what remains unknown.
 
-- **Question:** what are you trying to learn, and what decision would the answer inform?
-- **Method:** which settings are being compared, training budget and seeds,
-  evaluation procedure, measurements, and how runs/checkpoints enter the comparison.
-- **Status and findings:** what has run, what remains incomplete, what the results
-  support, and what remains uncertain. State when results are not yet available.
-- **Evidence:** links or locators for inputs, selected runs, saved reports, and
-  producing source. Include access instructions when evidence is stored elsewhere.
-- **Commands:** a short entry point linking to `reproduce.md` for detailed
-  preparation, execution, analysis, and reconstruction instructions. That
-  companion links to shared setup, training, and evaluation guides as needed.
+- Give the actual comparison, important controls, budget, independent seeds and
+  evaluation cases. Link exact methods and configuration.
+- Include only limitations that affect the conclusion.
+- Keep useful ITM output paths and links to results, evidence and replay commands.
+
+Omit routine scheduling, resource quotas, wall-time caps, device assignment,
+generic safeguards and job chronology. Delete prose that repeats configuration;
+do not move it into another document or script comments. Mention failures only
+when they explain missing evidence or affect interpretation.
+
+Aim for a few short paragraphs and an optional results table. Use `reproduce.md`
+for commands and non-obvious prerequisites. Reproducibility comes from retained
+code, inputs and results, not narration of execution settings.
 
 ### Study settings
 
