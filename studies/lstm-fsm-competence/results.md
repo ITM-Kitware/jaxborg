@@ -35,10 +35,8 @@ those missing primary cells.
 
 CPU recovery job **4139** started at **11:09:29 a.m. Eastern on November 8**.
 It revalidated and reused all 14 successful cells, then began the six missing
-cells (384 episodes) in separate, sequential Python processes. Its allocation
-is eight CPUs, 64 GiB memory and six hours, with no GPU request. The original
-failed attempts and outputs remain intact; explicit predecessor identities are
-retained in the recovery plan. Completion is still pending. See the
+cells (384 episodes) in separate Python processes to avoid the earlier memory
+failure. Completion is still pending. See the
 [verified submission record](checks/20261108-overnight-results/recovery-submission.json).
 
 The saved learned Reds come from a related archive, not a verified independent
