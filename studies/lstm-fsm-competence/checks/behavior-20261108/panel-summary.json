@@ -1,0 +1,2043 @@
+{
+  "analysis_source_sha256": "a0744a4ddf6bd527914a0a609052bf45cf62e8b6605e98df74770803e2c176de",
+  "builder_sha256": "e16605313375195981c98bd76319baf091f925d313cfbfeed5d08e7c77a695fc",
+  "cells": [
+    {
+      "canonical_parity": true,
+      "cell": "49968000-fsm",
+      "checkpoint": {
+        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
+        "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
+        "model_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
+        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
+        "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:8693f8f333f54cec87935ee8080f5ec7",
+        "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
+        "steps": 49968000,
+        "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+      },
+      "chosen_share_of_genuine_idle_decisions": {
+        "AllowTraffic": 0.17617021276595746,
+        "Analyse": 0.17936170212765956,
+        "BlockTraffic": 0.04,
+        "Decoy": 0.24659574468085108,
+        "Monitor": 0.01851063829787234,
+        "Remove": 0.2904255319148936,
+        "Restore": 0.030851063829787233,
+        "Sleep": 0.018085106382978722
+      },
+      "episodes": 4,
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:381a5fcaf04f4bb8863fd367ea97a0b2",
+      "mean_totals_per_episode": {
+        "action_cost": -36.25,
+        "blocked_directed_pair_ticks": 2811.75,
+        "busy_agent_ticks": 1325.0,
+        "forced_sleep_ticks": 1325.0,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 450.5,
+        "idle_decisions": 1175.0,
+        "impact_count": 126.75,
+        "return": -340.75,
+        "reward_asf": 0.0,
+        "reward_lwf": -139.75,
+        "reward_ria": -164.75,
+        "same_action_as_previous_idle_decision": 64.75,
+        "steps": 500.0
+      },
+      "pooled_chosen_counts": {
+        "AllowTraffic": 828,
+        "Analyse": 843,
+        "BlockTraffic": 188,
+        "Decoy": 1159,
+        "Monitor": 87,
+        "Remove": 1365,
+        "Restore": 145,
+        "Sleep": 85
+      },
+      "pooled_totals": {
+        "action_cost": -145.0,
+        "blocked_directed_pair_ticks": 11247,
+        "busy_agent_ticks": 5300,
+        "forced_sleep_ticks": 5300,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 1802.0,
+        "idle_decisions": 4700,
+        "impact_count": 507.0,
+        "return": -1363.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -559.0,
+        "reward_ria": -659.0,
+        "same_action_as_previous_idle_decision": 259,
+        "steps": 2000
+      },
+      "receipt_sha256": "6199832d4afd6813e7d68a83dc8a5818642e6451fd9bc66abe1b979ef734352f"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "49968000-red-diverse-100-final",
+      "checkpoint": {
+        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
+        "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
+        "model_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
+        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
+        "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:8693f8f333f54cec87935ee8080f5ec7",
+        "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
+        "steps": 49968000,
+        "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+      },
+      "chosen_share_of_genuine_idle_decisions": {
+        "AllowTraffic": 0.1831819142193112,
+        "Analyse": 0.20071836044791888,
+        "BlockTraffic": 0.040777519543629834,
+        "Decoy": 0.21740967673779843,
+        "Monitor": 0.024931333192478342,
+        "Remove": 0.28058313965772236,
+        "Restore": 0.034650327487851254,
+        "Sleep": 0.017747728713289668
+      },
+      "episodes": 4,
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:207ce394a88149238a86b75391f01b58",
+      "mean_totals_per_episode": {
+        "action_cost": -41.0,
+        "blocked_directed_pair_ticks": 2749.5,
+        "busy_agent_ticks": 1316.75,
+        "forced_sleep_ticks": 1316.75,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 289.0,
+        "idle_decisions": 1183.25,
+        "impact_count": 531.75,
+        "return": -2977.25,
+        "reward_asf": 0.0,
+        "reward_lwf": -463.25,
+        "reward_ria": -2473.0,
+        "same_action_as_previous_idle_decision": 68.5,
+        "steps": 500.0
+      },
+      "pooled_chosen_counts": {
+        "AllowTraffic": 867,
+        "Analyse": 950,
+        "BlockTraffic": 193,
+        "Decoy": 1029,
+        "Monitor": 118,
+        "Remove": 1328,
+        "Restore": 164,
+        "Sleep": 84
+      },
+      "pooled_totals": {
+        "action_cost": -164.0,
+        "blocked_directed_pair_ticks": 10998,
+        "busy_agent_ticks": 5267,
+        "forced_sleep_ticks": 5267,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 1156.0,
+        "idle_decisions": 4733,
+        "impact_count": 2127.0,
+        "return": -11909.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -1853.0,
+        "reward_ria": -9892.0,
+        "same_action_as_previous_idle_decision": 274,
+        "steps": 2000
+      },
+      "receipt_sha256": "f955bd5e6797cadd3ac4416d2991c78378ebd6bb25125ed03842a456f3d76f4e"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "124992000-fsm",
+      "checkpoint": {
+        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
+        "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+        "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
+        "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:410dde4ad9434c6c838c4e34ed23d604",
+        "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+        "steps": 124992000,
+        "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+      },
+      "chosen_share_of_genuine_idle_decisions": {
+        "AllowTraffic": 0.17155243600330305,
+        "Analyse": 0.2239884393063584,
+        "BlockTraffic": 0.05037159372419488,
+        "Decoy": 0.22481420313790257,
+        "Monitor": 0.018579686209744012,
+        "Remove": 0.27766308835673,
+        "Restore": 0.015483071841453344,
+        "Sleep": 0.01754748142031379
+      },
+      "episodes": 4,
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:bb523fb6a12c44d6bb58c5228553d168",
+      "mean_totals_per_episode": {
+        "action_cost": -18.75,
+        "blocked_directed_pair_ticks": 3085.5,
+        "busy_agent_ticks": 1289.0,
+        "forced_sleep_ticks": 1289.0,
+        "green_asf_count": 3.25,
+        "green_lwf_count": 439.5,
+        "idle_decisions": 1211.0,
+        "impact_count": 121.25,
+        "return": -449.25,
+        "reward_asf": -3.25,
+        "reward_lwf": -249.5,
+        "reward_ria": -177.75,
+        "same_action_as_previous_idle_decision": 78.0,
+        "steps": 500.0
+      },
+      "pooled_chosen_counts": {
+        "AllowTraffic": 831,
+        "Analyse": 1085,
+        "BlockTraffic": 244,
+        "Decoy": 1089,
+        "Monitor": 90,
+        "Remove": 1345,
+        "Restore": 75,
+        "Sleep": 85
+      },
+      "pooled_totals": {
+        "action_cost": -75.0,
+        "blocked_directed_pair_ticks": 12342,
+        "busy_agent_ticks": 5156,
+        "forced_sleep_ticks": 5156,
+        "green_asf_count": 13.0,
+        "green_lwf_count": 1758.0,
+        "idle_decisions": 4844,
+        "impact_count": 485.0,
+        "return": -1797.0,
+        "reward_asf": -13.0,
+        "reward_lwf": -998.0,
+        "reward_ria": -711.0,
+        "same_action_as_previous_idle_decision": 312,
+        "steps": 2000
+      },
+      "receipt_sha256": "a3a85caf2b77c19f926afc8576704ea979e8d39f695b2659176b6f6615b3f6b0"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "124992000-red-diverse-100-final",
+      "checkpoint": {
+        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
+        "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+        "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
+        "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:410dde4ad9434c6c838c4e34ed23d604",
+        "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+        "steps": 124992000,
+        "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+      },
+      "chosen_share_of_genuine_idle_decisions": {
+        "AllowTraffic": 0.17237035481839177,
+        "Analyse": 0.23409615788368676,
+        "BlockTraffic": 0.032542515221499056,
+        "Decoy": 0.22632794457274827,
+        "Monitor": 0.019525509132899434,
+        "Remove": 0.2706277556162083,
+        "Restore": 0.025404157043879907,
+        "Sleep": 0.019105605710686542
+      },
+      "episodes": 4,
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:5fa86c786ae34819aa2529fde8794309",
+      "mean_totals_per_episode": {
+        "action_cost": -30.25,
+        "blocked_directed_pair_ticks": 2657.0,
+        "busy_agent_ticks": 1309.25,
+        "forced_sleep_ticks": 1309.25,
+        "green_asf_count": 1.75,
+        "green_lwf_count": 203.5,
+        "idle_decisions": 1190.75,
+        "impact_count": 543.5,
+        "return": -2892.5,
+        "reward_asf": -1.75,
+        "reward_lwf": -345.25,
+        "reward_ria": -2515.25,
+        "same_action_as_previous_idle_decision": 79.5,
+        "steps": 500.0
+      },
+      "pooled_chosen_counts": {
+        "AllowTraffic": 821,
+        "Analyse": 1115,
+        "BlockTraffic": 155,
+        "Decoy": 1078,
+        "Monitor": 93,
+        "Remove": 1289,
+        "Restore": 121,
+        "Sleep": 91
+      },
+      "pooled_totals": {
+        "action_cost": -121.0,
+        "blocked_directed_pair_ticks": 10628,
+        "busy_agent_ticks": 5237,
+        "forced_sleep_ticks": 5237,
+        "green_asf_count": 7.0,
+        "green_lwf_count": 814.0,
+        "idle_decisions": 4763,
+        "impact_count": 2174.0,
+        "return": -11570.0,
+        "reward_asf": -7.0,
+        "reward_lwf": -1381.0,
+        "reward_ria": -10061.0,
+        "same_action_as_previous_idle_decision": 318,
+        "steps": 2000
+      },
+      "receipt_sha256": "a64d5540f5ac30ba22299680622fb0ac0698be5582f2d4b7d038ceedefb7c937"
+    }
+  ],
+  "check_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
+  "episodes": [
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:8a95e1fe37aa429e8301af8171a239f9",
+        "canonical_episode_index": 0,
+        "canonical_episode_sha256": "218d578fd5b1893403ee6a44fcaf8b352a18fe69402e9c81fe1532f54a35156d",
+        "canonical_return": -217.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 0,
+        "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+        "traced_return": -217.0
+      },
+      "cell": "49968000-fsm",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 200,
+        "Analyse": 221,
+        "BlockTraffic": 33,
+        "Decoy": 281,
+        "Monitor": 21,
+        "Remove": 360,
+        "Restore": 28,
+        "Sleep": 24
+      },
+      "completed_counts": {
+        "AllowTraffic": 200,
+        "Analyse": 221,
+        "BlockTraffic": 33,
+        "Decoy": 281,
+        "Monitor": 21,
+        "Remove": 359,
+        "Restore": 28,
+        "Sleep": 24
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9285714285714286
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1168,
+        "Analyse": 1168,
+        "BlockTraffic": 1168,
+        "Decoy": 1168,
+        "Monitor": 1168,
+        "Remove": 1168,
+        "Restore": 1168,
+        "Sleep": 1168
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -28.0,
+        "blocked_directed_pair_ticks": 1917,
+        "busy_agent_ticks": 1332,
+        "forced_sleep_ticks": 1332,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 265.0,
+        "idle_decisions": 1168,
+        "impact_count": 120.0,
+        "return": -217.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -58.0,
+        "reward_ria": -131.0,
+        "same_action_as_previous_idle_decision": 62,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:381a5fcaf04f4bb8863fd367ea97a0b2:artifact:56d0855a35054b71bc842244016eeb68",
+      "trace_sha256": "f56740d6b047d25dad2afbedbcc96135b8062e6a1ddb3488a1acbc77158d0b7e"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:4201de6b0811457c9c13e82b7a76d9bd",
+        "canonical_episode_index": 16,
+        "canonical_episode_sha256": "cd13f5922aa48614e77c3293d81583469d6c9696e168f007a00cf7a0ff94bc8b",
+        "canonical_return": -545.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 1,
+        "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+        "traced_return": -545.0
+      },
+      "cell": "49968000-fsm",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 249,
+        "Analyse": 219,
+        "BlockTraffic": 64,
+        "Decoy": 234,
+        "Monitor": 25,
+        "Remove": 345,
+        "Restore": 42,
+        "Sleep": 16
+      },
+      "completed_counts": {
+        "AllowTraffic": 249,
+        "Analyse": 219,
+        "BlockTraffic": 64,
+        "Decoy": 234,
+        "Monitor": 25,
+        "Remove": 342,
+        "Restore": 42,
+        "Sleep": 16
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1194,
+        "Analyse": 1194,
+        "BlockTraffic": 1194,
+        "Decoy": 1194,
+        "Monitor": 1194,
+        "Remove": 1194,
+        "Restore": 1194,
+        "Sleep": 1194
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -42.0,
+        "blocked_directed_pair_ticks": 3254,
+        "busy_agent_ticks": 1306,
+        "forced_sleep_ticks": 1306,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 456.0,
+        "idle_decisions": 1194,
+        "impact_count": 147.0,
+        "return": -545.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -261.0,
+        "reward_ria": -242.0,
+        "same_action_as_previous_idle_decision": 60,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:381a5fcaf04f4bb8863fd367ea97a0b2:artifact:8b6fb1e79fdb4b328621d1a9ccf12623",
+      "trace_sha256": "9e108da7660cd0f48b2acc26bc38fce7bb65d64b07440c06354427ed163559f7"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:a2638d152d474ccbb6be06904a29c7c4",
+        "canonical_episode_index": 32,
+        "canonical_episode_sha256": "7986e4a185052553b045c554fedb1d83856fb6b434ee2e37ff2ceda9435d2b5a",
+        "canonical_return": -171.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 2,
+        "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+        "traced_return": -171.0
+      },
+      "cell": "49968000-fsm",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 166,
+        "Analyse": 197,
+        "BlockTraffic": 37,
+        "Decoy": 347,
+        "Monitor": 14,
+        "Remove": 330,
+        "Restore": 39,
+        "Sleep": 13
+      },
+      "completed_counts": {
+        "AllowTraffic": 166,
+        "Analyse": 197,
+        "BlockTraffic": 37,
+        "Decoy": 345,
+        "Monitor": 14,
+        "Remove": 329,
+        "Restore": 39,
+        "Sleep": 13
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1143,
+        "Analyse": 1143,
+        "BlockTraffic": 1143,
+        "Decoy": 1143,
+        "Monitor": 1143,
+        "Remove": 1143,
+        "Restore": 1143,
+        "Sleep": 1143
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -39.0,
+        "blocked_directed_pair_ticks": 3692,
+        "busy_agent_ticks": 1357,
+        "forced_sleep_ticks": 1357,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 389.0,
+        "idle_decisions": 1143,
+        "impact_count": 93.0,
+        "return": -171.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -39.0,
+        "reward_ria": -93.0,
+        "same_action_as_previous_idle_decision": 76,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:381a5fcaf04f4bb8863fd367ea97a0b2:artifact:c3092f8ff4574c63ab4f57f6c112482d",
+      "trace_sha256": "7b005c71f260fc85b17b2ae7e3d7d737cce58e607965ac880735bca944c4da42"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:de486490da394ce4aa3c19064eec5e3c",
+        "canonical_episode_index": 48,
+        "canonical_episode_sha256": "11ae8e8f7aa30f5c73a70521de54bc7229d9346852df4303dc4112b261e644be",
+        "canonical_return": -430.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 3,
+        "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+        "traced_return": -430.0
+      },
+      "cell": "49968000-fsm",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 213,
+        "Analyse": 206,
+        "BlockTraffic": 54,
+        "Decoy": 297,
+        "Monitor": 27,
+        "Remove": 330,
+        "Restore": 36,
+        "Sleep": 32
+      },
+      "completed_counts": {
+        "AllowTraffic": 213,
+        "Analyse": 206,
+        "BlockTraffic": 54,
+        "Decoy": 297,
+        "Monitor": 27,
+        "Remove": 329,
+        "Restore": 36,
+        "Sleep": 32
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1195,
+        "Analyse": 1195,
+        "BlockTraffic": 1195,
+        "Decoy": 1195,
+        "Monitor": 1195,
+        "Remove": 1195,
+        "Restore": 1195,
+        "Sleep": 1195
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -36.0,
+        "blocked_directed_pair_ticks": 2384,
+        "busy_agent_ticks": 1305,
+        "forced_sleep_ticks": 1305,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 692.0,
+        "idle_decisions": 1195,
+        "impact_count": 147.0,
+        "return": -430.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -201.0,
+        "reward_ria": -193.0,
+        "same_action_as_previous_idle_decision": 61,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:381a5fcaf04f4bb8863fd367ea97a0b2:artifact:1063ab406a7143ac925a0ded405f4d59",
+      "trace_sha256": "705f6e68f1fcd225a55301d5521ad64baa52a5286820c85dc3e717e13481d68d"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:223c2d40b97945b4afbaebd8351acddf",
+        "canonical_episode_index": 0,
+        "canonical_episode_sha256": "4cc2161651bd7901b050e776276218df6558301800fb308269cf98497e576bf3",
+        "canonical_return": -3155.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 0,
+        "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+        "traced_return": -3155.0
+      },
+      "cell": "49968000-red-diverse-100-final",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 178,
+        "Analyse": 284,
+        "BlockTraffic": 55,
+        "Decoy": 221,
+        "Monitor": 22,
+        "Remove": 337,
+        "Restore": 42,
+        "Sleep": 23
+      },
+      "completed_counts": {
+        "AllowTraffic": 178,
+        "Analyse": 284,
+        "BlockTraffic": 55,
+        "Decoy": 220,
+        "Monitor": 22,
+        "Remove": 337,
+        "Restore": 40,
+        "Sleep": 23
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9642857142857143
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1162,
+        "Analyse": 1162,
+        "BlockTraffic": 1162,
+        "Decoy": 1162,
+        "Monitor": 1162,
+        "Remove": 1162,
+        "Restore": 1162,
+        "Sleep": 1162
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -42.0,
+        "blocked_directed_pair_ticks": 2899,
+        "busy_agent_ticks": 1338,
+        "forced_sleep_ticks": 1338,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 257.0,
+        "idle_decisions": 1162,
+        "impact_count": 567.0,
+        "return": -3155.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -394.0,
+        "reward_ria": -2719.0,
+        "same_action_as_previous_idle_decision": 56,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:207ce394a88149238a86b75391f01b58:artifact:26a7786a16524aeba6cb219b88eb872b",
+      "trace_sha256": "c3e6ccbadedfe800b8b7dfdb7a9563240457dd1f2eed3e7ecde8b3add41cce4f"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:ec333131b5964bfcb03c87892b3fc618",
+        "canonical_episode_index": 16,
+        "canonical_episode_sha256": "dfc210fdeb2e674707c456b71dd62a1e58b9bace9227b94ee6725b09fe7953ff",
+        "canonical_return": -2587.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 1,
+        "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+        "traced_return": -2587.0
+      },
+      "cell": "49968000-red-diverse-100-final",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 290,
+        "Analyse": 240,
+        "BlockTraffic": 47,
+        "Decoy": 256,
+        "Monitor": 44,
+        "Remove": 308,
+        "Restore": 36,
+        "Sleep": 25
+      },
+      "completed_counts": {
+        "AllowTraffic": 290,
+        "Analyse": 240,
+        "BlockTraffic": 47,
+        "Decoy": 256,
+        "Monitor": 44,
+        "Remove": 307,
+        "Restore": 36,
+        "Sleep": 25
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1246,
+        "Analyse": 1246,
+        "BlockTraffic": 1246,
+        "Decoy": 1246,
+        "Monitor": 1246,
+        "Remove": 1246,
+        "Restore": 1246,
+        "Sleep": 1246
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -36.0,
+        "blocked_directed_pair_ticks": 2448,
+        "busy_agent_ticks": 1254,
+        "forced_sleep_ticks": 1254,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 303.0,
+        "idle_decisions": 1246,
+        "impact_count": 420.0,
+        "return": -2587.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -419.0,
+        "reward_ria": -2132.0,
+        "same_action_as_previous_idle_decision": 85,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:207ce394a88149238a86b75391f01b58:artifact:3add8a45656f4c7f8b54fa6be90ba6be",
+      "trace_sha256": "18c1a9ac2266a038e6bb1593fe70e4a7625ce1032d325cdacfa0ff0e3ad88d18"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:c288ba36b1e14e9cbf8729db6a32d94e",
+        "canonical_episode_index": 32,
+        "canonical_episode_sha256": "1ef445a855f6a106afa24c4d023ccc8a103ab25ae32c0fd637fa6d34254c2aa2",
+        "canonical_return": -3239.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 2,
+        "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+        "traced_return": -3239.0
+      },
+      "cell": "49968000-red-diverse-100-final",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 192,
+        "Analyse": 202,
+        "BlockTraffic": 41,
+        "Decoy": 285,
+        "Monitor": 24,
+        "Remove": 338,
+        "Restore": 48,
+        "Sleep": 21
+      },
+      "completed_counts": {
+        "AllowTraffic": 192,
+        "Analyse": 202,
+        "BlockTraffic": 41,
+        "Decoy": 284,
+        "Monitor": 24,
+        "Remove": 336,
+        "Restore": 47,
+        "Sleep": 21
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1151,
+        "Analyse": 1151,
+        "BlockTraffic": 1151,
+        "Decoy": 1151,
+        "Monitor": 1151,
+        "Remove": 1151,
+        "Restore": 1151,
+        "Sleep": 1151
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -48.0,
+        "blocked_directed_pair_ticks": 2766,
+        "busy_agent_ticks": 1349,
+        "forced_sleep_ticks": 1349,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 297.0,
+        "idle_decisions": 1151,
+        "impact_count": 615.0,
+        "return": -3239.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -699.0,
+        "reward_ria": -2492.0,
+        "same_action_as_previous_idle_decision": 60,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:207ce394a88149238a86b75391f01b58:artifact:0d5c333af36a4856b47ec652f63e2f53",
+      "trace_sha256": "c06b4ff5d56eaa19967f4d3db8f2f350577fd4ed925ffe2a17e4e7df61dc5acc"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:0b839da497f24f529293af615d77339f",
+        "canonical_episode_index": 48,
+        "canonical_episode_sha256": "0492581405e3b9ea342745e2d0775acf0967051cacf70926fc281aba487b62cb",
+        "canonical_return": -2928.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 3,
+        "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+        "traced_return": -2928.0
+      },
+      "cell": "49968000-red-diverse-100-final",
+      "checkpoint_steps": 49968000,
+      "chosen_counts": {
+        "AllowTraffic": 207,
+        "Analyse": 224,
+        "BlockTraffic": 50,
+        "Decoy": 267,
+        "Monitor": 28,
+        "Remove": 345,
+        "Restore": 38,
+        "Sleep": 15
+      },
+      "completed_counts": {
+        "AllowTraffic": 207,
+        "Analyse": 224,
+        "BlockTraffic": 50,
+        "Decoy": 267,
+        "Monitor": 28,
+        "Remove": 344,
+        "Restore": 36,
+        "Sleep": 15
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1174,
+        "Analyse": 1174,
+        "BlockTraffic": 1174,
+        "Decoy": 1174,
+        "Monitor": 1174,
+        "Remove": 1174,
+        "Restore": 1174,
+        "Sleep": 1174
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -38.0,
+        "blocked_directed_pair_ticks": 2885,
+        "busy_agent_ticks": 1326,
+        "forced_sleep_ticks": 1326,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 299.0,
+        "idle_decisions": 1174,
+        "impact_count": 525.0,
+        "return": -2928.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -341.0,
+        "reward_ria": -2549.0,
+        "same_action_as_previous_idle_decision": 73,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:207ce394a88149238a86b75391f01b58:artifact:18b93af1c66a4dd9b6dd164bd0d785ef",
+      "trace_sha256": "7034b9e2502c70af02666b79a8e71015567c5dfc6647f4ac9efc9a3bc8ba82a5"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:1c480a726d8140b9a54e595da2765c47",
+        "canonical_episode_index": 0,
+        "canonical_episode_sha256": "a2b5dc9c40c707307e5f5f6ab804266e90a97dd28be6b43027864fe841e084ff",
+        "canonical_return": -925.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 0,
+        "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+        "traced_return": -925.0
+      },
+      "cell": "124992000-fsm",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 179,
+        "Analyse": 275,
+        "BlockTraffic": 36,
+        "Decoy": 262,
+        "Monitor": 25,
+        "Remove": 363,
+        "Restore": 16,
+        "Sleep": 17
+      },
+      "completed_counts": {
+        "AllowTraffic": 179,
+        "Analyse": 275,
+        "BlockTraffic": 36,
+        "Decoy": 262,
+        "Monitor": 25,
+        "Remove": 363,
+        "Restore": 16,
+        "Sleep": 17
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1173,
+        "Analyse": 1173,
+        "BlockTraffic": 1173,
+        "Decoy": 1173,
+        "Monitor": 1173,
+        "Remove": 1173,
+        "Restore": 1173,
+        "Sleep": 1173
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -16.0,
+        "blocked_directed_pair_ticks": 1673,
+        "busy_agent_ticks": 1327,
+        "forced_sleep_ticks": 1327,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 364.0,
+        "idle_decisions": 1173,
+        "impact_count": 150.0,
+        "return": -925.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -679.0,
+        "reward_ria": -230.0,
+        "same_action_as_previous_idle_decision": 79,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:bb523fb6a12c44d6bb58c5228553d168:artifact:0616a15af12140bfb728f3d82fd3f1f8",
+      "trace_sha256": "d08e01e55ce27430da60381f59e69baf92f8f200a2aa846b2edad199b4e28fca"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:a0c4ec6b14634c268ffa4be266c9508e",
+        "canonical_episode_index": 16,
+        "canonical_episode_sha256": "c31ba79836abe428fa8b3b898844a75281c2c583351d168aa1d15066befc08e3",
+        "canonical_return": -331.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 1,
+        "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+        "traced_return": -331.0
+      },
+      "cell": "124992000-fsm",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 247,
+        "Analyse": 269,
+        "BlockTraffic": 91,
+        "Decoy": 267,
+        "Monitor": 27,
+        "Remove": 315,
+        "Restore": 19,
+        "Sleep": 24
+      },
+      "completed_counts": {
+        "AllowTraffic": 247,
+        "Analyse": 269,
+        "BlockTraffic": 91,
+        "Decoy": 267,
+        "Monitor": 27,
+        "Remove": 314,
+        "Restore": 19,
+        "Sleep": 24
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1259,
+        "Analyse": 1259,
+        "BlockTraffic": 1259,
+        "Decoy": 1259,
+        "Monitor": 1259,
+        "Remove": 1259,
+        "Restore": 1259,
+        "Sleep": 1259
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -19.0,
+        "blocked_directed_pair_ticks": 3813,
+        "busy_agent_ticks": 1241,
+        "forced_sleep_ticks": 1241,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 419.0,
+        "idle_decisions": 1259,
+        "impact_count": 123.0,
+        "return": -331.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -102.0,
+        "reward_ria": -210.0,
+        "same_action_as_previous_idle_decision": 81,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:bb523fb6a12c44d6bb58c5228553d168:artifact:dac157a252844805976c10bce2aff951",
+      "trace_sha256": "986928c1cbc6004e246b136c0699b3a36976234cff56a923129165735acc52b4"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:33315f5474e7475d9c63cd6e3f88fd0b",
+        "canonical_episode_index": 32,
+        "canonical_episode_sha256": "9d4b0318b2bf0a3a11347da94ff55721c64cd4d7f612e7e24b8c47a1bdbc16a9",
+        "canonical_return": -229.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 2,
+        "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+        "traced_return": -229.0
+      },
+      "cell": "124992000-fsm",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 196,
+        "Analyse": 265,
+        "BlockTraffic": 49,
+        "Decoy": 273,
+        "Monitor": 14,
+        "Remove": 342,
+        "Restore": 26,
+        "Sleep": 14
+      },
+      "completed_counts": {
+        "AllowTraffic": 196,
+        "Analyse": 265,
+        "BlockTraffic": 49,
+        "Decoy": 273,
+        "Monitor": 14,
+        "Remove": 339,
+        "Restore": 26,
+        "Sleep": 14
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1179,
+        "Analyse": 1179,
+        "BlockTraffic": 1179,
+        "Decoy": 1179,
+        "Monitor": 1179,
+        "Remove": 1179,
+        "Restore": 1179,
+        "Sleep": 1179
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -26.0,
+        "blocked_directed_pair_ticks": 2315,
+        "busy_agent_ticks": 1321,
+        "forced_sleep_ticks": 1321,
+        "green_asf_count": 13.0,
+        "green_lwf_count": 337.0,
+        "idle_decisions": 1179,
+        "impact_count": 83.0,
+        "return": -229.0,
+        "reward_asf": -13.0,
+        "reward_lwf": -70.0,
+        "reward_ria": -120.0,
+        "same_action_as_previous_idle_decision": 87,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:bb523fb6a12c44d6bb58c5228553d168:artifact:199a281fbb654a6ab7f65a3cb9ffdd6c",
+      "trace_sha256": "342f01c784c89c57a0f29165f73f45358db575eb73c500246fd62ba8d4844c81"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:6f4f73beb7dd41c89975da2554ba13df",
+        "canonical_episode_index": 48,
+        "canonical_episode_sha256": "c3c6ff36c06b614917e99269bee92da7e9331fe566680636a861a6740d1f590b",
+        "canonical_return": -312.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 3,
+        "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+        "traced_return": -312.0
+      },
+      "cell": "124992000-fsm",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 209,
+        "Analyse": 276,
+        "BlockTraffic": 68,
+        "Decoy": 287,
+        "Monitor": 24,
+        "Remove": 325,
+        "Restore": 14,
+        "Sleep": 30
+      },
+      "completed_counts": {
+        "AllowTraffic": 209,
+        "Analyse": 274,
+        "BlockTraffic": 68,
+        "Decoy": 287,
+        "Monitor": 24,
+        "Remove": 325,
+        "Restore": 14,
+        "Sleep": 30
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9629629629629629
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1233,
+        "Analyse": 1233,
+        "BlockTraffic": 1233,
+        "Decoy": 1233,
+        "Monitor": 1233,
+        "Remove": 1233,
+        "Restore": 1233,
+        "Sleep": 1233
+      },
+      "opponent": "fsm",
+      "totals": {
+        "action_cost": -14.0,
+        "blocked_directed_pair_ticks": 4541,
+        "busy_agent_ticks": 1267,
+        "forced_sleep_ticks": 1267,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 638.0,
+        "idle_decisions": 1233,
+        "impact_count": 129.0,
+        "return": -312.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -147.0,
+        "reward_ria": -151.0,
+        "same_action_as_previous_idle_decision": 65,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:bb523fb6a12c44d6bb58c5228553d168:artifact:869e07a27eae4042b1762fdbec786f97",
+      "trace_sha256": "934484459b9da0fcf44a2c28af0e73b602e14c989021e3605a2507cb4783e983"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:91fcb044c26b4d018cada49413dd0e6d",
+        "canonical_episode_index": 0,
+        "canonical_episode_sha256": "1ee6d0474a1d13680e083a576e1d9125333912630f577068ea4ca614f5ce2097",
+        "canonical_return": -2758.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 0,
+        "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+        "traced_return": -2758.0
+      },
+      "cell": "124992000-red-diverse-100-final",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 191,
+        "Analyse": 292,
+        "BlockTraffic": 43,
+        "Decoy": 266,
+        "Monitor": 23,
+        "Remove": 329,
+        "Restore": 26,
+        "Sleep": 13
+      },
+      "completed_counts": {
+        "AllowTraffic": 191,
+        "Analyse": 291,
+        "BlockTraffic": 43,
+        "Decoy": 266,
+        "Monitor": 23,
+        "Remove": 328,
+        "Restore": 26,
+        "Sleep": 13
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1183,
+        "Analyse": 1183,
+        "BlockTraffic": 1183,
+        "Decoy": 1183,
+        "Monitor": 1183,
+        "Remove": 1183,
+        "Restore": 1183,
+        "Sleep": 1183
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -26.0,
+        "blocked_directed_pair_ticks": 3356,
+        "busy_agent_ticks": 1317,
+        "forced_sleep_ticks": 1317,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 83.0,
+        "idle_decisions": 1183,
+        "impact_count": 582.0,
+        "return": -2758.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -52.0,
+        "reward_ria": -2680.0,
+        "same_action_as_previous_idle_decision": 83,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:5fa86c786ae34819aa2529fde8794309:artifact:3fa6c92de6924581a65c5c17e8e63346",
+      "trace_sha256": "e510b743dea78c00d1e299297b0aba19455e5f680ffe7b187c686a45a9837c61"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:2eae069c42fd421b86795e050520cff7",
+        "canonical_episode_index": 16,
+        "canonical_episode_sha256": "a49822da9045027caf6a7dd18ce4bab0ee93ce526114572c248a40127d5d8d21",
+        "canonical_return": -2736.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 1,
+        "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+        "traced_return": -2736.0
+      },
+      "cell": "124992000-red-diverse-100-final",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 266,
+        "Analyse": 287,
+        "BlockTraffic": 55,
+        "Decoy": 249,
+        "Monitor": 31,
+        "Remove": 301,
+        "Restore": 28,
+        "Sleep": 37
+      },
+      "completed_counts": {
+        "AllowTraffic": 266,
+        "Analyse": 286,
+        "BlockTraffic": 55,
+        "Decoy": 248,
+        "Monitor": 31,
+        "Remove": 300,
+        "Restore": 28,
+        "Sleep": 37
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9642857142857143
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1254,
+        "Analyse": 1254,
+        "BlockTraffic": 1254,
+        "Decoy": 1254,
+        "Monitor": 1254,
+        "Remove": 1254,
+        "Restore": 1254,
+        "Sleep": 1254
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -28.0,
+        "blocked_directed_pair_ticks": 3226,
+        "busy_agent_ticks": 1246,
+        "forced_sleep_ticks": 1246,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 265.0,
+        "idle_decisions": 1254,
+        "impact_count": 437.0,
+        "return": -2736.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -461.0,
+        "reward_ria": -2247.0,
+        "same_action_as_previous_idle_decision": 84,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:5fa86c786ae34819aa2529fde8794309:artifact:a2613eb2522443829c9d59e62bf5a838",
+      "trace_sha256": "08ae875d962b39017892f6a8c9c37c70d507104fc6e64b4be586ced07b8d62e9"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:a09385b72ed649f3abfd7dd4f9bfac72",
+        "canonical_episode_index": 32,
+        "canonical_episode_sha256": "b3f4899fb5dc12cc3e9107644c82d47d33ccefcde37ed9bef977b373c0505e7c",
+        "canonical_return": -3218.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 2,
+        "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+        "traced_return": -3218.0
+      },
+      "cell": "124992000-red-diverse-100-final",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 184,
+        "Analyse": 276,
+        "BlockTraffic": 31,
+        "Decoy": 282,
+        "Monitor": 16,
+        "Remove": 339,
+        "Restore": 24,
+        "Sleep": 24
+      },
+      "completed_counts": {
+        "AllowTraffic": 184,
+        "Analyse": 276,
+        "BlockTraffic": 31,
+        "Decoy": 282,
+        "Monitor": 16,
+        "Remove": 334,
+        "Restore": 24,
+        "Sleep": 24
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1176,
+        "Analyse": 1176,
+        "BlockTraffic": 1176,
+        "Decoy": 1176,
+        "Monitor": 1176,
+        "Remove": 1176,
+        "Restore": 1176,
+        "Sleep": 1176
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -24.0,
+        "blocked_directed_pair_ticks": 2852,
+        "busy_agent_ticks": 1324,
+        "forced_sleep_ticks": 1324,
+        "green_asf_count": 7.0,
+        "green_lwf_count": 203.0,
+        "idle_decisions": 1176,
+        "impact_count": 647.0,
+        "return": -3218.0,
+        "reward_asf": -7.0,
+        "reward_lwf": -591.0,
+        "reward_ria": -2596.0,
+        "same_action_as_previous_idle_decision": 71,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:5fa86c786ae34819aa2529fde8794309:artifact:2294a4bcfa7b4643a323161dd04fefe1",
+      "trace_sha256": "867e84765d644f92703e69bbbb620912041815e7edb9e26b0a3072c8ad9fb0c8"
+    },
+    {
+      "case": {
+        "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:c96cce39b9fe49f980c4cc532bb638a9",
+        "canonical_episode_index": 48,
+        "canonical_episode_sha256": "bade423ae398d4260d6656f2cc5c4a4cd9576bfa5bf5621c591e17db970ec3da",
+        "canonical_return": -2858.0,
+        "episode_root": 21000,
+        "matches_canonical": true,
+        "topology_index": 3,
+        "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+        "traced_return": -2858.0
+      },
+      "cell": "124992000-red-diverse-100-final",
+      "checkpoint_steps": 124992000,
+      "chosen_counts": {
+        "AllowTraffic": 180,
+        "Analyse": 260,
+        "BlockTraffic": 26,
+        "Decoy": 281,
+        "Monitor": 23,
+        "Remove": 320,
+        "Restore": 43,
+        "Sleep": 17
+      },
+      "completed_counts": {
+        "AllowTraffic": 180,
+        "Analyse": 260,
+        "BlockTraffic": 26,
+        "Decoy": 280,
+        "Monitor": 23,
+        "Remove": 319,
+        "Restore": 43,
+        "Sleep": 17
+      },
+      "host_coverage_of_idle_opportunities": [
+        1.0,
+        1.0,
+        1.0,
+        1.0,
+        0.9629629629629629
+      ],
+      "idle_decisions_with_available_type": {
+        "AllowTraffic": 1150,
+        "Analyse": 1150,
+        "BlockTraffic": 1150,
+        "Decoy": 1150,
+        "Monitor": 1150,
+        "Remove": 1150,
+        "Restore": 1150,
+        "Sleep": 1150
+      },
+      "opponent": "red-diverse-100-final",
+      "totals": {
+        "action_cost": -43.0,
+        "blocked_directed_pair_ticks": 1194,
+        "busy_agent_ticks": 1350,
+        "forced_sleep_ticks": 1350,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 263.0,
+        "idle_decisions": 1150,
+        "impact_count": 508.0,
+        "return": -2858.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -277.0,
+        "reward_ria": -2538.0,
+        "same_action_as_previous_idle_decision": 80,
+        "steps": 500
+      },
+      "trace_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:5fa86c786ae34819aa2529fde8794309:artifact:988ff46d0cc54e1a9a18b6414e95aae0",
+      "trace_sha256": "efcb1d3e6ed8814f5604455954e093b5a69afa722d82f4e7ee7bf031e633fb4e"
+    }
+  ],
+  "evaluation_source_revision": "3d97d4c484b8e3969bbd222b5602aedf5595fb1f",
+  "limits": [
+    "One Blue training seed; four paired cases per opponent; action rows are correlated.",
+    "Completed means the pending action reached its execution tick, not successful remediation.",
+    "Pre/post target changes span the full multi-agent step and do not establish action causality.",
+    "Global compromised state is diagnostic ground truth, not Blue's observation.",
+    "Monitor also runs automatically every tick; explicit Monitor choices do not measure sensor coverage.",
+    "Green failure counts have no attempted-action denominator; report counts, not rates.",
+    "On-policy states diverge; these are not same-state action preference tests.",
+    "The four-root21000 cases are exploratory and do not replace the64-case checkpoint score panels."
+  ],
+  "maintained_summary_sha256": "33d7820527569d187cb62f764fb3eae563b255e3fda29875069ab74a1df1f472",
+  "paired_cases": [
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.018632706209344957,
+        "Analyse": 0.04522927396092444,
+        "BlockTraffic": 0.0024371124268647328,
+        "Decoy": -0.017223282999918238,
+        "Monitor": 0.003333420920482548,
+        "Remove": 0.0012437375188312227,
+        "Restore": -0.010332364035548703,
+        "Sleep": -0.006055191582291045
+      },
+      "opponent": "fsm",
+      "topology_index": 0,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 12.0,
+        "blocked_directed_pair_ticks": -244,
+        "busy_agent_ticks": -5,
+        "forced_sleep_ticks": -5,
+        "green_asf_count": 0.0,
+        "green_lwf_count": 99.0,
+        "idle_decisions": 5,
+        "impact_count": 30.0,
+        "return": -708.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -621.0,
+        "reward_ria": -99.0,
+        "same_action_as_previous_idle_decision": 17,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.012355263210412665,
+        "Analyse": 0.030244550792085934,
+        "BlockTraffic": 0.018678246940287885,
+        "Decoy": 0.016093174370661906,
+        "Monitor": 0.0005075682888895094,
+        "Remove": -0.03874615332420639,
+        "Restore": -0.020084537061798267,
+        "Sleep": 0.005662413204492147
+      },
+      "opponent": "fsm",
+      "topology_index": 1,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 23.0,
+        "blocked_directed_pair_ticks": 559,
+        "busy_agent_ticks": -65,
+        "forced_sleep_ticks": -65,
+        "green_asf_count": 0.0,
+        "green_lwf_count": -37.0,
+        "idle_decisions": 65,
+        "impact_count": -24.0,
+        "return": 214.0,
+        "reward_asf": 0.0,
+        "reward_lwf": 159.0,
+        "reward_ria": 32.0,
+        "same_action_as_previous_idle_decision": 21,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": 0.0210107324370713,
+        "Analyse": 0.052413295666286,
+        "BlockTraffic": 0.009189690983283573,
+        "Decoy": -0.07203488876867489,
+        "Monitor": -0.00037399905164526084,
+        "Remove": 0.0013624251167076995,
+        "Restore": -0.012068147970053362,
+        "Sleep": 0.0005008915870249042
+      },
+      "opponent": "fsm",
+      "topology_index": 2,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 13.0,
+        "blocked_directed_pair_ticks": -1377,
+        "busy_agent_ticks": -36,
+        "forced_sleep_ticks": -36,
+        "green_asf_count": 13.0,
+        "green_lwf_count": -52.0,
+        "idle_decisions": 36,
+        "impact_count": -10.0,
+        "return": -58.0,
+        "reward_asf": -13.0,
+        "reward_lwf": -31.0,
+        "reward_ria": -27.0,
+        "same_action_as_previous_idle_decision": 11,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.008737406129215058,
+        "Analyse": 0.051459344999949114,
+        "BlockTraffic": 0.00996175603267195,
+        "Decoy": -0.015769952525900355,
+        "Monitor": -0.003129422064767025,
+        "Remove": -0.012565874979215241,
+        "Restore": -0.018771102899008102,
+        "Sleep": -0.0024473424345152622
+      },
+      "opponent": "fsm",
+      "topology_index": 3,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 22.0,
+        "blocked_directed_pair_ticks": 2157,
+        "busy_agent_ticks": -38,
+        "forced_sleep_ticks": -38,
+        "green_asf_count": 0.0,
+        "green_lwf_count": -54.0,
+        "idle_decisions": 38,
+        "impact_count": -18.0,
+        "return": 118.0,
+        "reward_asf": 0.0,
+        "reward_lwf": 54.0,
+        "reward_ria": 42.0,
+        "same_action_as_previous_idle_decision": 4,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": 0.008269765452341898,
+        "Analyse": 0.0024238967705139947,
+        "BlockTraffic": -0.010983918768904866,
+        "Decoy": 0.034662742262371565,
+        "Monitor": 0.0005092220106121884,
+        "Remove": -0.011910702828219044,
+        "Restore": -0.01416655633523103,
+        "Sleep": -0.008804448563484708
+      },
+      "opponent": "red-diverse-100-final",
+      "topology_index": 0,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 16.0,
+        "blocked_directed_pair_ticks": 457,
+        "busy_agent_ticks": -21,
+        "forced_sleep_ticks": -21,
+        "green_asf_count": 0.0,
+        "green_lwf_count": -174.0,
+        "idle_decisions": 21,
+        "impact_count": 15.0,
+        "return": 397.0,
+        "reward_asf": 0.0,
+        "reward_lwf": 342.0,
+        "reward_ria": 39.0,
+        "same_action_as_previous_idle_decision": 27,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.020623571185368922,
+        "Analyse": 0.03625125121281242,
+        "BlockTraffic": 0.006138942862774915,
+        "Decoy": -0.006892870582994759,
+        "Monitor": -0.010592108463190666,
+        "Remove": -0.007159113309320286,
+        "Restore": -0.006563907214409876,
+        "Sleep": 0.0094413766796972
+      },
+      "opponent": "red-diverse-100-final",
+      "topology_index": 1,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 8.0,
+        "blocked_directed_pair_ticks": 778,
+        "busy_agent_ticks": -8,
+        "forced_sleep_ticks": -8,
+        "green_asf_count": 0.0,
+        "green_lwf_count": -38.0,
+        "idle_decisions": 8,
+        "impact_count": 17.0,
+        "return": -149.0,
+        "reward_asf": 0.0,
+        "reward_lwf": -42.0,
+        "reward_ria": -115.0,
+        "same_action_as_previous_idle_decision": -1,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.01034888325443123,
+        "Analyse": 0.05919431195588576,
+        "BlockTraffic": -0.009260654739741248,
+        "Decoy": -0.007814854873313376,
+        "Monitor": -0.0072459913591848574,
+        "Remove": -0.005392382843667443,
+        "Restore": -0.02129470380680509,
+        "Sleep": 0.002163158921257468
+      },
+      "opponent": "red-diverse-100-final",
+      "topology_index": 2,
+      "totals_delta_final_minus_primary": {
+        "action_cost": 24.0,
+        "blocked_directed_pair_ticks": 86,
+        "busy_agent_ticks": -25,
+        "forced_sleep_ticks": -25,
+        "green_asf_count": 7.0,
+        "green_lwf_count": -94.0,
+        "idle_decisions": 25,
+        "impact_count": 32.0,
+        "return": 21.0,
+        "reward_asf": -7.0,
+        "reward_lwf": 108.0,
+        "reward_ria": -104.0,
+        "same_action_as_previous_idle_decision": 11,
+        "steps": 0
+      }
+    },
+    {
+      "episode_root": 21000,
+      "idle_choice_share_delta": {
+        "AllowTraffic": -0.019798533441967248,
+        "Analyse": 0.03528627509073401,
+        "BlockTraffic": -0.01998074216724687,
+        "Decoy": 0.01692022813124952,
+        "Monitor": -0.0038500851788756396,
+        "Remove": -0.015606251388786019,
+        "Restore": 0.005023331605066295,
+        "Sleep": 0.0020057773498259393
+      },
+      "opponent": "red-diverse-100-final",
+      "topology_index": 3,
+      "totals_delta_final_minus_primary": {
+        "action_cost": -5.0,
+        "blocked_directed_pair_ticks": -1691,
+        "busy_agent_ticks": 24,
+        "forced_sleep_ticks": 24,
+        "green_asf_count": 0.0,
+        "green_lwf_count": -36.0,
+        "idle_decisions": -24,
+        "impact_count": -17.0,
+        "return": 70.0,
+        "reward_asf": 0.0,
+        "reward_lwf": 64.0,
+        "reward_ria": 11.0,
+        "same_action_as_previous_idle_decision": 7,
+        "steps": 0
+      }
+    }
+  ],
+  "plan_sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6",
+  "protocol": {
+    "check_id": "behavior-20261108",
+    "checkpoint_steps": [
+      49968000,
+      124992000
+    ],
+    "deterministic": false,
+    "episode_roots": [
+      21000
+    ],
+    "horizon": 500,
+    "interpretation": "Exploratory case study: four paired episodes per opponent, one trained Blue lineage. Paired checkpoint cases share layout/root within an opponent; FSM and learned opponents use different RNG contracts. Every archived learned Red is unseen during this FSM-only Blue training. These traces do not estimate population behavior or identify optimization causality.",
+    "opponents": [
+      "fsm",
+      "red-diverse-100-final"
+    ],
+    "question": "What decisions and consequences change between the primary and final Blue checkpoints against FSM and a strong archived learned Red?",
+    "requirements": [
+      "Retain exact source, checkpoint, sidecar, topology, reference evaluation and episode identities.",
+      "Require each new return to equal its retained canonical same-case return; retain discrepancies and withhold behavioral interpretation on mismatch.",
+      "Separate submitted actions, genuine idle decisions, forced busy Sleep, pending actions and completed actions.",
+      "Normalize choices by genuine decision opportunities and report legal action and owned host/subnet opportunities.",
+      "Treat Blue observations as available evidence and simulator compromise state as diagnostic ground truth; do not conflate them.",
+      "Report reward components, Green consequences, target state changes and route occupancy alongside frequencies.",
+      "Report incomplete cells as missing; do not substitute another checkpoint or opponent."
+    ],
+    "schema_version": 1,
+    "selection": "The first reserved episode root and all four declared evaluation layouts; chosen by index before inspecting case returns. No checkpoint or episode is selected by its outcome.",
+    "study_id": "lstm-fsm-competence",
+    "topology_source_seeds": [
+      200,
+      201,
+      202,
+      203
+    ],
+    "training_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+    "training_trial": "fsm-seed42"
+  },
+  "red": {
+    "condition": "diverse",
+    "contract": {
+      "action_dim": 1106,
+      "arch": {
+        "activation": "tanh",
+        "cell": "lstm",
+        "hidden_dim": 256,
+        "hidden_layers": 1,
+        "name": "recurrent",
+        "trunk": "shared"
+      },
+      "obs_dim": 706,
+      "source": {
+        "kind": "fresh",
+        "seed": 100
+      },
+      "team": "red",
+      "trainable": true
+    },
+    "historical_train_run_id": "60f493d9ed1a4cc99aef603b5dc3cc54",
+    "id": "red-diverse-100-final",
+    "model": "/data/shared/jaxborg/jaxborg-separate/ippo_jax/cotraining_lstm_env_diversity_separate_seed100/model_cotraining_lstm_env_diversity_separate_seed100.safetensors",
+    "origin": "external archived policy; no retained training producer is asserted",
+    "sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+    "sidecar": "/data/shared/jaxborg/jaxborg-separate/ippo_jax/cotraining_lstm_env_diversity_separate_seed100/recipe_cotraining_lstm_env_diversity_separate_seed100.yaml",
+    "sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+    "size_bytes": 10399608,
+    "stage": "final",
+    "steps": 49968000,
+    "team": "red",
+    "training_layout_identity": "original snapshot bytes unavailable; generation seeds only",
+    "training_seed": 100,
+    "training_source_revision": "45957e2e18fea380bb81d2a62cb2c7ddb5c2034e",
+    "training_topology_declaration": {
+      "cache_dir": ".bank_cache/topologies/cotraining/train",
+      "count": 100,
+      "generator": "jax",
+      "seed_start": 0
+    }
+  },
+  "schema_version": 1,
+  "topologies": [
+    {
+      "eligible_host_count": 9,
+      "eligible_host_indices": [
+        31,
+        32,
+        33,
+        44,
+        45,
+        46,
+        47,
+        48,
+        49
+      ],
+      "fingerprint": "0bdff3ed0258fe64b2f7651bd8c9c134630cfc6d62d24f1c9529c06ac0a5ab0a",
+      "host_count": 93,
+      "metadata": {
+        "cyborg_version": "4.0",
+        "format": "jaxborg.cc4.topology",
+        "format_version": 1,
+        "jaxborg_git_sha": "1545af8cb381ab2027c79814353b4b4963c7754c",
+        "op_zone_servers": null,
+        "scenario_config": {
+          "blue_max_observed_subnets": 3,
+          "max_steps": 500,
+          "max_tracked_session_pids": 34,
+          "max_tracked_suspicious_pids": 34,
+          "message_length": 8,
+          "mission_phases": 3,
+          "num_blue_agents": 5,
+          "num_decoy_types": 4,
+          "num_hosts": 137,
+          "num_red_agents": 6,
+          "num_services": 5,
+          "num_subnets": 9,
+          "obs_hosts_per_subnet": 17
+        },
+        "source": "generated",
+        "source_seed": 200
+      },
+      "op_zone_servers": null,
+      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000200.snapshot.npz",
+      "provenance": "reconstructed seed-matched layout; not verified observed training topology",
+      "role_eligible": true,
+      "role_map": {
+        "assignment_version": "jaxborg-fixed-resilience-roles-v1",
+        "role_map_id": "450b5e56ccdcf36dbc6f437cf0009db546b90f7695096d4b21e812b10122be41",
+        "roles": [
+          {
+            "host_index": 47,
+            "role": "auth",
+            "role_id": 1
+          },
+          {
+            "host_index": 49,
+            "role": "db",
+            "role_id": 2
+          },
+          {
+            "host_index": 33,
+            "role": "web",
+            "role_id": 3
+          }
+        ],
+        "topology_fingerprint": "0bdff3ed0258fe64b2f7651bd8c9c134630cfc6d62d24f1c9529c06ac0a5ab0a"
+      },
+      "server_count": 26,
+      "sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+      "source_seed": 200
+    },
+    {
+      "eligible_host_count": 5,
+      "eligible_host_indices": [
+        29,
+        30,
+        31,
+        32,
+        39
+      ],
+      "fingerprint": "c3caabe18799dc9d494769e0f5155fac22dbb3c95bab34aad37c07a8e68f8778",
+      "host_count": 78,
+      "metadata": {
+        "cyborg_version": "4.0",
+        "format": "jaxborg.cc4.topology",
+        "format_version": 1,
+        "jaxborg_git_sha": "1545af8cb381ab2027c79814353b4b4963c7754c",
+        "op_zone_servers": null,
+        "scenario_config": {
+          "blue_max_observed_subnets": 3,
+          "max_steps": 500,
+          "max_tracked_session_pids": 34,
+          "max_tracked_suspicious_pids": 34,
+          "message_length": 8,
+          "mission_phases": 3,
+          "num_blue_agents": 5,
+          "num_decoy_types": 4,
+          "num_hosts": 137,
+          "num_red_agents": 6,
+          "num_services": 5,
+          "num_subnets": 9,
+          "obs_hosts_per_subnet": 17
+        },
+        "source": "generated",
+        "source_seed": 201
+      },
+      "op_zone_servers": null,
+      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000201.snapshot.npz",
+      "provenance": "reconstructed seed-matched layout; not verified observed training topology",
+      "role_eligible": true,
+      "role_map": {
+        "assignment_version": "jaxborg-fixed-resilience-roles-v1",
+        "role_map_id": "c10d8da5f1df568cf5265e06ae3be2871b463bbff2c6f002e884a392afbdc946",
+        "roles": [
+          {
+            "host_index": 32,
+            "role": "auth",
+            "role_id": 1
+          },
+          {
+            "host_index": 30,
+            "role": "db",
+            "role_id": 2
+          },
+          {
+            "host_index": 31,
+            "role": "web",
+            "role_id": 3
+          }
+        ],
+        "topology_fingerprint": "c3caabe18799dc9d494769e0f5155fac22dbb3c95bab34aad37c07a8e68f8778"
+      },
+      "server_count": 18,
+      "sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+      "source_seed": 201
+    },
+    {
+      "eligible_host_count": 12,
+      "eligible_host_indices": [
+        44,
+        45,
+        46,
+        47,
+        48,
+        49,
+        59,
+        60,
+        61,
+        62,
+        63,
+        64
+      ],
+      "fingerprint": "8290e91b5a5b3279ac34d881bb57f8a3bf3c37d6915f40c2c5626701ae61f74b",
+      "host_count": 106,
+      "metadata": {
+        "cyborg_version": "4.0",
+        "format": "jaxborg.cc4.topology",
+        "format_version": 1,
+        "jaxborg_git_sha": "1545af8cb381ab2027c79814353b4b4963c7754c",
+        "op_zone_servers": null,
+        "scenario_config": {
+          "blue_max_observed_subnets": 3,
+          "max_steps": 500,
+          "max_tracked_session_pids": 34,
+          "max_tracked_suspicious_pids": 34,
+          "message_length": 8,
+          "mission_phases": 3,
+          "num_blue_agents": 5,
+          "num_decoy_types": 4,
+          "num_hosts": 137,
+          "num_red_agents": 6,
+          "num_services": 5,
+          "num_subnets": 9,
+          "obs_hosts_per_subnet": 17
+        },
+        "source": "generated",
+        "source_seed": 202
+      },
+      "op_zone_servers": null,
+      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000202.snapshot.npz",
+      "provenance": "reconstructed seed-matched layout; not verified observed training topology",
+      "role_eligible": true,
+      "role_map": {
+        "assignment_version": "jaxborg-fixed-resilience-roles-v1",
+        "role_map_id": "9e5adfa38ca78b2dad404e925dfdc385578d32a68ec29ffd7b1a5f3c41fd3d58",
+        "roles": [
+          {
+            "host_index": 61,
+            "role": "auth",
+            "role_id": 1
+          },
+          {
+            "host_index": 48,
+            "role": "db",
+            "role_id": 2
+          },
+          {
+            "host_index": 44,
+            "role": "web",
+            "role_id": 3
+          }
+        ],
+        "topology_fingerprint": "8290e91b5a5b3279ac34d881bb57f8a3bf3c37d6915f40c2c5626701ae61f74b"
+      },
+      "server_count": 38,
+      "sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+      "source_seed": 202
+    },
+    {
+      "eligible_host_count": 10,
+      "eligible_host_indices": [
+        31,
+        32,
+        33,
+        34,
+        35,
+        36,
+        45,
+        46,
+        47,
+        48
+      ],
+      "fingerprint": "5ae35020529a9ff0f46f136f55e37c91cc55ec4a53436c018439c2aa6232e1fe",
+      "host_count": 87,
+      "metadata": {
+        "cyborg_version": "4.0",
+        "format": "jaxborg.cc4.topology",
+        "format_version": 1,
+        "jaxborg_git_sha": "1545af8cb381ab2027c79814353b4b4963c7754c",
+        "op_zone_servers": null,
+        "scenario_config": {
+          "blue_max_observed_subnets": 3,
+          "max_steps": 500,
+          "max_tracked_session_pids": 34,
+          "max_tracked_suspicious_pids": 34,
+          "message_length": 8,
+          "mission_phases": 3,
+          "num_blue_agents": 5,
+          "num_decoy_types": 4,
+          "num_hosts": 137,
+          "num_red_agents": 6,
+          "num_services": 5,
+          "num_subnets": 9,
+          "obs_hosts_per_subnet": 17
+        },
+        "source": "generated",
+        "source_seed": 203
+      },
+      "op_zone_servers": null,
+      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000203.snapshot.npz",
+      "provenance": "reconstructed seed-matched layout; not verified observed training topology",
+      "role_eligible": true,
+      "role_map": {
+        "assignment_version": "jaxborg-fixed-resilience-roles-v1",
+        "role_map_id": "a862352da13248aceb2b855d270beca9161df19b3f7a27a6a1a77c88d8ab2d72",
+        "roles": [
+          {
+            "host_index": 35,
+            "role": "auth",
+            "role_id": 1
+          },
+          {
+            "host_index": 34,
+            "role": "db",
+            "role_id": 2
+          },
+          {
+            "host_index": 32,
+            "role": "web",
+            "role_id": 3
+          }
+        ],
+        "topology_fingerprint": "5ae35020529a9ff0f46f136f55e37c91cc55ec4a53436c018439c2aa6232e1fe"
+      },
+      "server_count": 23,
+      "sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+      "source_seed": 203
+    }
+  ],
+  "training_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1"
+}

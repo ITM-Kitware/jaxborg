@@ -3,8 +3,8 @@
 Can a separate actor/critic LSTM learn effective defense against the standard
 scripted attacker in the ordinary stock game? At the matched 49.968M-step budget,
 the two fixed-FSM runs scored better against FSM than the archived co-trained
-LSTMs. Longer training improved FSM scores further, but performance against
-other-lineage learned Reds showed no consistent robustness advantage.
+LSTMs. Longer training improved FSM scores and some learned-opponent scores,
+but the defenders still struggled against diverse-trained Reds.
 
 ## Comparison
 
@@ -33,9 +33,9 @@ for exact values and opponent-specific outcomes.
 
 ## Limits
 
-At the **November 8, 2026, 10:59 a.m. Eastern** snapshot, training and final
-evaluations were complete, but six primary learned-Red cells remained missing
-after evaluation failures. Final results cannot substitute for those cells.
+Training and final evaluations are complete. At **November 8, 12:45 p.m.
+Eastern**, four primary learned-Red cells still needed recovery after evaluation
+failures. Final results cannot substitute for those cells.
 
 Two training seeds and a related archived opponent panel do not establish general
 robustness. The archived training source and original training-layout bytes are
@@ -50,6 +50,6 @@ ITM output root:
 /home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
 ```
 
-[Behavior check](checks/behavior-20261108/README.md), [protocol](protocol.json), [recorded snapshot](checks/20261108-overnight-results/status.json),
+[Behavior findings](checks/behavior-20261108/results.md), [protocol](protocol.json), [recorded snapshot](checks/20261108-overnight-results/status.json),
 and [reproduction commands](reproduce.md). Producing source:
 `0aef148bbebb45818e71b20e9b5a52be031f93f1`.

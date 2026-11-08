@@ -26,18 +26,20 @@ establish a population-level improvement or a state-of-the-art result.
 
 ## Incomplete primary opponent panel
 
-Primary evaluation jobs **4131** and **4134** failed with LLVM memory-allocation
-errors after writing successful partial receipts. Their completed primary FSM
-results above remain available. At the primary checkpoint, each seed also has a
-completed `red-diverse-100-final` result; **six learned-Red cells remain missing**
-(three opponents for each seed). The complete final evaluation panels do not fill
-those missing primary cells.
+The primary opponent panel remains incomplete after evaluation memory failures.
+At **November 8, 12:45 p.m. Eastern**, recovery had completed two of the six missing
+cells; four remained. The newly recovered seed-42 comparisons use the same
+64 cases at both checkpoints:
 
-CPU recovery job **4139** started at **11:09:29 a.m. Eastern on November 8**.
-It revalidated and reused all 14 successful cells, then began the six missing
-cells (384 episodes) in separate Python processes to avoid the earlier memory
-failure. Completion is still pending. See the
-[verified submission record](checks/20261108-overnight-results/recovery-submission.json).
+| Opponent | Primary: 49.968M | Final: 124.992M | Final minus primary |
+| --- | ---: | ---: | ---: |
+| Diverse-trained Red, seed 42 | -2949.34 | -2842.72 | +106.63 |
+| Single-network Red, seed 100 | -786.14 | -688.42 | +97.72 |
+
+Extra FSM training improved these learned-opponent scores too. A complete
+two-seed primary comparison still needs the remaining cells; final evaluations
+cannot substitute for them. See the [verified recovery snapshot](checks/20261108-overnight-results/recovery-status-20261108T174549Z.json)
+and [submission record](checks/20261108-overnight-results/recovery-submission.json).
 
 The saved learned Reds come from a related archive, not a verified independent
 holdout population. This FSM-trained baseline is a competence diagnostic;
