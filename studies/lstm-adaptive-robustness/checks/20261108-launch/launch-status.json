@@ -1,0 +1,454 @@
+{
+  "blue_checkpoints": {
+    "blue100-final": {
+      "model_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+      "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "steps": 124992000,
+      "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f"
+    },
+    "blue100-primary": {
+      "model_sha256": "444236ab310f6d29977fe7daeca672ef70e36e8c33fd1d8c56d128574df5e0ed",
+      "sidecar_sha256": "a7e9e57ded79329a2f82c0599b348b1cf12011885b9d5eb73dde4bf627878a84",
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "steps": 49968000,
+      "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f"
+    },
+    "blue42-final": {
+      "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+      "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "steps": 124992000,
+      "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+    },
+    "blue42-primary": {
+      "model_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
+      "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "steps": 49968000,
+      "training_attempt": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e"
+    }
+  },
+  "gpu_deadline_utc": "2026-11-09T13:00:00+00:00",
+  "gpu_use": [
+    "0, 44194 MiB, 92 %",
+    "1, 41876 MiB, 100 %",
+    "2, 4764 MiB, 93 %",
+    "3, 4764 MiB, 92 %"
+  ],
+  "jobs": [
+    {
+      "dependencies": [],
+      "job_id": 4158,
+      "kind": "train",
+      "trial": "br-blue42-primary-red17"
+    },
+    {
+      "dependencies": [
+        4158
+      ],
+      "job_id": 4159,
+      "kind": "eval",
+      "trial": "br-blue42-primary-red17"
+    },
+    {
+      "dependencies": [
+        4158
+      ],
+      "job_id": 4160,
+      "kind": "train",
+      "trial": "br-blue42-final-red17"
+    },
+    {
+      "dependencies": [
+        4160,
+        4159
+      ],
+      "job_id": 4161,
+      "kind": "eval",
+      "trial": "br-blue42-final-red17"
+    },
+    {
+      "dependencies": [
+        4160
+      ],
+      "job_id": 4162,
+      "kind": "train",
+      "trial": "br-blue100-primary-red17"
+    },
+    {
+      "dependencies": [
+        4162,
+        4161
+      ],
+      "job_id": 4163,
+      "kind": "eval",
+      "trial": "br-blue100-primary-red17"
+    },
+    {
+      "dependencies": [
+        4162
+      ],
+      "job_id": 4164,
+      "kind": "train",
+      "trial": "br-blue100-final-red17"
+    },
+    {
+      "dependencies": [
+        4164,
+        4163
+      ],
+      "job_id": 4165,
+      "kind": "eval",
+      "trial": "br-blue100-final-red17"
+    },
+    {
+      "dependencies": [],
+      "job_id": 4166,
+      "kind": "train",
+      "trial": "br-blue42-final-red83"
+    },
+    {
+      "dependencies": [
+        4166
+      ],
+      "job_id": 4167,
+      "kind": "eval",
+      "trial": "br-blue42-final-red83"
+    },
+    {
+      "dependencies": [
+        4166
+      ],
+      "job_id": 4168,
+      "kind": "train",
+      "trial": "br-blue42-primary-red83"
+    },
+    {
+      "dependencies": [
+        4168,
+        4167
+      ],
+      "job_id": 4169,
+      "kind": "eval",
+      "trial": "br-blue42-primary-red83"
+    },
+    {
+      "dependencies": [
+        4168
+      ],
+      "job_id": 4170,
+      "kind": "train",
+      "trial": "br-blue100-final-red83"
+    },
+    {
+      "dependencies": [
+        4170,
+        4169
+      ],
+      "job_id": 4171,
+      "kind": "eval",
+      "trial": "br-blue100-final-red83"
+    },
+    {
+      "dependencies": [
+        4170
+      ],
+      "job_id": 4172,
+      "kind": "train",
+      "trial": "br-blue100-primary-red83"
+    },
+    {
+      "dependencies": [
+        4172,
+        4171
+      ],
+      "job_id": 4173,
+      "kind": "eval",
+      "trial": "br-blue100-primary-red83"
+    },
+    {
+      "dependencies": [
+        4164,
+        4172
+      ],
+      "job_id": 4174,
+      "kind": "train",
+      "trial": "br-blue42-primary-red149"
+    },
+    {
+      "dependencies": [
+        4174,
+        4165
+      ],
+      "job_id": 4175,
+      "kind": "eval",
+      "trial": "br-blue42-primary-red149"
+    },
+    {
+      "dependencies": [
+        4164,
+        4172
+      ],
+      "job_id": 4176,
+      "kind": "train",
+      "trial": "br-blue42-final-red149"
+    },
+    {
+      "dependencies": [
+        4176,
+        4173
+      ],
+      "job_id": 4177,
+      "kind": "eval",
+      "trial": "br-blue42-final-red149"
+    },
+    {
+      "dependencies": [
+        4174,
+        4176
+      ],
+      "job_id": 4178,
+      "kind": "train",
+      "trial": "br-blue100-final-red149"
+    },
+    {
+      "dependencies": [
+        4178,
+        4175
+      ],
+      "job_id": 4179,
+      "kind": "eval",
+      "trial": "br-blue100-final-red149"
+    },
+    {
+      "dependencies": [
+        4174,
+        4176
+      ],
+      "job_id": 4180,
+      "kind": "train",
+      "trial": "br-blue100-primary-red149"
+    },
+    {
+      "dependencies": [
+        4180,
+        4177
+      ],
+      "job_id": 4181,
+      "kind": "eval",
+      "trial": "br-blue100-primary-red149"
+    }
+  ],
+  "main_final_environment_steps": 29952000,
+  "observed_at": "2026-11-08T19:47:40.202587+00:00",
+  "observed_attempts": [
+    {
+      "budgets": [
+        {
+          "completed": 384000,
+          "requested": 29952000,
+          "unit": "environment_steps"
+        },
+        {
+          "completed": 8,
+          "requested": 624,
+          "unit": "joint_rollout_updates"
+        },
+        {
+          "completed": 0,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "blue_policy_updates"
+        },
+        {
+          "completed": 8,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "red_policy_updates"
+        }
+      ],
+      "id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:2a222c96d2ab4a93a3a6eef8287e8f3c",
+      "initialization": {
+        "blue": "cbb5606d65735a05df53fda0bbaeff3e2e28f943a42248cdd79250cfcd434f24",
+        "red": "ab23b4ceb21d0f17f303a0b7422f52776ffd62323586d20da1a3811e07f7ca80"
+      },
+      "status": "running",
+      "trial": "br-blue42-final-red83"
+    },
+    {
+      "budgets": [
+        {
+          "completed": 384000,
+          "requested": 29952000,
+          "unit": "environment_steps"
+        },
+        {
+          "completed": 8,
+          "requested": 624,
+          "unit": "joint_rollout_updates"
+        },
+        {
+          "completed": 0,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "blue_policy_updates"
+        },
+        {
+          "completed": 8,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "red_policy_updates"
+        }
+      ],
+      "id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:42277798d43345bdb844a2d5c1fe5885",
+      "initialization": {
+        "blue": "e5faa274378c1720ac536099527cf340c68d6696c25b86007101b40784a6f31b",
+        "red": "25cfcdaed2d10dd1b3a3c0a3b956d216f0af591e519dfa2284bdfdbc10015480"
+      },
+      "status": "running",
+      "trial": "br-blue42-primary-red17"
+    }
+  ],
+  "primary_environment_steps": 9984000,
+  "recorder_sha256": "f2ba065732d0643852464aa2e8965442f34001e2d131fbdc7837dd90f7fd76df",
+  "retained_files": {
+    "checks/fresh-compilation.json": "6652882a303805d37221fbce3b1cdf5b9c679d39b222a8cf4f6d0233065e8de4",
+    "checks/production-ready.json": "663bc18c5d3f8f7710770f7bffc3501aa6fcb3f9be395a786c5e21ae1b270e8a",
+    "checks/timing.json": "c2fd03ef0e84796f81b657f19126138272d5f2299b95af4412357ca5cdd92bc4",
+    "inputs/manifest.json": "8e2e00c49d02eb689983590fe77bd7720c2533a9805199e3b666d4e47770472c",
+    "inputs/protocol.json": "86d1832f615ae63d48c588159629f40a854c2632a2aded316ba981c03098292d",
+    "submissions/production-jobs.jsonl": "868cdd8a25535aad50ae3718517edf5a5ba0e3c246fdd5aef8aec95e9dfd2cc6",
+    "submissions/production-plan.json": "3abbd050e515f4f613797aa3173c03cbfd27653a8302e1e62809a91612f67963"
+  },
+  "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+  "squeue": [
+    "4181|PENDING|0:00|(Dependency)",
+    "4180|PENDING|0:00|(Dependency)",
+    "4179|PENDING|0:00|(Dependency)",
+    "4178|PENDING|0:00|(Dependency)",
+    "4177|PENDING|0:00|(Dependency)",
+    "4176|PENDING|0:00|(Dependency)",
+    "4175|PENDING|0:00|(Dependency)",
+    "4174|PENDING|0:00|(Dependency)",
+    "4173|PENDING|0:00|(Dependency)",
+    "4172|PENDING|0:00|(Dependency)",
+    "4171|PENDING|0:00|(Dependency)",
+    "4170|PENDING|0:00|(Dependency)",
+    "4169|PENDING|0:00|(Dependency)",
+    "4168|PENDING|0:00|(Dependency)",
+    "4167|PENDING|0:00|(Dependency)",
+    "4165|PENDING|0:00|(Dependency)",
+    "4164|PENDING|0:00|(Dependency)",
+    "4163|PENDING|0:00|(Dependency)",
+    "4162|PENDING|0:00|(Dependency)",
+    "4161|PENDING|0:00|(Dependency)",
+    "4160|PENDING|0:00|(Dependency)",
+    "4159|PENDING|0:00|(Dependency)",
+    "4158|RUNNING|3:23|itm",
+    "4166|RUNNING|3:23|itm"
+  ],
+  "study_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production",
+  "submission_plan": {
+    "blocks": 2,
+    "created_at": "2026-11-08T19:44:16.058835+00:00",
+    "manifest_sha256": "8e2e00c49d02eb689983590fe77bd7720c2533a9805199e3b666d4e47770472c",
+    "phase": "production",
+    "projection": {
+      "attempt_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:97a49cb9c7614cefb70df4c3b4022503",
+      "expected_seconds": 11924.045321197249,
+      "first_update_seconds": 127.11911015864462,
+      "primary_reserved_seconds": 5608.906362989219,
+      "reserved_seconds": 15205.056651496561,
+      "seconds_per_update": 18.454135170206428
+    },
+    "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2"
+  },
+  "timing": {
+    "attempt_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:97a49cb9c7614cefb70df4c3b4022503",
+    "estimated_208_update_seconds": 3945.1232252353802,
+    "first_update_seconds": 127.11911015864462,
+    "limit": "Measured short-run projection; checkpoint delivery and changing contention can add time.",
+    "manifest_sha256": "8e2e00c49d02eb689983590fe77bd7720c2533a9805199e3b666d4e47770472c",
+    "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+    "warm_median_seconds": 18.4444643240422,
+    "warm_update_seconds": [
+      17.988103532232344,
+      20.148055408149958,
+      18.35716406814754,
+      18.38302535470575,
+      20.301973577588797,
+      18.414108706638217,
+      18.54214528668672,
+      18.454135170206428,
+      18.4444643240422
+    ]
+  },
+  "validation": {
+    "cpu_evaluation": {
+      "blue_id": "blue42-primary",
+      "blue_returns": [
+        -386.0
+      ],
+      "episodes": 1,
+      "evaluation_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:evaluation:e6b2952b435a488cbab22aaa9508cf84",
+      "manifest_sha256": "8e2e00c49d02eb689983590fe77bd7720c2533a9805199e3b666d4e47770472c",
+      "mean_blue_return": -386.0,
+      "passed": true,
+      "response_environment_steps": 192000,
+      "run_id": "smoke-blue42-primary-red17",
+      "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+      "stage": "primary",
+      "training_attempt_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:f6761f516ef8489a9ce09e2f048f5390",
+      "trial": "smoke-blue42-primary-red17"
+    },
+    "fresh_compilation": {
+      "comparison": "Exact equality of all scientific numeric leaves from two fresh runs at update 2.",
+      "completed_updates": 2,
+      "environment_steps": 96000,
+      "passed": true,
+      "smoke_attempt_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:f6761f516ef8489a9ce09e2f048f5390",
+      "smoke_state": {
+        "artifact_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:f6761f516ef8489a9ce09e2f048f5390:artifact:fcfdb2cc386d49d1b7a4e844c397566e",
+        "leaf_count": 269,
+        "sha256": "89e65a4bd4be3ac798458dfc2201963ff58ed00c806e1bdf8c9ab022a41f362b",
+        "state_sha256": "6eb7c58846b548a2634340c109302f36b08f971c5a6f6207bb8918cd680c23b5"
+      },
+      "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+      "timing_attempt_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:97a49cb9c7614cefb70df4c3b4022503",
+      "timing_state": {
+        "artifact_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:97a49cb9c7614cefb70df4c3b4022503:artifact:66e0a2db9b1e4c39adbf461c360f6e49",
+        "leaf_count": 269,
+        "sha256": "5f5882bfbe4c8f14cc04e865d5cb16128a04779093e54c875de8a1985fb039fe",
+        "state_sha256": "6eb7c58846b548a2634340c109302f36b08f971c5a6f6207bb8918cd680c23b5"
+      }
+    },
+    "passed": true,
+    "resume": {
+      "leaf_count": 269,
+      "new_work_budgets": {
+        "blue_policy_updates": 0,
+        "environment_steps": 96000,
+        "joint_rollout_updates": 2,
+        "red_policy_updates": 2
+      },
+      "original_attempt": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:f6761f516ef8489a9ce09e2f048f5390",
+      "parent_state_sha256": "89e65a4bd4be3ac798458dfc2201963ff58ed00c806e1bdf8c9ab022a41f362b",
+      "passed": true,
+      "resumed_attempt": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:c9f960038c414b3eb7b20b46959a1d81",
+      "state_sha256": "74d38b2d21fb3a15f254cb597c0732819feeed22934307b80739f0fae948c793"
+    }
+  }
+}

@@ -14,7 +14,7 @@ validation; do not alter an existing run or its resume contract.
 ```sh
 python studies/lstm-adaptive-robustness/prepare.py prepare \
   --study-root "$STUDY_ROOT" --baseline-study "$BASELINE_ROOT" \
-  --expected-revision "$REVISION" --production-updates 208
+  --expected-revision "$REVISION" --production-updates 624
 python studies/lstm-adaptive-robustness/submit_jobs.py \
   --study-root "$STUDY_ROOT" --expected-revision "$REVISION" --phase validation
 ```
@@ -22,7 +22,7 @@ python studies/lstm-adaptive-robustness/submit_jobs.py \
 The resumed smoke restores update 2 of the four-update smoke and must reproduce
 its final numeric state exactly. Run the recorded CPU evaluation smoke, then
 `validate.py --study-root "$STUDY_ROOT" --expected-revision "$REVISION"
---require-cpu-eval`. Its acceptance record gates production. The separate
+--require-cpu-eval`. Its acceptance record gates production, including exact agreement with the independent timing run at update 2. The launcher sets deterministic GPU operations; preserve that setting when resuming. The separate
 ten-update timing trial estimates throughput without entering scientific
 comparisons. Then queue the complete paired blocks that fit the measured rate:
 
