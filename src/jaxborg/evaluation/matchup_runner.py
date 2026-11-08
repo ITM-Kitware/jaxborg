@@ -368,7 +368,7 @@ def _run_jax_matchup_episode_scan(
         # transition. Use that first child here so bypassing auto-reset does
         # not change the established reward-only rollout RNG stream.
         transition_key, _ = jax.random.split(step_key)
-        next_obs, next_state, rewards, dones, _ = env.step_env(
+        next_obs, next_state, rewards, dones, info = env.step_env(
             transition_key,
             current_state,
             actions,
@@ -386,6 +386,8 @@ def _run_jax_matchup_episode_scan(
         next_red_reset = ~current_state.state.red_agent_active if red_recurrent else red_reset
         trace = None
         if record_trajectory:
+            from jaxborg.evaluation.behavior_trace import behavior_fields
+
             trace = {
                 "blue_observations": blue_obs,
                 "red_observations": red_obs,
@@ -394,6 +396,9 @@ def _run_jax_matchup_episode_scan(
                 "blue_reward": reward,
                 "done": done,
                 "valid": jnp.bool_(True),
+                **behavior_fields(
+                    current_state, next_state, blue_actions, blue_masks, info, blue_block_policy=env.blue_block_policy
+                ),
             }
         return (rng, next_obs, next_state, reward, cia, done, carries, next_red_reset), trace
 
@@ -424,6 +429,10 @@ def _run_jax_matchup_episode_scan(
         def keep_terminal(_):
             trace = None
             if record_trajectory:
+                from jaxborg.evaluation.behavior_trace import behavior_fields
+
+                terminal_actions = jnp.zeros(len(blue_agents), dtype=jnp.int32)
+                terminal_masks = jnp.stack([env.get_avail_actions(current_state)[name] for name in blue_agents])
                 trace = {
                     "blue_observations": jnp.stack([current_obs[name] for name in blue_agents]),
                     "red_observations": jnp.stack([current_obs[name] for name in red_agents]),
@@ -432,6 +441,14 @@ def _run_jax_matchup_episode_scan(
                     "blue_reward": jnp.float32(0),
                     "done": jnp.bool_(True),
                     "valid": jnp.bool_(False),
+                    **behavior_fields(
+                        current_state,
+                        current_state,
+                        terminal_actions,
+                        terminal_masks,
+                        {},
+                        blue_block_policy=env.blue_block_policy,
+                    ),
                 }
             return (
                 rng,
