@@ -101,17 +101,17 @@ typed nonscalar JAX state, under the same protocol-v2 design:
 ~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
 ```
 
-At **November 7, 2026, 3:20 p.m. Eastern**, all 60 focused ITM tests had passed,
-along with GPU smoke **4125**, CPU smoke **4126** (3m 48s), and resume smoke
-**4127**. The resumed next update matched all **238 scientific state leaves**
-exactly. See the [retained execution record](checks/20261107-overnight/execution-evidence.json).
+Preflight passed 60 focused ITM tests, GPU and CPU smoke checks, and exact
+238-leaf full-state resume equivalence. The
+[launch record](checks/20261107-overnight/execution-evidence.json) preserves those checks.
 
-Production seed 42 (**4128**) and seed 100 (**4129**) were both **RUNNING** with
-18-hour limits; each first update, including compilation, took about 152 seconds.
-CPU evaluation jobs **4130-4135** were queued for the interim, primary and final
-checkpoints. Status-snapshot job **4136** was scheduled for **6 p.m. Eastern**.
-These independent Slurm jobs continue on ITM after the local Windows machine
-shuts down. This is a timestamped execution snapshot, not a completed result.
+At **November 8, 2026, 10:59 a.m. Eastern**, training jobs **4128/4129** and final
+evaluations **4132/4135** had completed. Both seeds reached **124.992M transitions**
+with verified final checkpoint hashes. FSM return improved from the 49.968M
+primary milestone to the final checkpoint for both seeds. Primary evaluation jobs
+**4131/4134** failed after successful partial receipts; six learned-Red cells
+remain missing, with CPU recovery pending. See the [results and limitations](results.md)
+and [retained status snapshot](checks/20261108-overnight-results/status.json).
 
 `--reuse-inputs` copies and rehashes the exact v1 topology bytes into the new
 root, recording the previous source, manifest and topology hashes without
