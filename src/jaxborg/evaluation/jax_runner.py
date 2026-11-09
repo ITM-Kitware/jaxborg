@@ -24,7 +24,10 @@ import numpy as np
 from CybORG.Agents.Wrappers import BlueFlatWrapper
 
 from jaxborg.actions.encoding import BLUE_ALLOW_TRAFFIC_END, BLUE_SLEEP, encode_blue_action
-from jaxborg.blue_observation_contract import blue_obs_size, enhanced_obs_enabled
+from jaxborg.blue_observation_contract import (
+    blue_obs_size,
+    recipe_blue_obs_size,
+)
 from jaxborg.checkpoint import load_jax_policy
 from jaxborg.evaluation.cyborg_env_factory import make_cyborg_env, reset_cyborg_env
 from jaxborg.evaluation.episode_seeds import expand_episode_seeds
@@ -47,7 +50,7 @@ def load_jax_checkpoint(path: str | Path) -> tuple[Any, dict, dict]:
     if not p.is_file():
         raise FileNotFoundError(f"Checkpoint not found: {p}")
     recipe = read_sidecar(p)
-    entry = load_jax_policy(p, team="blue", expected_obs_dim=blue_obs_size(enhanced_obs_enabled(recipe)))
+    entry = load_jax_policy(p, team="blue", expected_obs_dim=recipe_blue_obs_size(recipe))
     params, action_dim = entry.weights, entry.action_dim
     if action_dim == 0:
         action_dim = BLUE_ALLOW_TRAFFIC_END
@@ -211,7 +214,7 @@ def evaluate_jax_on_cyborg(
     seed_log: list[int] = [0] * total
 
     policy, params, recipe = load_jax_checkpoint(checkpoint_path)
-    if variant.cage4_enhanced_obs != enhanced_obs_enabled(recipe):
+    if blue_obs_size(variant.cage4_enhanced_obs, variant.blue_observation_version) != recipe_blue_obs_size(recipe):
         raise ValueError("checkpoint and evaluation cage4_enhanced_obs must match")
 
     if workers <= 1:

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "study_id": "defender-matched-system-benchmark",
+  "question": "How do the four archived final LSTM defenders compare with imported H-MARL Expert and Meta system references under identical current JAX game rules and fixed native-exported scenarios?",
+  "comparison": "Qualified system-reference comparison; not an architecture ablation, native CybORG reproduction, or paper SOTA claim.",
+  "full_case_indices": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "smoke_case_index": 99,
+  "smoke_policy_ids": ["blue-single-42-final", "hmarl-expert", "hmarl-meta"],
+  "full_policy_ids": ["blue-single-42-final", "blue-single-100-final", "blue-diverse-42-final", "blue-diverse-100-final", "hmarl-expert", "hmarl-meta"],
+  "episodes_full": 96,
+  "episodes_smoke": 3,
+  "horizon": 500,
+  "deterministic": false,
+  "red": "stock FSM",
+  "resilience_roles": false,
+  "hmarl_checkpoint_sha256": "c7b2bad2eb9769d7aeccc0e217231bf97b48edfbf7b881335e5c93e61f375699",
+  "case_selection": "First 16 rows of the completed native-matched cases.json, without outcome selection; smoke uses only row 99.",
+  "rng_contract": "Preserve declared policy_seed and dynamics_seed from each native case; separate streams folded by step. Shared numeric seeds identify matched scenarios, not equal actions or native/JAX random draws.",
+  "interpretation": "Conditional descriptions of six fixed systems. Episode/scenario variation is not independent training replication. Training budgets, architectures, observations and provenance differ across system families."
+}

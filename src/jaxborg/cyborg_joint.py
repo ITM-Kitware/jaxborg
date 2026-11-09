@@ -87,7 +87,11 @@ class CyborgJointAdapter:
         from jaxborg.evaluation.enhanced_blue_wrapper import EnhancedBlueFlatWrapper
 
         wrapper = EnhancedBlueFlatWrapper if variant.cage4_enhanced_obs else BlueFlatWrapper
-        self.blue_wrapper = wrapper(self.raw_env, pad_spaces=True)
+        self.blue_wrapper = wrapper(
+            self.raw_env,
+            pad_spaces=True,
+            **({"blue_observation_version": variant.blue_observation_version} if variant.cage4_enhanced_obs else {}),
+        )
         self.mappings: CC4Mappings | None = None
         self._discovered: list[set[int]] = [set() for _ in RED_AGENT_IDS]
         self._scanned_by_primary: list[set[int]] = [set() for _ in RED_AGENT_IDS]

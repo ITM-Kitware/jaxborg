@@ -18,6 +18,11 @@ def apply_blue_monitor(state: SimulatorState, const: SimulatorConst, agent_id: i
         return state
 
     covers = const.blue_agent_hosts[agent_id]
+    if state.blue_decoy_sources is not None:
+        state = state.replace(
+            blue_old_decoy_sources=jnp.where(covers[:, None], state.blue_decoy_sources, state.blue_old_decoy_sources),
+            blue_decoy_sources=jnp.where(covers[:, None], -1, state.blue_decoy_sources),
+        )
     has_any_activity = state.red_activity_this_step != ACTIVITY_NONE
     has_scan_activity = state.red_activity_this_step == ACTIVITY_SCAN
     newly_detected = has_any_activity & covers

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from jaxborg.evaluation import scripted_capture as recording
+from jaxborg.evaluation.capture_store import load_records
 
 
 def test_completed_opponent_survives_later_failure(tmp_path, monkeypatch):
@@ -130,3 +131,143 @@ def test_cli_has_one_tracking_owner(tmp_path, monkeypatch, recorded):
         monkeypatch.delenv("JAXBORG_SCRIPTED_CAPTURE", raising=False)
     evaluator.main(["--model", "model.safetensors"])
     assert len(attaches) == (0 if recorded else 1)
+
+
+@pytest.fixture
+def frozen_inputs(tmp_path, monkeypatch):
+    model = tmp_path / "model_fixture.safetensors"
+    model.write_bytes(b"external policy")
+    sidecar = tmp_path / "recipe_fixture.yaml"
+    sidecar.write_text("run:\n  train_run_id: historical-external-run\n")
+    effective = tmp_path / "effective.yaml"
+    effective.write_text("eval:\n  cia:\n    enabled: true\n")
+    topology = tmp_path / "topology.npz"
+    topology.write_bytes(b"fixed topology bytes")
+    monkeypatch.setattr(
+        recording,
+        "collect_provenance",
+        lambda **kw: SimpleNamespace(
+            configuration={"source_revision": kw["expected_revision"]},
+            facts={},
+            source_files={},
+            hashes={},
+            verify_sources=lambda: None,
+        ),
+    )
+    monkeypatch.setattr(recording, "destination_configured", lambda: False)
+    monkeypatch.setattr(
+        recording, "topology_evidence", lambda paths, hashes, **kw: {"sha256": hashes, "sampling": kw["sampling"]}
+    )
+    protocol = {
+        "schema_version": 1,
+        "kind": "protocol",
+        "id": "frozen:protocol:1",
+        "study_id": "frozen",
+        "revision": "1",
+        "selection_rule": "explicit",
+        "required_facts": {"attempt": ["resolved_config"], "evaluation": ["resolved_config"]},
+        "trials": [{"id": "trial", "condition_id": "external", "replicate_id": "42", "matched_unit_id": None}],
+        "metric_definitions": [
+            {
+                "name": "blue_return",
+                "unit": "score",
+                "direction": "higher",
+                "aggregation": "arithmetic mean",
+                "sampling_unit": "episode conditional on fixed policy",
+                "uncertainty": "none",
+            }
+        ],
+    }
+    return model, {
+        "root": tmp_path / "evidence",
+        "protocol": protocol,
+        "trial_id": "trial",
+        "expected_revision": "a" * 40,
+        "source_recipe": sidecar,
+        "effective_recipe": effective,
+        "base_variant": {"resilience_roles": True, "num_steps": 500},
+        "topology_paths": [topology],
+        "reds": ["fsm", "cia_c"],
+        "seeds": "17-18",
+        "episodes_per_seed": 1,
+    }
+
+
+@pytest.mark.parametrize("fail_later", [False, True])
+def test_frozen_capture_retains_external_inputs_and_completed_opponents(frozen_inputs, monkeypatch, fail_later):
+    from jaxborg.checkpoint import sidecar_path
+    from jaxborg.evaluation import jax_scripted_red
+
+    model, settings = frozen_inputs
+    checked = []
+
+    def execute(retained_model, *, on_row, **kwargs):
+        assert retained_model != model
+        assert retained_model.read_bytes() == model.read_bytes()
+        assert sidecar_path(retained_model).read_bytes() == sidecar_path(model).read_bytes()
+        assert kwargs["topology_paths"][0] != settings["topology_paths"][0]
+        assert kwargs["topology_paths"][0].read_bytes() == settings["topology_paths"][0].read_bytes()
+        assert kwargs["recipe"] == {"eval": {"cia": {"enabled": True}}}
+        rows = []
+        for opponent in kwargs["reds"]:
+            if fail_later and rows:
+                raise RuntimeError("second opponent failed")
+            row = {
+                "eval_red": opponent,
+                "per_episode_seeds": [17, 18],
+                "per_episode": [-2.0, -4.0],
+                "per_episode_cia": [{"c": 0.8}, {"c": 0.7}],
+                "per_episode_topology_fingerprints": ["canonical-topology", "canonical-topology"],
+                "episode_role_map_ids": ["fixed-roles", "fixed-roles"],
+                "mean_reward": -3.0,
+                "std_reward": 2**0.5,
+                "n_episodes": 2,
+                "cia_summary": {},
+            }
+            on_row(row)
+            rows.append(row)
+        return rows
+
+    monkeypatch.setattr(jax_scripted_red, "evaluate_jax_scripted_reds", execute)
+    settings["condition_check"] = checked.append
+    if fail_later:
+        with pytest.raises(RuntimeError, match="second opponent failed"):
+            recording.run_frozen_scripted(model, **settings)
+    else:
+        capture, rows = recording.run_frozen_scripted(model, **settings)
+        assert all(row["evaluation_id"] == capture.evaluation_id for row in rows)
+    assert checked[0]["topology"]["sampling"] == "exhaustive"
+    records = load_records(settings["root"])
+    attempts = [r for r in records if r["kind"] == "attempt"]
+    assert len(attempts) == 1 and attempts[0]["execution_kind"] == "evaluation"
+    evaluation = next(r for r in records if r["kind"] == "evaluation")
+    assert evaluation["status"] == ("failed" if fail_later else "succeeded")
+    assert evaluation["budgets"][0] == {"unit": "episodes", "requested": 4, "completed": 2 if fail_later else 4}
+    checkpoint = next(r for r in records if r["kind"] == "artifact" and r["role"] == "blue checkpoint")
+    assert checkpoint["producer_id"] is None
+    artifacts = [r for r in records if r["kind"] == "artifact" and r["role"] == "scripted opponent episode results"]
+    assert len(artifacts) == (1 if fail_later else 2)
+    for artifact in artifacts:
+        row = json.loads((settings["root"] / artifact["uri"]).read_text())
+        assert row["checkpoint_artifact_id"] == checkpoint["id"]
+        assert "training_attempt_id" not in row and "training_checkpoint_artifact_id" not in row
+        assert row["per_episode_topology_fingerprints"] == ["canonical-topology", "canonical-topology"]
+        assert row["per_episode_cia"] == [{"c": 0.8}, {"c": 0.7}]
+
+
+def test_frozen_condition_guard_rejects_before_start(frozen_inputs):
+    model, settings = frozen_inputs
+
+    def reject(configuration):
+        raise ValueError("wrong declared scientific cell")
+
+    with pytest.raises(ValueError, match="wrong declared scientific cell"):
+        recording.run_frozen_scripted(model, condition_check=reject, **settings)
+    assert not settings["root"].exists()
+
+
+def test_frozen_recipe_mismatch_rejects_before_start(frozen_inputs):
+    model, settings = frozen_inputs
+    with pytest.raises(ValueError, match="differs from retained effective recipe"):
+        recording.run_frozen_scripted(model, recipe={"eval": {}}, **settings)
+    assert not settings["root"].exists()

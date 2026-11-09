@@ -19,17 +19,6 @@ from jaxborg.evaluation.tracking import destination_configured
 
 
 def run_scripted(model, *, context, **kwargs):
-    from jaxborg.evaluation.jax_scripted_red import (
-        _normalise_reds,
-        _parse_seeds,
-        evaluate_jax_scripted_reds,
-        write_results,
-    )
-
-    kwargs["seeds"] = _parse_seeds(kwargs["seeds"])
-    kwargs["reds"] = _normalise_reds(kwargs["reds"])
-    if type(kwargs["episodes_per_seed"]) is not int or kwargs["episodes_per_seed"] < 1:
-        raise ValueError("episodes_per_seed must be positive")
     root = outside_source(context["root"])
     records = load_records(root)
     artifact = next(record for record in records if record["id"] == context["checkpoint"])
@@ -49,9 +38,121 @@ def run_scripted(model, *, context, **kwargs):
         expected_revision=context["revision"],
         allow_dirty=context.get("allow_dirty", False),
     )
+    _, rows = _run_scripted(
+        root=root,
+        protocol=json.loads((root / "protocol.json").read_text()),
+        trial_id=context["trial_id"],
+        provenance=provenance,
+        source_recipe=context["source_recipe"],
+        effective_recipe=context["effective_recipe"],
+        retained_inputs={"blue checkpoint": artifact["id"]},
+        training={"training_checkpoint_artifact_id": artifact["id"], "training_attempt_id": owner["id"]},
+        kwargs=kwargs,
+    )
+    return rows
+
+
+def run_frozen_scripted(
+    model,
+    *,
+    root,
+    protocol,
+    trial_id,
+    expected_revision,
+    source_recipe,
+    effective_recipe,
+    condition_check=None,
+    retry_of=None,
+    entrypoint=None,
+    source_roots=(),
+    allow_dirty=False,
+    **kwargs,
+):
+    """Record the CIA scripted suite for an external frozen JAX checkpoint.
+
+    The effective recipe supplies the evaluator settings. Imported weights and
+    their adjacent sidecar have no asserted training parent. The maintained
+    evaluator requires resilience roles; callers establish the game and
+    topology contract for their comparison.
+    Returns the capture receipt and the per-opponent result rows.
+    """
+    import yaml
+
+    from jaxborg.checkpoint import sidecar_path
+
+    if not isinstance(expected_revision, str) or len(expected_revision) != 40:
+        raise ValueError("Recorded executions require an exact pinned source revision")
+    model = Path(model).expanduser().resolve()
+    if model.suffix != ".safetensors":
+        raise ValueError("Frozen scripted capture requires a JAX .safetensors checkpoint")
+    if any(name in kwargs for name in ("on_row", "policy_loader", "env_factory", "episode_runner")):
+        raise ValueError("Frozen scripted capture uses the maintained executor without custom callbacks")
+    effective = yaml.safe_load(Path(effective_recipe).read_text())
+    if not isinstance(effective, dict):
+        raise ValueError("Effective recipe must contain a mapping")
+    if "recipe" in kwargs and kwargs["recipe"] != effective:
+        raise ValueError("Supplied recipe differs from retained effective recipe")
+    kwargs["recipe"] = effective
+    kwargs.setdefault("reds", ("fsm", "cia_c", "cia_i", "cia_a"))
+    kwargs.setdefault("seeds", "1000-1009")
+    kwargs.setdefault("episodes_per_seed", 1)
+    kwargs.setdefault("deterministic", False)
+    kwargs.setdefault("progress", False)
+    kwargs.setdefault("eval_name", None)
+    provenance = collect_provenance(
+        expected_revision=expected_revision,
+        entrypoint=entrypoint,
+        source_roots=source_roots,
+        allow_dirty=allow_dirty,
+    )
+    return _run_scripted(
+        root=outside_source(root),
+        protocol=protocol,
+        trial_id=trial_id,
+        provenance=provenance,
+        source_recipe=source_recipe,
+        effective_recipe=effective_recipe,
+        inputs={"blue checkpoint": model, "blue sidecar": sidecar_path(model)},
+        condition_check=condition_check,
+        retry_of=retry_of,
+        kwargs=kwargs,
+    )
+
+
+def _run_scripted(
+    *,
+    root,
+    protocol,
+    trial_id,
+    provenance,
+    source_recipe,
+    effective_recipe,
+    kwargs,
+    inputs=None,
+    retained_inputs=None,
+    training=None,
+    condition_check=None,
+    retry_of=None,
+):
+    from jaxborg.evaluation.jax_scripted_red import (
+        _normalise_reds,
+        _normalise_topology_paths,
+        _parse_seeds,
+        evaluate_jax_scripted_reds,
+        write_results,
+    )
+
+    kwargs = dict(kwargs)
+    kwargs["seeds"] = _parse_seeds(kwargs["seeds"])
+    kwargs["reds"] = _normalise_reds(kwargs["reds"])
+    kwargs["topology_paths"] = _normalise_topology_paths(kwargs["topology_paths"])
+    if type(kwargs["episodes_per_seed"]) is not int or kwargs["episodes_per_seed"] < 1:
+        raise ValueError("episodes_per_seed must be positive")
+    external_inputs = dict(inputs or {})
     inputs = {f"topology {i}": Path(path) for i, path in enumerate(kwargs["topology_paths"])}
-    inputs["source recipe"] = Path(context["source_recipe"])
-    inputs["effective recipe"] = Path(context["effective_recipe"])
+    inputs.update(external_inputs)
+    inputs["source recipe"] = Path(source_recipe)
+    inputs["effective recipe"] = Path(effective_recipe)
     topology_count = len(kwargs["topology_paths"])
     identities = {role: hashlib.sha256(path.read_bytes()).hexdigest() for role, path in inputs.items()}
     discovery = {
@@ -64,15 +165,19 @@ def run_scripted(model, *, context, **kwargs):
             sampling="exhaustive",
         ),
     }
+    configuration = json_configuration({**kwargs, **discovery, "execution": provenance.configuration})
+    if condition_check is not None:
+        condition_check(configuration)
     capture = start_evaluation(
         root,
-        protocol=json.loads((root / "protocol.json").read_text()),
-        trial_id=context["trial_id"],
+        protocol=protocol,
+        trial_id=trial_id,
+        retry_of=retry_of,
         requested_episodes=(len(kwargs["reds"]) * len(kwargs["seeds"]) * kwargs["episodes_per_seed"] * topology_count),
-        resolved_config=json_configuration({**kwargs, **discovery, "execution": provenance.configuration}),
+        resolved_config=configuration,
         facts={**provenance.facts, **{name: fact(value) for name, value in discovery.items()}},
         inputs=inputs,
-        retained_inputs={"blue checkpoint": artifact["id"]},
+        retained_inputs=retained_inputs,
         source_files=provenance.source_files,
         track=destination_configured(),
     )
@@ -84,13 +189,22 @@ def run_scripted(model, *, context, **kwargs):
                 raise ValueError("Evaluation input changed during retention")
         if json.loads((capture.directory / "source-files.json").read_text()) != provenance.hashes:
             raise ValueError("Retained source differs from preflight")
+        if external_inputs:
+            import yaml
+
+            effective = yaml.safe_load(capture.inputs["effective recipe"].read_text())
+            if effective != kwargs["recipe"]:
+                raise ValueError("Effective recipe changed during retention")
+            kwargs["recipe"] = effective
         index = 0
 
         def observe(row):
             nonlocal index
             row["evaluation_id"] = capture.evaluation_id
-            row["training_checkpoint_artifact_id"] = artifact["id"]
-            row["training_attempt_id"] = context["training_attempt_id"]
+            if training:
+                row.update(training)
+            else:
+                row["checkpoint_artifact_id"] = capture.input_ids["blue checkpoint"]
             for seed, reward in zip(row["per_episode_seeds"], row["per_episode"], strict=True):
                 record_episode(capture, episode_index=index, seed=seed, reward=reward)
                 index += 1
@@ -114,7 +228,7 @@ def run_scripted(model, *, context, **kwargs):
         rows = evaluate_jax_scripted_reds(capture.inputs["blue checkpoint"], on_row=observe, **kwargs)
         provenance.verify_sources()
         finish_evaluation(capture, status="succeeded")
-        return rows
+        return capture, rows
     except BaseException as error:
         fail_evaluation(capture, error)
         raise

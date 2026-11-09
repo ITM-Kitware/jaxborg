@@ -66,6 +66,7 @@ def variant_env_settings(variant: GameVariant) -> dict:
         "red_reward": variant.red_reward,
         "blue_block_policy": variant.blue_block_policy,
         "cage4_enhanced_obs": variant.cage4_enhanced_obs,
+        "blue_observation_version": variant.blue_observation_version,
     }
 
 

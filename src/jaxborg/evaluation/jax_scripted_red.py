@@ -438,6 +438,7 @@ def _scripted_variant(base_variant: GameVariant, red: str) -> GameVariant:
         red_reward=base_variant.red_reward,
         blue_block_policy=base_variant.blue_block_policy,
         cage4_enhanced_obs=base_variant.cage4_enhanced_obs,
+        blue_observation_version=base_variant.blue_observation_version,
     )
     return replace(
         variant,
@@ -600,6 +601,8 @@ def evaluate_jax_scripted_reds(
             "episodes_per_seed": episodes_per_seed,
             "episodes_per_topology": len(parsed_seeds) * episodes_per_seed,
             "stochastic": not deterministic,
+            "cage4_enhanced_obs": variant.cage4_enhanced_obs,
+            "blue_observation_version": variant.blue_observation_version,
             "blue_busy_action_masking": True,
             "mean_reward": mean(rewards),
             "std_reward": stdev(rewards) if len(rewards) > 1 else 0.0,
