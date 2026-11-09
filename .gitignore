@@ -17,3 +17,4 @@ mlruns/
 slurm-*.out
 scripts/dev/catalog_status.json
 outputs/*
+logs/

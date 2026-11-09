@@ -1,0 +1,102 @@
+meta:
+  name: cec_phase6_C11
+  source: "Phase 6 plan — plans/jax/cc4/cec/cec-phase6-plan.md (Test 2 — full env-diversity cocktail)"
+  added: 2026-05-09
+  notes: |
+    Phase 6 Test 2 — arm C11, the full env-diversity cocktail.
+    Forks Matched-Training v2 hyperparameters from recipes/default.yaml.
+
+    Per-reset, FOUR independent banks resample:
+      1. topology_bank (16 shapes)        — router adjacency, op-zone sizing
+      2. mission_bank (anti-corr 4-entry) — (LWF, ASF, RIA) multipliers
+      3. phase_boundary_bank (4 entries)  — when phase 1/2 transitions fire
+      4. phase_rewards_bank (true → 6)    — crown-jewel rotation across subnets
+
+    The 2×2 factorial (C00/C01/C10/C11) was collapsed after Test 1 v2 found
+    that the σ-ratio gate was policy-mediated: an untrained-on-bank policy
+    can't generate distributional spread under bank variation. C11 is the
+    "all four banks active" arm; C00 is the canonical-config control. Per-axis
+    ablations are deferred to Phase 7 if C11 lands.
+
+    CEC-faithful: training partner fixed (cc4_stock variant's red = fsm);
+    held-out red sweep at eval time via eval_recipe.py --eval-red.
+
+algorithm: ippo
+
+core:
+  lr: 3.0e-4
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+
+train:
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 3000000
+  variant: cc4_stock
+  topology_bank:
+    - scripts/dev/topology_bank/shape_00.snapshot.npz
+    - scripts/dev/topology_bank/shape_01.snapshot.npz
+    - scripts/dev/topology_bank/shape_02.snapshot.npz
+    - scripts/dev/topology_bank/shape_03.snapshot.npz
+    - scripts/dev/topology_bank/shape_04.snapshot.npz
+    - scripts/dev/topology_bank/shape_05.snapshot.npz
+    - scripts/dev/topology_bank/shape_06.snapshot.npz
+    - scripts/dev/topology_bank/shape_07.snapshot.npz
+    - scripts/dev/topology_bank/shape_08.snapshot.npz
+    - scripts/dev/topology_bank/shape_09.snapshot.npz
+    - scripts/dev/topology_bank/shape_10.snapshot.npz
+    - scripts/dev/topology_bank/shape_11.snapshot.npz
+    - scripts/dev/topology_bank/shape_12.snapshot.npz
+    - scripts/dev/topology_bank/shape_13.snapshot.npz
+    - scripts/dev/topology_bank/shape_14.snapshot.npz
+    - scripts/dev/topology_bank/shape_15.snapshot.npz
+  # Anti-correlated bank — every non-baseline entry boosts 2 of 3 components
+  # so a "boost the loud one" memorization fails. Disambiguates "diversity
+  # itself helps" from "loud reward signal helps" (the Test 1 σ critique).
+  mission_bank:
+    - [1, 1, 1]
+    - [3, 3, 1]
+    - [1, 3, 3]
+    - [3, 1, 3]
+  mission_bank_amplify: 1.0
+  # P2 — per-reset phase-boundary jitter. Phase transitions, allow-list flips,
+  # and per-phase reward emphasis all reindex against the sampled split, so
+  # "deploy decoys at step 167" memorization breaks.
+  phase_boundary_bank:
+    - [0, 167, 333]   # canonical CC4 split
+    - [0, 100, 300]   # short setup, balanced mid+late
+    - [0, 200, 400]   # long setup, short late
+    - [0, 150, 250]   # short mid-phase, late starts at 250
+  # P3 — crown-jewel rotation. Per-reset sample of which subnet is high-value
+  # in which phase (OPS_A↔OPS_B swap, ADMIN priority, OFFICE priority, both-
+  # OPS, full rotation). Forces the policy to read state instead of memorizing
+  # subnet indices. true → use the canonical 6-entry bank from topology_numpy.
+  phase_rewards_bank: true
+
+eval:
+  variant: cc4_stock
+
+jax:
+  num_envs: 48
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 50
+
+cleanrl:
+  num_envs: 48
+  rollout_length: 500
+  num_rollouts_per_update: 1
+  num_minibatches: 16
