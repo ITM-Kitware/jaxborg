@@ -26,9 +26,8 @@ import numpy as np
 from jaxborg.evaluation.jax_runner import load_jax_checkpoint
 from jaxborg.parity.fsm_red_env import make_fsm_red_env
 
-DEFAULT_CKPT = (
-    "/home/local/KHQ/paul.elliott/src/cyber/jaxborg-exp/ippo_jax/"
-    "default_seed42/model_default_seed42.safetensors"
+DEFAULT_CKPT = str(
+    Path.home() / "src/cyber/jaxborg-exp/ippo_jax/default_seed42/model_default_seed42.safetensors"
 )
 
 N_EPISODES = int(os.environ.get("CEC_SPIKE_EPISODES", "128"))
