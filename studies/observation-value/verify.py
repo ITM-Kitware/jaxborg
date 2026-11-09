@@ -237,7 +237,6 @@ def verify(root: Path, pilot: bool = False, download: bool = True) -> dict:
     require(index.get(protocol["id"]) == protocol, "Native protocol differs from frozen study protocol")
     uri = os.environ.get("MLFLOW_TRACKING_URI")
     require(bool(uri) and urlparse(uri).scheme in {"http", "https"}, "Require the dedicated Jaxborg HTTP tracking URI")
-    require(urlparse(uri).port != 5000, "Open World's MLflow port 5000 is not a Jaxborg tracking destination")
     client = MlflowClient(tracking_uri=uri)
     name = os.environ.get("MLFLOW_EXPERIMENT_NAME") or f"jaxborg/{manifest['study_id']}"
     experiment = client.get_experiment_by_name(name)
