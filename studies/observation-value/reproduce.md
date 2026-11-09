@@ -41,3 +41,13 @@ python studies/observation-value/compare.py analyze --root "$REPORT_ROOT" \
 selected evaluation identities and sensitivity summary. `report/episodes.csv`
 contains all scored test cases. Native evidence and MLflow delivery validation
 are checked separately with `verify.py`.
+
+Export the completed comparison and its plotting inputs with:
+
+```sh
+python studies/observation-value/plot.py \
+  --report "$REPORT_ROOT/report/comparison.json" --output-dir "$FIGURE_ROOT"
+```
+
+The figure exports retain the report hash, plotting-source hash, exact estimates
+and intervals. Keep the output directory outside the source checkout.
