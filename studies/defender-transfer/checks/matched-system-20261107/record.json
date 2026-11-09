@@ -1,12 +1,12 @@
 {
-  "analysis_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/analysis-full",
+  "analysis_root": "~/jaxborg-exp/shared/studies/defender-benchmark-20261107/analysis-full",
   "completed_at": "2026-11-07T13:00:22-05:00",
   "elapsed_seconds": 1531,
-  "evidence_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/evidence",
+  "evidence_root": "~/jaxborg-exp/shared/studies/defender-benchmark-20261107/evidence",
   "exit_code": "0:0",
   "full_episodes": 96,
   "id": "matched-system-20261107",
-  "input_manifest": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-benchmark-20261107/inputs/manifest.json",
+  "input_manifest": "~/jaxborg-exp/shared/studies/defender-benchmark-20261107/inputs/manifest.json",
   "interpretation": "All four saved LSTMs remain below both H-MARL system references on 16 matched stock-FSM scenarios. The system comparison does not establish a training bug, paper SOTA, or unseen-opponent robustness.",
   "locally_verified_artifacts": [
     "means.csv",
@@ -67,5 +67,7 @@
   "smoke_episodes": 3,
   "source_revision": "0bc41414c10858503cced002e477279de70567a3",
   "started_at": "2026-11-07T12:34:51-05:00",
-  "status": "completed"
+  "status": "completed",
+  "public_summary": true,
+  "original_snapshot_sha256": "919f7e29f46f29aaf216f36431752835328da7aefc106e9640290ea90dea1548"
 }

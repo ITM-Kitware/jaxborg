@@ -36,7 +36,7 @@ isolate an algorithm effect or establish published SOTA performance.
 ## Results and reproduction
 
 On ITM, outputs are under
-`/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/`:
+`~/jaxborg-exp/shared/studies/`:
 
 - `defender-transfer-20261107-v4/`: inputs, captured evaluations and
   `reviews/lstm-check-20261107T170233Z/analysis/`.

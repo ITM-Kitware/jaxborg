@@ -67,13 +67,13 @@
     "rollouts_required": false
   },
   "evidence": {
-    "authoritative_study": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4",
-    "authoritative_analysis": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/reviews/lstm-check-20261107T170233Z/analysis",
-    "raw_evidence": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/evidence",
-    "manifest": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/manifest.json",
-    "local_wsl_analysis": "/home/paulhax/src/itm/cyber/experiments/defender-transfer-20261107/lstm-check-20261107T170233Z/analysis",
-    "local_windows_analysis": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\lstm-check-20261107T170233Z\\analysis",
-    "original_summary": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\LSTM-CHECK-20261107.md",
+    "authoritative_study": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4",
+    "authoritative_analysis": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/reviews/lstm-check-20261107T170233Z/analysis",
+    "raw_evidence": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/evidence",
+    "manifest": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/manifest.json",
+    "local_wsl_analysis": "~/src/itm/cyber/experiments/defender-transfer-20261107/lstm-check-20261107T170233Z/analysis",
+    "local_windows_analysis": "%USERPROFILE%\\Documents\\Codex\\2026-11-07\\task\\lstm-check-20261107T170233Z\\analysis",
+    "original_summary": "%USERPROFILE%\\Documents\\Codex\\2026-11-07\\task\\LSTM-CHECK-20261107.md",
     "scheduler_snapshot": "../slurm-status.txt",
     "scheduler_observation_at_snapshot": {
       "job_4105": "COMPLETED, exit 0, elapsed 1:51:27",
@@ -111,5 +111,7 @@
     "report.html": "7b436a7a300d611d067ff78582ddd5dfa9f3d2cd0c40663ef740e7c97a826a10",
     "selection.json": "34b3232840b970e9203c1666e20c0a14312f15d9e089ce773f901b557e9a5926",
     "summary.csv": "d8ac321bf70d782b6822c54dbd15c0ea9f10525057872e4bd2296858058f1235"
-  }
+  },
+  "public_summary": true,
+  "original_snapshot_sha256": "b5f324ef8303c024f10008f0f65e787d9805eb0b8be5b737b49cd8570513ab6a"
 }
