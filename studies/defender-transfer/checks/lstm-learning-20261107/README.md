@@ -71,13 +71,13 @@ experiment store:
 
 ```text
 ITM:
-/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/
+~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/
   inputs/manifest.json
   evidence/
   reviews/lstm-check-20261107T170233Z/analysis/
 
 Local WSL analysis mirror:
-/home/paulhax/src/itm/cyber/experiments/defender-transfer-20261107/lstm-check-20261107T170233Z/analysis
+~/src/itm/cyber/experiments/defender-transfer-20261107/lstm-check-20261107T170233Z/analysis
 ```
 
 The saved report's `policy-means.csv` supports the learning table;
@@ -107,7 +107,7 @@ To reconstruct from raw evidence, use the **retained analyzer** (or
 original Python 3.11.13 runtime. Keep this checked-in frozen selection:
 
 ```bash
-study=/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4
+study=~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4
 selection=studies/defender-transfer/checks/lstm-learning-20261107/selection.json
 python "$study/reviews/lstm-check-20261107T170233Z/analysis/analyze.py" \
   --manifest "$study/inputs/manifest.json" \

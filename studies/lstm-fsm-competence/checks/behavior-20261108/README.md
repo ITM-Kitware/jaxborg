@@ -11,7 +11,7 @@ These are exploratory cases, not a replacement for the full score panels.
 ITM output:
 
 ```text
-/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4/
+~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4/
 ```
 
 The [launch record](launch-record.json) retains the exact inputs and evaluation

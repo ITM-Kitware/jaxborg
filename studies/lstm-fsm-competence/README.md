@@ -47,9 +47,13 @@ descriptive, not causal.
 ITM output root:
 
 ```text
-/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
+~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/
 ```
 
 [Behavior findings](checks/behavior-20261108/results.md), [protocol](protocol.json), [recorded snapshot](checks/20261108-overnight-results/status.json),
 and [reproduction commands](reproduce.md). Producing source:
 `0aef148bbebb45818e71b20e9b5a52be031f93f1`.
+
+Checked-in evidence is a public summary with personal paths and scheduler
+inventories removed. Each record retains the original snapshot hash; exact
+operational records remain outside the public repository.

@@ -50,7 +50,7 @@
     }
   },
   "observed_at": "2026-11-08T13:21:46.495445-05:00",
-  "output_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
+  "output_root": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
   "receipts": [
     {
       "canonical_parity": true,
@@ -270,6 +270,8 @@
     "sha256": "1df78def729be4221a2db78edb79f26d6c904216f5135597dee5701e8ab197bf",
     "test": "tests/evaluation/test_remove_observation_parity.py"
   },
-  "scheduler": "4142|COMPLETED|0:0|00:37:39|2026-11-08T12:33:34|2026-11-08T13:11:13\n4142.batch|COMPLETED|0:0|00:37:39|2026-11-08T12:33:34|2026-11-08T13:11:13\n",
-  "source_note": "Exact producing helper bytes are embedded here. Executable copies beside this record receive repository lint formatting."
+  "source_note": "Exact producing helper bytes are embedded here. Executable copies beside this record receive repository lint formatting.",
+  "public_summary": true,
+  "original_snapshot_sha256": "d4e66029cee935f8b07c078f19b1a8ff6f88d2febe919c1d72cee7893e1f6bb6",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
 }

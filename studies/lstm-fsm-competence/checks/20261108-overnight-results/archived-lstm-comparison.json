@@ -180,15 +180,15 @@
   ],
   "inputs": {
     "archived_episode_rows": {
-      "path": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\lstm-check-20261107T170233Z\\analysis\\episodes.csv",
+      "path": "~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/episodes.csv",
       "sha256": "a75cd2b32c84d35b453a82b5cf019e7fb760c90287e12a6bdb929401addc3cf8"
     },
     "archived_policy_means": {
-      "path": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\lstm-check-20261107T170233Z\\analysis\\policy-means.csv",
+      "path": "~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/policy-means.csv",
       "sha256": "6777a073589b5376ca078ba8e842d7afa4af7595365cc8db150d8d9f93ddf7f0"
     },
     "new_run_status": {
-      "path": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\fsm-result-status-20261108T105949.json",
+      "path": "~/Documents/Codex/2026-11-07/task/fsm-result-status-20261108T105949.json",
       "sha256": "b253ff54f779076f979f691e20b831f164898de964c8f382a09ef99a16fd5212"
     }
   },
@@ -196,7 +196,7 @@
     "budget": "The extension uses approximately 2.5 times the budget (124,992,000 versus 49,968,000 transitions); it is not an equal-budget comparison.",
     "equal_budget_fsm": "New fixed-FSM means exceed both corresponding archived single- and diverse-network co-trained LSTM means at 49,968,000 steps.",
     "exact_budget_ratio": 2.5014409221902016,
-    "learned_opponents": "Against other-lineage diverse-trained Reds, the new extended 125M policies remain about 302–305 return points below archived diverse-trained Blues. Single-trained Red comparisons are mixed.",
+    "learned_opponents": "Against other-lineage diverse-trained Reds, the new extended 125M policies remain about 302\u2013305 return points below archived diverse-trained Blues. Single-trained Red comparisons are mixed.",
     "missing": "Only seed 42 versus red-diverse-100-final has a completed equal-budget learned-Red cell among this other-lineage panel at the retained snapshot. The other primary cells are pending recovery."
   },
   "new_status_observed_at": "2026-11-08T10:59:49.582272-05:00",
@@ -252,5 +252,8 @@
     "new_evaluation_source": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
     "source_diff_review": "A separate source-diff review found no changes to the environment, LSTM rollout, or scripts/eval implementations between these evaluation revisions. Differences concern recording, training/resume, and H-MARL import paths; the H-MARL paths are not used by these LSTM comparisons."
   },
-  "schema_version": 1
+  "schema_version": 1,
+  "public_summary": true,
+  "original_snapshot_sha256": "594476202abc395b81083d57af9fb82254d00866f25c780ccee3171b7d6bf49b",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
 }

@@ -38,9 +38,9 @@ Despite its extra budget, the new extended policy scores about 305 points worse 
 
 The machine-readable companion [archived-lstm-comparison.json](archived-lstm-comparison.json) retains exact values, case checks and source qualifications. Input files:
 
-- `archived_policy_means`: `C:\Users\paul.elliott\Documents\Codex\2026-11-07\task\lstm-check-20261107T170233Z\analysis\policy-means.csv`
+- `archived_policy_means`: `~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/policy-means.csv`
   SHA-256: `6777a073589b5376ca078ba8e842d7afa4af7595365cc8db150d8d9f93ddf7f0`
-- `archived_episode_rows`: `C:\Users\paul.elliott\Documents\Codex\2026-11-07\task\lstm-check-20261107T170233Z\analysis\episodes.csv`
+- `archived_episode_rows`: `~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/episodes.csv`
   SHA-256: `a75cd2b32c84d35b453a82b5cf019e7fb760c90287e12a6bdb929401addc3cf8`
-- `new_run_status`: `C:\Users\paul.elliott\Documents\Codex\2026-11-07\task\fsm-result-status-20261108T105949.json`
+- `new_run_status`: `~/Documents/Codex/2026-11-07/task/fsm-result-status-20261108T105949.json`
   SHA-256: `b253ff54f779076f979f691e20b831f164898de964c8f382a09ef99a16fd5212`
