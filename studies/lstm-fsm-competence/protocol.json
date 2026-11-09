@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "kind": "protocol",
+  "id": "lstm-fsm-competence-v2",
+  "study_id": "lstm-fsm-competence",
+  "revision": "2",
+  "selection_rule": "explicit",
+  "required_facts": {
+    "attempt": [],
+    "evaluation": []
+  },
+  "metric_definitions": [
+    {
+      "name": "blue_return",
+      "unit": "score",
+      "direction": "higher",
+      "aggregation": "arithmetic mean",
+      "sampling_unit": "episode conditional on fixed policy, opponent and layout",
+      "uncertainty": "Descriptive episode variation; checkpoints and opponents do not create independent training replicates."
+    }
+  ],
+  "trials": [
+    {
+      "id": "smoke-seed42",
+      "condition_id": "implementation-smoke",
+      "replicate_id": "smoke-42",
+      "matched_unit_id": null
+    },
+    {
+      "id": "smoke-resume-seed42",
+      "condition_id": "resume-equivalence-smoke",
+      "replicate_id": "smoke-resume-42",
+      "matched_unit_id": null
+    },
+    {
+      "id": "fsm-seed42",
+      "condition_id": "fixed-stock-fsm",
+      "replicate_id": "training-42",
+      "matched_unit_id": null
+    },
+    {
+      "id": "fsm-seed100",
+      "condition_id": "fixed-stock-fsm",
+      "replicate_id": "training-100",
+      "matched_unit_id": null
+    }
+  ],
+  "extensions": {
+    "lstm_fsm_competence": {
+      "schema_version": 1,
+      "source": "studies/lstm-fsm-competence/README.md",
+      "values": {
+        "question": "Can the current separate actor/critic LSTM learn effective stock-game defense against the fixed standard FSM attacker?",
+        "training_seeds": [
+          42,
+          100
+        ],
+        "requested_environment_steps_per_seed": 125000000,
+        "completed_environment_steps_per_seed": 124992000,
+        "rollout_updates_per_seed": 2604,
+        "rollout_environment_steps": 48000,
+        "smoke_updates": 3,
+        "smoke_environment_steps": 144000,
+        "checkpoint_stride_updates": 20,
+        "training_topology_seeds": "0..99, stock generator, unchanged subnet scaffold and game rules",
+        "evaluation_topology_seeds": [
+          200,
+          201,
+          202,
+          203
+        ],
+        "evaluation_episode_roots": "21000..21015 for the archived transfer panel",
+        "primary_evaluation": "Prespecified update 1,041 checkpoint (49,968,000 transitions) versus initialization under fixed stock FSM, averaged equally over four reserved stock layouts and 16 episode roots, with separate results for each training seed.",
+        "secondary_evaluation": "Same primary checkpoints against four fixed archived learned Reds, plus the prespecified final overnight checkpoint at 124,992,000 transitions. Related archived Reds are excluded from new Blue training but are not a verified independent holdout population.",
+        "selection": "Use the explicitly selected successful attempt and prespecified checkpoints at 0, 49,968,000 and 124,992,000 transitions. The primary result stays at 49,968,000 regardless of extension performance. Failed or cancelled attempts and partial work remain incomplete. Smoke and resume smoke do not count as scientific replicates. No outcome-based checkpoint choice.",
+        "stop_rule": "Budget-limited training; no outcome-based stopping or tuning. All allocated work ends before 2026-11-09T13:00:00Z (Monday 08:00 America/New_York).",
+        "comparison_limit": "Historical co-trained policies are contextual references because exact historical training source is unavailable. This diagnostic does not identify the causal effect of co-training or nonstationarity, nor establish SOTA.",
+        "primary_checkpoint_update": 1041,
+        "primary_checkpoint_environment_steps": 49968000,
+        "overnight_extension_checkpoint_environment_steps": 124992000,
+        "resume_smoke": {
+          "parent_trial": "smoke-seed42",
+          "restore_update": 2,
+          "restore_environment_steps": 96000,
+          "target_update": 3,
+          "target_environment_steps": 144000,
+          "new_environment_steps": 48000,
+          "gate": "Scientific full-state digest after resumed update three must equal uninterrupted update three exactly."
+        },
+        "budget_extension_reason": "User requested useful overnight training toward Sunday November 8 at 09:00 America/New_York. Budget extended before production from 50M to 125M requested steps while preserving the original primary milestone. Measured v1 smoke estimated about 16.3 training hours per seed before added state-retention overhead; this is not a finish guarantee.",
+        "evaluation_stages": {
+          "interim": {
+            "environment_steps": 9600000,
+            "update": 200,
+            "opponents": [
+              "fsm"
+            ],
+            "purpose": "Development progress review; does not select checkpoints or change the budget."
+          },
+          "primary": {
+            "environment_steps": 49968000,
+            "update": 1041,
+            "opponents": "FSM plus four saved learned Reds"
+          },
+          "final": {
+            "environment_steps": 124992000,
+            "update": 2604,
+            "opponents": "FSM plus four saved learned Reds"
+          },
+          "cases": "Each scientific stage uses the same four reserved stock layouts and 16 episode roots per layout. Identical initial-reference evaluations are explicitly reused."
+        }
+      }
+    }
+  }
+}

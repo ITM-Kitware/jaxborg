@@ -1,0 +1,2549 @@
+{
+  "evaluations": [
+    {
+      "path": "evaluations/fsm-seed100/final/summary.json",
+      "selection": {
+        "0:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e325ccb9e57346aaab897cf56ec7f15c",
+        "0:red-diverse-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:32bc5a21696f4c63aadea2f35777130c",
+        "0:red-diverse-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:ca5fb3c2e021426f9b97b26d1f121571",
+        "0:red-single-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:cb9a859b812143e2a2480b96b9906389",
+        "0:red-single-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:4f411f6953b0417ebdfdad4ceed16f4b",
+        "124992000:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:3015f22fe6664abfa646d9f3e7315a5b",
+        "124992000:red-diverse-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:f576f2ec691649dcb5ce9c6a24c41dbc",
+        "124992000:red-diverse-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:18e10317caf043e7a0d10f61f0c094ee",
+        "124992000:red-single-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:52233c5949fd48819a970baea406eb35",
+        "124992000:red-single-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:2599d2e641e349eba07ea0620d64c992"
+      },
+      "summaries": [
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e325ccb9e57346aaab897cf56ec7f15c",
+          "mean_return": -4914.203125,
+          "opponent": "fsm",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-100-final",
+            "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+            "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:32bc5a21696f4c63aadea2f35777130c",
+          "mean_return": -7154.28125,
+          "opponent": "red-diverse-100-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-42-final",
+            "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+            "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:ca5fb3c2e021426f9b97b26d1f121571",
+          "mean_return": -7206.15625,
+          "opponent": "red-diverse-42-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-100-final",
+            "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+            "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:cb9a859b812143e2a2480b96b9906389",
+          "mean_return": -4861.890625,
+          "opponent": "red-single-100-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-42-final",
+            "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+            "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:4f411f6953b0417ebdfdad4ceed16f4b",
+          "mean_return": -5144.59375,
+          "opponent": "red-single-42-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+            "checkpoint_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:3015f22fe6664abfa646d9f3e7315a5b",
+          "mean_return": -355.515625,
+          "opponent": "fsm",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+            "checkpoint_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-100-final",
+            "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+            "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:f576f2ec691649dcb5ce9c6a24c41dbc",
+          "mean_return": -2879.734375,
+          "opponent": "red-diverse-100-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+            "checkpoint_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-42-final",
+            "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+            "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:18e10317caf043e7a0d10f61f0c094ee",
+          "mean_return": -2997.6875,
+          "opponent": "red-diverse-42-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+            "checkpoint_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-100-final",
+            "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+            "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:52233c5949fd48819a970baea406eb35",
+          "mean_return": -787.40625,
+          "opponent": "red-single-100-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+            "checkpoint_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-42-final",
+            "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+            "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:2599d2e641e349eba07ea0620d64c992",
+          "mean_return": -1029.78125,
+          "opponent": "red-single-42-final",
+          "reused": false
+        }
+      ],
+      "summary_sha256": "38e55f0a9565c134b77d994e16bdce3deddb7b89cb5098672393f26e2345274f"
+    },
+    {
+      "path": "evaluations/fsm-seed100/interim/summary.json",
+      "selection": {
+        "0:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e325ccb9e57346aaab897cf56ec7f15c",
+        "9600000:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:524496648b7a4089bd4631356f7abe39"
+      },
+      "summaries": [
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+            "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e325ccb9e57346aaab897cf56ec7f15c",
+          "mean_return": -4914.203125,
+          "opponent": "fsm",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:83f8cdc9ec3c40a4abaa0d57b970aa91",
+            "checkpoint_sha256": "5b63b1bdfc4a856baaf98c88d8c81ffbbf57bfda35bb5ea39ae482fc1fa9adf6",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "be3f5202dccd9af3a95ad406c4491c48eed3cbade8b1268a0261f657cbe15e7f",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 9600000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:524496648b7a4089bd4631356f7abe39",
+          "mean_return": -680.5625,
+          "opponent": "fsm",
+          "reused": false
+        }
+      ],
+      "summary_sha256": "fefbd3e0af9490c79bbb82cfe2e989f41dd3684ef892c47039bb791ae23a256a"
+    },
+    {
+      "path": "evaluations/fsm-seed42/final/summary.json",
+      "selection": {
+        "0:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:b445654566ee435db144805fd0f75145",
+        "0:red-diverse-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:781f17c1a2594ad195e5027b080922a4",
+        "0:red-diverse-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:45a26181973c40f0b6b9b16a2e34ce59",
+        "0:red-single-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:188631f14d9d47b5afdb010725dffc8b",
+        "0:red-single-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e3e5a34b4e6c41cf853d9d9b15b8123e",
+        "124992000:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:c7abbdb0acf54606a08ecf9d176407b0",
+        "124992000:red-diverse-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:ddc42bea98b34cb7aedee6c863de6841",
+        "124992000:red-diverse-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:72dfceeaf0fd42e39d601e84c8b83803",
+        "124992000:red-single-100-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e4a439881a304d8fa1f2dd51a096351e",
+        "124992000:red-single-42-final": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:a49a1f3eac3842fb80dc3d6a4ddf2617"
+      },
+      "summaries": [
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:b445654566ee435db144805fd0f75145",
+          "mean_return": -4905.703125,
+          "opponent": "fsm",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-100-final",
+            "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+            "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:781f17c1a2594ad195e5027b080922a4",
+          "mean_return": -7159.203125,
+          "opponent": "red-diverse-100-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-42-final",
+            "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+            "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:45a26181973c40f0b6b9b16a2e34ce59",
+          "mean_return": -7194.390625,
+          "opponent": "red-diverse-42-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-100-final",
+            "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+            "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:188631f14d9d47b5afdb010725dffc8b",
+          "mean_return": -4853.75,
+          "opponent": "red-single-100-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-42-final",
+            "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+            "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e3e5a34b4e6c41cf853d9d9b15b8123e",
+          "mean_return": -5138.234375,
+          "opponent": "red-single-42-final",
+          "reused": true
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+            "checkpoint_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:c7abbdb0acf54606a08ecf9d176407b0",
+          "mean_return": -323.1875,
+          "opponent": "fsm",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+            "checkpoint_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-100-final",
+            "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+            "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:ddc42bea98b34cb7aedee6c863de6841",
+          "mean_return": -2899.25,
+          "opponent": "red-diverse-100-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+            "checkpoint_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-diverse-42-final",
+            "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+            "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:72dfceeaf0fd42e39d601e84c8b83803",
+          "mean_return": -2842.71875,
+          "opponent": "red-diverse-42-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+            "checkpoint_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-100-final",
+            "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+            "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e4a439881a304d8fa1f2dd51a096351e",
+          "mean_return": -688.421875,
+          "opponent": "red-single-100-final",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+            "checkpoint_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "red-single-42-final",
+            "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+            "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": false,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 124992000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:a49a1f3eac3842fb80dc3d6a4ddf2617",
+          "mean_return": -963.84375,
+          "opponent": "red-single-42-final",
+          "reused": false
+        }
+      ],
+      "summary_sha256": "3536adec24ab382da565cadae0539ed9604f1e59bdf1a4dec5e93a4a7bd56b2a"
+    },
+    {
+      "path": "evaluations/fsm-seed42/interim/summary.json",
+      "selection": {
+        "0:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:b445654566ee435db144805fd0f75145",
+        "9600000:fsm": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:25129fc4d71247499b007fd4ac8c34b7"
+      },
+      "summaries": [
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+            "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 0,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:b445654566ee435db144805fd0f75145",
+          "mean_return": -4905.703125,
+          "opponent": "fsm",
+          "reused": false
+        },
+        {
+          "case": {
+            "backend": "cpu",
+            "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:cd11391d0b5949e49de550ab39119537",
+            "checkpoint_sha256": "2bc6b6140c6322315e3eaecfbf37372ebc2ed49a356f2ee517e3df034af4e656",
+            "deterministic": false,
+            "episodes_per_seed": 1,
+            "red_id": "fsm",
+            "red_sha256": null,
+            "red_sidecar_sha256": null,
+            "seeds": [
+              21000,
+              21001,
+              21002,
+              21003,
+              21004,
+              21005,
+              21006,
+              21007,
+              21008,
+              21009,
+              21010,
+              21011,
+              21012,
+              21013,
+              21014,
+              21015
+            ],
+            "sidecar_sha256": "c0ad1ada780c08f89e445f7632a0565953e3cdddf87c7cc0834f9e134b134320",
+            "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+            "topologies": [
+              "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+              "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+              "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+              "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+            ],
+            "variant": {
+              "blue_block_policy": "cc4",
+              "blue_observation_version": 2,
+              "cage4_enhanced_obs": true,
+              "name": "cc4_stock",
+              "num_steps": 500,
+              "op_zone_servers": null,
+              "red_agent": "finite_state",
+              "red_reward": "zero_sum",
+              "resilience_roles": true,
+              "target_weight": 5.0
+            }
+          },
+          "checkpoint_steps": 9600000,
+          "episodes": 64,
+          "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:25129fc4d71247499b007fd4ac8c34b7",
+          "mean_return": -679.609375,
+          "opponent": "fsm",
+          "reused": false
+        }
+      ],
+      "summary_sha256": "b2b1c0b0a5ed79ff4be415542d304af8c457ad6d69c3fe895a76add55cb310e1"
+    }
+  ],
+  "logs": {
+    "4128.err": "",
+    "4129.err": "",
+    "4130.err": "E1107 17:12:02.354632 2705298 slow_operation_alarm.cc:73] \n********************************\n[Compiling module jit__run_jax_scripted_red_episode_scan for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.\n********************************\nE1107 17:12:10.154255 2705259 slow_operation_alarm.cc:140] The operation took 2m7.803630157s\n\n********************************\n[Compiling module jit__run_jax_scripted_red_episode_scan for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.\n********************************\nExecution tracking delivery failed for 58e799e43eb94e0f83d993d5415bbae7: Evidence upload requires terminal attempts and dependencies\nExecution tracking delivery failed for d43f35f63fa54c31bd664e525d0814bc: Evidence upload requires terminal attempts and dependencies",
+    "4131.err": "E1108 00:38:42.301871 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301883 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301896 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301909 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301921 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301934 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301946 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301959 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301972 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301983 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:42.301995 2874063 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\ntimeout: the monitored command dumped core",
+    "4132.err": "",
+    "4133.err": "E1107 17:12:02.103635 2705307 slow_operation_alarm.cc:73] \n********************************\n[Compiling module jit__run_jax_scripted_red_episode_scan for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.\n********************************\nE1107 17:12:09.894770 2705292 slow_operation_alarm.cc:140] The operation took 2m7.795828636s\n\n********************************\n[Compiling module jit__run_jax_scripted_red_episode_scan for CPU] Very slow compile? If you want to file a bug, run with envvar XLA_FLAGS=--xla_dump_to=/tmp/foo and attach the results.\n********************************\nExecution tracking delivery failed for ac65e1f63c8d48099665aec8008c84c4: Evidence upload requires terminal attempts and dependencies\nExecution tracking delivery failed for 4c90662e10774484a22cada27bb281c5: Evidence upload requires terminal attempts and dependencies",
+    "4134.err": "E1108 00:38:43.375042 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375055 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375067 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375079 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375090 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375102 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375114 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375127 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375139 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375151 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\nE1108 00:38:43.375162 2874092 execution_engine.cc:54] LLVM compilation error: Cannot allocate memory\ntimeout: the monitored command dumped core",
+    "4135.err": ""
+  },
+  "observed_at": "2026-11-08T10:59:49.582272-05:00",
+  "primary_receipts": [
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-0-fsm.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+          "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "fsm",
+          "red_sha256": null,
+          "red_sidecar_sha256": null,
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": true,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e325ccb9e57346aaab897cf56ec7f15c",
+        "mean_return": -4914.203125,
+        "opponent": "fsm",
+        "reused": true
+      },
+      "sha256": "b390bccb9d1242a9c9fd162345013d94cb21680c0861504eb39704d4ef377b81"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-0-red-diverse-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+          "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-100-final",
+          "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+          "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:32bc5a21696f4c63aadea2f35777130c",
+        "mean_return": -7154.28125,
+        "opponent": "red-diverse-100-final",
+        "reused": false
+      },
+      "sha256": "db493693cc23450d52179138d56fc4b19c09d56aa8541f44167927c27752b021"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-0-red-diverse-42-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+          "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-42-final",
+          "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+          "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:ca5fb3c2e021426f9b97b26d1f121571",
+        "mean_return": -7206.15625,
+        "opponent": "red-diverse-42-final",
+        "reused": false
+      },
+      "sha256": "4de5dc647409688b64484cf26a2a220013ed9b68ffcb6d42c9940472e16c6195"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-0-red-single-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+          "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-single-100-final",
+          "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+          "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:cb9a859b812143e2a2480b96b9906389",
+        "mean_return": -4861.890625,
+        "opponent": "red-single-100-final",
+        "reused": false
+      },
+      "sha256": "3cd5e2fd0a2c47a2bf087f15bd093d3a8c50a7573a33f6dc1718c0e7055fa6c5"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-0-red-single-42-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:6ede7fc260fb417daa47061f62eef596",
+          "checkpoint_sha256": "4cd7ac78d2009d929a78b57c93ec2d2430a90f3adc2b79ccc70c174efcdb610c",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-single-42-final",
+          "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+          "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "58c1ad1ea24aa8bbbeac23ca08ef16c0e0eb96c9cf5990ad2bbf6e8f760e383f",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:4f411f6953b0417ebdfdad4ceed16f4b",
+        "mean_return": -5144.59375,
+        "opponent": "red-single-42-final",
+        "reused": false
+      },
+      "sha256": "5b0d8d8ad868db48a60892ae8ffa873c066677ef3bd05289045055fb3442cd0d"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-49968000-fsm.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:41129b6079e244788fdbf6e20dfa1d37",
+          "checkpoint_sha256": "444236ab310f6d29977fe7daeca672ef70e36e8c33fd1d8c56d128574df5e0ed",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "fsm",
+          "red_sha256": null,
+          "red_sidecar_sha256": null,
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "a7e9e57ded79329a2f82c0599b348b1cf12011885b9d5eb73dde4bf627878a84",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": true,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 49968000,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:8d9de068c5874559b1439b71ae6333ba",
+        "mean_return": -365.875,
+        "opponent": "fsm",
+        "reused": false
+      },
+      "sha256": "74d8262e5912b9120c674a6fd70d7bc8be7e79318510b0bdf0a0677870ca0f64"
+    },
+    {
+      "path": "evaluations/fsm-seed100/primary/receipt-49968000-red-diverse-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:41129b6079e244788fdbf6e20dfa1d37",
+          "checkpoint_sha256": "444236ab310f6d29977fe7daeca672ef70e36e8c33fd1d8c56d128574df5e0ed",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-100-final",
+          "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+          "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "a7e9e57ded79329a2f82c0599b348b1cf12011885b9d5eb73dde4bf627878a84",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 49968000,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:a13f82fe96af4200aa591fd7f88bc618",
+        "mean_return": -2962.140625,
+        "opponent": "red-diverse-100-final",
+        "reused": false
+      },
+      "sha256": "a2135836db25dda42d422ce7deae6a48de4fba8ecc23d45bacbf121b199007fb"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-0-fsm.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+          "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "fsm",
+          "red_sha256": null,
+          "red_sidecar_sha256": null,
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": true,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:b445654566ee435db144805fd0f75145",
+        "mean_return": -4905.703125,
+        "opponent": "fsm",
+        "reused": true
+      },
+      "sha256": "feec543c2937b44b682afaca0546b3aa5f6f6fe43af42c6c0a43abb5080d5ae8"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-0-red-diverse-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+          "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-100-final",
+          "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+          "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:781f17c1a2594ad195e5027b080922a4",
+        "mean_return": -7159.203125,
+        "opponent": "red-diverse-100-final",
+        "reused": false
+      },
+      "sha256": "db81d2bc2f7a55653aa2ce42d321e5d8510887688c219158c8776c395da5b606"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-0-red-diverse-42-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+          "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-42-final",
+          "red_sha256": "629b1c9c9d0603a8f6dd58cce6c09546d28f0d64e12f8c80fafad1e942a3f1ad",
+          "red_sidecar_sha256": "6ea104d4925152cf78b7f88278d8831ddf9d20b7462c2cc2bc56722015375b2f",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:45a26181973c40f0b6b9b16a2e34ce59",
+        "mean_return": -7194.390625,
+        "opponent": "red-diverse-42-final",
+        "reused": false
+      },
+      "sha256": "612e208d32c10a391d523e443575667dda8eec7e9cf8320c546dac5d68a8e23a"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-0-red-single-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+          "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-single-100-final",
+          "red_sha256": "c4df8abd363c3fa9206ba6ecd2922840c5da006a0b8df8601b83f892efc944c7",
+          "red_sidecar_sha256": "a3dbe10395b8d3f81189c30920ad29916d2417c926a60b1ea81b4998a53b3b1e",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:188631f14d9d47b5afdb010725dffc8b",
+        "mean_return": -4853.75,
+        "opponent": "red-single-100-final",
+        "reused": false
+      },
+      "sha256": "91c379913d80b19919e5741835ed27ff5138e380aaa362e9afb60241979e6f12"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-0-red-single-42-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:78e67bd6763e4e1980dcddbd0b0a5c2d",
+          "checkpoint_sha256": "b1dcec27df0d03462c3af00875de0995a31cf815386bfceceda99f7d644125cd",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-single-42-final",
+          "red_sha256": "e3b16ede33e8d3cb0ca83d7bfae6ec99fdfac19cc610771bf99338d9f3374f1f",
+          "red_sidecar_sha256": "d4c2ce9954f0947e93708c6e1234ef2e6af581873df73b5672ac6ca5a6e58fa7",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "0505057106c3e0c8256187fe4388600c83d68b68d38cf52fb23f0426d2245bb8",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 0,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e3e5a34b4e6c41cf853d9d9b15b8123e",
+        "mean_return": -5138.234375,
+        "opponent": "red-single-42-final",
+        "reused": false
+      },
+      "sha256": "8090592a3dc5d31b041dadd948febba6b90d0519e8f2528eff54b5ef9f1803cd"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-49968000-fsm.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
+          "checkpoint_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "fsm",
+          "red_sha256": null,
+          "red_sidecar_sha256": null,
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": true,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 49968000,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:7283a01f4b8c49cd9826df127fd243cc",
+        "mean_return": -425.78125,
+        "opponent": "fsm",
+        "reused": false
+      },
+      "sha256": "50d66eaa92c8a73d79dcb7c362c9c9c91fa74569bf142f8e05d6d729131af2bd"
+    },
+    {
+      "path": "evaluations/fsm-seed42/primary/receipt-49968000-red-diverse-100-final.json",
+      "receipt": {
+        "case": {
+          "backend": "cpu",
+          "checkpoint": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
+          "checkpoint_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
+          "deterministic": false,
+          "episodes_per_seed": 1,
+          "red_id": "red-diverse-100-final",
+          "red_sha256": "95f94a7d250a357dd66e1b1fd8ac6bd3d17ef0d97516e08cb7035454d7789fc1",
+          "red_sidecar_sha256": "bbfe3bb847698665baf5536f560da6b483259f8633ae76c0657cabf4b79dd9ee",
+          "seeds": [
+            21000,
+            21001,
+            21002,
+            21003,
+            21004,
+            21005,
+            21006,
+            21007,
+            21008,
+            21009,
+            21010,
+            21011,
+            21012,
+            21013,
+            21014,
+            21015
+          ],
+          "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
+          "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+          "topologies": [
+            "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+            "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+            "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+            "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+          ],
+          "variant": {
+            "blue_block_policy": "cc4",
+            "blue_observation_version": 2,
+            "cage4_enhanced_obs": true,
+            "name": "cc4_stock",
+            "num_steps": 500,
+            "op_zone_servers": null,
+            "red_agent": "finite_state",
+            "red_reward": "zero_sum",
+            "resilience_roles": false,
+            "target_weight": 5.0
+          }
+        },
+        "checkpoint_steps": 49968000,
+        "episodes": 64,
+        "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:845d20bbb1f7472294931122c5a705e8",
+        "mean_return": -2920.71875,
+        "opponent": "red-diverse-100-final",
+        "reused": false
+      },
+      "sha256": "224f036f8c1e9ed451f17fea577a05573fbecd89ec4cc13bcc681520cbc96f45"
+    }
+  ],
+  "root": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3",
+  "training": [
+    {
+      "budgets": [
+        {
+          "completed": 124992000,
+          "requested": 125000000,
+          "unit": "environment_steps"
+        },
+        {
+          "completed": 2604,
+          "requested": 2604,
+          "unit": "joint_rollout_updates"
+        },
+        {
+          "completed": 2604,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "blue_policy_updates"
+        },
+        {
+          "completed": 0,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "red_policy_updates"
+        }
+      ],
+      "checkpoint_count": 132,
+      "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e",
+      "latest_artifact_verification": {
+        "model": true,
+        "sidecar": true,
+        "training_state": true
+      },
+      "latest_checkpoints": [
+        {
+          "artifacts": {
+            "model": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:0416d8d53d2c46dc93037da6c66292e9",
+              "role": "blue policy checkpoint",
+              "sha256": "190f7f0108fa664d0789bcfce14c603e9dcaa31543de7ed8c2abcd2e102f5aef",
+              "size_bytes": 5907260,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124800000/checkpoint_124800000.safetensors"
+            },
+            "sidecar": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:5fa65e3ee1df4825b64ec9f25afecb9d",
+              "role": "checkpoint recipe sidecar",
+              "sha256": "53b5eb050250fdfd93a682dc65ad151bbfa6fa40ce84ca14855f66fbc580e56c",
+              "size_bytes": 15558,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124800000/recipe_checkpoint_124800000.yaml"
+            },
+            "training_state": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:6deb7fa65e9f4cff90af67478edec213",
+              "role": "full numeric training state",
+              "sha256": "296ee5bb3aaf06d74586049e8a4e1b3c0b01e2b14020b9ecff076bae75bfa9ff",
+              "size_bytes": 16241086,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124800000/training_state_124800000.npz"
+            }
+          },
+          "environment_steps": 124800000
+        },
+        {
+          "artifacts": {
+            "model": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
+              "role": "blue policy checkpoint",
+              "sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+              "size_bytes": 5907260,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors"
+            },
+            "sidecar": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:410dde4ad9434c6c838c4e34ed23d604",
+              "role": "checkpoint recipe sidecar",
+              "sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+              "size_bytes": 15586,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml"
+            },
+            "training_state": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:a656226c9ef9443eb69ddb4eab008fef",
+              "role": "full numeric training state",
+              "sha256": "5050f91c17fa8a63d9ac013000633f83405bfdcddb26506d9841ea4145a014cb",
+              "size_bytes": 16243156,
+              "uri": "attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/training_state_124992000.npz"
+            }
+          },
+          "environment_steps": 124992000
+        }
+      ],
+      "latest_update": {
+        "backend.jax.mean_rollout_return": -4.038743019104004,
+        "backend.jax.optimizer_state_finite": 1.0,
+        "backend.jax.parameters_finite": 1.0,
+        "backend.jax.reward_normalizer_finite": 1.0,
+        "backend.jax.rollout_boundary_time": 0.0,
+        "cumulative_environment_steps": 124992000,
+        "cumulative_update_idx": 2604,
+        "env_steps": 124992000,
+        "loss_entropy": 3.1649889945983887,
+        "loss_policy": -0.028210408985614777,
+        "loss_total": -0.05672638863325119,
+        "loss_value": 0.006267818622291088,
+        "lr": 0.0003,
+        "ppo_clip_fraction": 0.20892652869224548,
+        "ppo_explained_variance": 0.8173930048942566,
+        "ppo_grad_norm": 0.4805070757865906,
+        "ppo_kl_divergence": 0.01766510307788849,
+        "ppo_pre_clip_grad_norm": 0.531192421913147,
+        "team.blue.cumulative_update_count": 2604,
+        "team.blue.lr": 0.0003,
+        "team.blue.normalized_return": -4.038743019104004,
+        "team.blue.return": -293.91668701171875,
+        "team.blue.trainable": true,
+        "team.blue.update_count": 2604.0,
+        "team.blue.updated": 1.0,
+        "team.red.trainable": false,
+        "team.red.update_count": 0.0,
+        "team.red.updated": 0.0,
+        "throughput_sps": 2133.335827187363,
+        "train_episode_reward_mean": -293.91668701171875,
+        "update_idx": 2604,
+        "wall_time_s": 58589.93150871713
+      },
+      "snapshot": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/terminal.json",
+      "snapshot_mtime": 1794141204.425797,
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "status": "succeeded",
+      "training_cost": {
+        "completed_environment_steps": 124992000,
+        "cumulative_environment_steps": 124992000,
+        "device_count": 1,
+        "device_kinds": [
+          "NVIDIA RTX A6000"
+        ],
+        "loop_elapsed_seconds": 58592.4409380164,
+        "scope": "setup and loop include compilation, recording and inline evaluation; exclude topology materialization and final delivery",
+        "setup_elapsed_seconds": 14.269098359160125
+      },
+      "trial_id": "fsm-seed42"
+    },
+    {
+      "budgets": [
+        {
+          "completed": 124992000,
+          "requested": 125000000,
+          "unit": "environment_steps"
+        },
+        {
+          "completed": 2604,
+          "requested": 2604,
+          "unit": "joint_rollout_updates"
+        },
+        {
+          "completed": 2604,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "blue_policy_updates"
+        },
+        {
+          "completed": 0,
+          "requested": {
+            "reason": "Per-team update schedule is retained in resolved configuration",
+            "source": "configuration.json",
+            "value": null
+          },
+          "unit": "red_policy_updates"
+        }
+      ],
+      "checkpoint_count": 132,
+      "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f",
+      "latest_artifact_verification": {
+        "model": true,
+        "sidecar": true,
+        "training_state": true
+      },
+      "latest_checkpoints": [
+        {
+          "artifacts": {
+            "model": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:c76086372bc04a1b85e23a06f82dcf17",
+              "role": "blue policy checkpoint",
+              "sha256": "e4ac103c1937c3a0fa9da128e0a0e7cec79ea44298bc196d8c5a88f3a3d75110",
+              "size_bytes": 5907260,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124800000/checkpoint_124800000.safetensors"
+            },
+            "sidecar": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:87640b8a8f5f437e8161dbc1e27d7b82",
+              "role": "checkpoint recipe sidecar",
+              "sha256": "89c21d4b367d1c5e944fa8260be76b39de7414e47e393056a4ee62e257200069",
+              "size_bytes": 15559,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124800000/recipe_checkpoint_124800000.yaml"
+            },
+            "training_state": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:9032e62d0c0f4a359fe72c3938386503",
+              "role": "full numeric training state",
+              "sha256": "817a0919bdee487dce5540d25fbae097bee547851e6c58b754a89b59f6498ff4",
+              "size_bytes": 16241033,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124800000/training_state_124800000.npz"
+            }
+          },
+          "environment_steps": 124800000
+        },
+        {
+          "artifacts": {
+            "model": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:52a111c6fbb84189af0621b40fc0dab1",
+              "role": "blue policy checkpoint",
+              "sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+              "size_bytes": 5907260,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed100.safetensors"
+            },
+            "sidecar": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:3172da5199f54a72addde10992eea4e7",
+              "role": "checkpoint recipe sidecar",
+              "sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+              "size_bytes": 15588,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed100.yaml"
+            },
+            "training_state": {
+              "id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:dd77ef15950643719201c0e7e336667f:artifact:ce8e1852da6f46cebc47301a1ec766cd",
+              "role": "full numeric training state",
+              "sha256": "12bda9dbcf0e82f734f6267d911700d467dfdfdfb7838ffb942b99b8b8751d43",
+              "size_bytes": 16239711,
+              "uri": "attempts/dd77ef15950643719201c0e7e336667f/artifacts/checkpoints/124992000/training_state_124992000.npz"
+            }
+          },
+          "environment_steps": 124992000
+        }
+      ],
+      "latest_update": {
+        "backend.jax.mean_rollout_return": -4.2565507888793945,
+        "backend.jax.optimizer_state_finite": 1.0,
+        "backend.jax.parameters_finite": 1.0,
+        "backend.jax.reward_normalizer_finite": 1.0,
+        "backend.jax.rollout_boundary_time": 0.0,
+        "cumulative_environment_steps": 124992000,
+        "cumulative_update_idx": 2604,
+        "env_steps": 124992000,
+        "loss_entropy": 3.1900320053100586,
+        "loss_policy": -0.026414884254336357,
+        "loss_total": -0.05394537374377251,
+        "loss_value": 0.008739667944610119,
+        "lr": 0.0003,
+        "ppo_clip_fraction": 0.2062048316001892,
+        "ppo_explained_variance": 0.77433180809021,
+        "ppo_grad_norm": 0.47938215732574463,
+        "ppo_kl_divergence": 0.018025057390332222,
+        "ppo_pre_clip_grad_norm": 0.5612618327140808,
+        "team.blue.cumulative_update_count": 2604,
+        "team.blue.lr": 0.0003,
+        "team.blue.normalized_return": -4.2565507888793945,
+        "team.blue.return": -293.38543701171875,
+        "team.blue.trainable": true,
+        "team.blue.update_count": 2604.0,
+        "team.blue.updated": 1.0,
+        "team.red.trainable": false,
+        "team.red.update_count": 0.0,
+        "team.red.updated": 0.0,
+        "throughput_sps": 2170.979560211936,
+        "train_episode_reward_mean": -293.38543701171875,
+        "update_idx": 2604,
+        "wall_time_s": 57574.01050233655
+      },
+      "snapshot": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/dd77ef15950643719201c0e7e336667f/terminal.json",
+      "snapshot_mtime": 1794140191.61885,
+      "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+      "status": "succeeded",
+      "training_cost": {
+        "completed_environment_steps": 124992000,
+        "cumulative_environment_steps": 124992000,
+        "device_count": 1,
+        "device_kinds": [
+          "NVIDIA RTX A6000"
+        ],
+        "loop_elapsed_seconds": 57576.51602508966,
+        "scope": "setup and loop include compilation, recording and inline evaluation; exclude topology materialization and final delivery",
+        "setup_elapsed_seconds": 14.412790105678141
+      },
+      "trial_id": "fsm-seed100"
+    }
+  ],
+  "public_summary": true,
+  "original_snapshot_sha256": "b253ff54f779076f979f691e20b831f164898de964c8f382a09ef99a16fd5212",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
+}

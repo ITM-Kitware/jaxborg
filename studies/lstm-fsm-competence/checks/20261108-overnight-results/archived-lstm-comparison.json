@@ -1,0 +1,259 @@
+{
+  "evaluation_panel": {
+    "archive_bank_label": "unseen",
+    "checks": [
+      {
+        "archived_blue": "blue-single-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "fsm",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-single-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-single-100-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-single-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-diverse-100-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "fsm",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-single-100-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-42-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-diverse-100-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-single-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "fsm",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-single-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-single-42-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-single-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-diverse-42-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "fsm",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-single-42-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      },
+      {
+        "archived_blue": "blue-diverse-100-final",
+        "csv_mean_recomputed": true,
+        "episode_rows": 64,
+        "episode_seed_sets_match": true,
+        "opponent": "red-diverse-42-final",
+        "topology_hash_sets_match": true,
+        "unique_layout_seed_pairs": 64
+      }
+    ],
+    "episode_roots": [
+      21000,
+      21001,
+      21002,
+      21003,
+      21004,
+      21005,
+      21006,
+      21007,
+      21008,
+      21009,
+      21010,
+      21011,
+      21012,
+      21013,
+      21014,
+      21015
+    ],
+    "episodes_per_comparison_cell": 64,
+    "horizon": 500,
+    "sampling": "stochastic",
+    "topology_sha256": [
+      "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+      "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+      "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+      "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e"
+    ],
+    "verified_archived_comparison_cells": 12
+  },
+  "fsm_comparison": [
+    {
+      "seed_returns": {
+        "100": -485.375,
+        "42": -454.953125
+      },
+      "training": "Archived co-training: single network",
+      "training_steps": 49968000,
+      "two_seed_mean": -470.1640625
+    },
+    {
+      "seed_returns": {
+        "100": -432.53125,
+        "42": -467.359375
+      },
+      "training": "Archived co-training: diverse networks",
+      "training_steps": 49968000,
+      "two_seed_mean": -449.9453125
+    },
+    {
+      "seed_returns": {
+        "100": -365.875,
+        "42": -425.78125
+      },
+      "training": "New fixed-FSM training: primary",
+      "training_steps": 49968000,
+      "two_seed_mean": -395.828125
+    },
+    {
+      "seed_returns": {
+        "100": -355.515625,
+        "42": -323.1875
+      },
+      "training": "New fixed-FSM training: extension",
+      "training_steps": 124992000,
+      "two_seed_mean": -339.3515625
+    }
+  ],
+  "inputs": {
+    "archived_episode_rows": {
+      "path": "~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/episodes.csv",
+      "sha256": "a75cd2b32c84d35b453a82b5cf019e7fb760c90287e12a6bdb929401addc3cf8"
+    },
+    "archived_policy_means": {
+      "path": "~/Documents/Codex/2026-11-07/task/lstm-check-20261107T170233Z/analysis/policy-means.csv",
+      "sha256": "6777a073589b5376ca078ba8e842d7afa4af7595365cc8db150d8d9f93ddf7f0"
+    },
+    "new_run_status": {
+      "path": "~/Documents/Codex/2026-11-07/task/fsm-result-status-20261108T105949.json",
+      "sha256": "b253ff54f779076f979f691e20b831f164898de964c8f382a09ef99a16fd5212"
+    }
+  },
+  "interpretation": {
+    "budget": "The extension uses approximately 2.5 times the budget (124,992,000 versus 49,968,000 transitions); it is not an equal-budget comparison.",
+    "equal_budget_fsm": "New fixed-FSM means exceed both corresponding archived single- and diverse-network co-trained LSTM means at 49,968,000 steps.",
+    "exact_budget_ratio": 2.5014409221902016,
+    "learned_opponents": "Against other-lineage diverse-trained Reds, the new extended 125M policies remain about 302\u2013305 return points below archived diverse-trained Blues. Single-trained Red comparisons are mixed.",
+    "missing": "Only seed 42 versus red-diverse-100-final has a completed equal-budget learned-Red cell among this other-lineage panel at the retained snapshot. The other primary cells are pending recovery."
+  },
+  "new_status_observed_at": "2026-11-08T10:59:49.582272-05:00",
+  "other_lineage_learned_red_comparison": [
+    {
+      "archived_diverse_49968000": -714.28125,
+      "archived_single_49968000": -719.390625,
+      "blue_seed": 42,
+      "new_extension_minus_archived_diverse": 25.859375,
+      "new_fsm_124992000": -688.421875,
+      "new_fsm_49968000": null,
+      "opponent": "red-single-100-final"
+    },
+    {
+      "archived_diverse_49968000": -2594.375,
+      "archived_single_49968000": -2543.265625,
+      "blue_seed": 42,
+      "new_extension_minus_archived_diverse": -304.875,
+      "new_fsm_124992000": -2899.25,
+      "new_fsm_49968000": -2920.71875,
+      "opponent": "red-diverse-100-final"
+    },
+    {
+      "archived_diverse_49968000": -925.984375,
+      "archived_single_49968000": -991.734375,
+      "blue_seed": 100,
+      "new_extension_minus_archived_diverse": -103.796875,
+      "new_fsm_124992000": -1029.78125,
+      "new_fsm_49968000": null,
+      "opponent": "red-single-42-final"
+    },
+    {
+      "archived_diverse_49968000": -2695.78125,
+      "archived_single_49968000": -2488.640625,
+      "blue_seed": 100,
+      "new_extension_minus_archived_diverse": -301.90625,
+      "new_fsm_124992000": -2997.6875,
+      "new_fsm_49968000": null,
+      "opponent": "red-diverse-42-final"
+    }
+  ],
+  "provenance_qualifications": {
+    "archived_evaluation_backend": "GPU",
+    "archived_evaluation_source": "1545af8cb381ab2027c79814353b4b4963c7754c",
+    "limits": [
+      "The evaluation sources and hardware differ; matched declared cases do not establish bit-identical trajectories.",
+      "The exact archived training source and original stock training-layout bytes remain unavailable.",
+      "Only two training seeds are available; comparisons are descriptive and no confidence interval or significance claim is made.",
+      "Old Blues had different learned-opponent co-training exposure; selecting the other-seed Red lineage avoids their own co-trained Red but does not establish an independent holdout population.",
+      "These results do not isolate the causal effect of opponent choice, demonstrate broad robustness, or establish SOTA."
+    ],
+    "new_evaluation_backend": "CPU",
+    "new_evaluation_source": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+    "source_diff_review": "A separate source-diff review found no changes to the environment, LSTM rollout, or scripts/eval implementations between these evaluation revisions. Differences concern recording, training/resume, and H-MARL import paths; the H-MARL paths are not used by these LSTM comparisons."
+  },
+  "schema_version": 1,
+  "public_summary": true,
+  "original_snapshot_sha256": "594476202abc395b81083d57af9fb82254d00866f25c780ccee3171b7d6bf49b",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
+}

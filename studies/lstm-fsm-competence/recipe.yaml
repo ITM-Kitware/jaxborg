@@ -1,0 +1,63 @@
+meta:
+  name: lstm_fsm_competence
+  source: Current separate-LSTM competence baseline against stock FSM Red
+  added: '2026-11-07'
+  notes: |
+    Blue-only training in the unchanged stock game. The recipe retains the
+    archived diverse-LSTM Blue settings, with fixed scripted opposition.
+    Primary comparison is retained at 49,968,000 transitions (update 1,041).
+    The overnight extension completes 124,992,000 transitions (2,604 updates).
+algorithm: ippo
+cage4_enhanced_obs: true
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 1
+    seed: null
+    deterministic: false
+core:
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  anneal_lr: false
+arch:
+  name: recurrent
+  hidden_dim: 256
+  hidden_layers: 1
+  activation: tanh
+  cell: lstm
+  trunk: separate
+train:
+  teams: blue
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 125000000
+  variant: cc4_stock
+  topology_generation:
+    generator: jax
+    seed_start: 0
+    count: 100
+    cache_dir: .bank_cache/topologies/lstm-fsm-competence/train
+eval:
+  variant: cc4_stock
+  topology_generation:
+    generator: jax
+    seed_start: 200
+    count: 4
+    cache_dir: .bank_cache/topologies/lstm-fsm-competence/eval
+  topology_sampling: exhaustive
+  checkpoint_scripted_reds:
+    enabled: false
+  after_training: []
+jax:
+  num_envs: 96
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20

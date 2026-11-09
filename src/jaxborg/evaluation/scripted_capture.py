@@ -13,12 +13,12 @@ from jaxborg.evaluation.capture_store import (
     record_episode,
     start_evaluation,
 )
-from jaxborg.evaluation.joint_capture import fact, outside_source
+from jaxborg.evaluation.joint_capture import fact, outside_source, retained_json
 from jaxborg.evaluation.provenance import collect_provenance, topology_evidence
 from jaxborg.evaluation.tracking import destination_configured
 
 
-def run_scripted(model, *, context, **kwargs):
+def run_scripted(model, *, context, return_capture=False, **kwargs):
     root = outside_source(context["root"])
     records = load_records(root)
     artifact = next(record for record in records if record["id"] == context["checkpoint"])
@@ -33,12 +33,12 @@ def run_scripted(model, *, context, **kwargs):
         raise ValueError("Requested model differs from owned checkpoint")
     project = Path(__file__).resolve().parents[3]
     provenance = collect_provenance(
-        entrypoint=project / "scripts/eval/eval_scripted_reds_jax.py",
-        source_roots=(project / "scripts/eval",),
+        entrypoint=context.get("entrypoint") or project / "scripts/eval/eval_scripted_reds_jax.py",
+        source_roots=(project / "scripts/eval", *context.get("source_roots", ())),
         expected_revision=context["revision"],
         allow_dirty=context.get("allow_dirty", False),
     )
-    _, rows = _run_scripted(
+    capture, rows = _run_scripted(
         root=root,
         protocol=json.loads((root / "protocol.json").read_text()),
         trial_id=context["trial_id"],
@@ -46,10 +46,11 @@ def run_scripted(model, *, context, **kwargs):
         source_recipe=context["source_recipe"],
         effective_recipe=context["effective_recipe"],
         retained_inputs={"blue checkpoint": artifact["id"]},
+        condition_check=context.get("condition_check"),
         training={"training_checkpoint_artifact_id": artifact["id"], "training_attempt_id": owner["id"]},
         kwargs=kwargs,
     )
-    return rows
+    return (capture, rows) if return_capture else rows
 
 
 def run_frozen_scripted(
@@ -165,7 +166,10 @@ def _run_scripted(
             sampling="exhaustive",
         ),
     }
-    configuration = json_configuration({**kwargs, **discovery, "execution": provenance.configuration})
+    trajectories = kwargs.pop("trajectories", False)
+    configuration = json_configuration(
+        {**kwargs, **discovery, "trajectories": trajectories, "execution": provenance.configuration}
+    )
     if condition_check is not None:
         condition_check(configuration)
     capture = start_evaluation(
@@ -225,7 +229,26 @@ def _run_scripted(
                 except Exception as error:
                     print(f"MLflow evaluation metrics warning: {error}", flush=True)
 
-        rows = evaluate_jax_scripted_reds(capture.inputs["blue checkpoint"], on_row=observe, **kwargs)
+        def trace(index, values):
+            retained_json(
+                capture,
+                f"trajectories/{index}.json",
+                {
+                    "schema_version": 1,
+                    "eval_env": "jax_fsm",
+                    "episode_index": index,
+                    "steps": values,
+                    "meaning": "policy decisions and whole-step outcomes; recovery flags are attempts",
+                },
+                "JAX policy trajectory",
+            )
+
+        rows = evaluate_jax_scripted_reds(
+            capture.inputs["blue checkpoint"],
+            on_row=observe,
+            **({"on_trajectory": trace} if trajectories else {}),
+            **kwargs,
+        )
         provenance.verify_sources()
         finish_evaluation(capture, status="succeeded")
         return capture, rows

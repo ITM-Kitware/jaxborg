@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "check_id": "behavior-20261108",
+  "study_id": "lstm-fsm-competence",
+  "question": "What decisions and consequences change between the primary and final Blue checkpoints against FSM and a strong archived learned Red?",
+  "training_trial": "fsm-seed42",
+  "training_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+  "checkpoint_steps": [49968000, 124992000],
+  "opponents": ["fsm", "red-diverse-100-final"],
+  "topology_source_seeds": [200, 201, 202, 203],
+  "episode_roots": [21000],
+  "horizon": 500,
+  "deterministic": false,
+  "selection": "The first reserved episode root and all four declared evaluation layouts; chosen by index before inspecting case returns. No checkpoint or episode is selected by its outcome.",
+  "interpretation": "Exploratory case study: four paired episodes per opponent, one trained Blue lineage. Paired checkpoint cases share layout/root within an opponent; FSM and learned opponents use different RNG contracts. Every archived learned Red is unseen during this FSM-only Blue training. These traces do not estimate population behavior or identify optimization causality.",
+  "requirements": [
+    "Retain exact source, checkpoint, sidecar, topology, reference evaluation and episode identities.",
+    "Require each new return to equal its retained canonical same-case return; retain discrepancies and withhold behavioral interpretation on mismatch.",
+    "Separate submitted actions, genuine idle decisions, forced busy Sleep, pending actions and completed actions.",
+    "Normalize choices by genuine decision opportunities and report legal action and owned host/subnet opportunities.",
+    "Treat Blue observations as available evidence and simulator compromise state as diagnostic ground truth; do not conflate them.",
+    "Report reward components, Green consequences, target state changes and route occupancy alongside frequencies.",
+    "Report incomplete cells as missing; do not substitute another checkpoint or opponent."
+  ]
+}

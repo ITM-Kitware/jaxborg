@@ -189,6 +189,9 @@ def test_recorded_training_completes_independently_of_tracking_delivery(
     records = load_records(recording["root"])
     attempt = next(record for record in records if record["kind"] == "attempt")
     assert attempt["status"] == "succeeded"
+    assert attempt["facts"]["trainable_teams"]["value"] == ["blue", "red"]
+    assert attempt["facts"]["opponents"]["value"] == {}
+    assert attempt["facts"]["builder"]["value"]["function"] == "make_joint_jax_env"
     assert {budget["unit"]: budget["completed"] for budget in attempt["budgets"]} == {
         "environment_steps": 4,
         "joint_rollout_updates": 2,

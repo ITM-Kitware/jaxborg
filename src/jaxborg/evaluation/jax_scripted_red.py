@@ -171,7 +171,7 @@ def _blue_policy_action_masks(env: Any, state: Any, agents: Sequence[str]) -> ja
 
 @partial(
     jax.jit,
-    static_argnames=("policy_module", "env", "num_steps", "deterministic"),
+    static_argnames=("policy_module", "env", "num_steps", "deterministic", "record_trajectory"),
 )
 def _run_jax_scripted_red_episode_scan(
     policy_weights: Any,
@@ -183,7 +183,8 @@ def _run_jax_scripted_red_episode_scan(
     env: Any,
     num_steps: int,
     deterministic: bool,
-) -> tuple[jax.Array, jax.Array]:
+    record_trajectory: bool = False,
+):
     """Compile Blue inference, scripted Red, and CIA scoring for an episode."""
 
     key, reset_key = jax.random.split(key)
@@ -208,7 +209,7 @@ def _run_jax_scripted_red_episode_scan(
         # extras children. Retain its transition child while bypassing the
         # terminal auto-reset needed for final-state CIA scoring.
         transition_key = jax.random.split(step_key, 3)[0]
-        next_obs, next_state, rewards, dones, _ = env.step_env(
+        next_obs, next_state, rewards, dones, info = env.step_env(
             transition_key,
             current_state,
             actions,
@@ -219,18 +220,33 @@ def _run_jax_scripted_red_episode_scan(
             next_state.extras["host_resilience_role"],
         )
         done = jnp.asarray(dones["__all__"], dtype=jnp.bool_)
-        return rng, next_obs, next_state, reward, cia, done, policy_carry
+        trace = None
+        if record_trajectory:
+            from jaxborg.evaluation.behavior_trace import behavior_fields
+
+            trace = {
+                "blue_observations": obs_batch,
+                "blue_actions": selected,
+                "blue_reward": reward,
+                "done": done,
+                "valid": jnp.bool_(True),
+                **behavior_fields(
+                    current_state, next_state, selected, mask_batch, info, blue_block_policy=env.blue_block_policy
+                ),
+            }
+        return (rng, next_obs, next_state, reward, cia, done, policy_carry), trace
 
     def _scan_step(carry, _):
         rng, current_obs, current_state, active, reward_sum, cia_sum, valid_steps, policy_carry = carry
 
         def run_active(_):
-            next_rng, next_obs, next_state, reward, cia, done, next_policy_carry = _active_step(
+            result, trace = _active_step(
                 rng,
                 current_obs,
                 current_state,
                 policy_carry,
             )
+            next_rng, next_obs, next_state, reward, cia, done, next_policy_carry = result
             return (
                 next_rng,
                 next_obs,
@@ -240,9 +256,30 @@ def _run_jax_scripted_red_episode_scan(
                 cia_sum + cia,
                 valid_steps + jnp.int32(1),
                 next_policy_carry,
-            )
+            ), trace
 
         def keep_terminal(_):
+            trace = None
+            if record_trajectory:
+                from jaxborg.evaluation.behavior_trace import behavior_fields
+
+                terminal_actions = jnp.zeros(len(blue_agents), dtype=jnp.int32)
+                terminal_masks = _blue_policy_action_masks(env, current_state, blue_agents)
+                trace = {
+                    "blue_observations": jnp.stack([current_obs[name] for name in blue_agents]),
+                    "blue_actions": terminal_actions,
+                    "blue_reward": jnp.float32(0),
+                    "done": jnp.bool_(True),
+                    "valid": jnp.bool_(False),
+                    **behavior_fields(
+                        current_state,
+                        current_state,
+                        terminal_actions,
+                        terminal_masks,
+                        {},
+                        blue_block_policy=env.blue_block_policy,
+                    ),
+                }
             return (
                 rng,
                 current_obs,
@@ -252,9 +289,9 @@ def _run_jax_scripted_red_episode_scan(
                 cia_sum,
                 valid_steps,
                 policy_carry,
-            )
+            ), trace
 
-        return jax.lax.cond(active, run_active, keep_terminal, operand=None), None
+        return jax.lax.cond(active, run_active, keep_terminal, operand=None)
 
     scan_carry = (
         key,
@@ -266,11 +303,13 @@ def _run_jax_scripted_red_episode_scan(
         jnp.int32(0),
         initial_carry(policy_module, len(blue_agents)),
     )
-    final_carry, _ = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
+    final_carry, trajectory = jax.lax.scan(_scan_step, scan_carry, xs=None, length=num_steps)
     reward_sum = final_carry[4]
     cia_sum = final_carry[5]
     valid_steps = final_carry[6]
     cia_mean = jnp.where(valid_steps > 0, cia_sum / jnp.maximum(valid_steps, 1), zero_cia)
+    if record_trajectory:
+        return reward_sum, cia_mean, trajectory
     return reward_sum, cia_mean
 
 
@@ -284,6 +323,7 @@ def _run_jax_scripted_red_episodes_batched(
     batch_size: int | None = None,
     progress: bool = False,
     progress_label: str = "",
+    on_trajectory=None,
 ) -> list[JaxScriptedRedEpisode]:
     """Evaluate many fixed-topology episodes per compiled call via ``jax.vmap``.
 
@@ -305,6 +345,7 @@ def _run_jax_scripted_red_episodes_batched(
         env=env,
         num_steps=variant.num_steps,
         deterministic=deterministic,
+        **({"record_trajectory": True} if on_trajectory is not None else {}),
     )
     # Weights are shared across the batch; keys, topologies and roles vary.
     batched = jax.vmap(scan, in_axes=(None, 0, 0, 0))
@@ -316,13 +357,23 @@ def _run_jax_scripted_red_episodes_batched(
     episodes: list[JaxScriptedRedEpisode] = []
     for start in range(0, count, chunk):
         stop = min(start + chunk, count)
-        reward_batch, cia_batch = batched(
+        result = batched(
             policy.weights,
             _padded_batch(keys, start, stop, chunk),
             _padded_batch(indices, start, stop, chunk),
             _padded_batch(roles, start, stop, chunk),
         )
-        reward_batch, cia_batch = jax.device_get((reward_batch, cia_batch))
+        result = jax.device_get(result)
+        reward_batch, cia_batch = result[:2]
+        if on_trajectory is not None:
+            for offset in range(stop - start):
+                length = int(np.asarray(result[2]["valid"][offset]).sum())
+                values = {
+                    name: np.asarray(value[offset])[:length].tolist()
+                    for name, value in result[2].items()
+                    if name != "valid"
+                }
+                on_trajectory(start + offset, values)
         rewards = np.asarray(reward_batch)[: stop - start]
         cia_rows = np.asarray(cia_batch)[: stop - start]
         episodes.extend(
@@ -491,6 +542,7 @@ def evaluate_jax_scripted_reds(
     policy_loader: Callable[..., LoadedMatchupPolicy] | None = None,
     env_factory: Callable[..., Any] | None = None,
     episode_runner: Callable[..., JaxScriptedRedEpisode] | None = None,
+    on_trajectory=None,
 ) -> list[dict[str, Any]]:
     """Evaluate trained Blue against scripted Reds on an exhaustive bank."""
 
@@ -528,6 +580,8 @@ def evaluate_jax_scripted_reds(
         raise RuntimeError("model changed while loading evaluation policy")
     if policy.source.get("bundle_trainable") is False:
         raise ValueError(f"model bundle marks Blue as frozen, not trained: {resolved_model}")
+    if on_trajectory is not None and (policy.backend != "jax" or episode_runner is not None):
+        raise ValueError("Scripted policy trajectories require the native JAX evaluator")
     make_env = env_factory or make_jax_env
     run_episode = episode_runner or run_jax_scripted_red_episode
     run = source_recipe.get("run", {})
@@ -536,7 +590,7 @@ def evaluate_jax_scripted_reds(
     role_maps = _topology_role_maps(cases)
     rows: list[dict[str, Any]] = []
 
-    for red in normalised_reds:
+    for red_index, red in enumerate(normalised_reds):
         variant = _scripted_variant(base_variant, red)
         env = make_env(
             variant,
@@ -556,8 +610,15 @@ def evaluate_jax_scripted_reds(
                 deterministic=deterministic,
                 progress=progress,
                 progress_label=f"{red} ",
+                **(
+                    {"on_trajectory": lambda index, values: on_trajectory(red_index * len(cases) + index, values)}
+                    if on_trajectory is not None
+                    else {}
+                ),
             )
         else:
+            if on_trajectory is not None:
+                raise ValueError("Scripted trajectories require fixed-topology native JAX batching")
             for index, case in enumerate(cases, 1):
                 result = run_episode(
                     policy,

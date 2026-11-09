@@ -1,0 +1,277 @@
+{
+  "analysis_sources": {
+    "build_compact_panel.py": {
+      "content": "\"\"\"Freeze compact numeric evidence from the maintained behavior analyzer output.\"\"\"\n\nimport argparse\nfrom collections import Counter\nimport hashlib\nimport json\nfrom pathlib import Path\n\n\ndef digest(path):\n    return hashlib.sha256(Path(path).read_bytes()).hexdigest()\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument('check', type=Path)\n    parser.add_argument('output', type=Path)\n    args = parser.parse_args()\n    if args.output.exists():\n        raise FileExistsError(args.output)\n    plan_path = args.check / 'plan.json'\n    summary_path = args.check / 'analysis/summary.json'\n    plan = json.loads(plan_path.read_text())\n    summary = json.loads(summary_path.read_text())\n    if summary['plan_sha256'] != digest(plan_path) or summary['missing_cells']:\n        raise ValueError('Complete frozen panel required')\n    episodes = [{key: e[key] for key in ('cell', 'checkpoint_steps', 'opponent', 'case', 'trace_artifact', 'trace_sha256',\n                'totals', 'chosen_counts', 'completed_counts', 'idle_decisions_with_available_type',\n                'host_coverage_of_idle_opportunities')} for e in summary['episodes']]\n    cells = []\n    for cell in plan['cells']:\n        receipt_path = args.check / 'cells' / cell['id'] / 'receipt.json'\n        receipt = json.loads(receipt_path.read_text())\n        if not receipt['canonical_parity']:\n            raise ValueError('Canonical parity failed')\n        selected = [e for e in episodes if e['cell'] == cell['id']]\n        totals, chosen = Counter(), Counter()\n        for e in selected:\n            totals.update(e['totals'])\n            chosen.update(e['chosen_counts'])\n        cells.append({'cell': cell['id'], 'evaluation_id': receipt['evaluation_id'], 'receipt_sha256': digest(receipt_path),\n                      'episodes': len(selected), 'checkpoint': cell['checkpoint'], 'canonical_parity': True,\n                      'pooled_totals': dict(totals), 'mean_totals_per_episode': {k: v/len(selected) for k,v in totals.items()},\n                      'pooled_chosen_counts': dict(chosen),\n                      'chosen_share_of_genuine_idle_decisions': {k: v/totals['idle_decisions'] for k,v in chosen.items()}})\n    output = {'schema_version': 1, 'evaluation_source_revision': plan['source_revision'],\n              'training_source_revision': plan['protocol']['training_source_revision'],\n              'check_root': str(args.check.resolve()), 'plan_sha256': digest(plan_path),\n              'maintained_summary_sha256': digest(summary_path), 'builder_sha256': digest(__file__),\n              'analysis_source_sha256': summary['analyzer_sha256'], 'protocol': plan['protocol'],\n              'topologies': plan['topologies'], 'red': plan['red'], 'cells': cells, 'episodes': episodes,\n              'paired_cases': summary['paired_cases'],\n              'limits': summary['limits'] + ['On-policy states diverge; these are not same-state action preference tests.',\n                         'The four-root21000 cases are exploratory and do not replace the64-case checkpoint score panels.']}\n    args.output.write_text(json.dumps(output, indent=2, sort_keys=True) + '\\n')\n    print(json.dumps({'path':str(args.output),'sha256':digest(args.output),'bytes':args.output.stat().st_size}))\n\n\nif __name__ == '__main__':\n    main()\n",
+      "sha256": "e16605313375195981c98bd76319baf091f925d313cfbfeed5d08e7c77a695fc"
+    },
+    "case_diagnostics.py": {
+      "content": "\"\"\"Read parity-checked traces for per-agent and per-host descriptive diagnostics.\"\"\"\n\nimport argparse\nfrom collections import Counter, defaultdict\nimport hashlib\nimport json\nfrom pathlib import Path\n\nimport numpy as np\n\nNAMES = ('Sleep', 'Monitor', 'Analyse', 'Remove', 'Restore', 'Decoy', 'Block', 'Allow')\nSUBNETS = ('restricted A', 'restricted B', 'operational A', 'operational B', 'contractor', 'admin', 'office', 'public', 'internet')\n\n\ndef sha(path):\n    return hashlib.sha256(Path(path).read_bytes()).hexdigest()\n\n\ndef diagnose(values, weights):\n    agents = [Counter() for _ in range(5)]\n    hosts = defaultdict(Counter)\n    remediation = []\n    phases = defaultdict(Counter)\n    for t, actions in enumerate(values['blue_actions']):\n        phase = int(values['post_mission_phase'][t])\n        for component in ('reward_ria', 'reward_lwf', 'reward_asf', 'action_cost'):\n            phases[phase][component] += values[component][t]\n        active = values['host_active'][t]\n        subnet = values['host_subnet'][t]\n        for host, enabled in enumerate(active):\n            if not enabled:\n                continue\n            record = hosts[host]\n            record['subnet'] = int(subnet[host])\n            record['compromised_ticks'] += int(values['post_host_compromised'][t][host] > 0)\n            record['privileged_ticks'] += int(values['post_host_compromised'][t][host] == 2)\n            for field, label, offset in [('green_lwf_hosts', 'lwf', 0), ('green_asf_hosts', 'asf', 1), ('red_impact_hosts', 'ria', 2)]:\n                marked = bool(values[field][t][host])\n                record[label + '_count'] += int(marked)\n                record[label + '_penalty'] += float(marked * weights[phase, int(subnet[host]), offset])\n        for agent, action in enumerate(actions):\n            if values['blue_busy'][t][agent]:\n                agents[agent]['forced_wait_ticks'] += 1\n                continue\n            kind = int(values['blue_submitted_type'][t][agent])\n            host = int(values['blue_submitted_host'][t][agent])\n            agents[agent][NAMES[kind]] += 1\n            agents[agent]['idle_decisions'] += 1\n            if host >= 0:\n                hosts[host]['chosen_' + NAMES[kind]] += 1\n            if kind in (3, 4):\n                remediation.append({'row': t, 'agent': agent, 'host': host, 'action': NAMES[kind],\n                                    'pre_compromised': values['pre_host_compromised'][t][host],\n                                    'post_compromised': values['post_host_compromised'][t][host]})\n    for label in ('lwf', 'asf', 'ria'):\n        expected = sum(values['reward_' + label])\n        actual = sum(h[label + '_penalty'] for h in hosts.values())\n        if abs(actual - expected) > 1e-4:\n            raise ValueError(f'{label} host accounting mismatch: {actual} != {expected}')\n    return {'agents': [dict(x) for x in agents], 'hosts': {str(h): {**dict(x), 'subnet_name': SUBNETS[x['subnet']]} for h, x in hosts.items()},\n            'phase_rewards': dict(phases), 'remediation_starts': remediation}\n\n\ndef main():\n    from jaxborg.evaluation.capture_store import load_records\n\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument('--plan', type=Path, required=True)\n    parser.add_argument('--summary', type=Path, required=True)\n    parser.add_argument('--output', type=Path, required=True)\n    args = parser.parse_args()\n    if args.output.exists():\n        raise FileExistsError(args.output)\n    plan = json.loads(args.plan.read_text())\n    summary = json.loads(args.summary.read_text())\n    if summary['plan_sha256'] != sha(args.plan):\n        raise ValueError('Summary/plan identity mismatch')\n    evidence = Path(plan['study_root']) / 'evidence'\n    records = {r['id']: r for r in load_records(evidence)}\n    outputs, first_paths, divergence = [], {}, []\n    for episode in summary['episodes']:\n        artifact = records[episode['trace_artifact']]\n        path = evidence / artifact['uri']\n        if sha(path) != episode['trace_sha256']:\n            raise ValueError('Trace hash mismatch')\n        values = json.loads(path.read_text())['steps']\n        topology_index = episode['case']['topology_index']\n        snapshot = plan['topologies'][topology_index]\n        if sha(snapshot['path']) != snapshot['sha256']:\n            raise ValueError('Topology hash mismatch')\n        with np.load(snapshot['path'], allow_pickle=False) as topology:\n            data = diagnose(values, topology['phase_rewards'])\n        outputs.append({'cell': episode['cell'], 'case': episode['case'], 'trace_sha256': artifact['sha256'], **data})\n        key = (episode['opponent'], topology_index, episode['case']['episode_root'])\n        compact = {k: values[k] for k in ('blue_actions', 'blue_observations', 'blue_action_masks', 'blue_submitted_type', 'blue_submitted_host')}\n        if key in first_paths:\n            prior = first_paths.pop(key)\n            first = next((t for t in range(len(values['blue_actions'])) if prior['blue_actions'][t] != values['blue_actions'][t]), None)\n            divergence.append({'opponent': key[0], 'topology_index': key[1], 'episode_root': key[2], 'first_sampled_action_difference_row': first,\n                'observations_equal_at_first_difference': first is not None and prior['blue_observations'][first] == values['blue_observations'][first],\n                'masks_equal_at_first_difference': first is not None and prior['blue_action_masks'][first] == values['blue_action_masks'][first],\n                'primary_action_types': None if first is None else prior['blue_submitted_type'][first],\n                'final_action_types': None if first is None else values['blue_submitted_type'][first],\n                'primary_hosts': None if first is None else prior['blue_submitted_host'][first],\n                'final_hosts': None if first is None else values['blue_submitted_host'][first]})\n        else:\n            first_paths[key] = compact\n    result = {'plan_sha256': sha(args.plan), 'summary_sha256': sha(args.summary), 'source_sha256': sha(__file__),\n              'episodes': outputs, 'first_divergence': divergence,\n              'meaning': 'Descriptive on-policy state/action diagnostics. Net states and host costs are not individual-action causal effects.'}\n    args.output.write_text(json.dumps(result, indent=2, sort_keys=True) + '\\n')\n    print(json.dumps({'episodes': len(outputs), 'pairs': len(divergence), 'output': str(args.output)}))\n\n\nif __name__ == '__main__':\n    main()\n",
+      "sha256": "34f7e347ba339d352f47794bbb72ee1831cfb4b9ad668e4ccded45b615c8b302"
+    },
+    "compact_learned_case.py": {
+      "content": "\"\"\"Read retained layout200 traces; write a new compact paired evidence file.\"\"\"\nimport collections\nimport hashlib\nimport json\nimport pathlib\nimport sys\n\nimport numpy as np\n\nOUT = pathlib.Path(sys.argv[1]).expanduser()\nsys.path.insert(0, str(OUT))\nimport mechanism_probe as probe\n\nfull = json.loads((OUT / 'full-agent-host-diagnostics.json').read_text())\nold = json.loads((OUT / 'paired-fsm-compact-evidence.json').read_text())\nresult = {k: old[k] for k in ['schema_version', 'trace_source_revision',\n    'canonical_evaluation_source_revision', 'training_seed', 'episode_root',\n    'phase_boundaries', 'visible_plane_columns', 'probe_sha256']}\nresult['layout'] = 200\nresult['opponent'] = 'red-diverse-100-final'\nresult['weighted_host_cost_columns'] = ['host','subnet','LWF','RIA','ASF']\nresult['selected_tick_columns'] = ['tick','post_phase','submitted_action_id',\n    'submitted_action','submitted_host','busy','pending_ticks','pending_action_id',\n    'analyse_remove_restore_structural_masks','analyse_remove_restore_policy_masks',\n    'effective_action','effective_host','completes','visible_before','visible_next_tick',\n    'pre_compromised','post_compromised','pre_sessions','post_sessions',\n    'pre_service_reliability','post_service_reliability','pre_OT_stopped','post_OT_stopped',\n    'completed_recovery_attempt_flag','Red_idle_choices_targeting_host']\nresult['interpretation'] = old['interpretation'] + [\n    'RIA records penalized Impact attempts, including repeated attempts on already stopped OT; it is not a count of new outages.',\n    'Red Withdraw can clear all sessions without Blue remediation. Red decision rows are gated by active and pre-step pending ticks zero.',\n    'Case-paired trajectories have the same topology and root but diverged states; selective repair examples do not establish common-state preference or causal attribution of every return difference.',\n    'Service reliability vectors include all five service slots; the snapshot determines which services exist.',\n    'Mission-permitted route occupancy is from exact snapshot allowed_subnet_pairs and post-step phase.']\nresult['cells'] = []\nnames = ['aggressive_scan','stealth_scan','discover_deception','exploit',\n         'privilege_escalate','impact','degrade','withdraw']\nfocus = {73:0,86:2,31:1,38:1,44:3,46:3}\nticks = {\n 'primary': {73:[49,63,212,216],\n  86:[119,382,386],31:[153,157,207,209,343],\n  38:[168,170,340,344],44:[34],46:[226,403]},\n 'final': {73:[45,46,49,53,164],\n  86:[119,123],31:[246,248,449],\n  38:[168,453,476],44:[34,461],46:[190,403]}}\n\nfor label,checkpoint in [('primary',49968000),('final',124992000)]:\n    analysis = json.loads((OUT / f'{label}-learned-layout200-probe.json').read_text())\n    trace_path = pathlib.Path(analysis['inputs']['trace'])\n    raw = trace_path.read_bytes()\n    assert hashlib.sha256(raw).hexdigest() == analysis['inputs']['trace_sha256']\n    trace = json.loads(raw)\n    s = trace['steps']\n    topo = dict(np.load(analysis['inputs']['topology'], allow_pickle=False))\n    diag = next(e for e in full['episodes'] if e['cell']==f'{checkpoint}-red-diverse-100-final'\n                and e['case']['topology_index']==0 and e['case']['episode_root']==21000)\n    def red_choices(t,h):\n        found=[]\n        for r,x in enumerate(s['red_actions'][t]):\n            if not s['red_active_before'][t][r] or s['red_pending_ticks_before'][t][r] != 0: continue\n            if 10 <= x < 10+8*137 and (x-10)%137 == h:\n                found.append([r,names[(x-10)//137],x])\n        return found\n    def slot(a,h):\n        return next(k for k in range(48) if int(topo['blue_obs_subnets'][a][k//16])>=0\n            and int(topo['obs_host_map'][int(topo['blue_obs_subnets'][a][k//16])][k%16])==h)\n    def planes(t,a,k):\n        if t>=len(s['blue_actions']): return None\n        v=s['blue_observations'][t][a]; base=1+(k//16)*59\n        return [v[210+k],v[258+k],v[306+k],v[354+k],v[402+k],\n                v[base+27+k%16],v[base+43+k%16]]\n    def row(t,a,h,k):\n        ids=[2+k,50+k,98+k]\n        return [t,s['post_mission_phase'][t],s['blue_actions'][t][a],\n          probe.ACTION_NAMES[s['blue_submitted_type'][t][a]],s['blue_submitted_host'][t][a],\n          s['blue_busy'][t][a],s['blue_pending_ticks'][t][a],s['blue_pending_action'][t][a],\n          [s['blue_structural_masks'][t][a][i] for i in ids],\n          [s['blue_action_masks'][t][a][i] for i in ids],\n          probe.ACTION_NAMES[s['blue_effective_type'][t][a]],s['blue_effective_host'][t][a],\n          s['blue_effective_completes'][t][a],planes(t,a,k),planes(t+1,a,k),\n          s['pre_host_compromised'][t][h],s['post_host_compromised'][t][h],\n          probe.session_count(s,'pre',t,h),probe.session_count(s,'post',t,h),\n          s['pre_host_service_reliability'][t][h],s['post_host_service_reliability'][t][h],\n          s['pre_ot_service_stopped'][t][h],s['post_ot_service_stopped'][t][h],\n          s['blue_recovery_attempt_completed'][t][h],red_choices(t,h)]\n    cell={'checkpoint':label,'training_steps':checkpoint,'trace':analysis['inputs'],\n          'canonical_episode_receipt':diag['case'],'return_components':analysis['reward_components'],\n          'agents':diag['agents'],'alert_summary':analysis['alert_summary'],\n          'mission_route_occupancy':analysis['mission_route_occupancy'],\n          'weighted_host_costs':[[int(h),d['subnet'],d['lwf_penalty'],d['ria_penalty'],d['asf_penalty']]\n              for h,d in diag['hosts'].items() if d['lwf_penalty'] or d['ria_penalty'] or d['asf_penalty']],\n          'focus_hosts':[]}\n    for h,a in focus.items():\n        k=slot(a,h)\n        chosen=collections.Counter()\n        choices=[]\n        for t in range(500):\n            if not s['blue_busy'][t][a] and s['blue_submitted_host'][t][a]==h:\n                name=probe.ACTION_NAMES[s['blue_submitted_type'][t][a]]\n                chosen[name]+=1\n                if name in ('analyse','remove','restore'): choices.append([t,name,planes(t,a,k)])\n        impacts=[t for t in range(500) if s['red_impact_hosts'][t][h]]\n        withdraws=[t for t in range(500) if any(x[1]=='withdraw' for x in red_choices(t,h))]\n        selected=sorted(set(ticks[label][h]+withdraws))\n        item={'agent':a,'host':h,'subnet':int(topo['host_subnet'][h]),'relative_slot':k,\n            'restore_action':98+k,'idle_target_action_counts':dict(chosen),\n            'analyse_remove_restore_starts':[x[:2] for x in choices] if h in (73,86,31) else [],\n            'first_visible_indicator_onset':next(({key:e[key] for key in ('row','tick','channels_at_onset','status','response_tick','response_action') if key in e} for e in analysis['alert_events'] if e['agent']==a and e['host']==h),None),\n            'penalized_Impact_attempts':len(impacts),\n            'penalized_Impact_attempts_pre_OT_already_stopped':sum(bool(s['pre_ot_service_stopped'][t][h]) for t in impacts),\n            'first_last_penalized_Impact_attempt_ticks':[impacts[0],impacts[-1]] if impacts else [],\n            'Red_Withdraw_choice_ticks':withdraws,\n            'selected_ticks':[row(t,a,h,k) for t in selected] if h not in (44,46) else [],\n            'Withdraw_net_session_changes':[[t,red_choices(t,h),probe.session_count(s,'pre',t,h),probe.session_count(s,'post',t,h),s['pre_ot_service_stopped'][t][h],s['post_ot_service_stopped'][t][h],s['blue_recovery_attempt_completed'][t][h]] for t in withdraws]}\n        cell['focus_hosts'].append(item)\n    result['cells'].append(cell)\n\nresult['paired_component_delta']={k:result['cells'][1]['return_components'][k]-v\n    for k,v in result['cells'][0]['return_components'].items()}\nblob=(json.dumps(result,separators=(',',':'),sort_keys=True)+'\\n').encode()\nif len(blob)>=25000:\n    print([(c['checkpoint'],{k:len(json.dumps(v,separators=(',',':'))) for k,v in c.items()}) for c in result['cells']])\nassert len(blob)<25000,len(blob)\npath=OUT/'paired-learned-layout200-compact-evidence.json'\nwith path.open('xb') as f: f.write(blob)\nprint(json.dumps({'path':str(path),'bytes':len(blob),'sha256':hashlib.sha256(blob).hexdigest()}))\nfor cell in result['cells']:\n    print(cell['checkpoint'],[(h['host'],h['penalized_Impact_attempts'],h['penalized_Impact_attempts_pre_OT_already_stopped'],h['Red_Withdraw_choice_ticks']) for h in cell['focus_hosts']])\n",
+      "sha256": "dd5980d10f5ca721ddcb7b315df0b067ae8e21a480f88ca42c7f188912bbeaa2"
+    },
+    "mechanism_probe.py": {
+      "content": "\"\"\"Read retained behavior traces without executing policies or simulator steps.\n\nUsage: python mechanism_probe.py TRACE.json TOPOLOGY.snapshot.npz [--output REPORT.json]\nRequires NumPy only to read the topology snapshot. JSON trace analysis uses stdlib.\n\"\"\"\n\nfrom __future__ import annotations\n\nimport argparse\nimport hashlib\nimport json\nfrom collections import Counter, defaultdict\nfrom pathlib import Path\nfrom statistics import median\n\nACTION_NAMES = (\"sleep\", \"monitor\", \"analyse\", \"remove\", \"restore\", \"decoy\", \"block\", \"allow\")\nCHANNELS = (\"file\", \"process\", \"network\", \"ioc\")\nHOST_STARTS = ((2, 50, 2), (50, 98, 3), (98, 146, 4), (146, 194, 5))\n\n\ndef decode(action, agent, topology):\n    if not 0 <= action < 242:\n        raise ValueError(f\"Action outside the 242-action contract: {action}\")\n    if action < 2:\n        return action, None, None, None\n    for start, stop, kind in HOST_STARTS:\n        if start <= action < stop:\n            slot = action - start\n            subnet = topology[\"blue_obs_subnets\"][agent][slot // 16]\n            host = None if subnet < 0 else topology[\"obs_host_map\"][subnet][slot % 16]\n            if host is not None and not 0 <= host < len(topology[\"host_active\"]):\n                host = None\n            return kind, host, None, None\n    kind, offset = (6, action - 194) if action < 218 else (7, action - 218)\n    dst = topology[\"blue_obs_subnets\"][agent][offset % 3]\n    src = offset // 3\n    src += src >= dst\n    return kind, None, src, dst\n\n\ndef visible_hosts(observations, agent, topology):\n    if len(observations) != 450:\n        raise ValueError(\"Expected the enhanced-v2 450-element Blue observation\")\n    result = {}\n    for slot in range(48):\n        if not observations[210 + slot]:\n            continue\n        subnet = topology[\"blue_obs_subnets\"][agent][slot // 16]\n        if subnet < 0:\n            raise ValueError(\"Valid observation slot has no observed subnet\")\n        host = topology[\"obs_host_map\"][subnet][slot % 16]\n        if not (0 <= host < len(topology[\"host_active\"]) and topology[\"host_active\"][host]):\n            raise ValueError(\"Valid observation slot maps to an inactive or padded host\")\n        if not topology[\"blue_agent_hosts\"][agent][host]:\n            raise ValueError(\"Valid observation slot maps outside the agent's owned hosts\")\n        result[host] = tuple(\n            name for plane, name in enumerate(CHANNELS, 1) if observations[210 + plane * 48 + slot] > 0\n        )\n    return result\n\n\ndef session_count(steps, prefix, row, host):\n    field = f\"{prefix}_red_session_count\"\n    if field in steps:\n        return sum(int(agent[host]) for agent in steps[field][row])\n    return sum(bool(agent[host]) for agent in steps[f\"{prefix}_red_sessions\"][row])\n\n\ndef distribution(values):\n    return {\"n\": len(values), \"min\": min(values), \"median\": median(values), \"max\": max(values)} if values else {\"n\": 0}\n\n\ndef intervals(rows, times):\n    output = []\n    for row in rows:\n        if output and row == output[-1][\"end_row_inclusive\"] + 1:\n            output[-1][\"end_row_inclusive\"] = row\n            output[-1][\"end_tick_inclusive\"] = times[row]\n        else:\n            output.append({\"start_row\": row, \"end_row_inclusive\": row,\n                           \"start_tick\": times[row], \"end_tick_inclusive\": times[row]})\n    return output\n\n\ndef analyze(payload, topology, *, window_count=12):\n    steps = payload[\"steps\"]\n    n = len(steps[\"blue_actions\"])\n    if not n:\n        raise ValueError(\"Empty trace\")\n    if \"valid\" in steps:\n        if not all(steps[\"valid\"]):\n            raise ValueError(\"Trim invalid/padded trace rows before analysis\")\n    if any(len(row) != 5 for row in steps[\"blue_actions\"]):\n        raise ValueError(\"Expected five Blue agents\")\n    if any(len(mask) != 242 for row in steps[\"blue_action_masks\"] for mask in row):\n        raise ValueError(\"Expected the 242-action availability mask\")\n    times = [int(value) for value in steps[\"pre_step_count\"]]\n    if any(b != a + 1 for a, b in zip(times, times[1:])):\n        raise ValueError(\"Trace must contain contiguous world ticks\")\n    visible = [[visible_hosts(steps[\"blue_observations\"][t][a], a, topology) for a in range(5)] for t in range(n)]\n    decoded = [[decode(int(steps[\"blue_actions\"][t][a]), a, topology) for a in range(5)] for t in range(n)]\n    idle = [[not bool(steps[\"blue_busy\"][t][a]) for a in range(5)] for t in range(n)]\n    remediation_starts = defaultdict(list)\n    target_categories = {name: Counter() for name in ACTION_NAMES[2:6]}\n    starts = []\n    invalid_idle = []\n    idle_counts = Counter()\n    for t in range(n):\n        for a in range(5):\n            action = int(steps[\"blue_actions\"][t][a])\n            if not idle[t][a]:\n                continue\n            kind, host, _, _ = decoded[t][a]\n            idle_counts[ACTION_NAMES[kind]] += 1\n            if not steps[\"blue_action_masks\"][t][a][action]:\n                invalid_idle.append({\"row\": t, \"tick\": times[t], \"agent\": a, \"action\": action})\n            if kind not in (2, 3, 4, 5) or host is None:\n                continue\n            channels = visible[t][a].get(host, ())\n            compromised = int(steps[\"pre_host_compromised\"][t][host])\n            sessions = session_count(steps, \"pre\", t, host)\n            latent = compromised > 0 or sessions > 0\n            category = (\"visible_and_latent\" if latent else \"visible_only\") if channels else (\"latent_only\" if latent else \"neither\")\n            target_categories[ACTION_NAMES[kind]][category] += 1\n            if kind in (3, 4):\n                remediation_starts[a, host].append(t)\n                starts.append({\"row\": t, \"tick\": times[t], \"agent\": a, \"host\": host,\n                               \"action\": ACTION_NAMES[kind], \"channels\": list(channels), \"category\": category,\n                               \"pre_compromised_code\": compromised, \"pre_session_count\": sessions})\n\n    completions = []\n    for t in range(n):\n        for a in range(5):\n            kind = int(steps[\"blue_effective_type\"][t][a])\n            if kind not in (3, 4) or not steps[\"blue_effective_completes\"][t][a]:\n                continue\n            host = int(steps[\"blue_effective_host\"][t][a])\n            if not 0 <= host < len(topology[\"host_active\"]):\n                continue\n            before, after = (int(steps[f\"{prefix}_host_compromised\"][t][host]) for prefix in (\"pre\", \"post\"))\n            pre_sessions, post_sessions = (session_count(steps, prefix, t, host) for prefix in (\"pre\", \"post\"))\n            completions.append({\"row\": t, \"tick\": times[t], \"agent\": a, \"host\": host,\n                                \"action\": ACTION_NAMES[kind], \"pre_compromised_code\": before,\n                                \"post_compromised_code\": after, \"pre_session_count\": pre_sessions,\n                                \"post_session_count\": post_sessions, \"whole_step_net_sessions\": post_sessions - pre_sessions,\n                                \"whole_step_compromise_became_zero\": before > 0 and after == 0,\n                                \"visible_channels_before\": list(visible[t][a].get(host, ()))})\n\n    alert_events = []\n    for a in range(5):\n        previous = {}\n        for t in range(n):\n            for host, channels in visible[t][a].items():\n                if not channels or previous.get(host):\n                    continue\n                event = {\"row\": t, \"tick\": times[t], \"agent\": a, \"host\": host, \"channels_at_onset\": list(channels),\n                         \"pre_compromised_code_diagnostic\": int(steps[\"pre_host_compromised\"][t][host]),\n                         \"pre_session_count_diagnostic\": session_count(steps, \"pre\", t, host)}\n                same_pending = (not idle[t][a] and int(steps[\"blue_effective_type\"][t][a]) in (3, 4)\n                                and int(steps[\"blue_effective_host\"][t][a]) == host)\n                first_idle = next((u for u in range(t, n) if idle[u][a]), None)\n                event[\"compulsory_busy_delay_ticks\"] = None if first_idle is None else times[first_idle] - times[t]\n                if same_pending:\n                    event[\"status\"] = \"same_host_remediation_already_pending\"\n                    end = next((u for u in range(t, n) if steps[\"blue_effective_completes\"][u][a]), None)\n                    event[\"pending_completion_row\"] = end\n                else:\n                    response = next((u for u in remediation_starts[a, host] if u >= t), None)\n                    if response is None:\n                        event.update(status=\"episode_end_censored\", followup_ticks=times[-1] - times[t] + 1,\n                                     idle_opportunities_observed=sum(idle[u][a] for u in range(t, n)))\n                    else:\n                        event.update(status=\"subsequent_idle_remediation_start\", response_row=response,\n                                     response_tick=times[response], response_action=ACTION_NAMES[decoded[response][a][0]],\n                                     latency_world_ticks=times[response] - times[t],\n                                     earlier_idle_choices=sum(idle[u][a] for u in range(t, response)),\n                                     visible_evidence_cleared_before_start=any(not visible[u][a].get(host) for u in range(t, response)))\n                        end = next((u for u in range(response, n) if steps[\"blue_effective_completes\"][u][a]), None)\n                        event[\"response_completion_row\"] = end\n                        event[\"start_to_completion_ticks\"] = None if end is None else times[end] - times[response]\n                alert_events.append(event)\n            previous = visible[t][a]\n\n    route_rows = defaultdict(list)\n    per_tick_routes = []\n    phase_route_ticks = Counter()\n    route_blocks_started = []\n    allowed = topology[\"allowed_subnet_pairs\"]\n    for t in range(n):\n        phase = int(steps[\"post_mission_phase\"][t])\n        blocks = steps[\"post_blocked_zones\"][t]\n        pairs = []\n        for source in range(9):\n            for destination in range(source + 1, 9):\n                permitted = allowed[phase][source][destination] or allowed[phase][destination][source]\n                if permitted and (blocks[source][destination] or blocks[destination][source]):\n                    route_rows[source, destination].append(t)\n                    pairs.append([source, destination])\n                    phase_route_ticks[str(phase)] += 1\n        per_tick_routes.append(pairs)\n        for a in range(5):\n            kind, _, src, dst = decoded[t][a]\n            if idle[t][a] and kind == 6 and src >= 0 and dst >= 0:\n                old = steps[\"pre_blocked_zones\"][t]\n                route_blocks_started.append({\"row\": t, \"tick\": times[t], \"agent\": a, \"src\": src, \"dst\": dst,\n                                             \"mission_phase\": phase,\n                                             \"pair_permitted_for_green\": bool(allowed[phase][src][dst] or allowed[phase][dst][src]),\n                                             \"pair_already_blocked_either_direction\": bool(old[src][dst] or old[dst][src])})\n\n    window_candidates = []\n    responded = [event for event in alert_events if event[\"status\"] == \"subsequent_idle_remediation_start\"]\n    for event in sorted(responded, key=lambda e: e[\"latency_world_ticks\"], reverse=True)[:4]:\n        window_candidates.append((\"slow_alert_response\", event[\"response_row\"], event[\"agent\"], event[\"host\"]))\n    for event in [e for e in alert_events if e[\"status\"] != \"subsequent_idle_remediation_start\"][:3]:\n        window_candidates.append((event[\"status\"], event[\"row\"], event[\"agent\"], event[\"host\"]))\n    for event in [e for e in completions if e[\"pre_session_count\"] > 0 and e[\"whole_step_net_sessions\"] >= 0][:3]:\n        window_candidates.append((\"remediation_completion_without_net_session_decrease\", event[\"row\"], event[\"agent\"], event[\"host\"]))\n    for t in range(1, n):\n        if steps[\"post_mission_phase\"][t] != steps[\"post_mission_phase\"][t - 1]:\n            window_candidates.append((\"mission_phase_boundary\", t, None, None))\n    if not window_candidates:\n        window_candidates.append((\"episode_opening\", 0, None, None))\n    windows = []\n    seen = set()\n    for label, anchor, agent, host in window_candidates:\n        first = max(0, min(anchor - 5, n - 20))\n        stop = min(n, first + 20)\n        identity = first, stop, agent, host\n        if identity in seen:\n            continue\n        seen.add(identity)\n        rows = []\n        for t in range(first, stop):\n            record = {\"row\": t, \"tick\": times[t], \"post_phase\": int(steps[\"post_mission_phase\"][t]),\n                      \"blue_actions\": [ACTION_NAMES[item[0]] for item in decoded[t]],\n                      \"blue_targets\": [item[1] for item in decoded[t]],\n                      \"blue_busy\": [not value for value in idle[t]], \"mission_pairs_blocked\": per_tick_routes[t],\n                      \"reward\": {name: steps[name][t] for name in (\"blue_reward\", \"reward_ria\", \"reward_lwf\", \"reward_asf\", \"action_cost\")}}\n            if agent is not None and host is not None:\n                record.update(visible_channels=list(visible[t][agent].get(host, ())),\n                              pre_compromised=int(steps[\"pre_host_compromised\"][t][host]),\n                              post_compromised=int(steps[\"post_host_compromised\"][t][host]),\n                              pre_sessions=session_count(steps, \"pre\", t, host),\n                              post_sessions=session_count(steps, \"post\", t, host),\n                              effective_action=ACTION_NAMES[int(steps[\"blue_effective_type\"][t][agent])],\n                              effective_host=int(steps[\"blue_effective_host\"][t][agent]),\n                              effective_completes=bool(steps[\"blue_effective_completes\"][t][agent]))\n            rows.append(record)\n        windows.append({\"reason\": label, \"anchor_row\": anchor, \"agent\": agent, \"host\": host,\n                        \"start_row\": first, \"end_row_exclusive\": stop, \"rows\": rows})\n        if len(windows) >= window_count:\n            break\n    response_reuse = Counter((e[\"agent\"], e[\"host\"], e[\"response_row\"]) for e in responded)\n    return {\n        \"schema_version\": 1, \"episode_index\": payload.get(\"episode_index\"), \"world_steps\": n,\n        \"interpretation\": [\n            \"Visible alerts include persistent history, Green false positives and blocked-access network events.\",\n            \"Alert response is temporal association; policy states and attacker opportunities can diverge across paired cases.\",\n            \"A response may match multiple prior alert onsets; counts below disclose reuse and clearing before response.\",\n            \"Remediation completion is an attempt. Net state changes span Blue, Green, Red and session reassignment.\",\n            \"Latent category means pre-step compromised code>0 or session count>0; it is unavailable to Blue as ground truth.\",\n            \"Green route occupancy uses exact allowed_subnet_pairs and post-step phase; failures do not identify the sampled route.\",\n        ],\n        \"idle_action_counts\": dict(idle_counts), \"forced_busy_rows\": sum(not value for row in idle for value in row),\n        \"invalid_idle_action_rows\": invalid_idle,\n        \"target_start_categories\": {name: dict(counts) for name, counts in target_categories.items()},\n        \"remediation_starts\": starts,\n        \"alert_summary\": {\"onsets\": len(alert_events), \"statuses\": dict(Counter(e[\"status\"] for e in alert_events)),\n                          \"latency_world_ticks\": distribution([e[\"latency_world_ticks\"] for e in responded]),\n                          \"earlier_idle_choices\": distribution([e[\"earlier_idle_choices\"] for e in responded]),\n                          \"responses_matched_to_multiple_onsets\": sum(count > 1 for count in response_reuse.values()),\n                          \"onsets_matching_reused_response\": sum(count for count in response_reuse.values() if count > 1)},\n        \"alert_events\": alert_events, \"completed_remediation_net_diagnostics\": completions,\n        \"green_failures\": {name: sum(sum(bool(value) for value in row) for row in steps[name])\n                           for name in (\"green_lwf_hosts\", \"green_asf_hosts\")},\n        \"reward_components\": {name: sum(steps[name]) for name in (\"blue_reward\", \"reward_ria\", \"reward_lwf\", \"reward_asf\", \"action_cost\")},\n        \"mission_route_occupancy\": {\"undirected_pair_ticks\": sum(len(rows) for rows in route_rows.values()),\n                                    \"by_phase\": dict(phase_route_ticks),\n                                    \"routes\": [{\"subnets\": list(pair), \"ticks\": len(rows), \"runs\": intervals(rows, times)}\n                                               for pair, rows in sorted(route_rows.items())]},\n        \"block_starts\": route_blocks_started, \"manual_windows\": windows,\n    }\n\n\ndef main():\n    parser = argparse.ArgumentParser(description=__doc__)\n    parser.add_argument(\"trace\", type=Path)\n    parser.add_argument(\"topology\", type=Path)\n    parser.add_argument(\"--output\", type=Path)\n    parser.add_argument(\"--windows\", type=int, default=12)\n    args = parser.parse_args()\n    import numpy as np\n\n    trace_bytes = args.trace.read_bytes()\n    snapshot_bytes = args.topology.read_bytes()\n    with np.load(args.topology, allow_pickle=False) as data:\n        topology = {name: data[name].tolist() for name in (\"allowed_subnet_pairs\", \"blue_obs_subnets\", \"obs_host_map\", \"host_active\", \"blue_agent_hosts\")}\n    report = analyze(json.loads(trace_bytes), topology, window_count=args.windows)\n    report[\"inputs\"] = {\"trace\": str(args.trace.resolve()), \"trace_sha256\": hashlib.sha256(trace_bytes).hexdigest(),\n                        \"topology\": str(args.topology.resolve()), \"topology_sha256\": hashlib.sha256(snapshot_bytes).hexdigest(),\n                        \"probe_sha256\": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}\n    text = json.dumps(report, indent=2, allow_nan=False) + \"\\n\"\n    if args.output:\n        args.output.parent.mkdir(parents=True, exist_ok=True)\n        args.output.write_text(text, encoding=\"utf-8\")\n    else:\n        print(text, end=\"\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+      "sha256": "1b8d9eeae9842bf4b4f4cf1c48b224021cf8cae0551712bdeb4805f7da8cb195"
+    }
+  },
+  "compact_artifact_sha256": {
+    "paired-fsm-compact-evidence.json": "690c54e8e03d9bd46fe3523c0380c32f967012fd64596c0877feb3538b507f9b",
+    "paired-learned-layout200-compact-evidence.json": "faea1e890bf3e6197a70ad466bb5c407505655867fbf14b30de0e25db262b29e",
+    "panel-summary.json": "2e5f8b71c7a8ffd14b45434b2dce97b4bc8a914ff2397695fc55e065b11c934a"
+  },
+  "evaluation_source_revision": "3d97d4c484b8e3969bbd222b5602aedf5595fb1f",
+  "files": {
+    "analysis/summary.json": {
+      "bytes": 4264563,
+      "sha256": "33d7820527569d187cb62f764fb3eae563b255e3fda29875069ab74a1df1f472"
+    },
+    "cells/124992000-fsm/receipt.json": {
+      "bytes": 2558,
+      "sha256": "a3a85caf2b77c19f926afc8576704ea979e8d39f695b2659176b6f6615b3f6b0"
+    },
+    "cells/124992000-red-diverse-100-final/receipt.json": {
+      "bytes": 2584,
+      "sha256": "a64d5540f5ac30ba22299680622fb0ac0698be5582f2d4b7d038ceedefb7c937"
+    },
+    "cells/49968000-fsm/receipt.json": {
+      "bytes": 2557,
+      "sha256": "6199832d4afd6813e7d68a83dc8a5818642e6451fd9bc66abe1b979ef734352f"
+    },
+    "cells/49968000-red-diverse-100-final/receipt.json": {
+      "bytes": 2583,
+      "sha256": "f955bd5e6797cadd3ac4416d2991c78378ebd6bb25125ed03842a456f3d76f4e"
+    },
+    "plan.json": {
+      "bytes": 36120,
+      "sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6"
+    }
+  },
+  "observed_at": "2026-11-08T13:21:46.495445-05:00",
+  "output_root": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
+  "receipts": [
+    {
+      "canonical_parity": true,
+      "cell": "124992000-fsm",
+      "episodes": [
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:1c480a726d8140b9a54e595da2765c47",
+          "canonical_episode_index": 0,
+          "canonical_episode_sha256": "a2b5dc9c40c707307e5f5f6ab804266e90a97dd28be6b43027864fe841e084ff",
+          "canonical_return": -925.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 0,
+          "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+          "traced_return": -925.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:a0c4ec6b14634c268ffa4be266c9508e",
+          "canonical_episode_index": 16,
+          "canonical_episode_sha256": "c31ba79836abe428fa8b3b898844a75281c2c583351d168aa1d15066befc08e3",
+          "canonical_return": -331.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 1,
+          "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+          "traced_return": -331.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:33315f5474e7475d9c63cd6e3f88fd0b",
+          "canonical_episode_index": 32,
+          "canonical_episode_sha256": "9d4b0318b2bf0a3a11347da94ff55721c64cd4d7f612e7e24b8c47a1bdbc16a9",
+          "canonical_return": -229.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 2,
+          "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+          "traced_return": -229.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:c7abbdb0acf54606a08ecf9d176407b0:artifact:6f4f73beb7dd41c89975da2554ba13df",
+          "canonical_episode_index": 48,
+          "canonical_episode_sha256": "c3c6ff36c06b614917e99269bee92da7e9331fe566680636a861a6740d1f590b",
+          "canonical_return": -312.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 3,
+          "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+          "traced_return": -312.0
+        }
+      ],
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:bb523fb6a12c44d6bb58c5228553d168",
+      "plan_sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "124992000-red-diverse-100-final",
+      "episodes": [
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:91fcb044c26b4d018cada49413dd0e6d",
+          "canonical_episode_index": 0,
+          "canonical_episode_sha256": "1ee6d0474a1d13680e083a576e1d9125333912630f577068ea4ca614f5ce2097",
+          "canonical_return": -2758.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 0,
+          "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+          "traced_return": -2758.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:2eae069c42fd421b86795e050520cff7",
+          "canonical_episode_index": 16,
+          "canonical_episode_sha256": "a49822da9045027caf6a7dd18ce4bab0ee93ce526114572c248a40127d5d8d21",
+          "canonical_return": -2736.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 1,
+          "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+          "traced_return": -2736.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:a09385b72ed649f3abfd7dd4f9bfac72",
+          "canonical_episode_index": 32,
+          "canonical_episode_sha256": "b3f4899fb5dc12cc3e9107644c82d47d33ccefcde37ed9bef977b373c0505e7c",
+          "canonical_return": -3218.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 2,
+          "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+          "traced_return": -3218.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:ddc42bea98b34cb7aedee6c863de6841:artifact:c96cce39b9fe49f980c4cc532bb638a9",
+          "canonical_episode_index": 48,
+          "canonical_episode_sha256": "bade423ae398d4260d6656f2cc5c4a4cd9576bfa5bf5621c591e17db970ec3da",
+          "canonical_return": -2858.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 3,
+          "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+          "traced_return": -2858.0
+        }
+      ],
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:5fa86c786ae34819aa2529fde8794309",
+      "plan_sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "49968000-fsm",
+      "episodes": [
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:8a95e1fe37aa429e8301af8171a239f9",
+          "canonical_episode_index": 0,
+          "canonical_episode_sha256": "218d578fd5b1893403ee6a44fcaf8b352a18fe69402e9c81fe1532f54a35156d",
+          "canonical_return": -217.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 0,
+          "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+          "traced_return": -217.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:4201de6b0811457c9c13e82b7a76d9bd",
+          "canonical_episode_index": 16,
+          "canonical_episode_sha256": "cd13f5922aa48614e77c3293d81583469d6c9696e168f007a00cf7a0ff94bc8b",
+          "canonical_return": -545.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 1,
+          "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+          "traced_return": -545.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:a2638d152d474ccbb6be06904a29c7c4",
+          "canonical_episode_index": 32,
+          "canonical_episode_sha256": "7986e4a185052553b045c554fedb1d83856fb6b434ee2e37ff2ceda9435d2b5a",
+          "canonical_return": -171.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 2,
+          "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+          "traced_return": -171.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:7283a01f4b8c49cd9826df127fd243cc:artifact:de486490da394ce4aa3c19064eec5e3c",
+          "canonical_episode_index": 48,
+          "canonical_episode_sha256": "11ae8e8f7aa30f5c73a70521de54bc7229d9346852df4303dc4112b261e644be",
+          "canonical_return": -430.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 3,
+          "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+          "traced_return": -430.0
+        }
+      ],
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:381a5fcaf04f4bb8863fd367ea97a0b2",
+      "plan_sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6"
+    },
+    {
+      "canonical_parity": true,
+      "cell": "49968000-red-diverse-100-final",
+      "episodes": [
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:223c2d40b97945b4afbaebd8351acddf",
+          "canonical_episode_index": 0,
+          "canonical_episode_sha256": "4cc2161651bd7901b050e776276218df6558301800fb308269cf98497e576bf3",
+          "canonical_return": -3155.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 0,
+          "topology_sha256": "4945aabdb5984cab85d7d7f315b1e5d7cfe23654c1352ac836675e3dff50cbf8",
+          "traced_return": -3155.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:ec333131b5964bfcb03c87892b3fc618",
+          "canonical_episode_index": 16,
+          "canonical_episode_sha256": "dfc210fdeb2e674707c456b71dd62a1e58b9bace9227b94ee6725b09fe7953ff",
+          "canonical_return": -2587.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 1,
+          "topology_sha256": "91cc0a68881d982a7dc9238c42dbcd5a341b16643f4fc2478c95181225340cfe",
+          "traced_return": -2587.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:c288ba36b1e14e9cbf8729db6a32d94e",
+          "canonical_episode_index": 32,
+          "canonical_episode_sha256": "1ef445a855f6a106afa24c4d023ccc8a103ab25ae32c0fd637fa6d34254c2aa2",
+          "canonical_return": -3239.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 2,
+          "topology_sha256": "1002548a4b43ff6677c068d87b8b7887b783c218a54f287fc5521c302d9ce032",
+          "traced_return": -3239.0
+        },
+        {
+          "canonical_episode_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:845d20bbb1f7472294931122c5a705e8:artifact:0b839da497f24f529293af615d77339f",
+          "canonical_episode_index": 48,
+          "canonical_episode_sha256": "0492581405e3b9ea342745e2d0775acf0967051cacf70926fc281aba487b62cb",
+          "canonical_return": -2928.0,
+          "episode_root": 21000,
+          "matches_canonical": true,
+          "topology_index": 3,
+          "topology_sha256": "0812121a952eb94662aaa51d11e5c1615b698f27bf8653cdbd0b1c79f353050e",
+          "traced_return": -2928.0
+        }
+      ],
+      "evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:207ce394a88149238a86b75391f01b58",
+      "plan_sha256": "5ef586eafc3105c39f20d7bf8320abd6fd49a208840c43c9e11bb284d9fee5f6"
+    }
+  ],
+  "remove_observation_parity": {
+    "command": "JAX_PLATFORMS=cpu .venv/bin/python -m pytest tests/evaluation/test_remove_observation_parity.py -q",
+    "elapsed_seconds": 19.98,
+    "execution": "local WSL CPU",
+    "passed": 2,
+    "scope": "Real CybORG root/user Remove completion and all 450 observation values before/after; not full-episode parity.",
+    "sha256": "1df78def729be4221a2db78edb79f26d6c904216f5135597dee5701e8ab197bf",
+    "test": "tests/evaluation/test_remove_observation_parity.py"
+  },
+  "source_note": "Exact producing helper bytes are embedded here. Executable copies beside this record receive repository lint formatting.",
+  "public_summary": true,
+  "original_snapshot_sha256": "d4e66029cee935f8b07c078f19b1a8ff6f88d2febe919c1d72cee7893e1f6bb6",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
+}

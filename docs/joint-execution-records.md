@@ -14,14 +14,42 @@ python scripts/train/algorithms/ippo_jax.py --recipe /inputs/recipe.yaml \
 The CLI prints the evidence root and attempt ID on success or after a retained
 failure. Use that attempt ID for an explicit retry.
 
-The supported recorded path starts both policies fresh and uses zero-sum joint
-JAX training. Fixed and adaptive update schedules use the existing trainer.
+Recorded training supports fresh zero-sum joint JAX training and fresh Blue-only
+training against the native stock FSM Red. Fixed and adaptive update schedules
+use the existing joint trainer; Blue-only training updates Blue every rollout,
+uses global gradient clipping, and requires rollout length to equal the episode
+horizon. Blue team architecture overrides apply to both training and checkpoint
+metadata. The legacy `joint_rollout_updates` budget unit denotes outer rollout
+batches for either path; Blue-only records retain zero Red policy updates.
+
+Blue-only checkpoints retain an initial policy, periodic policies, numeric
+initial state, and exact effective observation/architecture metadata. Its legacy
+inline checkpoint evaluator uses CybORG; disable inline evaluation and run a
+separately recorded JAX evaluator when native JAX measurements are required.
 Explicit topology snapshots and recipe-generated banks are retained as exact
 input bytes after the ordinary recipe projection materializes them. Generated
 banks retain their generation settings and snapshot metadata; recording does
-not substitute a different generator or sampling procedure. Frozen opponents,
-resume and auxiliary mission banks remain unsupported by this recorded path.
+not substitute a different generator or sampling procedure. Frozen learned opponents,
+joint-training resume and auxiliary mission banks remain unsupported by this recorded path.
 `--development-no-recording` explicitly opts out of research records.
+
+For recorded Blue/FSM training, every retained policy checkpoint also owns a
+numeric full-state archive containing parameters, optimizer state, reward
+normalizer, RNG, environment state and observations. Use `--checkpoint-update N`
+to retain an additional cumulative rollout milestone. Resume into a new output
+tag and attempt with `--resume-state PATH_TO_RETAINED_NPZ`, keeping the original
+seed, complete recipe/horizon, source revision, dependencies and topology bytes.
+The checkpoint and original zero-step policy artifacts must belong to the same
+evidence store and pass ownership/hash checks; cross-store resume is unsupported.
+The output tag/directory must be fresh. The loader rejects mismatched contracts
+and restores the complete state rather than restarting the optimizer from policy weights. Continuation is limited to
+aligned episode/rollout boundaries; recurrent carry resets there by design.
+
+Continuation attempts count only newly executed updates/transitions in their
+budgets and retain cumulative counts in each metrics row and checkpoint. Their
+initial checkpoint truthfully records the restored step; `training_origin`
+retains the original zero-step policy identity. The initial diagnostic NPZ
+described below remains separate from these full-state continuation archives.
 
 The configured `scripts/eval/eval_scripted_reds_jax.py` post-training job gets
 its own recorded evaluation over the training-owned final checkpoint. It
@@ -70,7 +98,8 @@ inside execution. An undeclared local import or changed source rejects completio
 Training retains initial policy weights and numeric optimizer, normalizer, RNG,
 environment and observation diagnostics as NPZ arrays with a path/dtype/shape
 manifest. These diagnostic leaves do not define a resume format. Later policy
-checkpoints remain weights-only outputs; exact continuation is unsupported.
+bundles remain weights-only outputs. Blue/FSM continuation uses the separate
+full-state archives above; joint checkpoints do not support continuation.
 Environment transitions, joint rollout updates and each team's policy updates
 have distinct budget units.
 
