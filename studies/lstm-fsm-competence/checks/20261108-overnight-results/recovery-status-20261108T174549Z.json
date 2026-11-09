@@ -11,17 +11,17 @@
       "opponent": "fsm",
       "primary_49968000": -365.875,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/8d9de068c5874559b1439b71ae6333ba/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/8d9de068c5874559b1439b71ae6333ba/configuration.json",
         "sha256": "b7187a973b5b0421855a3780abf9cd123a795ab57b0bdb9c0c58296c02207861"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:8d9de068c5874559b1439b71ae6333ba",
       "primary_gain_from_initial": 4548.328125,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/8d9de068c5874559b1439b71ae6333ba/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/8d9de068c5874559b1439b71ae6333ba/input-artifacts.json",
         "sha256": "2427a6bdb2c244268e89b787153038dc419360bbbc6d0c36d80c259dacc529e9"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed100/primary/receipt-49968000-fsm.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed100/primary/receipt-49968000-fsm.json",
         "sha256": "74d8262e5912b9120c674a6fd70d7bc8be7e79318510b0bdf0a0677870ca0f64"
       },
       "primary_record_sha256": "0463a225718c537b8a00fca78d3c970c1604bfcddcdc92316cd98ad8a3cb4e61",
@@ -38,17 +38,17 @@
       "opponent": "red-diverse-100-final",
       "primary_49968000": -2962.140625,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/a13f82fe96af4200aa591fd7f88bc618/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/a13f82fe96af4200aa591fd7f88bc618/configuration.json",
         "sha256": "bf849ab0d3fe9cbae5ea4aef4bda7b28884ed3e6d04a6eed9397aa21f6c30633"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:a13f82fe96af4200aa591fd7f88bc618",
       "primary_gain_from_initial": 4192.140625,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/a13f82fe96af4200aa591fd7f88bc618/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/a13f82fe96af4200aa591fd7f88bc618/input-artifacts.json",
         "sha256": "42a43c4b8d0394f9bed3c29a675ede9807d854b4874cc8dbf45dcb3c2ef01cf1"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed100/primary/receipt-49968000-red-diverse-100-final.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed100/primary/receipt-49968000-red-diverse-100-final.json",
         "sha256": "a2135836db25dda42d422ce7deae6a48de4fba8ecc23d45bacbf121b199007fb"
       },
       "primary_record_sha256": "74919d17319f70dd22cadc345b5b8f60bfff83519ad4136697aee5040a4bac86",
@@ -65,17 +65,17 @@
       "opponent": "fsm",
       "primary_49968000": -425.78125,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/7283a01f4b8c49cd9826df127fd243cc/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/7283a01f4b8c49cd9826df127fd243cc/configuration.json",
         "sha256": "c5b0d35558c3b1c4f1174bfb6463589c757d988266dc3fea4ba13f08c4ea4edf"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:7283a01f4b8c49cd9826df127fd243cc",
       "primary_gain_from_initial": 4479.921875,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/7283a01f4b8c49cd9826df127fd243cc/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/7283a01f4b8c49cd9826df127fd243cc/input-artifacts.json",
         "sha256": "ca0d70ce5ba3ee324e4ac5e23326c1c979c93e6dfddc45dc46943569ee936aad"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed42/primary/receipt-49968000-fsm.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed42/primary/receipt-49968000-fsm.json",
         "sha256": "50d66eaa92c8a73d79dcb7c362c9c9c91fa74569bf142f8e05d6d729131af2bd"
       },
       "primary_record_sha256": "732f4f26fff1aa0ffad3e75832980ef96cad5139f01b9b749753d6214804d87e",
@@ -92,17 +92,17 @@
       "opponent": "red-diverse-100-final",
       "primary_49968000": -2920.71875,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/845d20bbb1f7472294931122c5a705e8/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/845d20bbb1f7472294931122c5a705e8/configuration.json",
         "sha256": "206f9f60498daaa005a6d4afce2be9cb0e960e09bfc7d3056a3555df110d278d"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:845d20bbb1f7472294931122c5a705e8",
       "primary_gain_from_initial": 4238.484375,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/845d20bbb1f7472294931122c5a705e8/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/845d20bbb1f7472294931122c5a705e8/input-artifacts.json",
         "sha256": "0541c521b97be4683561e2a7cc07c98c33b4d52f581abac7489742511dcbbcc9"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed42/primary/receipt-49968000-red-diverse-100-final.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evaluations/fsm-seed42/primary/receipt-49968000-red-diverse-100-final.json",
         "sha256": "224f036f8c1e9ed451f17fea577a05573fbecd89ec4cc13bcc681520cbc96f45"
       },
       "primary_record_sha256": "f90c4c8c3365e371f6764c07975bf952d290f32a53150e3bd594525b9bb83c0b",
@@ -119,17 +119,17 @@
       "opponent": "red-diverse-42-final",
       "primary_49968000": -2949.34375,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/e1b596f74d384e298f40c19025a24cc3/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/e1b596f74d384e298f40c19025a24cc3/configuration.json",
         "sha256": "1d1b6d201930ce0826834c2d894a3e30c934437344cb7fc7579c08abfb502003"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:e1b596f74d384e298f40c19025a24cc3",
       "primary_gain_from_initial": 4245.046875,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/e1b596f74d384e298f40c19025a24cc3/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/e1b596f74d384e298f40c19025a24cc3/input-artifacts.json",
         "sha256": "aaa684d97ce3bfdfd3ee67295609deb163031203cce68fec7ddb8278be4be154"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/cells/fsm-seed42-red-diverse-42-final.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/cells/fsm-seed42-red-diverse-42-final.json",
         "sha256": "2392316e54531de85e125fa2d532374680db4236363e7c9d0cf4df0e1b84b2fe"
       },
       "primary_record_sha256": "89746c3fedbade11f69dd9fe1f1e556b4ab71af220ddb74829264264f073e016",
@@ -146,17 +146,17 @@
       "opponent": "red-single-100-final",
       "primary_49968000": -786.140625,
       "primary_configuration_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/239ec289f98b458b983814811549ebf0/configuration.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/239ec289f98b458b983814811549ebf0/configuration.json",
         "sha256": "cad27c126ee6f0ee20a63a4a3cb75d7bb664138a127ca3a0d0dce0313ce40a08"
       },
       "primary_evaluation_id": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:evaluation:239ec289f98b458b983814811549ebf0",
       "primary_gain_from_initial": 4067.609375,
       "primary_input_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/239ec289f98b458b983814811549ebf0/input-artifacts.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/239ec289f98b458b983814811549ebf0/input-artifacts.json",
         "sha256": "316479b9a3ef98bdf727d925387d82f1b7952d2c6f42666f3bac4464dd369eae"
       },
       "primary_receipt_file": {
-        "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/cells/fsm-seed42-red-single-100-final.json",
+        "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/cells/fsm-seed42-red-single-100-final.json",
         "sha256": "3de7edb35103921fcd2986ac8797e2171234b043e95607834aafb8de21f5bcd0"
       },
       "primary_record_sha256": "1c92bc9d22c33c8b177a41af835733a9f9c5a8b8c1190bb83d8c2aab902870e8",
@@ -166,39 +166,39 @@
   "completed_primary_plan_cells": 16,
   "files": {
     "external_helper": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/orchestration/recover_fsm_primary.py",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/orchestration/recover_fsm_primary.py",
       "sha256": "2577c187f31b6f1687d1f8e4222865c451c324482d330b4db7f5772419af6789"
     },
     "launch.sh": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/launch.sh",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/launch.sh",
       "sha256": "d6de4ceba237e0e5c026f256439f354bf730a5e2df46e4e2f612e5fa43b9fca8"
     },
     "plan.json": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/plan.json",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/plan.json",
       "sha256": "e57cfd4b468ac7e606ce0b8e43affe2028f1338af612579c80ee2c7132cd125a"
     },
     "protocol": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/protocol.json",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/protocol.json",
       "sha256": "b6f2ccc81860d9030d97a700c3a7621af7060c8fe16816cf34c0572434183fdf"
     },
     "src/jaxborg/evaluation/joint_capture.py": {
-      "path": "/home/local/KHQ/paul.elliott/src/cyber/jaxborg/lstm-fsm-resumable-v3-20261107/src/jaxborg/evaluation/joint_capture.py",
+      "path": "~/src/cyber/jaxborg/lstm-fsm-resumable-v3-20261107/src/jaxborg/evaluation/joint_capture.py",
       "sha256": "0ff3b6b95d42091d627ba22b3f7f43c3e42785b1133cb9fceaea2a5713329128"
     },
     "studies/lstm-fsm-competence/evaluate.py": {
-      "path": "/home/local/KHQ/paul.elliott/src/cyber/jaxborg/lstm-fsm-resumable-v3-20261107/studies/lstm-fsm-competence/evaluate.py",
+      "path": "~/src/cyber/jaxborg/lstm-fsm-resumable-v3-20261107/studies/lstm-fsm-competence/evaluate.py",
       "sha256": "a604558314e6049f8f843b40acd6c01b6072d99ee719dbbc685778934b499ed6"
     },
     "submission.json": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/submission.json",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/submission.json",
       "sha256": "e76582fb40dcde5e2c6cfd9e5d33b17cceab3edc168825e7dc6e8b4ac3b4724e"
     },
     "submitted.job": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/submitted.job",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/recoveries/primary-20261108/submitted.job",
       "sha256": "b72b1c657524be31ed79b4e4c914219938d48105fd5dba318cde64f78c97d0b1"
     },
     "training_manifest": {
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/inputs/manifest.json",
+      "path": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/inputs/manifest.json",
       "sha256": "9560c6f605993ad8647aad3b14080b5a7a10a9f33873e96af7bf3d8f769c586f"
     }
   },
@@ -216,34 +216,12 @@
   ],
   "newly_recovered_cells": 2,
   "observed_at_utc": "2026-11-08T17:45:48.757637+00:00",
-  "queue": {
-    "argv": [
-      "squeue",
-      "-h",
-      "-j",
-      "4139",
-      "-o",
-      "%i|%j|%T|%M|%L|%C|%m|%R"
-    ],
-    "returncode": 0,
-    "stderr": "",
-    "stdout": "4139|lstm-primary-recovery|RUNNING|1:36:19|4:23:41|8|64G|itm\n"
-  },
-  "scheduler": {
-    "argv": [
-      "sacct",
-      "-j",
-      "4139",
-      "--parsable2",
-      "--format=JobID,JobName,State,ExitCode,Elapsed,Start,End,AllocCPUS,ReqMem,MaxRSS"
-    ],
-    "returncode": 0,
-    "stderr": "",
-    "stdout": "JobID|JobName|State|ExitCode|Elapsed|Start|End|AllocCPUS|ReqMem|MaxRSS\n4139|lstm-primary-recovery|RUNNING|0:0|01:36:19|2026-11-08T11:09:29|Unknown|8|64G|\n4139.batch|batch|RUNNING|0:0|01:36:19|2026-11-08T11:09:29|Unknown|8||\n"
-  },
   "snapshot_file": {
-    "path": "C:\\Users\\paul.elliott\\Documents\\Codex\\2026-11-07\\task\\fsm-primary-recovery-status-20261108T174549Z.json",
+    "path": "~/Documents/Codex/2026-11-07/task/fsm-primary-recovery-status-20261108T174549Z.json",
     "sha256": "ee8d91fff0d10a077baa9c468a89d6061ac87beb3e5aafb251be4d393deedb66"
   },
-  "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1"
+  "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+  "public_summary": true,
+  "original_snapshot_sha256": "38520ede1910d75abacc6ccacc010b42aa644702a3ca6364f66c34f350993788",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
 }

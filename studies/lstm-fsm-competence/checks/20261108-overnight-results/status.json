@@ -2254,9 +2254,7 @@
       "sha256": "224f036f8c1e9ed451f17fea577a05573fbecd89ec4cc13bcc681520cbc96f45"
     }
   ],
-  "queue": "",
-  "root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3",
-  "scheduler": "4128|lstm-fsm-seed42|COMPLETED|0:0|16:17:11|2026-11-07T15:16:24|2026-11-08T07:33:35\n4128.batch|batch|COMPLETED|0:0|16:17:11|2026-11-07T15:16:24|2026-11-08T07:33:35\n4129|lstm-fsm-seed100|COMPLETED|0:0|16:00:15|2026-11-07T15:16:27|2026-11-08T07:16:42\n4129.batch|batch|COMPLETED|0:0|16:00:15|2026-11-07T15:16:27|2026-11-08T07:16:42\n4130|lstm-interim-42|COMPLETED|0:0|00:48:29|2026-11-07T16:58:28|2026-11-07T17:46:57\n4130.batch|batch|COMPLETED|0:0|00:48:29|2026-11-07T16:58:28|2026-11-07T17:46:57\n4131|lstm-primary-42|FAILED|0:11|01:50:20|2026-11-07T22:48:28|2026-11-08T00:38:48\n4131.batch|batch|CANCELLED|0:11|01:50:20|2026-11-07T22:48:28|2026-11-08T00:38:48\n4132|lstm-final-42|COMPLETED|0:0|01:36:42|2026-11-08T07:33:35|2026-11-08T09:10:17\n4132.batch|batch|COMPLETED|0:0|01:36:42|2026-11-08T07:33:35|2026-11-08T09:10:17\n4133|lstm-interim-100|COMPLETED|0:0|00:48:32|2026-11-07T16:58:28|2026-11-07T17:47:00\n4133.batch|batch|COMPLETED|0:0|00:48:32|2026-11-07T16:58:28|2026-11-07T17:47:00\n4134|lstm-primary-100|FAILED|0:11|01:50:21|2026-11-07T22:48:28|2026-11-08T00:38:49\n4134.batch|batch|CANCELLED|0:11|01:50:21|2026-11-07T22:48:28|2026-11-08T00:38:49\n4135|lstm-final-100|COMPLETED|0:0|01:36:02|2026-11-08T07:16:42|2026-11-08T08:52:44\n4135.batch|batch|COMPLETED|0:0|01:36:02|2026-11-08T07:16:42|2026-11-08T08:52:44\n",
+  "root": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3",
   "training": [
     {
       "budgets": [
@@ -2384,7 +2382,7 @@
         "update_idx": 2604,
         "wall_time_s": 58589.93150871713
       },
-      "snapshot": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/terminal.json",
+      "snapshot": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/terminal.json",
       "snapshot_mtime": 1794141204.425797,
       "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
       "status": "succeeded",
@@ -2527,7 +2525,7 @@
         "update_idx": 2604,
         "wall_time_s": 57574.01050233655
       },
-      "snapshot": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/dd77ef15950643719201c0e7e336667f/terminal.json",
+      "snapshot": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/dd77ef15950643719201c0e7e336667f/terminal.json",
       "snapshot_mtime": 1794140191.61885,
       "source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
       "status": "succeeded",
@@ -2544,5 +2542,8 @@
       },
       "trial_id": "fsm-seed100"
     }
-  ]
+  ],
+  "public_summary": true,
+  "original_snapshot_sha256": "b253ff54f779076f979f691e20b831f164898de964c8f382a09ef99a16fd5212",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
 }

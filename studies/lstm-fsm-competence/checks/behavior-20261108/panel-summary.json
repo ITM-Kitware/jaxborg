@@ -6,10 +6,10 @@
       "canonical_parity": true,
       "cell": "49968000-fsm",
       "checkpoint": {
-        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
+        "model": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
         "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
         "model_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
-        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
+        "sidecar": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
         "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:8693f8f333f54cec87935ee8080f5ec7",
         "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
         "steps": 49968000,
@@ -75,10 +75,10 @@
       "canonical_parity": true,
       "cell": "49968000-red-diverse-100-final",
       "checkpoint": {
-        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
+        "model": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/checkpoint_49968000.safetensors",
         "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:58f738db388f47c6bd60faf6ff581cfb",
         "model_sha256": "eb661ec82b069aba6c67a94715ac97c3315098c1df98d00b230c71407aeb6d62",
-        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
+        "sidecar": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/49968000/recipe_checkpoint_49968000.yaml",
         "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:8693f8f333f54cec87935ee8080f5ec7",
         "sidecar_sha256": "1da5689e7b8b61b5bb73816db6e87809124c7d82a87e4940eded821d14c5f921",
         "steps": 49968000,
@@ -144,10 +144,10 @@
       "canonical_parity": true,
       "cell": "124992000-fsm",
       "checkpoint": {
-        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
+        "model": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
         "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
         "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
-        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
+        "sidecar": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
         "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:410dde4ad9434c6c838c4e34ed23d604",
         "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
         "steps": 124992000,
@@ -213,10 +213,10 @@
       "canonical_parity": true,
       "cell": "124992000-red-diverse-100-final",
       "checkpoint": {
-        "model": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
+        "model": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/model_lstm-fsm-competence-20261107-v3-fsm-seed42.safetensors",
         "model_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:82be8ba4646f49ac91ebd1b3f40a433b",
         "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
-        "sidecar": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
+        "sidecar": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/evidence/attempts/1b624344526d48389f92ac8e2eea214e/artifacts/checkpoints/124992000/recipe_lstm-fsm-competence-20261107-v3-fsm-seed42.yaml",
         "sidecar_artifact": "evaluation-store:7c19cb329884499a8fb4aaa8ef67a18c:attempt:1b624344526d48389f92ac8e2eea214e:artifact:410dde4ad9434c6c838c4e34ed23d604",
         "sidecar_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
         "steps": 124992000,
@@ -279,7 +279,7 @@
       "receipt_sha256": "a64d5540f5ac30ba22299680622fb0ac0698be5582f2d4b7d038ceedefb7c937"
     }
   ],
-  "check_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
+  "check_root": "~/jaxborg-exp/shared/studies/lstm-fsm-competence-20261107-v3/checks/behavior-20261108-3d97d4c4",
   "episodes": [
     {
       "case": {
@@ -1802,7 +1802,7 @@
         "source_seed": 200
       },
       "op_zone_servers": null,
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000200.snapshot.npz",
+      "path": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000200.snapshot.npz",
       "provenance": "reconstructed seed-matched layout; not verified observed training topology",
       "role_eligible": true,
       "role_map": {
@@ -1867,7 +1867,7 @@
         "source_seed": 201
       },
       "op_zone_servers": null,
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000201.snapshot.npz",
+      "path": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000201.snapshot.npz",
       "provenance": "reconstructed seed-matched layout; not verified observed training topology",
       "role_eligible": true,
       "role_map": {
@@ -1939,7 +1939,7 @@
         "source_seed": 202
       },
       "op_zone_servers": null,
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000202.snapshot.npz",
+      "path": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000202.snapshot.npz",
       "provenance": "reconstructed seed-matched layout; not verified observed training topology",
       "role_eligible": true,
       "role_map": {
@@ -2009,7 +2009,7 @@
         "source_seed": 203
       },
       "op_zone_servers": null,
-      "path": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000203.snapshot.npz",
+      "path": "~/jaxborg-exp/shared/studies/defender-transfer-20261107-v4/inputs/topologies/unseen/jax_seed_0000000203.snapshot.npz",
       "provenance": "reconstructed seed-matched layout; not verified observed training topology",
       "role_eligible": true,
       "role_map": {
@@ -2039,5 +2039,8 @@
       "source_seed": 203
     }
   ],
-  "training_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1"
+  "training_source_revision": "0aef148bbebb45818e71b20e9b5a52be031f93f1",
+  "public_summary": true,
+  "original_snapshot_sha256": "2e5f8b71c7a8ffd14b45434b2dce97b4bc8a914ff2397695fc55e065b11c934a",
+  "original_records_note": "Exact operational originals are retained outside the public repository; existing artifact and embedded-file hashes identify the originals."
 }
