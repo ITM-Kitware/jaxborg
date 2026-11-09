@@ -32,6 +32,7 @@ existing code.
 | [Defender transfer](defender-transfer/README.md) | Comparing archived policies across attacker and layout panels, with learning references and explicit limits on familiarity. |
 | [LSTM competence against fixed FSM Red](lstm-fsm-competence/README.md) | Separating a primary training budget from an extension and relating score panels to exploratory behavior checks. |
 | [LSTM adaptive robustness](lstm-adaptive-robustness/README.md) | Training fresh attackers against frozen defenders and comparing finite-budget responses and saved-policy cross-play. |
+| [Observation value](observation-value/README.md) | Testing whether observations and memory improve returns beyond calibrated fixed randomized action preferences. |
 | [Red update schedules](red-update-schedules/README.md) | Comparing baseline, quarter-rate, and adaptive training recipes with explicit run selection and reconstructable tables. |
 | [Joint payoff and blocking](reward-offset/README.md) | Composing a reward change and a blocking rule in a small four-condition execution example. |
 | [Frozen-defender response](frozen-defender-response/README.md) | Rebuilding a completed study's report from saved measurements. Its reference input bundle must be obtained separately from the study author. |
