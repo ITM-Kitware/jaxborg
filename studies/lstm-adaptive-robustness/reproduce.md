@@ -53,3 +53,28 @@ age pairs. Keep explicit attempt selections when a trial has retries. Production
 and evaluation receipts identify the actual attempt, checkpoint artifacts,
 source, and consumed inputs. Checkpoint selection follows the protocol; neither
 a later retry nor a stronger intermediate attacker silently replaces a result.
+
+## Complete interrupted cross-play
+
+The original evaluator jobs cannot finish the full panel within their launcher
+deadline. Use `recover_evaluations.py` from the current study branch to retain a
+recovery plan outside the pinned runtime checkout, then submit the retained copy:
+
+```sh
+python recover_evaluations.py plan --study-root "$STUDY_ROOT" \
+  --source-root "$PINNED_SOURCE" --expected-revision "$REVISION" \
+  --recovery-root "$RECOVERY_ROOT"
+python "$RECOVERY_ROOT/recover_evaluations.py" submit \
+  --recovery-root "$RECOVERY_ROOT" --dry-run
+python "$RECOVERY_ROOT/recover_evaluations.py" submit \
+  --recovery-root "$RECOVERY_ROOT"
+```
+
+Recovery waits for each original evaluator to finish and rechecks its retained
+results before evaluating a missing cell. A receipt alias selects the exact
+original training attempt; it does not represent new training. Each incomplete
+cell repeats its full original panel in a fresh destination, preserving partial
+evidence. Primary and final attacker budgets remain separate. The recovery plan,
+submission ledger, per-cell selections and results identify all reused and new
+evaluations. A failed submission with an uncertain outcome requires reconciliation
+with Slurm before another submission.
