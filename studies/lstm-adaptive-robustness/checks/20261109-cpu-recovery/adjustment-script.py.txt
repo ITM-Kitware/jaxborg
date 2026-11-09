@@ -1,0 +1,160 @@
+"""Record and apply the two-lane adjustment to this study's existing CPU jobs."""
+
+import hashlib
+import json
+import re
+import subprocess
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+ROOT = Path('/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production')
+RECOVERY = ROOT / 'recoveries/20261109-cpu-v2'
+OUTPUT = RECOVERY / 'adjustments/20261109-two-lanes'
+TERMINAL = {'COMPLETED', 'FAILED', 'CANCELLED', 'TIMEOUT', 'OUT_OF_MEMORY', 'NODE_FAIL', 'PREEMPTED', 'BOOT_FAIL', 'DEADLINE', 'REVOKED'}
+
+
+def read(path):
+    return json.loads(path.read_text())
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def write(name, value):
+    with (OUTPUT / name).open('x') as stream:
+        json.dump(value, stream, indent=2, sort_keys=True)
+        stream.write('\n')
+
+
+def snapshot():
+    result = {}
+    for line in subprocess.check_output(['scontrol', 'show', 'job', '--oneliner'], text=True).splitlines():
+        fields = dict(item.split('=', 1) for item in line.split() if '=' in item)
+        if 'JobId' in fields:
+            result[int(fields['JobId'])] = fields
+    return result
+
+
+def terminal(job, jobs):
+    if job in jobs:
+        return jobs[job]['JobState'] in TERMINAL
+    lines = subprocess.check_output(['sacct', '-n', '-X', '-P', '-j', str(job), '-o', 'JobIDRaw,State'], text=True).splitlines()
+    states = [line.split('|')[1].split()[0].rstrip('+') for line in lines if line.split('|')[0] == str(job)]
+    if len(states) != 1 or states[0] not in TERMINAL:
+        raise ValueError(f'Unknown prerequisite {job}')
+    return True
+
+
+def command(args, label):
+    write(label + '-intent.json', {'at': datetime.now(timezone.utc).isoformat(), 'command': args})
+    result = subprocess.run(args, text=True, capture_output=True)
+    write(label + '-response.json', {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+    if result.returncode:
+        raise RuntimeError(f'{label} failed; inspect retained response and current jobs before any retry')
+
+
+def plan():
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    source = read(RECOVERY / 'plan.json')
+    protocol = read(ROOT / 'inputs/protocol.json')
+    original_lanes = protocol['extensions']['lstm_adaptive_robustness']['values']['lanes']
+    submissions = [json.loads(line) for line in (RECOVERY / 'submissions.jsonl').read_text().splitlines()]
+    ids = {r['cell_id']: r['job_id'] for r in submissions if r['event'] == 'submitted'}
+    jobs = snapshot()
+    owned = {j: jobs[j] for j in ids.values() if j in jobs}
+    for job, fields in owned.items():
+        assert fields['UserId'].startswith('paul.elliott(')
+        assert fields['JobName'].startswith('adaptive-recovery-')
+        assert fields['WorkDir'] == source['source_root'] and fields['Partition'] == 'community'
+        assert not any('gpu' in fields.get(k, '').lower() for k in ('TRES', 'AllocTRES', 'TresPerNode', 'TresPerTask', 'Gres'))
+    running = [j for j, row in owned.items() if row['JobState'] == 'RUNNING']
+    assert len(running) <= 1
+    pending = {j for j, row in owned.items() if row['JobState'] == 'PENDING'}
+    assert all(row['JobState'] in TERMINAL | {'PENDING', 'RUNNING'} for row in owned.values())
+    lanes = {'17': [], '83': []}
+    optional = {'br-blue42-primary-red149': ('17', 0), 'br-blue42-final-red149': ('83', 0),
+                'br-blue100-final-red149': ('17', 1), 'br-blue100-primary-red149': ('83', 1)}
+    for cell in source['cells']:
+        job = ids.get(cell['id'])
+        if job not in pending:
+            continue
+        trial = cell['trial']
+        if trial in optional:
+            lane, wave = optional[trial]
+            rank = (2, wave, 0 if cell['blue'] == trial[3:].rsplit('-red', 1)[0] else 1, cell['id'])
+        else:
+            lane = trial.rsplit('red', 1)[1]
+            wave = original_lanes[lane].index(trial)
+            own = cell['blue'] == trial[3:].rsplit('-red', 1)[0]
+            rank = (0 if cell['stage'] == 'primary' else 1, wave, 0 if own else 1, cell['id'])
+        lanes[lane].append({'job_id': job, 'cell': cell, 'sort_key': rank})
+    for lane in lanes.values():
+        lane.sort(key=lambda row: row['sort_key'])
+        previous = running[0] if running else None
+        for row in lane:
+            original = row['cell']['original_eval_job']
+            deps = [] if terminal(original, jobs) else [original]
+            if previous is not None and not terminal(previous, jobs):
+                deps.append(previous)
+            row['dependencies'] = list(dict.fromkeys(deps))
+            row['satisfied_original'] = original if original not in deps else None
+            previous = row['job_id']
+    ordered = [row['job_id'] for lane in lanes.values() for row in lane]
+    assert set(ordered) == pending and len(ordered) == len(set(ordered))
+    result = {'created_at': datetime.now(timezone.utc).isoformat(), 'lanes': lanes, 'running_anchor': running,
+              'source_root': source['source_root'], 'source_revision': source['expected_revision'],
+              'scientific_plan_sha256': sha(RECOVERY / 'plan.json'), 'original_ledger_sha256': sha(RECOVERY / 'submissions.jsonl'),
+              'adjustment_source_sha256': sha(Path(__file__)), 'pending_ids': sorted(pending),
+              'before': {str(j): owned[j] for j in pending}, 'resources': {'cpus': 4, 'memory_mib': 20480},
+              'order': 'Within each Red lane: primary own-target first in each training wave, remaining primary cells in that wave, then final-budget cells, then optional replication.'}
+    write('plan.json', result)
+    print(json.dumps({'pending_jobs': len(pending), 'running_anchor': running, 'lanes': {k: [r['job_id'] for r in v] for k, v in lanes.items()}}))
+
+
+def apply():
+    data = read(OUTPUT / 'plan.json')
+    assert sha(Path(__file__)) == data['adjustment_source_sha256']
+    assert sha(RECOVERY / 'plan.json') == data['scientific_plan_sha256']
+    assert sha(RECOVERY / 'submissions.jsonl') == data['original_ledger_sha256']
+    current = snapshot()
+    assert all(current[j]['JobState'] == 'PENDING' for j in data['pending_ids']), 'State changed; do not apply stale plan'
+    command(['scontrol', 'hold', ','.join(map(str, data['pending_ids']))], 'hold')
+    held = snapshot()
+    write('held.json', {str(j): held[j] for j in data['pending_ids']})
+    assert all(held[j]['JobState'] == 'PENDING' and held[j]['Priority'] == '0' for j in data['pending_ids'])
+    for lane in data['lanes'].values():
+        for row in lane:
+            dep = 'afterany:' + ':'.join(map(str, row['dependencies'])) if row['dependencies'] else ''
+            command(['scontrol', 'update', f'JobId={row["job_id"]}', 'NumCPUs=4', 'CPUsPerTask=4',
+                     'MinCPUsNode=4', 'MinMemoryNode=20480', f'Dependency={dep}'], f'update-{row["job_id"]}')
+    verify(data, held=True)
+    command(['scontrol', 'release', ','.join(map(str, data['pending_ids']))], 'release')
+    verify(data, held=False)
+
+
+def verify(data, held):
+    current = snapshot()
+    rows = []
+    for lane in data['lanes'].values():
+        for row in lane:
+            fields = current[row['job_id']]
+            assert fields['NumCPUs'] == '4' and fields['CPUs/Task'] == '4' and fields['MinCPUsNode'] == '4'
+            assert fields['MinMemoryNode'] in {'20G', '20480M', '20480'}
+            actual = set(map(int, re.findall(r':([0-9]+)', fields['Dependency'])))
+            assert actual <= set(row['dependencies'])
+            assert all(dep in actual or terminal(dep, current) for dep in row['dependencies'])
+            if held:
+                assert fields['JobState'] == 'PENDING' and fields['Priority'] == '0'
+            rows.append({'job_id': row['job_id'], 'cell_id': row['cell']['id'], 'state': fields['JobState'],
+                         'dependencies': row['dependencies'], 'scheduler_dependency': fields['Dependency']})
+    assert sum(current[j]['JobState'] == 'RUNNING' for j in data['pending_ids']) <= 2
+    assert subprocess.check_output(['git', '-C', data['source_root'], 'rev-parse', 'HEAD'], text=True).strip() == data['source_revision']
+    assert not subprocess.check_output(['git', '-C', data['source_root'], 'status', '--porcelain'], text=True)
+    write('verified-held.json' if held else 'verified-released.json', {'at': datetime.now(timezone.utc).isoformat(), 'passed': True, 'jobs': rows})
+    print(json.dumps({'held': held, 'verified_jobs': len(rows), 'passed': True}))
+
+
+if __name__ == '__main__':
+    {'plan': plan, 'apply': apply}[sys.argv[1]]()
