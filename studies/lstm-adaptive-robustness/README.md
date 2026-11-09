@@ -1,8 +1,10 @@
 # LSTM robustness to adaptive attackers
 
 Does the extra fixed-FSM training from 49.968M to 124.992M transitions make Blue
-harder for a newly trained attacker to exploit? Eight main searches are queued,
-with the first two running. Scientific results are pending.
+harder for a newly trained attacker to exploit? The first two attacker searches
+completed; the cross-play matrix is still incomplete.
+[CPU recovery](checks/20261109-cpu-recovery/launch-status.json) is queued to finish
+missing cells while preserving completed results and partial evidence.
 
 Train fresh Red policies against both checkpoint ages from Blue seeds **42 and
 100** in the [competence study](../lstm-fsm-competence/README.md). Red seeds **17
@@ -30,3 +32,6 @@ agreement across independent fresh runs and checkpoint continuation.
 
 ITM results:
 `~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/`.
+
+Recovery selections, submissions and outputs:
+`production/recoveries/20261109-cpu-v2/` beneath the dated study directory.

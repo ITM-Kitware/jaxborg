@@ -1,0 +1,795 @@
+{
+  "at": "2026-11-09T00:49:35.152162+00:00",
+  "passed": true,
+  "recovery_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2",
+  "runtime_source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+  "runtime_checkout_clean": true,
+  "helper_source_commit": "2e382d44f7444d862e47a0b12cf888f92275f502",
+  "helper_sha256": "a672111fa6695989e50fd5cd98eb8ffb9ac3cf83aba07a49262964566de1d7d4",
+  "plan_sha256": "594bdade0663859142b3636ea2e885913a18c53f51f2a3aadaa96caf99177d43",
+  "submission_ledger_sha256": "50197636f87b1e2625f1f802222e33e48db8cac4534b8d99392b68717de0158e",
+  "preflight_sha256": "49c589dc27d1b1a58bd92f35019d50535924cc3e2f7838cfb8b5586c74f3481d",
+  "recovery_tests_passed": 34,
+  "completed_cells_reused": [
+    {
+      "at": "2026-11-09T00:47:54.831045+00:00",
+      "cell_id": "c000",
+      "event": "skipped",
+      "success": {
+        "evaluation_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:evaluation:3205812a7fdd42adb5b280a79150268e",
+        "receipt": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-primary-red17/primary/blue42-primary/receipt.json",
+        "receipt_sha256": "4ded3105c07291ed7b44b2fbf7c0c6ed04901ec93c727bac6b3368547630f247"
+      }
+    },
+    {
+      "at": "2026-11-09T00:47:56.861265+00:00",
+      "cell_id": "c001",
+      "event": "skipped",
+      "success": {
+        "evaluation_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:evaluation:45461b06538c48d2bb79cd4948f5b74a",
+        "receipt": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-final-red83/primary/blue42-primary/receipt.json",
+        "receipt_sha256": "12e23926d9c5896773b1e6e63b386021df8ad5ac0ae16d6dac113e35130fb6e9"
+      }
+    }
+  ],
+  "cpu_recovery_jobs": [
+    {
+      "job_id": 4182,
+      "cell_id": "c002",
+      "state": "PENDING",
+      "dependencies": [
+        4159
+      ]
+    },
+    {
+      "job_id": 4183,
+      "cell_id": "c003",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4182
+      ]
+    },
+    {
+      "job_id": 4184,
+      "cell_id": "c004",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4183
+      ]
+    },
+    {
+      "job_id": 4185,
+      "cell_id": "c005",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4184
+      ]
+    },
+    {
+      "job_id": 4186,
+      "cell_id": "c006",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4185
+      ]
+    },
+    {
+      "job_id": 4187,
+      "cell_id": "c007",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4186
+      ]
+    },
+    {
+      "job_id": 4188,
+      "cell_id": "c008",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4187
+      ]
+    },
+    {
+      "job_id": 4189,
+      "cell_id": "c009",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4188
+      ]
+    },
+    {
+      "job_id": 4190,
+      "cell_id": "c010",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4189
+      ]
+    },
+    {
+      "job_id": 4191,
+      "cell_id": "c011",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4190
+      ]
+    },
+    {
+      "job_id": 4192,
+      "cell_id": "c012",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4191
+      ]
+    },
+    {
+      "job_id": 4193,
+      "cell_id": "c013",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4192
+      ]
+    },
+    {
+      "job_id": 4194,
+      "cell_id": "c014",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4193
+      ]
+    },
+    {
+      "job_id": 4195,
+      "cell_id": "c015",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4194
+      ]
+    },
+    {
+      "job_id": 4196,
+      "cell_id": "c016",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4195
+      ]
+    },
+    {
+      "job_id": 4197,
+      "cell_id": "c017",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4196
+      ]
+    },
+    {
+      "job_id": 4198,
+      "cell_id": "c018",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4197
+      ]
+    },
+    {
+      "job_id": 4199,
+      "cell_id": "c019",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4198
+      ]
+    },
+    {
+      "job_id": 4200,
+      "cell_id": "c020",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4199
+      ]
+    },
+    {
+      "job_id": 4201,
+      "cell_id": "c021",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4200
+      ]
+    },
+    {
+      "job_id": 4202,
+      "cell_id": "c022",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4201
+      ]
+    },
+    {
+      "job_id": 4203,
+      "cell_id": "c023",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4202
+      ]
+    },
+    {
+      "job_id": 4204,
+      "cell_id": "c024",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4203
+      ]
+    },
+    {
+      "job_id": 4205,
+      "cell_id": "c025",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4204
+      ]
+    },
+    {
+      "job_id": 4206,
+      "cell_id": "c026",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4205
+      ]
+    },
+    {
+      "job_id": 4207,
+      "cell_id": "c027",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4206
+      ]
+    },
+    {
+      "job_id": 4208,
+      "cell_id": "c028",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4207
+      ]
+    },
+    {
+      "job_id": 4209,
+      "cell_id": "c029",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4208
+      ]
+    },
+    {
+      "job_id": 4210,
+      "cell_id": "c030",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4209
+      ]
+    },
+    {
+      "job_id": 4211,
+      "cell_id": "c031",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4210
+      ]
+    },
+    {
+      "job_id": 4212,
+      "cell_id": "c032",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4211
+      ]
+    },
+    {
+      "job_id": 4213,
+      "cell_id": "c033",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4212
+      ]
+    },
+    {
+      "job_id": 4214,
+      "cell_id": "c034",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4213
+      ]
+    },
+    {
+      "job_id": 4215,
+      "cell_id": "c035",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4214
+      ]
+    },
+    {
+      "job_id": 4216,
+      "cell_id": "c036",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4215
+      ]
+    },
+    {
+      "job_id": 4217,
+      "cell_id": "c037",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4216
+      ]
+    },
+    {
+      "job_id": 4218,
+      "cell_id": "c038",
+      "state": "PENDING",
+      "dependencies": [
+        4159,
+        4217
+      ]
+    },
+    {
+      "job_id": 4219,
+      "cell_id": "c039",
+      "state": "PENDING",
+      "dependencies": [
+        4167,
+        4218
+      ]
+    },
+    {
+      "job_id": 4220,
+      "cell_id": "c040",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4219
+      ]
+    },
+    {
+      "job_id": 4221,
+      "cell_id": "c041",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4220
+      ]
+    },
+    {
+      "job_id": 4222,
+      "cell_id": "c042",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4221
+      ]
+    },
+    {
+      "job_id": 4223,
+      "cell_id": "c043",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4222
+      ]
+    },
+    {
+      "job_id": 4224,
+      "cell_id": "c044",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4223
+      ]
+    },
+    {
+      "job_id": 4225,
+      "cell_id": "c045",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4224
+      ]
+    },
+    {
+      "job_id": 4226,
+      "cell_id": "c046",
+      "state": "PENDING",
+      "dependencies": [
+        4161,
+        4225
+      ]
+    },
+    {
+      "job_id": 4227,
+      "cell_id": "c047",
+      "state": "PENDING",
+      "dependencies": [
+        4169,
+        4226
+      ]
+    },
+    {
+      "job_id": 4228,
+      "cell_id": "c048",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4227
+      ]
+    },
+    {
+      "job_id": 4229,
+      "cell_id": "c049",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4228
+      ]
+    },
+    {
+      "job_id": 4230,
+      "cell_id": "c050",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4229
+      ]
+    },
+    {
+      "job_id": 4231,
+      "cell_id": "c051",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4230
+      ]
+    },
+    {
+      "job_id": 4232,
+      "cell_id": "c052",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4231
+      ]
+    },
+    {
+      "job_id": 4233,
+      "cell_id": "c053",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4232
+      ]
+    },
+    {
+      "job_id": 4234,
+      "cell_id": "c054",
+      "state": "PENDING",
+      "dependencies": [
+        4163,
+        4233
+      ]
+    },
+    {
+      "job_id": 4235,
+      "cell_id": "c055",
+      "state": "PENDING",
+      "dependencies": [
+        4171,
+        4234
+      ]
+    },
+    {
+      "job_id": 4236,
+      "cell_id": "c056",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4235
+      ]
+    },
+    {
+      "job_id": 4237,
+      "cell_id": "c057",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4236
+      ]
+    },
+    {
+      "job_id": 4238,
+      "cell_id": "c058",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4237
+      ]
+    },
+    {
+      "job_id": 4239,
+      "cell_id": "c059",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4238
+      ]
+    },
+    {
+      "job_id": 4240,
+      "cell_id": "c060",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4239
+      ]
+    },
+    {
+      "job_id": 4241,
+      "cell_id": "c061",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4240
+      ]
+    },
+    {
+      "job_id": 4242,
+      "cell_id": "c062",
+      "state": "PENDING",
+      "dependencies": [
+        4165,
+        4241
+      ]
+    },
+    {
+      "job_id": 4243,
+      "cell_id": "c063",
+      "state": "PENDING",
+      "dependencies": [
+        4173,
+        4242
+      ]
+    },
+    {
+      "job_id": 4244,
+      "cell_id": "c064",
+      "state": "PENDING",
+      "dependencies": [
+        4175,
+        4243
+      ]
+    },
+    {
+      "job_id": 4245,
+      "cell_id": "c065",
+      "state": "PENDING",
+      "dependencies": [
+        4177,
+        4244
+      ]
+    },
+    {
+      "job_id": 4246,
+      "cell_id": "c066",
+      "state": "PENDING",
+      "dependencies": [
+        4175,
+        4245
+      ]
+    },
+    {
+      "job_id": 4247,
+      "cell_id": "c067",
+      "state": "PENDING",
+      "dependencies": [
+        4177,
+        4246
+      ]
+    },
+    {
+      "job_id": 4248,
+      "cell_id": "c068",
+      "state": "PENDING",
+      "dependencies": [
+        4175,
+        4247
+      ]
+    },
+    {
+      "job_id": 4249,
+      "cell_id": "c069",
+      "state": "PENDING",
+      "dependencies": [
+        4177,
+        4248
+      ]
+    },
+    {
+      "job_id": 4250,
+      "cell_id": "c070",
+      "state": "PENDING",
+      "dependencies": [
+        4175,
+        4249
+      ]
+    },
+    {
+      "job_id": 4251,
+      "cell_id": "c071",
+      "state": "PENDING",
+      "dependencies": [
+        4177,
+        4250
+      ]
+    },
+    {
+      "job_id": 4252,
+      "cell_id": "c072",
+      "state": "PENDING",
+      "dependencies": [
+        4179,
+        4251
+      ]
+    },
+    {
+      "job_id": 4253,
+      "cell_id": "c073",
+      "state": "PENDING",
+      "dependencies": [
+        4181,
+        4252
+      ]
+    },
+    {
+      "job_id": 4254,
+      "cell_id": "c074",
+      "state": "PENDING",
+      "dependencies": [
+        4179,
+        4253
+      ]
+    },
+    {
+      "job_id": 4255,
+      "cell_id": "c075",
+      "state": "PENDING",
+      "dependencies": [
+        4181,
+        4254
+      ]
+    },
+    {
+      "job_id": 4256,
+      "cell_id": "c076",
+      "state": "PENDING",
+      "dependencies": [
+        4179,
+        4255
+      ]
+    },
+    {
+      "job_id": 4257,
+      "cell_id": "c077",
+      "state": "PENDING",
+      "dependencies": [
+        4181,
+        4256
+      ]
+    },
+    {
+      "job_id": 4258,
+      "cell_id": "c078",
+      "state": "PENDING",
+      "dependencies": [
+        4179,
+        4257
+      ]
+    },
+    {
+      "job_id": 4259,
+      "cell_id": "c079",
+      "state": "PENDING",
+      "dependencies": [
+        4181,
+        4258
+      ]
+    }
+  ],
+  "live_training_deadlines": [
+    {
+      "job_id": 4160,
+      "state": "RUNNING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4162,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4164,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4168,
+      "state": "RUNNING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4170,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4172,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4174,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4176,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4178,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    },
+    {
+      "job_id": 4180,
+      "state": "PENDING",
+      "deadline": "2026-11-09T08:00:00"
+    }
+  ],
+  "dena_job": {
+    "job_id": 4137,
+    "state": "RUNNING"
+  },
+  "note": "Fresh CPU evaluation aliases preserve all original successful and partial evidence. Runtime checks skip newly completed cells. Main primary, main final, optional primary order."
+}

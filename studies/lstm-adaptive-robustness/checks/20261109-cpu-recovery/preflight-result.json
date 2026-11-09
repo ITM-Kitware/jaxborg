@@ -1,0 +1,27 @@
+{
+  "at": "2026-11-09T00:47:36.074118+00:00",
+  "passed": true,
+  "cells": 80,
+  "already_complete": 2,
+  "planned_cpu_jobs": 78,
+  "one_serial_recovery_chain": true,
+  "runtime_rechecks": true,
+  "helper_sha256": "a672111fa6695989e50fd5cd98eb8ffb9ac3cf83aba07a49262964566de1d7d4",
+  "dry_run_sha256": "5939c9ae24dd96fa02a1816b1020495e789d4dffbffe565752cf78d986549b22",
+  "first_command": [
+    "sbatch",
+    "--parsable",
+    "--partition=community",
+    "--cpus-per-task=8",
+    "--mem=24G",
+    "--time=120",
+    "--signal=B:INT@180",
+    "--job-name=adaptive-recovery-c002",
+    "--chdir=/home/local/KHQ/paul.elliott/src/cyber/jaxborg/lstm-adaptive-20261108-607cc014",
+    "--output=/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/logs/%j.out",
+    "--error=/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/logs/%j.err",
+    "--dependency=afterany:4159",
+    "--wrap",
+    "exec /home/local/KHQ/paul.elliott/src/cyber/jaxborg/lstm-adaptive-20261108-607cc014/.venv/bin/python /home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/recover_evaluations.py run-cell --recovery-root /home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2 --cell-id c002 --plan-sha256 594bdade0663859142b3636ea2e885913a18c53f51f2a3aadaa96caf99177d43"
+  ]
+}
