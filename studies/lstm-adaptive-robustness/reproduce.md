@@ -79,6 +79,6 @@ submission ledger, per-cell selections and results identify all reused and new
 evaluations. A failed submission with an uncertain outcome requires reconciliation
 with Slurm before another submission.
 
-The [current queue adjustment](checks/20261109-cpu-recovery/two-lanes.json)
-records the two recovery lanes and direct-matchup priority. It preserves the
+The [current queue adjustment](checks/20261109-cpu-recovery/four-plus-three.json)
+records the current recovery lanes and direct-matchup priority. It preserves the
 original job IDs, evaluator prerequisites, scientific plan and submission ledger.

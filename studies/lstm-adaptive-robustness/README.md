@@ -3,7 +3,7 @@
 Does the extra fixed-FSM training from 49.968M to 124.992M transitions make Blue
 harder for a newly trained attacker to exploit? The first two attacker searches
 completed; the cross-play matrix is still incomplete.
-[CPU recovery](checks/20261109-cpu-recovery/two-lanes.json) is queued to finish
+[CPU recovery](checks/20261109-cpu-recovery/four-plus-three.json) is queued to finish
 missing cells while preserving completed results and partial evidence. Direct
 matchups take priority within each completed training batch.
 
