@@ -3,6 +3,8 @@
 - Next: [training](training.md), [evaluation](evaluation.md), or [composing a study](../studies/README.md).
 - Commands below run from the repository root. Paths such as `/absolute/path/...`
   are placeholders to replace with your chosen locations.
+- On ITM, follow [Studies on ITM](itm-studies.md) for shared storage, the
+  dedicated Jaxborg tracking destination, and checkpoint budgets.
 
 ## Python environment
 

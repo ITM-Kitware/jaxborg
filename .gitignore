@@ -20,6 +20,7 @@ scripts/dev/catalog_status.json
 outputs/*
 
 docs/*
+!docs/itm-studies.md
 !docs/parity.md
 !docs/topologies.md
 exp/

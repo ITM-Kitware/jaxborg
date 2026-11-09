@@ -6,7 +6,11 @@ generated evidence outside the source checkout.
 
 ## Start here
 
+- [Study instructions](AGENTS.md): required storage, tracking, and checkpoint rules.
 - [Project setup](../docs/setup.md): environment, storage, and MLflow.
+- [Studies on ITM](../docs/itm-studies.md): shared paths, the dedicated Jaxborg
+  MLflow service, historical imports, and checkpoint budgets. Read before
+  preparing an ITM study or submitting jobs.
 - [Shared training guide](../docs/training.md): recipes and execution.
 - [Shared evaluation guide](../docs/evaluation.md): evaluators and outputs.
 

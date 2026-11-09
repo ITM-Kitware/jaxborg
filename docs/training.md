@@ -79,6 +79,9 @@
 
 ## Checkpoint evaluation
 
+- On ITM, use the [checkpoint budget](itm-studies.md#checkpoint-budget) when
+  choosing periodic saves and evaluation milestones. The default recovery
+  cadence is approximately four hours; metric logging can remain frequent.
 - `mlflow.checkpoint_eval` configures evaluation during training:
   - `every_steps: 0` disables it.
   - `episodes_per_seed`, `seed`, and `deterministic` specify its sampling.
