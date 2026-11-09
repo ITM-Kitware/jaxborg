@@ -1,7 +1,7 @@
 {
   "at": "2026-11-09T00:49:35.152162+00:00",
   "passed": true,
-  "recovery_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2",
+  "recovery_root": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2",
   "runtime_source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
   "runtime_checkout_clean": true,
   "helper_source_commit": "2e382d44f7444d862e47a0b12cf888f92275f502",
@@ -17,7 +17,7 @@
       "event": "skipped",
       "success": {
         "evaluation_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:evaluation:3205812a7fdd42adb5b280a79150268e",
-        "receipt": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-primary-red17/primary/blue42-primary/receipt.json",
+        "receipt": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-primary-red17/primary/blue42-primary/receipt.json",
         "receipt_sha256": "4ded3105c07291ed7b44b2fbf7c0c6ed04901ec93c727bac6b3368547630f247"
       }
     },
@@ -27,7 +27,7 @@
       "event": "skipped",
       "success": {
         "evaluation_id": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:evaluation:45461b06538c48d2bb79cd4948f5b74a",
-        "receipt": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-final-red83/primary/blue42-primary/receipt.json",
+        "receipt": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/evaluations/br-blue42-final-red83/primary/blue42-primary/receipt.json",
         "receipt_sha256": "12e23926d9c5896773b1e6e63b386021df8ad5ac0ae16d6dac113e35130fb6e9"
       }
     }
@@ -735,61 +735,8 @@
       ]
     }
   ],
-  "live_training_deadlines": [
-    {
-      "job_id": 4160,
-      "state": "RUNNING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4162,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4164,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4168,
-      "state": "RUNNING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4170,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4172,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4174,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4176,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4178,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4180,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    }
-  ],
-  "dena_job": {
-    "job_id": 4137,
-    "state": "RUNNING"
-  },
-  "note": "Fresh CPU evaluation aliases preserve all original successful and partial evidence. Runtime checks skip newly completed cells. Main primary, main final, optional primary order."
+  "note": "Fresh CPU evaluation aliases preserve all original successful and partial evidence. Runtime checks skip newly completed cells. Main primary, main final, optional primary order.",
+  "public_summary": true,
+  "original_retained_record_sha256": "b77d4b33b37a416c508faed55c4557aa7bd1c04714d88e85c96bfe42cf861a4c",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/launch-status.json"
 }

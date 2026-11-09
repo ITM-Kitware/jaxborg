@@ -4,9 +4,9 @@
   "xla_flags": "--xla_gpu_exclude_nondeterministic_ops=true",
   "original_attempt": "evaluation-store:f0fbe34b856f4cf7a9aaaeb0cb357ce9:attempt:ac4e139a848f4084b2aafb6c79b2d6a4",
   "resumed_attempt": "evaluation-store:f0fbe34b856f4cf7a9aaaeb0cb357ce9:attempt:d93a3346d4b04d599937feea3bee85ba",
-  "parent": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/96000/training_state_96000.npz",
-  "original_final": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/192000/training_state_192000.npz",
-  "resumed_final": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/d93a3346d4b04d599937feea3bee85ba/artifacts/checkpoints/192000/training_state_192000.npz",
+  "parent": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/96000/training_state_96000.npz",
+  "original_final": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/ac4e139a848f4084b2aafb6c79b2d6a4/artifacts/checkpoints/192000/training_state_192000.npz",
+  "resumed_final": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/evidence/attempts/d93a3346d4b04d599937feea3bee85ba/artifacts/checkpoints/192000/training_state_192000.npz",
   "elapsed_seconds": 301.8070192337036,
   "frozen_verification_original": {
     "blue": {
@@ -36,5 +36,8 @@
   "resumed_update_seconds": [
     48.76603501942009,
     67.05462272744626
-  ]
+  ],
+  "public_summary": true,
+  "original_retained_record_sha256": "364c4facf8b08a968ca1df038db529a560ebcfc96a03dde757267d1b277d86c2",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/checks/resume-diagnostic/deterministic-comparison.json"
 }

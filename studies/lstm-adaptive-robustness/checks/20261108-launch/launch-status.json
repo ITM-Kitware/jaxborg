@@ -30,12 +30,6 @@
     }
   },
   "gpu_deadline_utc": "2026-11-09T13:00:00+00:00",
-  "gpu_use": [
-    "0, 44194 MiB, 92 %",
-    "1, 41876 MiB, 100 %",
-    "2, 4764 MiB, 93 %",
-    "3, 4764 MiB, 92 %"
-  ],
   "jobs": [
     {
       "dependencies": [],
@@ -334,33 +328,7 @@
     "submissions/production-plan.json": "3abbd050e515f4f613797aa3173c03cbfd27653a8302e1e62809a91612f67963"
   },
   "source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
-  "squeue": [
-    "4181|PENDING|0:00|(Dependency)",
-    "4180|PENDING|0:00|(Dependency)",
-    "4179|PENDING|0:00|(Dependency)",
-    "4178|PENDING|0:00|(Dependency)",
-    "4177|PENDING|0:00|(Dependency)",
-    "4176|PENDING|0:00|(Dependency)",
-    "4175|PENDING|0:00|(Dependency)",
-    "4174|PENDING|0:00|(Dependency)",
-    "4173|PENDING|0:00|(Dependency)",
-    "4172|PENDING|0:00|(Dependency)",
-    "4171|PENDING|0:00|(Dependency)",
-    "4170|PENDING|0:00|(Dependency)",
-    "4169|PENDING|0:00|(Dependency)",
-    "4168|PENDING|0:00|(Dependency)",
-    "4167|PENDING|0:00|(Dependency)",
-    "4165|PENDING|0:00|(Dependency)",
-    "4164|PENDING|0:00|(Dependency)",
-    "4163|PENDING|0:00|(Dependency)",
-    "4162|PENDING|0:00|(Dependency)",
-    "4161|PENDING|0:00|(Dependency)",
-    "4160|PENDING|0:00|(Dependency)",
-    "4159|PENDING|0:00|(Dependency)",
-    "4158|RUNNING|3:23|itm",
-    "4166|RUNNING|3:23|itm"
-  ],
-  "study_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production",
+  "study_root": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production",
   "submission_plan": {
     "blocks": 2,
     "created_at": "2026-11-08T19:44:16.058835+00:00",
@@ -450,5 +418,8 @@
       "resumed_attempt": "evaluation-store:5da818f4fa644f8fa0a591b64d83cebe:attempt:c9f960038c414b3eb7b20b46959a1d81",
       "state_sha256": "74d38b2d21fb3a15f254cb597c0732819feeed22934307b80739f0fae948c793"
     }
-  }
+  },
+  "public_summary": true,
+  "original_retained_record_sha256": "ff3b0331d901eb778a1e80758bcf92792e3dc3cca61d20925284f105ce4c2bb9",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/checks/launch-status.json"
 }

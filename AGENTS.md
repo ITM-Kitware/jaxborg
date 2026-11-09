@@ -15,6 +15,11 @@ move it into another document or script comments. Mention an execution detail
 only when it changes the scientific interpretation or is essential to reproduce
 the result. Keep README summaries short; link exact methods and records.
 
+Study PRs are public. Keep credentials, personal home paths, usernames and
+unrelated people's job details out of tracked records and PR descriptions. Use
+study-relative or `~/` paths and concise result/provenance summaries; retain exact
+operational records externally and link them by location and content hash.
+
 ## Tests
 
 ```bash

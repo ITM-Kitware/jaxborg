@@ -57,5 +57,8 @@
     "inprocess-v2/comparison.json": "5301ac727650b605e2343b8a4adabfc3e8c19a94f241befb7483b3b94355f81d",
     "inprocess-v2/format-summary.json": "f87a3434fdcedd95f4907ca7103783e80684c54f0e23a9971f9a34e94a91c070",
     "deterministic-comparison.json": "364c4facf8b08a968ca1df038db529a560ebcfc96a03dde757267d1b277d86c2"
-  }
+  },
+  "public_summary": true,
+  "original_retained_record_sha256": "9424a70b8e4ccfc7cea43828b719155a98c1d0ba919e5fac299b75be78409f8e",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/checks/resume-diagnostic/summary.json"
 }

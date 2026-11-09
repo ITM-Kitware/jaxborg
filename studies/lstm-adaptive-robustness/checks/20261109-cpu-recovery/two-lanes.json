@@ -1,7 +1,7 @@
 {
   "at": "2026-11-09T01:09:26.296910+00:00",
   "passed": true,
-  "adjustment_root": "/home/local/KHQ/paul.elliott/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-two-lanes",
+  "adjustment_root": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-two-lanes",
   "source_runtime_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
   "adjustment_source_sha256": "4d706070bf74d2562e8d7502bcbc4a5676c4e9e08e119c225a88caa69bc2cd08",
   "adjustment_plan_sha256": "9703ed4e0440b45c479518b1fe86ab87707b4b59fb951b4ec420146856f71dba",
@@ -171,57 +171,7 @@
     }
   ],
   "order": "Within each Red lane: primary own-target first in each training wave, remaining primary cells in that wave, then final-budget cells, then optional replication.",
-  "live_training_deadlines": [
-    {
-      "job_id": 4160,
-      "state": "RUNNING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4162,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4164,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4168,
-      "state": "RUNNING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4170,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4172,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4174,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4176,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4178,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    },
-    {
-      "job_id": 4180,
-      "state": "PENDING",
-      "deadline": "2026-11-09T08:00:00"
-    }
-  ],
-  "dena_job_4137_state": "RUNNING"
+  "public_summary": true,
+  "original_retained_record_sha256": "69f83351958e84307d15170f94e7687d0de8a636886253883abfb498fb68926a",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-two-lanes/summary.json"
 }
