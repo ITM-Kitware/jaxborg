@@ -1,32 +1,40 @@
 # Do observations improve Blue decisions?
 
-Do the final Blue policies gain useful competence from observations and memory,
-or does a fixed randomized preference over legal actions perform comparably?
-This study compares each sampled policy with one observation-blind categorical
-preference vector per agent, fitted on separate calibration episodes and frozen
-before held-out evaluation. Observation-blindness remains a hypothesis.
+Full sampled Blue policies were compared with mask-aware, observation-blind
+categorical preferences fitted on separate calibration episodes. All three full
+policies gained meaningful return beyond their frozen baselines: every 95%
+interval exceeded the prespecified 100-point practical margin.
 
-Use the frozen learned-Red panel: two independently trained LSTM seeds at
-124.992M steps and one MAPPO trajectory at 150M, against seven 29.952M adaptive
-Reds and the co-trained MAPPO Red. Fit across all eight opponents, then compare
-on 32 fresh episode roots across four reserved layouts, for 500 steps per case.
-Both conditions sample; Red remains unchanged. Masks supply information to both
-conditions. The baseline has no phase or opponent input. This tests value beyond
-that particular distilled baseline, rather than the best possible blind policy.
+| Final Blue checkpoint | Full mean | Blind mean | Full minus blind, 95% interval |
+| --- | ---: | ---: | ---: |
+| LSTM 42, 124.992M steps | -3,491.0 | -4,561.4 | +1,070.3 [984.7, 1,156.0] |
+| LSTM 100, 124.992M steps | -3,501.1 | -4,719.2 | +1,218.1 [1,119.2, 1,316.9] |
+| MAPPO 43, 150M steps | -2,352.8 | -4,819.8 | +2,467.0 [2,311.9, 2,622.1] |
 
-The practical margin is 100 return points per episode. Report full-policy minus
-blind return separately for each checkpoint, with a 95% interval over matched
-root means conditional on this opponent/layout panel. An interval entirely above
-100 supports useful responsiveness; one entirely within ±100 supports comparable
-performance on this panel. Other results remain inconclusive about equivalence.
-Repeated episodes and related Reds do not add independent Blue training runs.
+The 6,144 held-out episodes used the frozen learned-Red panel: seven 29.952M
+adaptive Reds and the co-trained MAPPO Red, four reserved layouts, 32 fresh
+episode roots and 500 steps per case. Both Blue conditions sampled, and Red
+always sampled. One canonical preference vector per agent was distilled across
+all eight opponents using 64 calibration episodes per Blue. Masks supply
+information to both conditions; the baseline receives no phase or opponent input.
+The six historical replay returns matched exactly.
 
-Sparse actual decision inputs support controlled spatial evidence swaps and
-separate observation/carry sensitivity measurements. These measure dependence;
-closed-loop returns determine its usefulness. There is no established architecture
-cause. Historical cases must replay exactly before new comparisons.
+Controlled swaps of complete host evidence changed the top action in 59–65% of
+eligible calibration decisions while masks and incoming carries were held fixed.
+Both LSTMs also depended strongly on incoming carry. The return comparison
+combines phase, static context, evidence and history, so it does not isolate
+threat-specific responsiveness or useful memory. No architecture cause has been
+established.
 
-The frozen protocol, selections, calibration fit, measurements and report live at
-`/data/shared/jaxborg/studies/observation-value-20261109/`. The dedicated tracking
-experiment is `jaxborg/observation-value-20261109`. [prepare.py](prepare.py)
-freezes inputs; [compare.py](compare.py) runs and analyzes the comparison.
+Intervals describe fresh-root variation conditional on these opponents, layouts
+and fitted baselines. They exclude uncertainty from refitting or new training
+runs. Two LSTM training seeds and one MAPPO trajectory do not establish a
+population-wide result. This tests one distilled blind policy per checkpoint,
+rather than the best return-optimized blind controller.
+
+The frozen inputs, `report/comparison.json`, episode tables, sensitivity records
+and validation checks live at
+`/data/shared/jaxborg/studies/observation-value-20261109/` on ITM. Tracking uses
+`jaxborg/observation-value-20261109` (experiment 5). Evaluation source revision:
+`a102881a791eb96f71da542725aa3f5b908bb51d`.
+See [reproduction instructions](reproduce.md) and [the analyzer](compare.py).
