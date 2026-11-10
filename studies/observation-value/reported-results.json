@@ -1,0 +1,998 @@
+{
+  "schema_version": 1,
+  "study_id": "observation-value-20261109",
+  "summary": [
+    {
+      "difference": "full_policy_return_minus_frozen_baseline_return",
+      "mean_difference": 1070.328125,
+      "confidence_level": 0.95,
+      "confidence_interval": [
+        984.6528950189771,
+        1156.0033549810228
+      ],
+      "standard_error": 42.00768086741541,
+      "practical_margin": 100.0,
+      "classification": "useful_full_policy_advantage",
+      "roots": 32,
+      "opponents": 8,
+      "layouts": 4,
+      "matched_episode_pairs": 1024,
+      "root_mean_differences": [
+        921.3125,
+        1189.84375,
+        826.75,
+        1246.90625,
+        713.75,
+        942.03125,
+        1056.8125,
+        1181.28125,
+        841.75,
+        1412.46875,
+        945.125,
+        1580.28125,
+        908.625,
+        1009.96875,
+        1012.65625,
+        776.9375,
+        1033.75,
+        962.21875,
+        1045.71875,
+        1091.125,
+        752.28125,
+        1375.03125,
+        1008.28125,
+        1090.09375,
+        859.1875,
+        882.03125,
+        1158.3125,
+        1634.875,
+        1238.75,
+        892.5,
+        1541.625,
+        1118.21875
+      ],
+      "uncertainty": "Student t interval across independent episode-root means; fixed opponent/layout panel",
+      "scope": "Conditional on selected checkpoints and the fitted baseline; evaluation roots are not training replicates",
+      "blue": "lstm42-final",
+      "full_mean": -3491.0263671875,
+      "blind_mean": -4561.3544921875,
+      "baseline_sha256": "0bc7d9d2214a739d9d7666a301bd4f16392b767a3224353e4c470ac95ab44d70",
+      "confidence_lower": 984.6528950189771,
+      "confidence_upper": 1156.0033549810228
+    },
+    {
+      "difference": "full_policy_return_minus_frozen_baseline_return",
+      "mean_difference": 1218.0712890625,
+      "confidence_level": 0.95,
+      "confidence_interval": [
+        1119.1961778491827,
+        1316.9464002758173
+      ],
+      "standard_error": 48.47975451596979,
+      "practical_margin": 100.0,
+      "classification": "useful_full_policy_advantage",
+      "roots": 32,
+      "opponents": 8,
+      "layouts": 4,
+      "matched_episode_pairs": 1024,
+      "root_mean_differences": [
+        1062.125,
+        1458.71875,
+        1299.28125,
+        1417.25,
+        1127.28125,
+        1110.375,
+        1181.84375,
+        1414.96875,
+        911.9375,
+        1580.59375,
+        1183.46875,
+        1753.03125,
+        907.875,
+        1149.625,
+        1163.625,
+        1167.8125,
+        1118.40625,
+        1324.96875,
+        1142.40625,
+        1067.65625,
+        792.5,
+        1836.84375,
+        1166.21875,
+        1044.625,
+        993.0625,
+        980.96875,
+        1706.65625,
+        1762.46875,
+        1296.21875,
+        982.09375,
+        1025.0,
+        848.375
+      ],
+      "uncertainty": "Student t interval across independent episode-root means; fixed opponent/layout panel",
+      "scope": "Conditional on selected checkpoints and the fitted baseline; evaluation roots are not training replicates",
+      "blue": "lstm100-final",
+      "full_mean": -3501.0849609375,
+      "blind_mean": -4719.15625,
+      "baseline_sha256": "1755f99e73bbc3d842ab69cdd0f7147871504d6e02fdee5080d440e448850b35",
+      "confidence_lower": 1119.1961778491827,
+      "confidence_upper": 1316.9464002758173
+    },
+    {
+      "difference": "full_policy_return_minus_frozen_baseline_return",
+      "mean_difference": 2466.9951171875,
+      "confidence_level": 0.95,
+      "confidence_interval": [
+        2311.856552308206,
+        2622.133682066794
+      ],
+      "standard_error": 76.06645847489085,
+      "practical_margin": 100.0,
+      "classification": "useful_full_policy_advantage",
+      "roots": 32,
+      "opponents": 8,
+      "layouts": 4,
+      "matched_episode_pairs": 1024,
+      "root_mean_differences": [
+        2564.0625,
+        2766.09375,
+        2201.875,
+        2452.4375,
+        2177.625,
+        2512.15625,
+        1989.3125,
+        2441.21875,
+        2284.28125,
+        3041.4375,
+        3002.09375,
+        1855.03125,
+        2277.15625,
+        2569.3125,
+        2231.1875,
+        2740.75,
+        2217.5625,
+        1897.25,
+        2047.71875,
+        3232.75,
+        2608.34375,
+        2578.96875,
+        2287.3125,
+        2168.5625,
+        2617.78125,
+        2067.78125,
+        3151.09375,
+        3405.40625,
+        2498.09375,
+        2215.375,
+        3181.0625,
+        1662.75
+      ],
+      "uncertainty": "Student t interval across independent episode-root means; fixed opponent/layout panel",
+      "scope": "Conditional on selected checkpoints and the fitted baseline; evaluation roots are not training replicates",
+      "blue": "mappo43-final",
+      "full_mean": -2352.841796875,
+      "blind_mean": -4819.8369140625,
+      "baseline_sha256": "37c017c6fdebb8afc0e955c6ed942b5eb7fd2ffac6a181621f11b832f2d53173",
+      "confidence_lower": 2311.856552308206,
+      "confidence_upper": 2622.133682066794
+    }
+  ],
+  "scored_test_episodes": 6144,
+  "method": {
+    "horizon": 500,
+    "blue_conditions": [
+      "sampled",
+      "blind"
+    ],
+    "red_selection": "sampled",
+    "test_episode_roots": [
+      32000,
+      32001,
+      32002,
+      32003,
+      32004,
+      32005,
+      32006,
+      32007,
+      32008,
+      32009,
+      32010,
+      32011,
+      32012,
+      32013,
+      32014,
+      32015,
+      32016,
+      32017,
+      32018,
+      32019,
+      32020,
+      32021,
+      32022,
+      32023,
+      32024,
+      32025,
+      32026,
+      32027,
+      32028,
+      32029,
+      32030,
+      32031
+    ],
+    "baseline": {
+      "kind": "mask-renormalized fixed categorical action-and-target preferences per Blue agent",
+      "fit": "teacher cross entropy on genuine calibration decisions at every tick",
+      "conditioning": "agent and current legal mask; one fixed vector across all selected opponents and layouts",
+      "phase_conditioned": false,
+      "opponent_conditioned": false,
+      "recurrent": false,
+      "elapsed_time_input": false
+    },
+    "calibration": {
+      "lstm42-final": {
+        "fitted_baseline_sha256": "0bc7d9d2214a739d9d7666a301bd4f16392b767a3224353e4c470ac95ab44d70",
+        "calibration_episode_roots": [
+          31000,
+          31001
+        ],
+        "calibration_episodes": 64,
+        "probability_collection_stride": 1,
+        "recorded_ticks": 32000,
+        "genuine_decisions_per_agent": [
+          16056,
+          15248,
+          15471,
+          15082,
+          15533
+        ],
+        "teacher_to_baseline_kl_nats_per_agent": [
+          0.7456312859375229,
+          0.8160271474671799,
+          0.8047278493193941,
+          0.8629646432136666,
+          0.6971405743338535
+        ]
+      },
+      "lstm100-final": {
+        "fitted_baseline_sha256": "1755f99e73bbc3d842ab69cdd0f7147871504d6e02fdee5080d440e448850b35",
+        "calibration_episode_roots": [
+          31000,
+          31001
+        ],
+        "calibration_episodes": 64,
+        "probability_collection_stride": 1,
+        "recorded_ticks": 32000,
+        "genuine_decisions_per_agent": [
+          16532,
+          15518,
+          15407,
+          15375,
+          15610
+        ],
+        "teacher_to_baseline_kl_nats_per_agent": [
+          0.6722459390842963,
+          0.8055423245328419,
+          0.7738799172879394,
+          0.8163608887633842,
+          0.6784429057749235
+        ]
+      },
+      "mappo43-final": {
+        "fitted_baseline_sha256": "37c017c6fdebb8afc0e955c6ed942b5eb7fd2ffac6a181621f11b832f2d53173",
+        "calibration_episode_roots": [
+          31000,
+          31001
+        ],
+        "calibration_episodes": 64,
+        "probability_collection_stride": 1,
+        "recorded_ticks": 32000,
+        "genuine_decisions_per_agent": [
+          15382,
+          15368,
+          14862,
+          14687,
+          15287
+        ],
+        "teacher_to_baseline_kl_nats_per_agent": [
+          0.43327496823120804,
+          0.6333749966264093,
+          0.5418442651967745,
+          0.5288247840966913,
+          0.769319830023206
+        ]
+      }
+    },
+    "confidence_intervals": "Separate per-policy two-sided 95% Student t intervals across 32 episode-root mean paired differences, conditional on the fixed opponent/layout panel and fitted baseline.",
+    "practical_margin": 100.0
+  },
+  "selected_inputs": {
+    "blues": [
+      {
+        "id": "lstm42-final",
+        "model_sha256": "cd96b4cf0457ec9bd343ee7800ac0606b18072811470b5d610c85c39db72f18a",
+        "recipe_sha256": "dbed8c3702170c25bcde24e515130328324605e833c5ace4d69402d97d161dc0",
+        "training_seed": 42,
+        "training_steps": 124992000,
+        "architecture": {
+          "activation": "tanh",
+          "cell": "lstm",
+          "hidden_dim": 256,
+          "hidden_layers": 1,
+          "name": "recurrent",
+          "trunk": "separate"
+        },
+        "observation_dimension": 450,
+        "action_dimension": 242
+      },
+      {
+        "id": "lstm100-final",
+        "model_sha256": "eb17d0d4804bfecaa18ad258eee04b3f99a87e2c2094166cc501deafdf3683c5",
+        "recipe_sha256": "864b222246400b2a4615016fc0c61e125aaab7ba025ae99eaccae44ef5b6d12b",
+        "training_seed": 100,
+        "training_steps": 124992000,
+        "architecture": {
+          "activation": "tanh",
+          "cell": "lstm",
+          "hidden_dim": 256,
+          "hidden_layers": 1,
+          "name": "recurrent",
+          "trunk": "separate"
+        },
+        "observation_dimension": 450,
+        "action_dimension": 242
+      },
+      {
+        "id": "mappo43-final",
+        "model_sha256": "8e237355d06f50f8fcaafcc4f6575ce2abaff0941b3f49972bb4fef9caf05f56",
+        "recipe_sha256": "28643dac4b37fc36acd88667df64c27818045d42973cfa3fdca10c29de959f8e",
+        "training_seed": 43,
+        "training_steps": 150000000,
+        "architecture": {
+          "activation": "tanh",
+          "blue_observation_version": 2,
+          "cage4_enhanced_obs": true,
+          "critic_input": "global_state",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "mappo"
+        },
+        "observation_dimension": 450,
+        "action_dimension": 242
+      }
+    ],
+    "reds": [
+      {
+        "id": "br-blue100-final-red17",
+        "model_sha256": "39befdd515741b49d85c8df63d6af62dc10e37cb162a2bdf66ccb76f9d551c3f",
+        "recipe_sha256": "9b3a155ae49cb3d3fa283a28d031570f1eb26e669a97eba497cf6ce902e0d917",
+        "training_seed": 17,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue100-final-red83",
+        "model_sha256": "b16058171d973f62571b6954855174e9860a2aee7f57dc9b57430a9d0c960a62",
+        "recipe_sha256": "4be1f79b31512e36dd60e20a361b485db6cc830b672839f41928bfcf6c7cd4f4",
+        "training_seed": 83,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue100-primary-red17",
+        "model_sha256": "cb26ba910f77697fbb45d6e21fe0c50ee5438d14c6fef55b215a39c56db75498",
+        "recipe_sha256": "ea399b42d657753cda1063d60a12eb251514a63e64bed7ac5e8c1271441823e7",
+        "training_seed": 17,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue42-final-red17",
+        "model_sha256": "384735fa9a5192288ba3b7df989d94f3468b71a72e3c4814cb151b5e59a5fd87",
+        "recipe_sha256": "135362e18e4e6d5277bfdfd343b4a6209d97131a5a281e396be6145b624a03cd",
+        "training_seed": 17,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue42-final-red83",
+        "model_sha256": "ae7bac317894530800025ad51ea0e4ce141b839caf42187319ba48331eac3cc3",
+        "recipe_sha256": "70806b2c60b7a2dc877974d46aeb94b169dcbd73f7fbbccd13f03a16164e0849",
+        "training_seed": 83,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue42-primary-red17",
+        "model_sha256": "4c199432edfed06bd77be17077e20428fb88643a4cbfe6923bbc13bd19b3d6af",
+        "recipe_sha256": "d1bc66b6efbfad054cbeca86b845ed11105dce4345227f8b61d770f68fd77998",
+        "training_seed": 17,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "br-blue42-primary-red83",
+        "model_sha256": "3dd50c53d4503a2aea709a96cb9453cbb323f2877cd9fc178794dab1bfb8e2a6",
+        "recipe_sha256": "15f0cf6f3af48229a803436ca3cc65e741e9fde4114647c2038ea15c3d3ab22d",
+        "training_seed": 83,
+        "training_steps": 29952000,
+        "architecture": {
+          "activation": "tanh",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "shared"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      },
+      {
+        "id": "mappo43-cotrained",
+        "model_sha256": "8e237355d06f50f8fcaafcc4f6575ce2abaff0941b3f49972bb4fef9caf05f56",
+        "recipe_sha256": "28643dac4b37fc36acd88667df64c27818045d42973cfa3fdca10c29de959f8e",
+        "training_seed": 43,
+        "training_steps": 150000000,
+        "architecture": {
+          "activation": "tanh",
+          "blue_observation_version": 2,
+          "cage4_enhanced_obs": true,
+          "critic_input": "global_state",
+          "hidden_dim": 256,
+          "hidden_layers": 2,
+          "name": "mappo",
+          "team": "red"
+        },
+        "observation_dimension": 706,
+        "action_dimension": 1106
+      }
+    ],
+    "topologies": [
+      {
+        "label": "reserved-200",
+        "sha256": "3739905e2fd88762cf92b2d8fd89c0b043b0bf3c96fd21899712fa5018e26d89"
+      },
+      {
+        "label": "reserved-201",
+        "sha256": "5810e1753eee6a8149db89992c2fb2565278b4244cf9c6b3a0cb6ad0148ff486"
+      },
+      {
+        "label": "reserved-202",
+        "sha256": "00642b14fb2771e3f913991cabdf42180fed9585e2dc0485d777df99b388bb79"
+      },
+      {
+        "label": "reserved-203",
+        "sha256": "159d2b5e89cf2e818937ed799da224675c8b2ed4603ee0f11b437154190d8b5e"
+      }
+    ]
+  },
+  "sensitivity": {
+    "lstm42-final": {
+      "retained_rows": 881,
+      "genuine_decisions": 2182,
+      "evidence_permutation": {
+        "decisions": 1980,
+        "tv_mean": 0.32080473867433346,
+        "tv_median": 0.30582005573175763,
+        "tv_p90": 0.4757748562309021,
+        "js_nats_mean": 0.08778556744489222,
+        "js_nats_median": 0.07115857871318232,
+        "js_nats_p90": 0.16965366205624324,
+        "argmax_changed_mean": 0.6373737373737374,
+        "source_target_mass_change_mean": -0.027447717264294624,
+        "source_Analyse_probability_change_mean": -0.0034569120034575462,
+        "source_Remove_probability_change_mean": -0.011477183550596237,
+        "source_Restore_probability_change_mean": -0.012032815255224705,
+        "source_Decoy_probability_change_mean": -0.0004808083758689463,
+        "destination_target_mass_change_mean": 0.03442494943737984,
+        "destination_Analyse_probability_change_mean": 0.0004753967223223299,
+        "destination_Remove_probability_change_mean": 0.03403060510754585,
+        "destination_Restore_probability_change_mean": 0.0024723915848881006,
+        "destination_Decoy_probability_change_mean": -0.0025534462183713913
+      },
+      "evidence_selection": "First observed subnet with unequal evidence; lexicographically greatest and least valid host tuples.",
+      "target_action_order": [
+        "Analyse",
+        "Remove",
+        "Restore",
+        "Decoy"
+      ],
+      "interpretation": "Input dependence only. Spatial evidence permutations are controlled counterfactual inputs; trajectory realizability is not established. Closed-loop returns determine functional value.",
+      "retained_probability_max_abs_error": 9.238719940185547e-07,
+      "initial_carry_intervention": {
+        "decisions": 2182,
+        "tv_mean": 0.44770910412179865,
+        "tv_median": 0.4433706861348826,
+        "tv_p90": 0.6093832814794583,
+        "js_nats_mean": 0.1614255721093783,
+        "js_nats_median": 0.14720625405101434,
+        "js_nats_p90": 0.2626638674294133,
+        "argmax_changed_mean": 0.8056828597616865
+      },
+      "matched_carry_intervention": {
+        "decisions": 2182,
+        "tv_mean": 0.4926010126373908,
+        "tv_median": 0.4994725736200536,
+        "tv_p90": 0.665685092564143,
+        "js_nats_mean": 0.19076867619026372,
+        "js_nats_median": 0.18601873534904317,
+        "js_nats_p90": 0.31140049600166336,
+        "argmax_changed_mean": 0.8684692942254812
+      },
+      "carry_interpretation": "Donors are actual incoming carries matched on receiving agent, topology, phase and exact legal mask. Combining a donor history with the recipient observation remains counterfactual. Initialized carry at later ticks is a memory-reset intervention, not a valid replacement history.",
+      "blue": "lstm42-final"
+    },
+    "lstm100-final": {
+      "retained_rows": 883,
+      "genuine_decisions": 2268,
+      "evidence_permutation": {
+        "decisions": 2093,
+        "tv_mean": 0.30644220311068626,
+        "tv_median": 0.292835421322593,
+        "tv_p90": 0.45596887520215823,
+        "js_nats_mean": 0.08147322918356774,
+        "js_nats_median": 0.06523008847063094,
+        "js_nats_p90": 0.15616570915489894,
+        "argmax_changed_mean": 0.6473960821786908,
+        "source_target_mass_change_mean": -0.02796279452741146,
+        "source_Analyse_probability_change_mean": -0.0010147378779947758,
+        "source_Remove_probability_change_mean": -0.013377816416323185,
+        "source_Restore_probability_change_mean": -0.015070651657879353,
+        "source_Decoy_probability_change_mean": 0.001500411075539887,
+        "destination_target_mass_change_mean": 0.03715599700808525,
+        "destination_Analyse_probability_change_mean": -0.0015373601345345378,
+        "destination_Remove_probability_change_mean": 0.03848341107368469,
+        "destination_Restore_probability_change_mean": 0.0014681776519864798,
+        "destination_Decoy_probability_change_mean": -0.0012582275085151196
+      },
+      "evidence_selection": "First observed subnet with unequal evidence; lexicographically greatest and least valid host tuples.",
+      "target_action_order": [
+        "Analyse",
+        "Remove",
+        "Restore",
+        "Decoy"
+      ],
+      "interpretation": "Input dependence only. Spatial evidence permutations are controlled counterfactual inputs; trajectory realizability is not established. Closed-loop returns determine functional value.",
+      "retained_probability_max_abs_error": 7.152557373046875e-07,
+      "initial_carry_intervention": {
+        "decisions": 2268,
+        "tv_mean": 0.45267656196087086,
+        "tv_median": 0.4457597568965015,
+        "tv_p90": 0.6032269406065817,
+        "js_nats_mean": 0.16233110291097883,
+        "js_nats_median": 0.14873459362786134,
+        "js_nats_p90": 0.25515959650358977,
+        "argmax_changed_mean": 0.841710758377425
+      },
+      "matched_carry_intervention": {
+        "decisions": 2268,
+        "tv_mean": 0.48749248999774575,
+        "tv_median": 0.49564420950226307,
+        "tv_p90": 0.6586357963223634,
+        "js_nats_mean": 0.18707022346516589,
+        "js_nats_median": 0.18089012614796024,
+        "js_nats_p90": 0.3078749192911248,
+        "argmax_changed_mean": 0.8659611992945326
+      },
+      "carry_interpretation": "Donors are actual incoming carries matched on receiving agent, topology, phase and exact legal mask. Combining a donor history with the recipient observation remains counterfactual. Initialized carry at later ticks is a memory-reset intervention, not a valid replacement history.",
+      "blue": "lstm100-final"
+    },
+    "mappo43-final": {
+      "retained_rows": 1015,
+      "genuine_decisions": 2478,
+      "evidence_permutation": {
+        "decisions": 2321,
+        "tv_mean": 0.2658943588556884,
+        "tv_median": 0.19986800036319607,
+        "tv_p90": 0.5363266152746391,
+        "js_nats_mean": 0.08426228810563005,
+        "js_nats_median": 0.03532147617198083,
+        "js_nats_p90": 0.21240555067416894,
+        "argmax_changed_mean": 0.5932787591555364,
+        "source_target_mass_change_mean": -0.04267226159572601,
+        "source_Analyse_probability_change_mean": -0.016405636444687843,
+        "source_Remove_probability_change_mean": -0.00016197905642911792,
+        "source_Restore_probability_change_mean": -0.024976592510938644,
+        "source_Decoy_probability_change_mean": -0.0011280516628175974,
+        "destination_target_mass_change_mean": 0.06247316300868988,
+        "destination_Analyse_probability_change_mean": 0.011189190670847893,
+        "destination_Remove_probability_change_mean": -0.0007733138627372682,
+        "destination_Restore_probability_change_mean": 0.051125649362802505,
+        "destination_Decoy_probability_change_mean": 0.0009316382929682732
+      },
+      "evidence_selection": "First observed subnet with unequal evidence; lexicographically greatest and least valid host tuples.",
+      "target_action_order": [
+        "Analyse",
+        "Remove",
+        "Restore",
+        "Decoy"
+      ],
+      "interpretation": "Input dependence only. Spatial evidence permutations are controlled counterfactual inputs; trajectory realizability is not established. Closed-loop returns determine functional value.",
+      "retained_probability_max_abs_error": 7.152557373046875e-07,
+      "carry_interpretation": "Feedforward actor; no recurrent carry.",
+      "blue": "mappo43-final"
+    }
+  },
+  "earlier_comparison": {
+    "study_id": "action-selection-learned-red-20261109",
+    "selected_blue_ids": [
+      "lstm42-final",
+      "lstm100-final",
+      "mappo43-final"
+    ],
+    "blue_selection_modes": [
+      "sampled",
+      "argmax"
+    ],
+    "red_selection": "sampled",
+    "episode_roots": [
+      21000,
+      21001,
+      21002,
+      21003
+    ],
+    "horizon": 500,
+    "selected_main_episodes": 768,
+    "episodes_per_mode_per_blue": 128,
+    "summary": [
+      {
+        "blue": "lstm42-final",
+        "red_policies": 8,
+        "episodes_per_mode": 128,
+        "sampled_mean": -3488.4296875,
+        "argmax_mean": -4116.984375,
+        "argmax_minus_sampled": -628.5546875
+      },
+      {
+        "blue": "lstm100-final",
+        "red_policies": 8,
+        "episodes_per_mode": 128,
+        "sampled_mean": -3518.1328125,
+        "argmax_mean": -4139.8515625,
+        "argmax_minus_sampled": -621.71875
+      },
+      {
+        "blue": "mappo43-final",
+        "red_policies": 8,
+        "episodes_per_mode": 128,
+        "sampled_mean": -2415.1484375,
+        "argmax_mean": -3177.65625,
+        "argmax_minus_sampled": -762.5078125
+      }
+    ],
+    "opponent_comparisons": [
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue100-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3745.125,
+        "argmax_mean": -4471.75,
+        "argmax_minus_sampled": -726.625,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue100-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3702.1875,
+        "argmax_mean": -4443.9375,
+        "argmax_minus_sampled": -741.75,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue100-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3858.75,
+        "argmax_mean": -4742.25,
+        "argmax_minus_sampled": -883.5,
+        "argmax_episode_wins": 0
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue42-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3626.6875,
+        "argmax_mean": -4185.0,
+        "argmax_minus_sampled": -558.3125,
+        "argmax_episode_wins": 4
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue42-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3821.75,
+        "argmax_mean": -4437.625,
+        "argmax_minus_sampled": -615.875,
+        "argmax_episode_wins": 3
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue42-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3972.625,
+        "argmax_mean": -4529.875,
+        "argmax_minus_sampled": -557.25,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "br-blue42-primary-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3655.5625,
+        "argmax_mean": -4245.8125,
+        "argmax_minus_sampled": -590.25,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "lstm42-final",
+        "red": "mappo43-cotrained",
+        "episodes_per_mode": 16,
+        "sampled_mean": -1524.75,
+        "argmax_mean": -1879.625,
+        "argmax_minus_sampled": -354.875,
+        "argmax_episode_wins": 6
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue100-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3787.3125,
+        "argmax_mean": -4720.625,
+        "argmax_minus_sampled": -933.3125,
+        "argmax_episode_wins": 3
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue100-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3778.25,
+        "argmax_mean": -4233.4375,
+        "argmax_minus_sampled": -455.1875,
+        "argmax_episode_wins": 3
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue100-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3837.0,
+        "argmax_mean": -4726.9375,
+        "argmax_minus_sampled": -889.9375,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue42-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3693.5,
+        "argmax_mean": -4235.8125,
+        "argmax_minus_sampled": -542.3125,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue42-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3733.3125,
+        "argmax_mean": -4424.375,
+        "argmax_minus_sampled": -691.0625,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue42-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3966.5,
+        "argmax_mean": -4346.625,
+        "argmax_minus_sampled": -380.125,
+        "argmax_episode_wins": 4
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "br-blue42-primary-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -3735.125,
+        "argmax_mean": -4512.625,
+        "argmax_minus_sampled": -777.5,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "lstm100-final",
+        "red": "mappo43-cotrained",
+        "episodes_per_mode": 16,
+        "sampled_mean": -1614.0625,
+        "argmax_mean": -1918.375,
+        "argmax_minus_sampled": -304.3125,
+        "argmax_episode_wins": 4
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue100-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2398.9375,
+        "argmax_mean": -3151.375,
+        "argmax_minus_sampled": -752.4375,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue100-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2459.9375,
+        "argmax_mean": -3735.0,
+        "argmax_minus_sampled": -1275.0625,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue100-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2571.9375,
+        "argmax_mean": -3311.875,
+        "argmax_minus_sampled": -739.9375,
+        "argmax_episode_wins": 3
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue42-final-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2774.0,
+        "argmax_mean": -3270.3125,
+        "argmax_minus_sampled": -496.3125,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue42-final-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2551.6875,
+        "argmax_mean": -3493.9375,
+        "argmax_minus_sampled": -942.25,
+        "argmax_episode_wins": 1
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue42-primary-red17",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2923.5625,
+        "argmax_mean": -3479.8125,
+        "argmax_minus_sampled": -556.25,
+        "argmax_episode_wins": 2
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "br-blue42-primary-red83",
+        "episodes_per_mode": 16,
+        "sampled_mean": -2676.3125,
+        "argmax_mean": -3381.75,
+        "argmax_minus_sampled": -705.4375,
+        "argmax_episode_wins": 3
+      },
+      {
+        "blue": "mappo43-final",
+        "red": "mappo43-cotrained",
+        "episodes_per_mode": 16,
+        "sampled_mean": -964.8125,
+        "argmax_mean": -1597.1875,
+        "argmax_minus_sampled": -632.375,
+        "argmax_episode_wins": 5
+      }
+    ],
+    "behavior": [
+      {
+        "blue": "lstm42-final",
+        "mode": "sampled",
+        "genuine_decisions": 153860,
+        "mean_top_action_probability": 0.18316963841889505,
+        "mean_normalized_entropy": 0.7494650782762807,
+        "identical_action_repeat_fraction": 0.05894139146325545,
+        "mean_unique_target_hosts_per_episode_agent": 14.459375
+      },
+      {
+        "blue": "lstm42-final",
+        "mode": "argmax",
+        "genuine_decisions": 163981,
+        "mean_top_action_probability": 0.1796150056120731,
+        "mean_normalized_entropy": 0.7533009204365352,
+        "identical_action_repeat_fraction": 0.595459804947931,
+        "mean_unique_target_hosts_per_episode_agent": 11.4140625
+      },
+      {
+        "blue": "lstm100-final",
+        "mode": "sampled",
+        "genuine_decisions": 156441,
+        "mean_top_action_probability": 0.17504523024895957,
+        "mean_normalized_entropy": 0.7581517337218039,
+        "identical_action_repeat_fraction": 0.05520503719488322,
+        "mean_unique_target_hosts_per_episode_agent": 14.4546875
+      },
+      {
+        "blue": "lstm100-final",
+        "mode": "argmax",
+        "genuine_decisions": 168891,
+        "mean_top_action_probability": 0.17145868118083524,
+        "mean_normalized_entropy": 0.7617655730084414,
+        "identical_action_repeat_fraction": 0.5610902758378851,
+        "mean_unique_target_hosts_per_episode_agent": 11.46875
+      },
+      {
+        "blue": "mappo43-final",
+        "mode": "sampled",
+        "genuine_decisions": 150959,
+        "mean_top_action_probability": 0.19536041792659,
+        "mean_normalized_entropy": 0.6764953277187805,
+        "identical_action_repeat_fraction": 0.07577884365915154,
+        "mean_unique_target_hosts_per_episode_agent": 13.4546875
+      },
+      {
+        "blue": "mappo43-final",
+        "mode": "argmax",
+        "genuine_decisions": 160084,
+        "mean_top_action_probability": 0.17731174059088967,
+        "mean_normalized_entropy": 0.6954717539789694,
+        "identical_action_repeat_fraction": 0.8526441885552294,
+        "mean_unique_target_hosts_per_episode_agent": 7.003125
+      }
+    ],
+    "behavior_definition": "Genuine Blue decisions only; busy waits and singleton masks excluded. Exact-action repetitions are measured between successive genuine decisions. Host coverage includes Analyse, Remove, Restore and Decoy targets.",
+    "uncertainty": "Descriptive measurements for these selected fixed policies and cases; episode roots differ from the full-versus-baseline study."
+  },
+  "limitations": [
+    "Fixed trained policies and familiar layouts; intervals describe test-root variation, not training populations or calibration uncertainty. Distillation does not find the best return-optimized blind policy.",
+    "The full-versus-baseline comparison removes direct observations and recurrent history while retaining agent identity and legal masks, which still convey context. It does not isolate useful threat-specific responsiveness or useful memory.",
+    "Spatial evidence and carry interventions measure input dependence; compatibility with a realizable trajectory is not established.",
+    "The earlier sampling-versus-argmax and current full-versus-baseline comparisons use different episode roots and cannot be combined as one matched three-condition comparison.",
+    "The selected panel contains two independently trained LSTM seeds and one MAPPO training trajectory at a different budget; it does not establish architecture-level or population-wide rankings."
+  ],
+  "execution_source_revision": "a102881a791eb96f71da542725aa3f5b908bb51d",
+  "source_hashes": {
+    "observation-value-20261109/report/comparison.json": "4814d8b1ab6766286d43fcfdd1714614d486049462d79d2f74025b6ff191383a",
+    "observation-value-20261109/inputs/manifest.json": "ff522d809d5e6ac88b36f0ef6871d36e029d41fae557975bf619e31f5eb341ea",
+    "observation-value-20261109/inputs/protocol.json": "2e1f2e11eb4921e1e294b593b1180dd7b1ddbb939e05e0e4627091f0d7cb63f0",
+    "action-selection-learned-red-20261109/comparison.json": "2ff15730c0ef22317b5050185040641a1e6d169d3ec7d25aaf2723fdaf967c5f",
+    "action-selection-learned-red-20261109/episodes.csv": "97cd41f0eccc0efd7d9a43424668014c0d9f67b32c3ca260cd870bc97ccee864",
+    "action-selection-learned-red-20261109/inputs/manifest.json": "897f39fd07443fdc4d15f61a58b76c6c2ff903382b6ec36ec647b5ad3e3b7861",
+    "observation-value-20261109/baselines/lstm42-final.json": "0bc7d9d2214a739d9d7666a301bd4f16392b767a3224353e4c470ac95ab44d70",
+    "observation-value-20261109/baselines/lstm100-final.json": "1755f99e73bbc3d842ab69cdd0f7147871504d6e02fdee5080d440e448850b35",
+    "observation-value-20261109/baselines/mappo43-final.json": "37c017c6fdebb8afc0e955c6ed942b5eb7fd2ffac6a181621f11b832f2d53173"
+  }
+}
