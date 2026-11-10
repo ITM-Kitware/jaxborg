@@ -1,40 +1,54 @@
-# Do observations improve Blue decisions?
+# Why does sampling beat argmax?
 
-Full sampled Blue policies were compared with mask-aware, observation-blind
-categorical preferences fitted on separate calibration episodes. All three full
-policies gained meaningful return beyond their frozen baselines: every 95%
-interval exceeded the prespecified 100-point practical margin.
+**Finding:** The original sampled policies substantially beat a constant action
+mix. The reason sampling beats argmax remains open.
 
-| Final Blue checkpoint | Full mean | Blind mean | Full minus blind, 95% interval |
-| --- | ---: | ---: | ---: |
-| LSTM 42, 124.992M steps | -3,491.0 | -4,561.4 | +1,070.3 [984.7, 1,156.0] |
-| LSTM 100, 124.992M steps | -3,501.1 | -4,719.2 | +1,218.1 [1,119.2, 1,316.9] |
-| MAPPO 43, 150M steps | -2,352.8 | -4,819.8 | +2,467.0 [2,311.9, 2,622.1] |
+**Why we asked.** The earlier test ran the same trained policies with sampling
+or argmax, keeping observations and LSTM memory enabled. Sampling scored higher;
+argmax repeated actions more and covered fewer hosts. Could useful action
+variety from a constant mix explain the performance?
 
-The 6,144 held-out episodes used the frozen learned-Red panel: seven 29.952M
-adaptive Reds and the co-trained MAPPO Red, four reserved layouts, 32 fresh
-episode roots and 500 steps per case. Both Blue conditions sampled, and Red
-always sampled. One canonical preference vector per agent was distilled across
-all eight opponents using 64 calibration episodes per Blue. Masks supply
-information to both conditions; the baseline receives no phase or opponent input.
-The six historical replay returns matched exactly.
+**What we tried.**
 
-Controlled swaps of complete host evidence changed the top action in 59–65% of
-eligible calibration decisions while masks and incoming carries were held fixed.
-Both LSTMs also depended strongly on incoming carry. The return comparison
-combines phase, static context, evidence and history, so it does not isolate
-threat-specific responsiveness or useful memory. No architecture cause has been
-established.
+1. Run each of three already trained policies for 64 calibration episodes,
+   recording its predicted action probabilities.
+2. Fit a separate baseline: one constant set of action-and-target weights per
+   Blue agent. It samples legal actions without observations, memory or a clock.
+3. Compare baseline sampling with original-policy sampling on fresh episodes,
+   against the same attackers. Red keeps sampling. No neural networks are retrained.
 
-Intervals describe fresh-root variation conditional on these opponents, layouts
-and fitted baselines. They exclude uncertainty from refitting or new training
-runs. Two LSTM training seeds and one MAPPO trajectory do not establish a
-population-wide result. This tests one distilled blind policy per checkpoint,
-rather than the best return-optimized blind controller.
+**Result.** Each original policy beat its fitted constant mix. Every 95%
+interval exceeded the declared 100-point meaningful gain.
 
-The frozen inputs, `report/comparison.json`, episode tables, sensitivity records
-and validation checks live at
-`/data/shared/jaxborg/studies/observation-value-20261109/` on ITM. Tracking uses
-`jaxborg/observation-value-20261109` (experiment 5). Evaluation source revision:
-`a102881a791eb96f71da542725aa3f5b908bb51d`.
-See [reproduction instructions](reproduce.md) and [the analyzer](compare.py).
+![Original sampled policies outperform their constant-mix baselines.](figures/original-versus-constant-mix.svg)
+
+[Exact results and supporting measurements](reported-results.json).
+
+**Possible explanation for the argmax gap.** Argmax may repeatedly pick the
+same highest-ranked action or target, missing lower-probability choices that
+provide useful sensing, recovery or coverage. Sampling keeps those choices in
+play. The observed repetition and coverage differences fit this hypothesis;
+they do not establish the cause.
+
+**Still open.** The advantage over a constant mix could come from a changing
+phase/time schedule, reactions to attacks on particular hosts, or both.
+
+**Suggested next experiment.** Fit a baseline whose action-and-target mix varies
+with phase, time and layout, without live host evidence. Compare that sampled
+schedule with original sampling and argmax on matched fresh cases. This tests
+how much performance scheduling alone can reproduce; the argmax mechanism
+would still need a separate test.
+
+**Scope.** Two LSTM seeds at 124.992M training steps and one MAPPO trajectory at
+150M; 6,144 test episodes against eight selected attackers on four familiar
+layouts. Intervals describe variation across 32 test roots, conditional on the
+fitted baselines. They exclude new training runs and baseline refitting. The
+earlier argmax comparison used different roots; the two gaps cannot be combined.
+
+The two-part **brief with charts**, exact plotting values and source reports
+live under `report/brief-20261110/` in the ITM study root:
+`/data/shared/jaxborg/studies/observation-value-20261109/`.
+Full measurements: `report/comparison.json` and `report/episodes.csv`.
+Earlier study: `/data/shared/jaxborg/studies/action-selection-learned-red-20261109/`.
+Tracking: `jaxborg/observation-value-20261109` (experiment 5).
+See [methods and reconstruction](reproduce.md).

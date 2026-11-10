@@ -20,8 +20,8 @@ POLICIES = {
     "lstm100-final": "LSTM 100\n124.992M training steps",
     "mappo43-final": "MAPPO 43\n150M training steps",
 }
-TITLE = "Full policy versus fixed action preferences"
-STEM = "full-policy-versus-fixed-preferences"
+TITLE = "Original policies outperform the constant mix"
+STEM = "original-versus-constant-mix"
 
 
 def identity(path):
@@ -70,7 +70,7 @@ def plot(report_path, output_dir):
     rows = selected_rows(report)
     roots, opponents, layouts = (rows[0][name] for name in ("roots", "opponents", "layouts"))
     scope = (
-        f"{roots} fresh episode roots × {opponents} frozen Reds × {layouts} reserved layouts per policy; 500 steps.\n"
+        f"{roots} fresh episode roots × {opponents} selected Reds × {layouts} familiar layouts per policy; 500 steps.\n"
         "Intervals describe episode-root variation for this fixed panel, conditional on the fitted baselines."
     )
     source_identity = identity(Path(__file__).resolve())
@@ -91,7 +91,7 @@ def plot(report_path, output_dir):
         figure, axis = plt.subplots(figsize=(10.5, 4.7))
         figure.subplots_adjust(left=0.23, right=0.72, top=0.76, bottom=0.32)
         figure.suptitle(TITLE, fontsize=15, x=0.03, ha="left", y=0.97)
-        axis.set_title("Mean difference and 95% root-cluster confidence interval", fontsize=10, loc="left", pad=20)
+        axis.set_title("Mean score advantage and 95% confidence interval", fontsize=10, loc="left", pad=20)
         axis.axvspan(-100, 100, color="#edf0f3", zorder=0)
         axis.axvline(0, color="#6b7280", linestyle="--", linewidth=1.0, zorder=1)
         axis.errorbar(
@@ -117,7 +117,7 @@ def plot(report_path, output_dir):
         axis.spines[["top", "right", "left"]].set_visible(False)
         axis.spines["bottom"].set_color("#a3aab4")
         axis.tick_params(axis="y", length=0, pad=12)
-        axis.set_xlabel("Return difference per episode (full policy minus fixed preferences)", labelpad=10)
+        axis.set_xlabel("Score advantage per episode (original sampling minus constant-mix sampling)", labelpad=10)
         axis.text(1.04, 1.02, "Difference [95% CI]", transform=axis.transAxes, fontsize=10)
         for position, row in enumerate(rows):
             estimate = row["mean_difference"]
