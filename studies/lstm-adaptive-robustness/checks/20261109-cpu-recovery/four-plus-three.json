@@ -1,0 +1,124 @@
+{
+  "public_summary": true,
+  "at": "2026-11-09T01:28:23.986207+00:00",
+  "passed": true,
+  "retained_records_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-four-plus-three/",
+  "runtime_source_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+  "adjustment_source_sha256": "e2da26fbcc1cbc60b719179815dcca7670a5ea790673f0ef7ae265eb56ae871f",
+  "applied_plan_sha256": "0dbf2a360e09424987d50a40cd86c77cf37e4c54649b8e14aab76213e52711b4",
+  "released_verification_sha256": "d61d9c3442cc2f11ce3a8e29eec6b9296c059f13ee52ae0078a7c8577c839afb",
+  "scientific_plan_sha256": "594bdade0663859142b3636ea2e885913a18c53f51f2a3aadaa96caf99177d43",
+  "original_ledger_sha256": "50197636f87b1e2625f1f802222e33e48db8cac4534b8d99392b68717de0158e",
+  "cpu_concurrency": {
+    "after_gate": 7,
+    "before_gate": 4,
+    "gate_utc": "2026-11-09T13:00:00+00:00"
+  },
+  "cpus_per_evaluation": 4,
+  "memory_gib_per_evaluation": 20,
+  "focused_planning_checks_passed": 9,
+  "running_evaluations_preserved": [
+    4184,
+    4185
+  ],
+  "active_recovery_jobs_at_check": [
+    4184,
+    4185,
+    4186,
+    4187
+  ],
+  "lane_job_ids": {
+    "0": [
+      4212,
+      4216,
+      4189,
+      4192,
+      4221,
+      4224,
+      4200,
+      4198,
+      4232,
+      4230,
+      4209,
+      4206,
+      4241,
+      4238,
+      4244,
+      4251,
+      4256
+    ],
+    "1": [
+      4215,
+      4217,
+      4190,
+      4193,
+      4222,
+      4225,
+      4203,
+      4199,
+      4235,
+      4231,
+      4210,
+      4207,
+      4242,
+      4239,
+      4247,
+      4257,
+      4259
+    ],
+    "2": [
+      4186,
+      4213,
+      4218,
+      4188,
+      4194,
+      4220,
+      4226,
+      4196,
+      4201,
+      4228,
+      4233,
+      4204,
+      4208,
+      4236,
+      4240,
+      4245,
+      4258
+    ],
+    "3": [
+      4187,
+      4214,
+      4219,
+      4191,
+      4195,
+      4223,
+      4227,
+      4197,
+      4202,
+      4229,
+      4234,
+      4205,
+      4211,
+      4237,
+      4243,
+      4246,
+      4252
+    ],
+    "4": [
+      4248,
+      4253
+    ],
+    "5": [
+      4249,
+      4254
+    ],
+    "6": [
+      4250,
+      4255
+    ]
+  },
+  "new_submissions": 0,
+  "order": "Finish ready training batches; prioritize primary own-target comparisons within each batch. Additional lanes after the GPU cutoff handle optional replication.",
+  "gpu_training_unchanged": true,
+  "scientific_conditions_unchanged": true
+}

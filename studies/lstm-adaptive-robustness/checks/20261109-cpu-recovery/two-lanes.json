@@ -1,0 +1,177 @@
+{
+  "at": "2026-11-09T01:09:26.296910+00:00",
+  "passed": true,
+  "adjustment_root": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-two-lanes",
+  "source_runtime_revision": "607cc014671ff3b553cf2cb0e5a193091d1fecb2",
+  "adjustment_source_sha256": "4d706070bf74d2562e8d7502bcbc4a5676c4e9e08e119c225a88caa69bc2cd08",
+  "adjustment_plan_sha256": "9703ed4e0440b45c479518b1fe86ab87707b4b59fb951b4ec420146856f71dba",
+  "verification_sha256": "d7a242acaa96bc69d65c002ff093149eed2d6d14f9afb9bae9ab0a5f8844a45d",
+  "original_scientific_plan_sha256": "594bdade0663859142b3636ea2e885913a18c53f51f2a3aadaa96caf99177d43",
+  "original_submission_ledger_sha256": "50197636f87b1e2625f1f802222e33e48db8cac4534b8d99392b68717de0158e",
+  "max_concurrent_recovery_cells": 2,
+  "cpus_per_recovery_cell": 4,
+  "memory_gib_per_recovery_cell": 20,
+  "state_counts": {
+    "PENDING": 78
+  },
+  "new_job_submissions": 0,
+  "lane_job_ids": {
+    "17": [
+      4182,
+      4184,
+      4186,
+      4190,
+      4188,
+      4192,
+      4194,
+      4200,
+      4196,
+      4198,
+      4202,
+      4210,
+      4204,
+      4206,
+      4208,
+      4212,
+      4214,
+      4216,
+      4218,
+      4222,
+      4220,
+      4224,
+      4226,
+      4232,
+      4228,
+      4230,
+      4234,
+      4242,
+      4236,
+      4238,
+      4240,
+      4244,
+      4246,
+      4248,
+      4250,
+      4258,
+      4252,
+      4254,
+      4256
+    ],
+    "83": [
+      4183,
+      4185,
+      4187,
+      4189,
+      4191,
+      4193,
+      4195,
+      4203,
+      4197,
+      4199,
+      4201,
+      4209,
+      4205,
+      4207,
+      4211,
+      4215,
+      4213,
+      4217,
+      4219,
+      4221,
+      4223,
+      4225,
+      4227,
+      4235,
+      4229,
+      4231,
+      4233,
+      4241,
+      4237,
+      4239,
+      4243,
+      4247,
+      4245,
+      4249,
+      4251,
+      4257,
+      4253,
+      4255,
+      4259
+    ]
+  },
+  "primary_own_target_jobs": [
+    {
+      "id": "c010",
+      "trial": "br-blue42-final-red17",
+      "blue": "blue42-final",
+      "job_id": 4190,
+      "dependencies": [
+        4161,
+        4186
+      ]
+    },
+    {
+      "id": "c020",
+      "trial": "br-blue100-primary-red17",
+      "blue": "blue100-primary",
+      "job_id": 4200,
+      "dependencies": [
+        4163,
+        4194
+      ]
+    },
+    {
+      "id": "c030",
+      "trial": "br-blue100-final-red17",
+      "blue": "blue100-final",
+      "job_id": 4210,
+      "dependencies": [
+        4165,
+        4202
+      ]
+    },
+    {
+      "id": "c003",
+      "trial": "br-blue42-final-red83",
+      "blue": "blue42-final",
+      "job_id": 4183,
+      "dependencies": [
+        4167
+      ]
+    },
+    {
+      "id": "c009",
+      "trial": "br-blue42-primary-red83",
+      "blue": "blue42-primary",
+      "job_id": 4189,
+      "dependencies": [
+        4169,
+        4187
+      ]
+    },
+    {
+      "id": "c023",
+      "trial": "br-blue100-final-red83",
+      "blue": "blue100-final",
+      "job_id": 4203,
+      "dependencies": [
+        4171,
+        4195
+      ]
+    },
+    {
+      "id": "c029",
+      "trial": "br-blue100-primary-red83",
+      "blue": "blue100-primary",
+      "job_id": 4209,
+      "dependencies": [
+        4173,
+        4201
+      ]
+    }
+  ],
+  "order": "Within each Red lane: primary own-target first in each training wave, remaining primary cells in that wave, then final-budget cells, then optional replication.",
+  "public_summary": true,
+  "original_retained_record_sha256": "69f83351958e84307d15170f94e7687d0de8a636886253883abfb498fb68926a",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/adjustments/20261109-two-lanes/summary.json"
+}

@@ -15,6 +15,9 @@ move it into another document or script comments. Mention an execution detail
 only when it changes the scientific interpretation or is essential to reproduce
 the result. Keep README summaries short; link exact methods and records.
 
+Keep credentials, personal paths, and unnecessary machine/user details out of
+public PRs. Use `~/` or relative paths; keep full execution records on ITM.
+
 ## Tests
 
 ```bash

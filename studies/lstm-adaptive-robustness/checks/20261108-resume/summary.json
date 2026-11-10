@@ -1,0 +1,64 @@
+{
+  "source_revision": "fafee221a68c8c9248ae4c4fd871d7c9edb07373",
+  "question": "Why did fresh GPU training and resuming its update2 checkpoint produce different final numeric states?",
+  "findings": {
+    "original_resume_initial_restoration": {
+      "equal_numeric_diagnostic_leaves": 225,
+      "equal_policy_tensors": 44
+    },
+    "original_final_difference": {
+      "total_leaves": 269,
+      "different_leaves": 28,
+      "different_groups": [
+        "4reward-normalizer scalar means/variances",
+        "8Redparameter tensors",
+        "16RedAdam moment tensors"
+      ],
+      "maximum_red_parameter_difference": 0.003501041792333126
+    },
+    "three_independent_resumes": {
+      "jobs": [
+        4145,
+        4148,
+        4149
+      ],
+      "all269_final_leaves_equal": true
+    },
+    "fresh_smoke_vs_fresh_timing": {
+      "initial44_policy_tensors_equal": true,
+      "different_update2_red_parameter_optimizer_leaves": 24,
+      "maximum_absolute_difference": 4.584179259836674e-05
+    },
+    "warm_cache_helper_vs_fresh_timing": {
+      "all269_update2_leaves_equal": true
+    },
+    "inprocess_restoration": {
+      "job": 4152,
+      "original_repeat_restored_same_template_restored_fresh_template_all_equal": true,
+      "state_sha256": "ca74188000eb133d5f79fd7e3940ccad8f09cb555fdc7a33d37ef6b5b2968437",
+      "input_avals_layouts_sharding_and_alias_groups_equal": true
+    },
+    "deterministic_gpu_trial": {
+      "job": 4151,
+      "XLA_FLAGS": "--xla_gpu_exclude_nondeterministic_ops=true",
+      "fresh4_vs_resume2to4_all269_leaves_equal": true,
+      "state_sha256": "74d38b2d21fb3a15f254cb597c0732819feeed22934307b80739f0fae948c793"
+    }
+  },
+  "interpretation": "The loader restored every checked value exactly. Evidence is most consistent with different GPU autotuned compilation choices under the shared cache, rather than omitted state, array-layout changes, or optimizer reconstruction. Exact kernel choice was not instrumented, so autotuning is an inference. The deterministic-GPU flag passed the real recorded round-trip check.",
+  "implementation_change": "No shared serializer or PPO change; use the tested flag consistently for this study and repeat final-source validation/timing.",
+  "evidence_sha256": {
+    "original-final-differences.jsonl": "fc0100504d07d7f187a2ac3083581c32e508ca1e7ea54591a4b549148f21d259",
+    "original-initial-restoration.txt": "67a4eb529a3d47f5c480a25454e826f7014cd9d6c45a62069994e05dafa3b8bf",
+    "replay-comparison.json": "224f57bdc3f31f5c7ce0603f77a99d65225c901c699d11949180a3368a1b3645",
+    "fresh-initial-policies.json": "2d5bc52ba15f3d0e8ecd9325f0adaaf55ba1c254ce09a6a7107db5cd33dfd7cc",
+    "fresh-update2-canonical.json": "401e129c68b5680b4cb565d1ff6d1e908506250237f3229a00785b6626e29a90",
+    "helper-timing-comparison.json": "186ebd5937db42126486365f8961082447231b549ee95ccb60003ffbd6a2e125",
+    "inprocess-v2/comparison.json": "5301ac727650b605e2343b8a4adabfc3e8c19a94f241befb7483b3b94355f81d",
+    "inprocess-v2/format-summary.json": "f87a3434fdcedd95f4907ca7103783e80684c54f0e23a9971f9a34e94a91c070",
+    "deterministic-comparison.json": "364c4facf8b08a968ca1df038db529a560ebcfc96a03dde757267d1b277d86c2"
+  },
+  "public_summary": true,
+  "original_retained_record_sha256": "9424a70b8e4ccfc7cea43828b719155a98c1d0ba919e5fac299b75be78409f8e",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/checks/resume-diagnostic/summary.json"
+}

@@ -1,0 +1,14 @@
+{
+  "at": "2026-11-09T00:47:36.074118+00:00",
+  "passed": true,
+  "cells": 80,
+  "already_complete": 2,
+  "planned_cpu_jobs": 78,
+  "one_serial_recovery_chain": true,
+  "runtime_rechecks": true,
+  "helper_sha256": "a672111fa6695989e50fd5cd98eb8ffb9ac3cf83aba07a49262964566de1d7d4",
+  "dry_run_sha256": "5939c9ae24dd96fa02a1816b1020495e789d4dffbffe565752cf78d986549b22",
+  "public_summary": true,
+  "original_retained_record_sha256": "49c589dc27d1b1a58bd92f35019d50535924cc3e2f7838cfb8b5586c74f3481d",
+  "private_record_locator": "~/jaxborg-exp/shared/studies/lstm-adaptive-robustness-20261108/production/recoveries/20261109-cpu-v2/preflight-result.json"
+}

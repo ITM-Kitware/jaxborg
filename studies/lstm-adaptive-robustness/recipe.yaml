@@ -1,0 +1,53 @@
+meta:
+  name: lstm_adaptive_robustness
+  source: Fresh Red response against an owned fixed-FSM LSTM Blue checkpoint
+  added: '2026-11-08'
+algorithm: ippo
+cage4_enhanced_obs: true
+mlflow:
+  checkpoint_eval:
+    every_steps: 0
+    episodes_per_seed: 1
+    seed: null
+    deterministic: false
+core:
+  lr: 0.0003
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_eps: 0.2
+  vf_coef: 0.5
+  max_grad_norm: 0.5
+  ent_coef: 0.01
+  norm_rewards: true
+  anneal_lr: false
+arch:
+  name: shared
+  hidden_dim: 256
+  hidden_layers: 2
+  activation: tanh
+train:
+  teams: red
+  opponents:
+    blue:
+      path: prepared-by-study/model_blue.safetensors
+  episode_length: 500
+  buffer_size: 5120000
+  minibatch_size: 320000
+  sgd_iterations: 64
+  total_timesteps: 10000000
+  variant: cc4_stock
+eval:
+  variant: cc4_stock
+  topology_sampling: exhaustive
+  play_priors:
+    enabled: false
+  cross_play:
+    enabled: false
+  checkpoint_scripted_reds:
+    enabled: false
+  after_training: []
+jax:
+  num_envs: 96
+  num_minibatches: 16
+  update_epochs: 4
+  checkpoint_every_updates: 20

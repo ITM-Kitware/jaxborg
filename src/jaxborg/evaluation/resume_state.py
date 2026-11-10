@@ -72,6 +72,11 @@ def _descriptor(payload, manifest):
     }
 
 
+def numeric_state_sha256(state):
+    """Hash numeric values and their tree paths, dtypes, shapes and weak typing."""
+    return hashlib.sha256(_json_bytes(_leaves(state)[1])).hexdigest()
+
+
 def save_training_state(path, *, state, metadata):
     """Atomically create an immutable numeric archive and return its identities."""
     if not isinstance(metadata, dict):
