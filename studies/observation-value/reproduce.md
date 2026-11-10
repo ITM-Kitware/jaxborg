@@ -26,8 +26,17 @@ policy hashes, layout hashes, calibration roots, held-out roots and expected
 cells. Obtain those inputs from the shared study directory or the dedicated
 MLflow experiment. Do not replace policies with newer checkpoints.
 
-Use the retained source revision and its resolved environment. Each Blue policy
-requires the following recorded stages, in order:
+Use the retained source revision and its resolved environment. To rerun episodes,
+prepare a fresh study root from the earlier action-selection panel:
+
+```sh
+python studies/observation-value/prepare.py \
+  --previous "$EARLIER_STUDY_ROOT" --root "$STUDY_ROOT"
+```
+
+Both the earlier panel and its model/topology files must be accessible. Never
+execute these stages against the completed study store; existing results and
+baselines are retained evidence. Each Blue policy requires these stages in order:
 
 ```sh
 python studies/observation-value/compare.py replay --root "$STUDY_ROOT" \
@@ -83,9 +92,10 @@ defines the independent calibration and test roots.
 
 Controlled swaps of complete host evidence changed the top action in 59–65% of
 eligible calibration decisions with mask and incoming carry held fixed. Both
-LSTMs also depended on incoming carry. These checks establish input dependence;
-the return comparison removes phase, static context, evidence and history
-together and does not isolate useful threat response or memory.
+LSTMs also depended on incoming carry. These checks establish input dependence.
+The return comparison removes direct observations and history while retaining
+agent identity and legal masks, which still convey context. It does not isolate
+useful threat response or memory.
 
 Intervals describe fresh-root variation conditional on these opponents, familiar
 layouts and fitted baselines. They exclude uncertainty from refitting and new

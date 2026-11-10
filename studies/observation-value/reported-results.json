@@ -978,7 +978,7 @@
   },
   "limitations": [
     "Fixed trained policies and familiar layouts; intervals describe test-root variation, not training populations or calibration uncertainty. Distillation does not find the best return-optimized blind policy.",
-    "The full-versus-baseline comparison removes phase, static context, live host evidence and recurrent history jointly. It does not isolate useful threat-specific responsiveness or useful memory.",
+    "The full-versus-baseline comparison removes direct observations and recurrent history while retaining agent identity and legal masks, which still convey context. It does not isolate useful threat-specific responsiveness or useful memory.",
     "Spatial evidence and carry interventions measure input dependence; compatibility with a realizable trajectory is not established.",
     "The earlier sampling-versus-argmax and current full-versus-baseline comparisons use different episode roots and cannot be combined as one matched three-condition comparison.",
     "The selected panel contains two independently trained LSTM seeds and one MAPPO training trajectory at a different budget; it does not establish architecture-level or population-wide rankings."
