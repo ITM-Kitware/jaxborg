@@ -460,8 +460,16 @@ def figures(destination, summary, curves, order, config):
 
 def analysis_files(include_helpers=False):
     files = [
-        PROJECT / name for name in ("pyproject.toml", "uv.lock", ".python-version", "README.md", "studies/README.md")
-    ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")]
+        PROJECT / name
+        for name in (
+            "pyproject.toml",
+            "uv.lock",
+            ".python-version",
+            "README.md",
+            "studies/README.md",
+            "studies/AGENTS.md",
+        )
+    ] + [HERE / name for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md", "reproduce.md")]
     files.extend([PROJECT / "src/jaxborg/__init__.py", PROJECT / "src/jaxborg/frozen_bundle.py"])
     sources = {path.relative_to(PROJECT).as_posix(): path for path in files}
     if include_helpers:

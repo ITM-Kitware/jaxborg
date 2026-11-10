@@ -464,9 +464,16 @@ class ReportCliTests(unittest.TestCase):
             data = (self.output / name).read_bytes()
             self.assertEqual(metadata, {"size": len(data), "sha256": sha256(data)})
         source = manifest["analysis_source"]
-        expected_files = {"pyproject.toml", "uv.lock", ".python-version", "README.md", "studies/README.md"} | {
+        expected_files = {
+            "pyproject.toml",
+            "uv.lock",
+            ".python-version",
+            "README.md",
+            "studies/README.md",
+            "studies/AGENTS.md",
+        } | {
             f"studies/frozen-defender-response/{name}"
-            for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md")
+            for name in ("analyze.py", "index_bundle.py", "test_analyze.py", "README.md", "reproduce.md")
         }
         expected_files |= {"src/jaxborg/__init__.py", "src/jaxborg/frozen_bundle.py"}
         self.assertEqual(set(source["files"]), expected_files)

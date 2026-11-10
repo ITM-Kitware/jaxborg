@@ -6,6 +6,7 @@ generated evidence outside the source checkout.
 
 ## Start here
 
+- [Study instructions](AGENTS.md): interpreting evidence and planning research.
 - [Project setup](../docs/setup.md): environment, storage, and MLflow.
 - [Shared training guide](../docs/training.md): recipes and execution.
 - [Shared evaluation guide](../docs/evaluation.md): evaluators and outputs.
@@ -16,6 +17,11 @@ generated evidence outside the source checkout.
 2. Follow its result references to the report, selected runs, and measurements.
 3. Use its analysis commands and retained source when checking a result.
 
+Read progressively from the question to the evidence needed for the current
+task. A retained summary can orient the reader; inspect selected measurements
+for new calculations. A newer report can update current understanding without
+replacing an earlier saved selection. State when completion status was checked.
+
 ### Studies and examples
 
 These examples illustrate different research questions and ways to compose
@@ -23,10 +29,26 @@ existing code.
 
 | Study | What it illustrates |
 | --- | --- |
+| [Defender transfer](defender-transfer/README.md) | Comparing archived policies across attacker and layout panels, with learning references and explicit limits on familiarity. |
+| [LSTM competence against fixed FSM Red](lstm-fsm-competence/README.md) | Separating a primary training budget from an extension and relating score panels to exploratory behavior checks. |
+| [LSTM adaptive robustness](lstm-adaptive-robustness/README.md) | Training fresh attackers against frozen defenders and comparing finite-budget responses and saved-policy cross-play. |
 | [Red update schedules](red-update-schedules/README.md) | Comparing baseline, quarter-rate, and adaptive training recipes with explicit run selection and reconstructable tables. |
 | [Joint payoff and blocking](reward-offset/README.md) | Composing a reward change and a blocking rule in a small four-condition execution example. |
 | [Frozen-defender response](frozen-defender-response/README.md) | Rebuilding a completed study's report from saved measurements. Its reference input bundle must be obtained separately from the study author. |
 | [Nash co-training retrospective](nash-co-training/README.md) | Replaying unilateral deviations and saved-policy cross-play from archived runs and selections. |
+
+### Research workflows
+
+Use these questions to guide the task; they do not require additional files or
+sections in each study.
+
+| Request | Reasoning and useful output |
+| --- | --- |
+| What do we know? | Link relevant studies, supporting and conflicting findings, tested scope, and unresolved questions. Use related-study links or an optional synthesis when a question spans studies. |
+| Compare results | Check compatibility and completion before combining measurements. Show the selected policies, independent training runs, missing cases, and what the reported uncertainty describes. |
+| Investigate a failure | Separate recorded events from explanations. Check prevalence before claiming a recurring pattern, inspect counterexamples, and use existing replay tools for selected trajectories. |
+| Choose the next action | Identify the uncertainty affecting the decision. Compare a few alternatives, including reanalysis or evaluation of existing policies, by expected learning, feasibility, cost, and stopping conditions. |
+| Prepare a study | Turn the chosen question into a bounded protocol: predictions, controls, independent runs, evaluation cases, budgets, selection and analysis rules, missing-case handling, and retained evidence. Identify unresolved choices before execution. |
 
 ## Create a study
 
@@ -47,6 +69,11 @@ studies/<short-study-name>/
 
 Lead with the question and finding. Explain what the result means and the next
 research decision. For unfinished work, say what remains unknown.
+
+When useful, state the hypothesis or prediction and what evidence would change
+the conclusion. Preserve consequential changes in interpretation and link
+related studies; separate sections are optional. A question can span several
+studies without changing their execution identities.
 
 - Give the actual comparison, important controls, budget, independent seeds and
   evaluation cases. Link exact methods and configuration.

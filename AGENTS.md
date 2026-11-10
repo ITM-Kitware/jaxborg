@@ -2,7 +2,8 @@
 
 ## Study workflow
 
-Start with the [study guide](studies/README.md).
+Before preparing, changing, analyzing, or planning a study, follow the
+[study instructions](studies/AGENTS.md) and read the [study guide](studies/README.md).
 
 Write for a researcher deciding what the result means and what to do next.
 Lead with the question and finding, then the comparison and limitations that
