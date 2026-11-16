@@ -77,7 +77,7 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 100000000
+  total_timesteps: 50000000
   variant: cc4_stock
 
   # Seed 0 is shared with the control; seeds 1-99 add topology diversity.

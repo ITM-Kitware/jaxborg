@@ -68,7 +68,7 @@ train:
   buffer_size: 5120000
   minibatch_size: 320000
   sgd_iterations: 64
-  total_timesteps: 100000000
+  total_timesteps: 50000000
   variant: cc4_stock
 
   # Seed 0 is shared with the control; seeds 1-99 add topology diversity.
@@ -252,6 +252,15 @@ eval:
         - --episodes-per-seed
         - 1
         - --progress
+
+    # Same-seed non-diverse Red; supplied after both conditions finish training.
+    # Other seeds from both Red conditions are covered by eval.env_diversity.
+    - name: nondiverse-red
+      script: scripts/eval/eval_matchup.py
+      model_arg: --blue-path
+      args: [--recipe, "{recipe}", --policy-backend, "{backend}",
+             --red-path, "{nondiverse_red}", --name, nondiverse-red,
+             --seeds, 1000-1009, --episodes-per-seed, 6]
 
 jax:
   num_envs: 96  # Start here on a 40 GB GPU; benchmark 48/96 before trying 192.

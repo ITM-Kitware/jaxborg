@@ -326,6 +326,92 @@ def test_adaptive_red_updates_freeze_optimizer_and_use_current_raw_return(tiny_j
             assert float(metrics["blue"]["raw_rollout_return"]) == -800.0
 
 
+@pytest.mark.parametrize("resume_update", [0, 2, 4])
+def test_training_resume_restores_both_policies_and_remaining_budget(tiny_joint, monkeypatch, tmp_path, resume_update):
+    from jaxborg.checkpoint import ModelBundle, PolicyBundleEntry
+    from scripts.train.algorithms import ippo_jax as trainer
+
+    networks, configs = tiny_joint
+    for config in configs.values():
+        config.update(TOTAL_TIMESTEPS=8, UPDATE_EVERY=1)
+    recipe = {
+        "meta": {"name": "tiny_resume"},
+        "algorithm": "ippo",
+        "core": {"lr": 1e-2},
+        "train": {"teams": "both"},
+        "arch": {"name": "shared"},
+    }
+    _, _, _, init_states, _ = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
+    saved_states = init_states(jax.random.PRNGKey(123))
+    bundle = ModelBundle(
+        backend="jax",
+        policies={
+            team: PolicyBundleEntry(
+                weights=state.params,
+                team=team,
+                obs_dim=4 if team == "blue" else 6,
+                action_dim=3 if team == "blue" else 5,
+                arch=recipe["arch"],
+            )
+            for team, state in saved_states.items()
+        },
+    )
+    monkeypatch.setattr(trainer, "recipe_blue_obs_size", lambda _: 4)
+    monkeypatch.setattr(trainer, "BLUE_ALLOW_TRAFFIC_END", 3)
+    monkeypatch.setattr(trainer, "RED_OBS_SIZE", 6)
+    monkeypatch.setattr(trainer, "RED_POLICY_ACTION_DIM", 5)
+    monkeypatch.setattr(trainer, "project_jax", lambda _, *, team: configs[team])
+    monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_a, **_kw: {})
+    monkeypatch.setattr(trainer, "_network_from_arch", lambda _, dim: networks["blue" if dim == 3 else "red"])
+    monkeypatch.setattr(
+        trainer,
+        "select_joint_resume",
+        lambda *_a: (
+            (
+                tmp_path / ("model_tiny_resume.safetensors" if resume_update == 4 else "checkpoint_4.safetensors"),
+                bundle,
+                resume_update,
+            )
+            if resume_update
+            else None
+        ),
+    )
+    monkeypatch.setattr(trainer, "MlflowCheckpointEvaluator", lambda _: SimpleNamespace(due=lambda *_a, **_kw: False))
+    monkeypatch.setattr(trainer, "start_run", lambda *_a, **_kw: SimpleNamespace(info=SimpleNamespace(run_id="test")))
+    for name in ("log_metrics", "log_artifact", "end_run"):
+        monkeypatch.setattr(trainer.mlflow, name, lambda *_a, **_kw: None)
+    bundles = []
+    monkeypatch.setattr(trainer, "save_jax_bundle", lambda path, policies, **kw: bundles.append((policies, kw)))
+    monkeypatch.setattr(trainer, "write_sidecar", lambda path, *_a, **_kw: path)
+    monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
+    seen_updates = []
+
+    def make_train(*args, **kwargs):
+        if resume_update:
+            for team in ("blue", "red"):
+                _assert_tree_exact(kwargs["initial_params"][team], saved_states[team].params)
+        env, obs, env_state, init, update = joint.make_joint_train(*args, **kwargs)
+
+        def record_update(*args, **kwargs):
+            seen_updates.append(kwargs["update_idx"])
+            return update(*args, **kwargs)
+
+        return env, obs, env_state, init, record_update
+
+    monkeypatch.setattr(trainer, "make_joint_train", make_train)
+    trainer._run_joint_training(SimpleNamespace(seed=42, resume="latest"), recipe, "tiny_resume", tmp_path)
+    assert seen_updates == list(range(resume_update, 4))
+    if resume_update == 4:
+        assert not bundles
+        assert not (tmp_path / "metrics.jsonl").exists()
+        return
+    rows = [json.loads(line) for line in (tmp_path / "metrics.jsonl").read_text().splitlines()]
+    assert [row["env_steps"] for row in rows] == list(range((resume_update + 1) * 2, 9, 2))
+    assert bundles[-1][1]["provenance"]["total_steps"] == 8
+    if resume_update:
+        assert bundles[-1][0]["blue"].source["training_state_reset"] is True
+
+
 def test_adaptive_update_requires_explicit_schedule_state(tiny_joint):
     networks, configs = tiny_joint
     for config in configs.values():

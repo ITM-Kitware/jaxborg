@@ -11,7 +11,7 @@ Outputs (to `$JAXBORG_EXP_DIR/ippo_jax/<tag>/`):
     metrics.jsonl              (standardized schema, see jaxborg.metrics_schema)
     recipe_<tag>.yaml          (resolved recipe sidecar)
     model_<tag>.safetensors    (params, safetensors format)
-    checkpoint_*.safetensors   (periodic full checkpoints)
+    checkpoint_*.safetensors   (periodic policy weights and step count)
 """
 
 # ruff: noqa: E402
@@ -81,6 +81,7 @@ from jaxborg.recipe import (
     training_teams,
 )
 from jaxborg.scenarios.cc4.game_variant import GameVariant
+from jaxborg.training_resume import preserve_resume_metrics, select_joint_resume
 from jaxborg.training_topology_sampling import validate_training_topology_coverage
 from scripts.train.algorithms.ippo_jax_joint import (
     GAME_COUNTERS as joint_game_counters,
@@ -484,6 +485,29 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         if topology_bank:
             validate_training_topology_coverage(len(topology_bank), int(config["NUM_ENVS"]))
 
+    num_steps = int(configs["blue"]["NUM_STEPS"])
+    num_envs = int(configs["blue"]["NUM_ENVS"])
+    num_updates = int(configs["blue"]["TOTAL_TIMESTEPS"]) // (num_steps * num_envs)
+    start_update = 0
+    resume = None
+    if getattr(args, "resume", None):
+        resume = select_joint_resume(save_dir, tag, recipe, args.seed, num_steps * num_envs, num_updates, args.resume)
+        if resume is not None:
+            resume_path, resume_bundle, start_update = resume
+            if resume_path == save_dir / f"model_{tag}.safetensors":
+                print(f"SKIP train {tag}: validated completed model {resume_path}", flush=True)
+                from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
+
+                run_configured_evaluations_after_training(resume_path, recipe)
+                return
+            if start_update >= num_updates:
+                raise ValueError("Resume checkpoint has no remaining updates; expected a completed final model")
+            print(
+                f"Resuming policy weights from {resume_path} at update {start_update}/{num_updates}. "
+                "Optimizer, RNG, environment, reward normalization and adaptive state are reset.",
+                flush=True,
+            )
+
     opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
     dims = {
         "blue": (recipe_blue_obs_size(recipe), BLUE_ALLOW_TRAFFIC_END),
@@ -519,6 +543,19 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         arches[team] = arch
         sources[team] = source
         networks[team] = _network_from_arch(arch, action_dim)
+
+    if resume is not None:
+        for team in ("blue", "red"):
+            entry = resume_bundle.policies[team]
+            if (entry.obs_dim, entry.action_dim) != dims[team]:
+                raise ValueError(f"Resume {team} observation/action dimensions differ: {resume_path}")
+            initial_params[team] = entry.weights
+            sources[team] = {
+                "kind": "weight_resume",
+                "path": str(resume_path.resolve()),
+                "total_steps": start_update * num_steps * num_envs,
+                "training_state_reset": True,
+            }
 
     print("=" * 60, flush=True)
     print(f"{recipe['algorithm'].upper()}-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
@@ -560,11 +597,8 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         print(f"  opponent population: {configs['blue']['OPPONENT_POPULATION']}", flush=True)
     print(f"  env+networks setup: {time.perf_counter() - t0:.1f}s", flush=True)
 
-    num_updates = int(configs["blue"]["NUM_UPDATES"])
     if num_updates < 1:
         raise ValueError("total_timesteps must cover at least one joint rollout")
-    num_steps = int(configs["blue"]["NUM_STEPS"])
-    num_envs = int(configs["blue"]["NUM_ENVS"])
     metrics_path = save_dir / "metrics.jsonl"
     start = time.perf_counter()
     final_metrics = None
@@ -593,9 +627,11 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
             },
         )
 
-    print(f"Starting joint training ({num_updates} updates)...", flush=True)
-    with metrics_path.open("w") as metrics_file:
-        for update_idx in range(num_updates):
+    if resume is not None:
+        preserve_resume_metrics(metrics_path, start_update * num_steps * num_envs)
+    print(f"Starting joint training ({num_updates - start_update} remaining updates)...", flush=True)
+    with metrics_path.open("a" if resume is not None else "w") as metrics_file:
+        for update_idx in range(start_update, num_updates):
             result = collect_and_update(
                 train_states,
                 env_state,
@@ -610,12 +646,12 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                 adaptive_state = result[6]
             metrics = jax.device_get(metrics)
             final_metrics = metrics
-            if update_idx == 0:
+            if update_idx == start_update:
                 print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
 
             env_steps = (update_idx + 1) * num_steps * num_envs
             elapsed = time.perf_counter() - start
-            sps = env_steps / elapsed if elapsed > 0 else 0.0
+            sps = (env_steps - start_update * num_steps * num_envs) / elapsed if elapsed > 0 else 0.0
             primary_team = "blue" if "blue" in trainable_teams else "red"
             primary = metrics[primary_team]
             blue = metrics["blue"]
@@ -755,7 +791,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
                             sidecar_path.unlink(missing_ok=True)
 
     elapsed = time.perf_counter() - start
-    sps = int(configs["blue"]["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
+    sps = (num_updates - start_update) * num_steps * num_envs / elapsed if elapsed > 0 else 0.0
     final_reward = float(final_metrics["game"]["blue_return"]) if final_metrics is not None else float("nan")
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
     mlflow.log_artifact(str(metrics_path))
@@ -783,6 +819,12 @@ def main(*, expected_algorithm: str | None = None):
     parser.add_argument("--tag", type=str, default=None, help="Run tag (defaults to <recipe>_seed<n>)")
     parser.add_argument("--total-timesteps", type=int, default=None, help="Override recipe.train.total_timesteps")
     parser.add_argument("--num-envs", type=int, default=None, help="Override recipe.jax.num_envs")
+    parser.add_argument(
+        "--resume",
+        nargs="?",
+        const="latest",
+        help="Resume joint policy weights/progress from latest intact export or a path; optimizer state resets",
+    )
     args = parser.parse_args()
 
     recipe = copy.deepcopy(load_recipe(args.recipe))
@@ -790,6 +832,8 @@ def main(*, expected_algorithm: str | None = None):
         parser.error(f"this launcher requires algorithm: {expected_algorithm}")
     teams = training_teams(recipe)
     learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
+    if args.resume and not learned_red:
+        parser.error("--resume currently requires joint Blue/Red training")
     blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
     red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
     modules = {"blue": blue_module, "red": red_module}
