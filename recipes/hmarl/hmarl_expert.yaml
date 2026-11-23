@@ -23,14 +23,14 @@ eval:
   # Includes the H-MARL Red suite in the standard H-MARL evaluation as well.
   reds: [fsm, cia_c, cia_i, cia_a, aggressive, stealthy, impact]
   seeds: 1000-1009
-  episodes_per_seed: 6
+  episodes_per_seed: 1
   deterministic: false
   cia:
     enabled: true
     metric: resilience
     role_assignment: fixed_per_topology
   # Same held-out cases as cotraining_lstm_env_diversity's JAX scripted sweep:
-  # 10 topologies x 10 seeds x 6 episodes = 600 episodes per Red.
+  # 10 topologies x 10 seeds x 1 episode = 100 episodes per Red.
   topology_generation:
     generator: jax
     seed_start: 100

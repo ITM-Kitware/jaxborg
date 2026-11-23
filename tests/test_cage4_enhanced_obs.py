@@ -202,7 +202,7 @@ def test_flag_is_enabled_only_for_actual_cotraining_recipes():
         if recipe.get("kind") == "pretrained_eval":
             assert enhanced_obs_enabled(recipe)
             continue
-        expected = path.parent.name == "cotraining" and recipe.get("train", {}).get("teams") == "both"
+        expected = Path("recipes/cotraining") in path.parents and recipe.get("train", {}).get("teams") == "both"
         assert enhanced_obs_enabled(recipe) is expected, path
         assert train_variant(recipe).cage4_enhanced_obs is expected
         assert eval_variant(recipe).cage4_enhanced_obs is expected

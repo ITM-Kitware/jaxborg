@@ -5,13 +5,14 @@ from pathlib import Path
 
 import pytest
 
+from jaxborg.blue_observation_contract import recipe_blue_obs_size
 from jaxborg.evaluation import hmarl_reds, jax_scripted_red
 from jaxborg.evaluation.cia.fixed_topology import EvaluationCase
 from jaxborg.evaluation.matchup_runner import LoadedMatchupPolicy
 from jaxborg.evaluation.post_training import PostTrainingEvalSettings
 from jaxborg.evaluation.scripted_red import ScriptedRedEvalSettings
 from jaxborg.pretrained import hmarl
-from jaxborg.recipe import load
+from jaxborg.recipe import eval_variant, load, project_team_configs
 from jaxborg.scenarios.cc4.hmarl_reds import HMARL_REDS
 
 
@@ -77,8 +78,6 @@ def test_cli_reuses_cases_and_loads_correct_blue_policy(monkeypatch, tmp_path, r
             str(model),
             "--seeds",
             "1000",
-            "--episodes-per-seed",
-            "1",
             "--episode-length",
             "4",
             "--deterministic",
@@ -117,10 +116,23 @@ def test_cli_reuses_cases_and_loads_correct_blue_policy(monkeypatch, tmp_path, r
         base + suffix
         for base in ("cotraining", "cotraining_lstm", "cotraining_mappo", "cotraining_mappo_lstm")
         for suffix in ("", "_env_diversity")
-    ],
+    ]
+    + sorted(
+        p.stem
+        for p in (Path(__file__).resolve().parents[1] / "recipes/cotraining/training_configurations").rglob("*.yaml")
+    ),
 )
-def test_comparison_recipes_schedule_hmarl_suite(recipe_name):
+def test_comparison_recipes_schedule_hmarl_suite(recipe_name, monkeypatch):
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
     recipe = load(recipe_name)
+    assert recipe_blue_obs_size(recipe) == 450
+    configs = project_team_configs(recipe, "jax")
+    for team, config in configs.items():
+        assert config["TRAIN_VARIANT"].blue_observation_version == 2
+        assert config["TRAIN_VARIANT"].cage4_enhanced_obs is True
+        assert config["UPDATE_EVERY"] == recipe["train"].get("update_every", {}).get(team, 1)
+        assert config["ADAPTIVE_UPDATES"] == recipe["train"].get("adaptive_updates")
+        assert config["OPPONENT_POPULATION"] == recipe["train"].get("opponent_population")
     jobs = PostTrainingEvalSettings.from_recipe(recipe).evaluations
     job = next(job for job in jobs if job.name == "hmarl-reds")
     assert job.resolve_script() == Path("scripts/eval/eval_hmarl_reds.py").resolve()
@@ -135,7 +147,7 @@ def test_comparison_recipes_schedule_hmarl_suite(recipe_name):
         "--seeds",
         "1000-1009",
         "--episodes-per-seed",
-        "6",
+        "1",
         "--progress",
     )
     # FSM/Default is evaluated once by the existing scripted sweep.
@@ -147,6 +159,18 @@ def test_comparison_recipes_schedule_hmarl_suite(recipe_name):
         "cia_a",
     )
     assert ScriptedRedEvalSettings(reds=HMARL_REDS).reds == HMARL_REDS
+    for variant in ("expert", "meta"):
+        reference = load(f"hmarl_{variant}")
+        for key in ("topology_generation", "topology_sampling", "cia"):
+            assert recipe["eval"][key] == reference["eval"][key]
+        assert eval_variant(recipe) == eval_variant(reference)
+        assert reference["eval"]["deterministic"] is False
+        for final_job in (scripted, job):
+            args = final_job.args
+            assert args[args.index("--seeds") + 1] == reference["eval"]["seeds"] == "1000-1009"
+            assert int(args[args.index("--episodes-per-seed") + 1]) == reference["eval"]["episodes_per_seed"] == 1
+            assert "--deterministic" not in args
+        assert reference["eval"]["topology_generation"]["count"] * 10 * reference["eval"]["episodes_per_seed"] == 100
 
 
 @pytest.mark.parametrize("args", [[], ["--reds", "cia_c"], ["--model", "x", "--episode-length", "0"]])

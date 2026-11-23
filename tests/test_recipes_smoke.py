@@ -14,8 +14,10 @@ from pathlib import Path
 import pytest
 import yaml
 
+from jaxborg.opponent_population import OpponentPopulationSettings
 from jaxborg.policies import POLICY_REGISTRY
-from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, train_variant
+from jaxborg.recipe import eval_variant, load, project_cleanrl, project_jax, project_team_configs, train_variant
+from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 
 RECIPES_DIR = Path(__file__).resolve().parents[1] / "recipes"
@@ -82,7 +84,10 @@ def test_cleanrl_projection(recipe):
         with pytest.raises(ValueError, match="JAX backend"):
             project_cleanrl(recipe)
         return
-    if recipe["train"].get("adaptive_updates") is not None:
+    if (
+        recipe["train"].get("adaptive_updates") is not None
+        or OpponentPopulationSettings.from_config(recipe["train"].get("opponent_population")) is not None
+    ):
         with pytest.raises(ValueError, match="only by the JAX joint trainer"):
             project_cleanrl(recipe)
         return
@@ -131,7 +136,10 @@ def test_minibatch_divides_batch(recipe, monkeypatch):
         with pytest.raises(ValueError, match="JAX backend"):
             project_cleanrl(recipe)
         return
-    if recipe["train"].get("adaptive_updates") is not None:
+    if (
+        recipe["train"].get("adaptive_updates") is not None
+        or OpponentPopulationSettings.from_config(recipe["train"].get("opponent_population")) is not None
+    ):
         return  # This schedule only runs on JAX; rejection is checked above.
     c = project_cleanrl(recipe)
     batch = c["num_envs"] * c["rollout_length"] * c["num_rollouts_per_update"]
@@ -227,3 +235,24 @@ def test_the_rule_knob_harness_is_the_only_recipe_declaring_overrides():
     """Only the rule harness declares game-rule overrides."""
     declared = sorted(name for name in RECIPE_NAMES if (load(name).get("train") or {}).get("variant_overrides"))
     assert declared == [RULE_KNOB_HARNESS]
+
+
+@pytest.mark.parametrize("split", ["5050", "7525"])
+@pytest.mark.parametrize("name", sorted(p.stem for p in (RECIPES_DIR / "cotraining" / "alignment").glob("*.yaml")))
+def test_alignment_recipes_support_population_training(name, split, tmp_path, monkeypatch):
+    monkeypatch.setattr("jaxborg.recipe._resolve_topology_bank", lambda *_args, **_kwargs: ())
+    recipe = load(name)
+    population = load(f"cotraining_pbt_adaptive_updates_{split}")["train"]["opponent_population"]
+    recipe["train"]["opponent_population"] = population
+    path = tmp_path / "alignment_population.yaml"
+    path.write_text(yaml.safe_dump(recipe))
+    combined = load(str(path))
+    configs = project_team_configs(combined, "jax")
+    for cfg in configs.values():
+        assert cfg["OPPONENT_POPULATION"] == population
+        assert cfg["REWARD_CONFIG"] == RewardConfig.from_recipe(recipe)
+        assert cfg["REWARD_CONFIG"].name == "shaping"
+        assert cfg["TRAIN_VARIANT"].resilience_roles
+        assert cfg["ADAPTIVE_UPDATES"] == recipe["train"].get("adaptive_updates")
+    with pytest.raises(ValueError, match="JAX backend"):
+        project_cleanrl(combined)

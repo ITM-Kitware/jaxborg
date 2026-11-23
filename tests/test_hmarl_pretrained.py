@@ -246,7 +246,7 @@ def test_eval_only_recipe_matches_cotraining_cases_and_rejects_training(variant)
     # Same seeds as the final-model FSM/CIA sweep (not the cheaper checkpoint curve).
     scripted = next(job for job in reference["eval"]["after_training"] if job["name"] == "scripted-reds")
     assert ev["seeds"] == scripted["args"][scripted["args"].index("--seeds") + 1]
-    assert ev["episodes_per_seed"] == 6
+    assert ev["episodes_per_seed"] == scripted["args"][scripted["args"].index("--episodes-per-seed") + 1] == 1
     assert ev["episode_length"] == reference["train"]["episode_length"] == 500
     assert ev["reds"] == ["fsm", "cia_c", "cia_i", "cia_a", "aggressive", "stealthy", "impact"]
     assert ev["deterministic"] is False

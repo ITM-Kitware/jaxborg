@@ -27,7 +27,7 @@ from typing import Any
 
 from jaxborg.evaluation.checkpoint_scripted_reds import CheckpointScriptedRedsSettings
 from jaxborg.evaluation.cross_play import CrossPlaySettings
-from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, validate_cross_seed_models
+from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, validate_cross_seed_pool
 from jaxborg.evaluation.play_priors import PlayPriorsSettings
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -184,36 +184,19 @@ def _checkpoint_scripted_reds_evaluation(recipe: Mapping[str, Any]) -> PostTrain
 
 
 def _cross_seed_play_evaluation(
-    model_path: str | Path, recipe: Mapping[str, Any], red_model: str | Path | None
+    model_path: str | Path, recipe: Mapping[str, Any], red_model: str | Path | Sequence[str | Path] | None
 ) -> PostTrainingEval | None:
     settings = CrossSeedPlaySettings.from_recipe(recipe)
     if not settings.enabled:
         return None
-    if red_model is None:
+    if not red_model:
         print("Skipping cross-seed-play: supply --cross-seed-red after the other seed finishes training.", flush=True)
         return None
-    red = validate_cross_seed_models(model_path, red_model)
+    reds = validate_cross_seed_pool(model_path, [red_model] if isinstance(red_model, (str, Path)) else red_model)
     return PostTrainingEval(
         name="cross-seed-play",
-        script="scripts/eval/eval_matchup.py",
-        model_arg="--blue-path",
-        args=(
-            "--recipe",
-            "{recipe}",
-            "--policy-backend",
-            "{backend}",
-            "--red-path",
-            str(red),
-            "--name",
-            "{name}",
-            "--seeds",
-            ",".join(map(str, settings.seeds)),
-            "--episodes-per-seed",
-            str(settings.episodes_per_seed),
-            "--mlflow-source-team",
-            "blue",
-        )
-        + (("--deterministic",) if settings.deterministic else ()),
+        script="scripts/eval/eval_cross_seed_only.py",
+        args=("--recipe", "{recipe}") + tuple(arg for red in reds for arg in ("--red-model", str(red))),
         required=settings.required,
     )
 
@@ -279,8 +262,10 @@ def _successful_evaluations(
                 if record["status"] != "succeeded" or record.get("returncode") != 0:
                     continue
                 command = record["command"]
-                if not isinstance(command, list) or len(command) < 2 or not all(
-                    isinstance(arg, str) for arg in command
+                if (
+                    not isinstance(command, list)
+                    or len(command) < 2
+                    or not all(isinstance(arg, str) for arg in command)
                 ):
                     continue
                 key = _evaluation_resume_key(record["name"], command, record["jax_platforms"], saved_recipe)
@@ -294,7 +279,7 @@ def run_configured_evaluations_after_training(
     model_path: str | Path,
     recipe: Mapping[str, Any],
     *,
-    cross_seed_red: str | Path | None = None,
+    cross_seed_red: str | Path | Sequence[str | Path] | None = None,
     nondiverse_red: str | Path | None = None,
     save_evaluation_recipe: bool = False,
     resume: bool = False,
@@ -478,7 +463,11 @@ def run_configured_evaluations_after_training(
 def main(argv: Sequence[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Run a recipe's ordered post-training evaluation scripts")
     parser.add_argument("--model", required=True, help="Final model bundle to pass to every evaluation")
-    parser.add_argument("--cross-seed-red", help="Final Red bundle from another training seed for eval.cross_seed_play")
+    parser.add_argument(
+        "--cross-seed-red",
+        action="append",
+        help="Final Red from another training seed; repeat for every held-out seed",
+    )
     parser.add_argument("--nondiverse-red", help="Same-seed baseline Red bundle for {nondiverse_red} recipe jobs")
     parser.add_argument(
         "--recipe",

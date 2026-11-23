@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Replay only a recipe's cyclic final-model cross-seed evaluation."""
+"""Replay Blue checkpoints against every other training seed's final Red."""
 
 # ruff: noqa: E402
 
@@ -20,7 +20,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 
-from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, validate_cross_seed_models
+from jaxborg.checkpoint import read_sidecar
+from jaxborg.evaluation.cross_seed_play import CrossSeedPlaySettings, run_cross_seed_play, validate_cross_seed_pool
 from jaxborg.evaluation.env_diversity import discover_models
 from jaxborg.evaluation.play_priors import _parse_seeds
 from jaxborg.recipe import load, project_eval
@@ -28,10 +29,13 @@ from jaxborg.recipe import load, project_eval
 
 def main(argv=None, *, run_subprocess=subprocess.run):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--recipe", default="cotraining_mappo", help="Recipe name or YAML path")
+    parser.add_argument("--recipe", help="Recipe name or YAML path; discovery defaults to cotraining_mappo")
+    parser.add_argument("--model", help="Evaluate one Blue run instead of discovering all training seeds")
+    parser.add_argument("--red-model", action="append", default=[], help="Final held-out Red; repeat for each seed")
+    parser.add_argument("--output", help="JSONL result path for --model mode")
     parser.add_argument("--exp-dir", default=os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp"))
     parser.add_argument(
-        "--train-seeds", help="Training seeds in the cycle; default: all available completed seeds, sorted"
+        "--train-seeds", help="Training seeds to compare; default: all available completed seeds, sorted"
     )
     parser.add_argument("--model-tag", default="*", help="Run-directory glob to disambiguate reruns")
     parser.add_argument(
@@ -41,6 +45,19 @@ def main(argv=None, *, run_subprocess=subprocess.run):
         "--dry-run", action="store_true", help="Print the exact evaluation commands without running them"
     )
     args = parser.parse_args(argv)
+    if args.model:
+        if not args.red_model:
+            parser.error("--model requires at least one --red-model")
+        if args.train_seeds or args.output_dir or args.dry_run:
+            parser.error("--train-seeds, --output-dir and --dry-run apply only to discovery mode")
+        recipe = copy.deepcopy(read_sidecar(args.model))
+        if args.recipe:
+            recipe["eval"] = copy.deepcopy(load(args.recipe)["eval"])
+        run_cross_seed_play(args.model, args.red_model, recipe, output=args.output)
+        return
+    if args.red_model or args.output:
+        parser.error("--red-model and --output require --model")
+    args.recipe = args.recipe or "cotraining_mappo"
     exp_dir = Path(args.exp_dir).expanduser().resolve()
     try:
         recipe = load(args.recipe)
@@ -73,36 +90,28 @@ def main(argv=None, *, run_subprocess=subprocess.run):
     )
     recipe_path = output / "recipe_eval.yaml"
     records = []
-    for index, seed in enumerate(seeds):
-        opponent = seeds[(index + 1) % len(seeds)]
-        blue, red = models[seed].path, models[opponent].path
-        validate_cross_seed_models(blue, red)
+    for seed in seeds:
+        opponents = [opponent for opponent in seeds if opponent != seed]
+        blue = models[seed].path
+        reds = validate_cross_seed_pool(blue, [models[opponent].path for opponent in opponents])
         command = [
             sys.executable,
-            str(ROOT / "scripts/eval/eval_matchup.py"),
+            str(Path(__file__).resolve()),
             "--recipe",
             str(recipe_path),
-            "--policy-backend",
-            "jax",
-            "--blue-path",
+            "--model",
             blue,
-            "--red-path",
-            red,
-            "--name",
-            "cross-seed-play",
-            "--mlflow-source-team",
-            "blue",
-            "--seeds",
-            ",".join(map(str, settings.seeds)),
-            "--episodes-per-seed",
-            str(settings.episodes_per_seed),
             "--output",
-            str(output / f"blue_{seed}_vs_red_{opponent}.json"),
+            str(output / f"blue_{seed}_cross_seed.jsonl"),
         ]
-        if settings.deterministic:
-            command.append("--deterministic")
-        records.append({"blue_seed": seed, "red_seed": opponent, "command": command, "status": "pending"})
-    print(f"Only cross-seed-play: recipe={recipe['meta']['name']}, training seed cycle={seeds}", flush=True)
+        for red in reds:
+            command.extend(("--red-model", str(red)))
+        records.append({"blue_seed": seed, "red_seeds": opponents, "command": command, "status": "pending"})
+    print(
+        f"Only cross-seed-play: recipe={recipe['meta']['name']}, training seeds={seeds}, "
+        f"up to {settings.max_checkpoints} Blue checkpoints against every other seed's final Red",
+        flush=True,
+    )
     for note in notes:
         print(f"NOTE: {note}", flush=True)
     if args.dry_run:
@@ -119,7 +128,7 @@ def main(argv=None, *, run_subprocess=subprocess.run):
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     env = {**os.environ, "JAXBORG_EXP_DIR": str(exp_dir), "PYTHONUNBUFFERED": "1"}
     for record in records:
-        print(f"Blue {record['blue_seed']} vs Red {record['red_seed']}", flush=True)
+        print(f"Blue {record['blue_seed']} vs Reds {record['red_seeds']}", flush=True)
         result = run_subprocess(record["command"], cwd=ROOT, env=env, check=False)
         record["returncode"] = result.returncode
         record["status"] = "succeeded" if result.returncode == 0 else "failed"

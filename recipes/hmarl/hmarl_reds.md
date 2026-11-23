@@ -39,8 +39,8 @@ Default/FSM is already covered by their `scripted-reds` suite. H-MARL's regular
 Invoked directly, the dedicated H-MARL Red script defaults to
 `fsm aggressive stealthy impact`; `--reds` selects a subset.
 
-The configured protocol is 10 held-out topologies × 10 seeds × 6 episodes =
-600 episodes per opponent, each 500 steps. The evaluator reuses the exhaustive
+The configured protocol is 10 held-out topologies × 10 seeds × 1 episode =
+100 episodes per opponent, each 500 steps. The evaluator reuses the exhaustive
 bank, episode seeds, fixed CIA role maps, and recurrent/stateful policy carry.
 It requires the existing CIA-enabled evaluation configuration and bank. These
 are JAXborg results under that protocol, not reproductions of the paper's scores.

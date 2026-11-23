@@ -33,7 +33,7 @@ def main(argv: Sequence[str] | None = None) -> None:
     parser.add_argument("--recipe", default=os.environ.get("JAXBORG_RECIPE_PATH"), help="Recipe name or YAML path")
     parser.add_argument("--reds", nargs="+", choices=HMARL_REDS, default=list(HMARL_REDS))
     parser.add_argument("--seeds", help="Seed list/range; defaults to eval.seeds or 1000-1009")
-    parser.add_argument("--episodes-per-seed", type=int, help="Defaults to eval.episodes_per_seed or 6")
+    parser.add_argument("--episodes-per-seed", type=int, help="Defaults to eval.episodes_per_seed or 1")
     parser.add_argument("--episode-length", type=int, help="Override duration for a short smoke run")
     parser.add_argument("--deterministic", action=argparse.BooleanOptionalAction, default=None)
     parser.add_argument("--progress", action=argparse.BooleanOptionalAction, default=True)
@@ -101,7 +101,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         reds=args.reds,
         seeds=args.seeds if args.seeds is not None else ev.get("seeds", "1000-1009"),
         episodes_per_seed=(
-            args.episodes_per_seed if args.episodes_per_seed is not None else ev.get("episodes_per_seed", 6)
+            args.episodes_per_seed if args.episodes_per_seed is not None else ev.get("episodes_per_seed", 1)
         ),
         deterministic=args.deterministic if args.deterministic is not None else ev.get("deterministic", False),
         progress=args.progress,
