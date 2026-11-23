@@ -90,6 +90,10 @@ train:
 
   episode_length: 500  # PPO rollout horizon; it does not change environment termination.
   total_timesteps: 3000000  # Joint vectorized env steps; not doubled for two teams.
+  resume: false  # JAX: latest (or true), or a path to training_latest.msgpack; false/null starts fresh.
+  # Full state is saved at jax.checkpoint_every_updates, evaluation checkpoints,
+  # and completion, even when resume is false. Only the latest full state is retained.
+  # total_timesteps is the cumulative target; increasing it requires constant LR.
   # Optional CIA payoff; omission preserves the default reward everywhere.
   # Shaping requires a resilience_roles variant and >=3 op-zone servers.
   # Both reward values are reported; unavailable CIA scores are null.

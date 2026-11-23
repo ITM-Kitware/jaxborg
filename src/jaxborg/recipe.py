@@ -38,6 +38,7 @@ from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
 from jaxborg.scenarios.cc4.game_variants import VARIANTS, variant_for_red
 from jaxborg.topology_banks import expand_topology_bank, materialize_topology_bank, validate_topology_split
+from jaxborg.training_resume import resume_request
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 RECIPES_DIR = REPO_ROOT / "recipes"
@@ -89,6 +90,7 @@ def _validate(recipe: dict[str, Any], *, source: str) -> None:
             raise ValueError(f"{source}: missing required section '{section}'")
         if section != "algorithm" and not isinstance(recipe[section], dict):
             raise ValueError(f"{source}: section '{section}' must be a mapping")
+    resume_request(recipe)
     if "name" not in recipe["arch"]:
         raise ValueError(f"{source}: arch.name is required")
     if "lr" not in recipe["core"]:

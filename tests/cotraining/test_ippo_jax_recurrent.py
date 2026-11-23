@@ -231,3 +231,71 @@ def test_standard_train_uses_parallel_topology_bank_path(tiny_blue):
 
     assert _changed(before, after.params)
     assert np.isfinite(float(metric["total_loss"]))
+
+
+@pytest.mark.parametrize("architecture", ["shared", "recurrent"])
+def test_blue_training_resume_matches_uninterrupted_run(tiny_blue, monkeypatch, tmp_path, architecture):
+    import json
+    import sys
+
+    from jaxborg.training_resume import select_training_resume
+
+    config = _config(num_envs=1, num_steps=2, num_minibatches=1)
+    config.update(TOTAL_TIMESTEPS=8, NORM_REWARDS=True, ANNEAL_LR=True, HIDDEN_DIM=8, CHECKPOINT_EVERY_UPDATES=2)
+    recipe = {
+        "meta": {"name": "tiny_blue_resume"},
+        "algorithm": "ippo",
+        "arch": {"name": architecture, "hidden_dim": 8, "hidden_layers": 1},
+        "core": {"lr": 0.01, "anneal_lr": True},
+        "train": {"total_timesteps": 8},
+    }
+    if architecture == "recurrent":
+        recipe["arch"]["cell"] = "lstm"
+    monkeypatch.setattr(_TinyBlueEnv, "action_space", lambda *_: SimpleNamespace(n=ACTION_DIM), raising=False)
+    monkeypatch.setattr(ippo_jax, "load_recipe", lambda _: recipe)
+    monkeypatch.setattr(ippo_jax, "project_jax", lambda _: dict(config))
+    monkeypatch.setattr(ippo_jax, "recipe_blue_obs_size", lambda _: OBS_DIM)
+    monkeypatch.setattr(ippo_jax, "MlflowCheckpointEvaluator", lambda _: SimpleNamespace(due=lambda *_a, **_kw: False))
+    monkeypatch.setattr(ippo_jax, "start_run", lambda *_a, **_kw: SimpleNamespace(info=SimpleNamespace(run_id="test")))
+    for name in ("log_metrics", "log_artifact", "end_run"):
+        monkeypatch.setattr(ippo_jax.mlflow, name, lambda *_a, **_kw: None)
+    monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
+    monkeypatch.setattr(sys, "argv", ["ippo_jax.py", "--recipe", "tiny", "--seed", "42"])
+    monkeypatch.setattr(ippo_jax, "EXP_DIR", tmp_path / "uninterrupted")
+    ippo_jax.main()
+    run_dir = "ippo_jax/tiny_blue_resume_seed42"
+    expected = select_training_resume(tmp_path / "uninterrupted" / run_dir, recipe, 42, 2, 4, "latest")
+    monkeypatch.setattr(ippo_jax, "EXP_DIR", tmp_path / "interrupted")
+    make_train = ippo_jax.make_train
+    updates = []
+
+    def interruptible_train(*args, **kwargs):
+        env, obs, env_state, init, update = make_train(*args, **kwargs)
+
+        def step(*args):
+            if len(updates) == 2 and not recipe["train"].get("resume"):
+                raise RuntimeError("interrupted")
+            updates.append(1)
+            return update(*args)
+
+        return env, obs, env_state, init, step
+
+    monkeypatch.setattr(ippo_jax, "make_train", interruptible_train)
+    with pytest.raises(RuntimeError, match="interrupted"):
+        ippo_jax.main()
+    recipe["train"]["resume"] = "latest"
+    updates.clear()
+    ippo_jax.main()
+    assert len(updates) == 2
+    actual = select_training_resume(tmp_path / "interrupted" / run_dir, recipe, 42, 2, 4, "latest")
+    assert jax.tree.structure(actual.state) == jax.tree.structure(expected.state)
+    for a, b in zip(jax.tree.leaves(actual.state), jax.tree.leaves(expected.state)):
+        np.testing.assert_array_equal(a, b)
+    rows = [
+        json.loads(line) for line in (tmp_path / "interrupted" / run_dir / "metrics.jsonl").read_text().splitlines()
+    ]
+    assert [row["env_steps"] for row in rows] == [2, 4, 6, 8]
+    updates.clear()
+    monkeypatch.setattr(ippo_jax, "start_run", lambda *_a, **_kw: pytest.fail("completed resume started an empty run"))
+    ippo_jax.main()
+    assert updates == []

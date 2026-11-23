@@ -1,11 +1,20 @@
 import copy
 import json
 
+import jax
 import jax.numpy as jnp
+import numpy as np
+import optax
 import pytest
+from flax.training.train_state import TrainState
 
-from jaxborg.checkpoint import PolicyBundleEntry, save_jax_bundle, write_sidecar
-from jaxborg.training_resume import preserve_resume_metrics, select_joint_resume
+from jaxborg.training_resume import (
+    LATEST_CHECKPOINT,
+    preserve_resume_metrics,
+    resume_request,
+    save_training_checkpoint,
+    select_training_resume,
+)
 
 
 @pytest.fixture
@@ -13,79 +22,146 @@ def recipe():
     return {
         "meta": {"name": "resume_test"},
         "algorithm": "ippo",
+        "core": {"lr": 0.01},
         "arch": {"name": "shared"},
         "train": {"teams": "both", "total_timesteps": 100},
         "jax": {"num_envs": 2},
     }
 
 
-def export(path, recipe, steps, seed=42):
-    policies = {
-        team: PolicyBundleEntry(
-            weights={"weight": jnp.array([steps], dtype=jnp.float32)},
-            team=team,
-            obs_dim=3,
-            action_dim=2,
-            arch=recipe["arch"],
-        )
-        for team in ("blue", "red")
-    }
-    save_jax_bundle(path, policies, provenance={"recipe": "resume_test", "seed": seed, "total_steps": steps})
-    stem = path.stem.removeprefix("model_")
-    write_sidecar(path.with_name(f"recipe_{stem}.yaml"), recipe, seed=seed, total_steps=steps, backend="jax")
+def save(path, recipe, **kwargs):
+    settings = dict(recipe=recipe, seed=42, completed_updates=2, rollout_steps=10, state={"x": jnp.ones(2)})
+    settings.update(kwargs)
+    return save_training_checkpoint(path, **settings)
 
 
-def test_latest_intact_checkpoint_skips_truncated_write_and_missing_sidecar(tmp_path, recipe):
-    export(tmp_path / "checkpoint_20.safetensors", recipe, 20)
-    export(tmp_path / "checkpoint_80.safetensors", recipe, 80)
-    (tmp_path / "recipe_checkpoint_80.yaml").unlink()
-    (tmp_path / "checkpoint_100.safetensors").write_bytes(b"truncated")
-    path, bundle, update = select_joint_resume(tmp_path, "test", recipe, 42, 10, 10)
-    assert path.name == "checkpoint_20.safetensors"
-    assert update == 2
-    assert set(bundle.policies) == {"blue", "red"}
-    assert float(bundle.policies["red"].weights["weight"][0]) == 20
+def select(path, recipe, **kwargs):
+    settings = dict(seed=42, rollout_steps=10, total_updates=10, requested="latest")
+    settings.update(kwargs)
+    return select_training_resume(path, recipe, **settings)
 
 
-def test_valid_final_model_takes_precedence_and_eval_changes_are_allowed(tmp_path, recipe):
-    export(tmp_path / "checkpoint_80.safetensors", recipe, 80)
-    export(tmp_path / "model_test.safetensors", recipe, 100)
+@pytest.mark.parametrize(
+    "value, expected", [(None, None), (False, None), (True, "latest"), ("latest", "latest"), ("a.msgpack", "a.msgpack")]
+)
+def test_yaml_resume_options(value, expected):
+    recipe = {"train": {"resume": value}}
+    assert resume_request(recipe) == expected
+    assert resume_request(recipe, "override.msgpack") == "override.msgpack"
+
+
+@pytest.mark.parametrize("value", [0, 1, [], {}, "", " "])
+def test_invalid_yaml_resume_options(value):
+    with pytest.raises(ValueError, match="train.resume"):
+        resume_request({"train": {"resume": value}})
+
+
+def test_restore_optimizer_and_schedule_matches_uninterrupted_updates(tmp_path, recipe):
+    tx = optax.adam(optax.linear_schedule(0.01, 0.001, 10))
+    template = TrainState.create(apply_fn=lambda: None, params={"w": jnp.array([1.0, 2.0])}, tx=tx)
+
+    def update(state, rng):
+        rng, key = jax.random.split(rng)
+        return state.apply_gradients(grads={"w": jax.random.normal(key, (2,))}), rng
+
+    state, rng = template, jax.random.PRNGKey(2)
+    for _ in range(2):
+        state, rng = update(state, rng)
+    save(tmp_path / LATEST_CHECKPOINT, recipe, state=(state, rng))
+    restored, restored_rng = select(tmp_path, recipe).restore((template, jax.random.PRNGKey(99)))
+    for _ in range(3):
+        state, rng = update(state, rng)
+        restored, restored_rng = update(restored, restored_rng)
+    for expected, actual in zip(jax.tree.leaves((state, rng)), jax.tree.leaves((restored, restored_rng))):
+        np.testing.assert_array_equal(actual, expected)
+
+
+def test_latest_and_explicit_checkpoint_are_self_contained(tmp_path, recipe):
+    path = save(tmp_path / LATEST_CHECKPOINT, recipe)
+    recipe["train"]["resume"] = "latest"
     recipe["eval"] = {"after_training": []}
-    path, _, update = select_joint_resume(tmp_path, "test", recipe, 42, 10, 10)
-    assert path.name == "model_test.safetensors"
-    assert update == 10
+    recipe["jax"]["checkpoint_every_updates"] = 1
+    for requested in ("latest", str(path)):
+        checkpoint = select(tmp_path, recipe, requested=requested)
+        assert checkpoint.completed_updates == 2
+        np.testing.assert_array_equal(checkpoint.restore({"x": jnp.zeros(2)})["x"], np.ones(2))
 
 
-@pytest.mark.parametrize("change", ["seed", "recipe", "steps", "sidecar"])
-def test_incompatible_resume_fails_without_falling_back(tmp_path, recipe, change):
-    export(tmp_path / "checkpoint_20.safetensors", recipe, 20)
-    saved = copy.deepcopy(recipe)
-    if change == "recipe":
-        saved["jax"]["num_envs"] = 4
-    export(
-        tmp_path / "checkpoint_80.safetensors",
-        saved,
-        81 if change == "steps" else 80,
-        seed=100 if change == "seed" else 42,
-    )
-    if change == "sidecar":
-        write_sidecar(tmp_path / "recipe_checkpoint_80.yaml", recipe, seed=42, total_steps=70, backend="jax")
+@pytest.mark.parametrize("change", ["seed", "recipe", "rollout", "budget", "architecture", "reward"])
+def test_incompatible_resume_fails(tmp_path, recipe, change):
+    save(tmp_path / LATEST_CHECKPOINT, recipe)
+    kwargs = {}
+    if change == "seed":
+        kwargs["seed"] = 43
+    elif change == "recipe":
+        recipe["meta"]["name"] = "another"
+    elif change == "rollout":
+        kwargs["rollout_steps"] = 5
+    elif change == "budget":
+        recipe["train"]["total_timesteps"] = 10
+    elif change == "architecture":
+        recipe["arch"]["hidden_dim"] = 4
+    else:
+        recipe["core"]["norm_rewards"] = True
     with pytest.raises(ValueError):
-        select_joint_resume(tmp_path, "test", recipe, 42, 10, 10)
+        select(tmp_path, recipe, **kwargs)
 
 
-def test_no_progress_starts_fresh_but_damaged_progress_does_not(tmp_path, recipe):
-    assert select_joint_resume(tmp_path, "test", recipe, 42, 10, 10) is None
-    # MAPPO crashed during its first compilation, after opening an empty log.
+def test_budget_extension_requires_constant_learning_rate(tmp_path, recipe):
+    save(tmp_path / LATEST_CHECKPOINT, recipe)
+    extended = copy.deepcopy(recipe)
+    extended["train"]["total_timesteps"] = 200
+    assert select(tmp_path, extended, total_updates=20).completed_updates == 2
+    recipe["train"]["team_overrides"] = {"red": {"core": {"anneal_lr": True}}}
+    save(tmp_path / LATEST_CHECKPOINT, recipe)
+    assert select(tmp_path, recipe).completed_updates == 2
+    recipe["train"]["total_timesteps"] = 200
+    with pytest.raises(ValueError, match="anneal_lr"):
+        select(tmp_path, recipe, total_updates=20)
+
+
+def test_failed_atomic_write_leaves_previous_checkpoint_intact(tmp_path, recipe, monkeypatch):
+    path = save(tmp_path / LATEST_CHECKPOINT, recipe)
+    original = path.read_bytes()
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("jaxborg.training_resume.os.replace", fail)
+    with pytest.raises(OSError, match="disk full"):
+        save(path, recipe, completed_updates=4)
+    assert path.read_bytes() == original
+    assert list(tmp_path.iterdir()) == [path]
+    assert select(tmp_path, recipe).completed_updates == 2
+
+
+def test_damaged_or_policy_only_progress_does_not_restart(tmp_path, recipe):
+    assert select(tmp_path, recipe) is None
     (tmp_path / "metrics.jsonl").touch()
-    assert select_joint_resume(tmp_path, "test", recipe, 42, 10, 10) is None
-    (tmp_path / "checkpoint_20.safetensors").write_bytes(b"truncated")
-    with pytest.raises(ValueError, match="No intact checkpoint"):
-        select_joint_resume(tmp_path, "test", recipe, 42, 10, 10)
+    assert select(tmp_path, recipe) is None
+    path = tmp_path / LATEST_CHECKPOINT
+    path.write_bytes(b"truncated")
+    with pytest.raises(ValueError, match="checkpoint"):
+        select(tmp_path, recipe)
+    path.unlink()
+    (tmp_path / "checkpoint_20.safetensors").touch()
+    with pytest.raises(ValueError, match="No full training checkpoint"):
+        select(tmp_path, recipe)
+    with pytest.raises(ValueError, match="policy-only"):
+        select(tmp_path, recipe, requested=str(tmp_path / "checkpoint_20.safetensors"))
     (tmp_path / "checkpoint_20.safetensors").unlink()
     (tmp_path / "metrics.jsonl").write_text("{}\n")
-    with pytest.raises(ValueError, match="metrics exist"):
-        select_joint_resume(tmp_path, "test", recipe, 42, 10, 10)
+    with pytest.raises(ValueError, match="No full training checkpoint"):
+        select(tmp_path, recipe)
+    with pytest.raises(FileNotFoundError):
+        select(tmp_path, recipe, requested=str(path))
+
+
+@pytest.mark.parametrize("template", [{"y": jnp.ones(2)}, {"x": jnp.ones(3)}, {"x": jnp.ones(2, dtype=jnp.int32)}])
+def test_incompatible_state_structure_shape_or_dtype_is_rejected(tmp_path, recipe, template):
+    save(tmp_path / LATEST_CHECKPOINT, recipe)
+    with pytest.raises(ValueError, match="Resume training state"):
+        select(tmp_path, recipe).restore(template)
 
 
 def test_resume_metrics_archives_original_and_removes_uncheckpointed_progress(tmp_path):

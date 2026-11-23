@@ -12,6 +12,7 @@ Outputs (to `$JAXBORG_EXP_DIR/ippo_jax/<tag>/`):
     recipe_<tag>.yaml          (resolved recipe sidecar)
     model_<tag>.safetensors    (params, safetensors format)
     checkpoint_*.safetensors   (periodic policy weights and step count)
+    training_latest.msgpack    (latest complete training state for resume)
 """
 
 # ruff: noqa: E402
@@ -83,7 +84,13 @@ from jaxborg.recipe import (
 )
 from jaxborg.reward_config import RewardConfig
 from jaxborg.scenarios.cc4.game_variant import GameVariant
-from jaxborg.training_resume import preserve_resume_metrics, select_joint_resume
+from jaxborg.training_resume import (
+    LATEST_CHECKPOINT,
+    preserve_resume_metrics,
+    resume_request,
+    save_training_checkpoint,
+    select_training_resume,
+)
 from jaxborg.training_topology_sampling import validate_training_topology_coverage
 from scripts.train.algorithms.ippo_jax_joint import (
     GAME_COUNTERS as joint_game_counters,
@@ -489,6 +496,50 @@ def _legacy_arch_from_sidecar(path: Path, team: str) -> dict:
     return dict(team_recipe(sidecar, team)["arch"])
 
 
+def _start_training_run(recipe, seed, resume):
+    tags = None
+    if resume is not None:
+        tags = {
+            "resume.checkpoint": str(resume.path.resolve()),
+            "resume.completed_updates": str(resume.completed_updates),
+        }
+        if resume.train_run_id:
+            tags["resume.parent_run_id"] = resume.train_run_id
+    return start_run(recipe, backend="jax", seed=seed, extra_tags=tags).info.run_id
+
+
+def _export_checkpoint(save_dir, tag, recipe, seed, env_steps, is_final, train_run_id, policies):
+    """Keep inference bundles and their sidecars independent of resume state."""
+    name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
+    path = save_dir / name
+    save_jax_bundle(
+        path,
+        policies,
+        provenance={
+            "recipe": recipe["meta"]["name"],
+            "seed": int(seed),
+            "total_steps": int(env_steps),
+            "train_run_id": train_run_id,
+        },
+    )
+    sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
+    sidecar = write_sidecar(
+        save_dir / sidecar_name,
+        recipe,
+        seed=seed,
+        total_steps=env_steps,
+        backend="jax",
+        train_run_id=train_run_id,
+        extra={
+            "trainable_teams": [team for team, entry in policies.items() if entry.trainable],
+            "policy_sources": {team: entry.source for team, entry in policies.items()},
+            "model": name,
+            "training_checkpoint": LATEST_CHECKPOINT,
+        },
+    )
+    return path, sidecar
+
+
 def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     """Train or freeze independent Blue/Red policies in a joint JAX rollout."""
     trainable_teams = training_teams(recipe)
@@ -502,27 +553,16 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     num_steps = int(configs["blue"]["NUM_STEPS"])
     num_envs = int(configs["blue"]["NUM_ENVS"])
     num_updates = int(configs["blue"]["TOTAL_TIMESTEPS"]) // (num_steps * num_envs)
-    start_update = 0
-    resume = None
-    if getattr(args, "resume", None):
-        resume = select_joint_resume(save_dir, tag, recipe, args.seed, num_steps * num_envs, num_updates, args.resume)
-        if resume is not None:
-            resume_path, resume_bundle, start_update = resume
-            if resume_path == save_dir / f"model_{tag}.safetensors":
-                print(f"SKIP train {tag}: validated completed model {resume_path}", flush=True)
-                from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
-
-                run_configured_evaluations_after_training(resume_path, recipe)
-                return
-            if start_update >= num_updates:
-                raise ValueError("Resume checkpoint has no remaining updates; expected a completed final model")
-            print(
-                f"Resuming policy weights from {resume_path} at update {start_update}/{num_updates}. "
-                "Optimizer, RNG, environment, reward normalization and adaptive state are reset.",
-                flush=True,
-            )
-
-    opponent_paths = resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
+    resume = select_training_resume(
+        save_dir,
+        recipe,
+        args.seed,
+        num_steps * num_envs,
+        num_updates,
+        resume_request(recipe, getattr(args, "resume", None)),
+    )
+    start_update = resume.completed_updates if resume is not None else 0
+    opponent_paths = {} if resume is not None else resolve_train_opponents(recipe, backend="jax", exp_dir=EXP_DIR)
     dims = {
         "blue": (recipe_blue_obs_size(recipe), BLUE_ALLOW_TRAFFIC_END),
         "red": (RED_OBS_SIZE, RED_POLICY_ACTION_DIM),
@@ -534,7 +574,13 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
 
     for team in ("blue", "red"):
         obs_dim, action_dim = dims[team]
-        if team in trainable_teams:
+        if resume is not None:
+            metadata = resume.policies[team]
+            if (metadata["obs_dim"], metadata["action_dim"]) != dims[team]:
+                raise ValueError(f"Resume {team} observation/action dimensions differ: {resume.path}")
+            arch = metadata["arch"]
+            source = {"kind": "training_resume", "path": str(resume.path.resolve()), "training_state_reset": False}
+        elif team in trainable_teams:
             arch = dict(team_recipe(recipe, team)["arch"])
             source = {"kind": "fresh", "seed": int(args.seed)}
         else:
@@ -558,19 +604,6 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
         sources[team] = source
         networks[team] = _network_from_arch(arch, action_dim)
 
-    if resume is not None:
-        for team in ("blue", "red"):
-            entry = resume_bundle.policies[team]
-            if (entry.obs_dim, entry.action_dim) != dims[team]:
-                raise ValueError(f"Resume {team} observation/action dimensions differ: {resume_path}")
-            initial_params[team] = entry.weights
-            sources[team] = {
-                "kind": "weight_resume",
-                "path": str(resume_path.resolve()),
-                "total_steps": start_update * num_steps * num_envs,
-                "training_state_reset": True,
-            }
-
     print("=" * 60, flush=True)
     print(f"{recipe['algorithm'].upper()}-JAX joint [{recipe['meta']['name']}] seed={args.seed}", flush=True)
     print(
@@ -589,8 +622,6 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     print("=" * 60, flush=True)
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
-    run = start_run(recipe, backend="jax", seed=args.seed)
-    train_run_id = run.info.run_id
     t0 = time.perf_counter()
     env, obs, env_state, init_states, collect_and_update = make_joint_train(
         configs,
@@ -605,6 +636,11 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
     reward_norm_states = {team: initial_reward_norm_state(configs[team]["NUM_ENVS"]) for team in ("blue", "red")}
     adaptive_settings = AdaptiveUpdateSettings.from_config(configs["blue"].get("ADAPTIVE_UPDATES"))
     adaptive_state = initial_adaptive_update_state(adaptive_settings) if adaptive_settings is not None else None
+    if resume is not None:
+        train_states, env_state, obs, rng, reward_norm_states, adaptive_state = resume.restore(
+            (train_states, env_state, obs, rng, reward_norm_states, adaptive_state)
+        )
+        print(f"Restored full training state from {resume.path} at update {start_update}/{num_updates}", flush=True)
     if adaptive_settings is not None:
         print(f"  adaptive Red updates: {adaptive_settings}", flush=True)
     if configs["blue"].get("OPPONENT_POPULATION"):
@@ -613,11 +649,11 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
 
     if num_updates < 1:
         raise ValueError("total_timesteps must cover at least one joint rollout")
+    train_run_id = resume.train_run_id if resume is not None else None
     metrics_path = save_dir / "metrics.jsonl"
-    start = time.perf_counter()
     final_metrics = None
 
-    def save_bundle(path: Path, env_steps: int) -> None:
+    def export_checkpoint(env_steps: int, is_final: bool, *, save_state=True):
         policies = {
             team: PolicyBundleEntry(
                 weights=train_states[team].params,
@@ -630,19 +666,35 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
             )
             for team in ("blue", "red")
         }
-        save_jax_bundle(
-            path,
-            policies,
-            provenance={
-                "recipe": recipe["meta"]["name"],
-                "seed": int(args.seed),
-                "total_steps": int(env_steps),
-                "train_run_id": train_run_id,
+        paths = _export_checkpoint(save_dir, tag, recipe, args.seed, env_steps, is_final, train_run_id, policies)
+        if not save_state:
+            return paths
+        state_path = save_training_checkpoint(
+            save_dir / LATEST_CHECKPOINT,
+            recipe=recipe,
+            seed=args.seed,
+            completed_updates=env_steps // (num_steps * num_envs),
+            rollout_steps=num_steps * num_envs,
+            state=(train_states, env_state, obs, rng, reward_norm_states, adaptive_state),
+            policies={
+                team: {"arch": arches[team], "obs_dim": dims[team][0], "action_dim": dims[team][1]} for team in dims
             },
+            train_run_id=train_run_id,
         )
+        mlflow.log_artifact(str(state_path), artifact_path="training")
+        return paths
 
     if resume is not None:
         preserve_resume_metrics(metrics_path, start_update * num_steps * num_envs)
+    if start_update == num_updates:
+        final_model, _ = export_checkpoint(start_update * num_steps * num_envs, True, save_state=False)
+        print(f"Training already complete at update {start_update}; exported {final_model}", flush=True)
+        from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
+
+        run_configured_evaluations_after_training(final_model, recipe)
+        return
+    train_run_id = _start_training_run(recipe, args.seed, resume)
+    start = time.perf_counter()
     print(f"Starting joint training ({num_updates - start_update} remaining updates)...", flush=True)
     with metrics_path.open("a" if resume is not None else "w") as metrics_file:
         for update_idx in range(start_update, num_updates):
@@ -773,23 +825,7 @@ def _run_joint_training(args, recipe: dict, tag: str, save_dir: Path) -> None:
             eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
             periodic_checkpoint = checkpoint_every > 0 and (update_idx + 1) % checkpoint_every == 0
             if periodic_checkpoint or is_final or eval_due:
-                name = f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors"
-                checkpoint_path = save_dir / name
-                save_bundle(checkpoint_path, env_steps)
-                sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
-                sidecar_path = write_sidecar(
-                    save_dir / sidecar_name,
-                    recipe,
-                    seed=args.seed,
-                    total_steps=env_steps,
-                    backend="jax",
-                    train_run_id=train_run_id,
-                    extra={
-                        "trainable_teams": list(trainable_teams),
-                        "policy_sources": sources,
-                        "model": name,
-                    },
-                )
+                checkpoint_path, sidecar_path = export_checkpoint(env_steps, is_final)
                 if eval_due:
                     print(
                         f"  MLflow checkpoint evaluation at step {env_steps:,}; "
@@ -847,7 +883,7 @@ def main(*, expected_algorithm: str | None = None):
         "--resume",
         nargs="?",
         const="latest",
-        help="Resume joint policy weights/progress from latest intact export or a path; optimizer state resets",
+        help="Resume full training state from latest checkpoint or a .msgpack path; overrides train.resume",
     )
     args = parser.parse_args()
 
@@ -856,8 +892,6 @@ def main(*, expected_algorithm: str | None = None):
         parser.error(f"this launcher requires algorithm: {expected_algorithm}")
     teams = training_teams(recipe)
     learned_red = "red" in teams or bool(recipe.get("train", {}).get("opponents", {}).get("red"))
-    if args.resume and not learned_red:
-        parser.error("--resume currently requires joint Blue/Red training")
     blue_module = _network_from_arch(team_recipe(recipe, "blue")["arch"], BLUE_ALLOW_TRAFFIC_END)
     red_module = _network_from_arch(team_recipe(recipe, "red")["arch"], RED_POLICY_ACTION_DIM)
     modules = {"blue": blue_module, "red": red_module}
@@ -893,6 +927,16 @@ def main(*, expected_algorithm: str | None = None):
         _run_joint_training(args, recipe, tag, save_dir)
         return
 
+    num_envs = int(config["NUM_ENVS"])
+    num_steps = int(config["NUM_STEPS"])
+    num_updates = int(config["TOTAL_TIMESTEPS"]) // (num_envs * num_steps)
+    if num_updates < 1:
+        raise ValueError("total_timesteps must cover at least one rollout")
+    resume = select_training_resume(
+        save_dir, recipe, args.seed, num_steps * num_envs, num_updates, resume_request(recipe, args.resume)
+    )
+    start_update = resume.completed_updates if resume is not None else 0
+
     # Build a throwaway env to get action_dim for network init.
     variant: GameVariant = config["TRAIN_VARIANT"]
     topology_bank = config.get("TOPOLOGY_BANK") or None
@@ -918,8 +962,6 @@ def main(*, expected_algorithm: str | None = None):
     print("=" * 60, flush=True)
 
     checkpoint_evaluator = MlflowCheckpointEvaluator(recipe)
-    run = start_run(recipe, backend="jax", seed=args.seed)
-    train_run_id = run.info.run_id
 
     t0 = time.perf_counter()
     env, init_obs, init_env_state, init_train_state, collect_and_update = make_train(config, network)
@@ -938,27 +980,80 @@ def main(*, expected_algorithm: str | None = None):
         count=jnp.array(1e-4, dtype=jnp.float32),
     )
 
-    num_updates = int(config["NUM_UPDATES"])
-    num_steps = int(config["NUM_STEPS"])
-    metrics_path = save_dir / "metrics.jsonl"
-    metrics_file = open(metrics_path, "w")
+    if resume is not None:
+        train_state, env_state, obs, rng, reward_norm_state = resume.restore(
+            (train_state, env_state, obs, rng, reward_norm_state)
+        )
+        print(f"Restored full training state from {resume.path} at update {start_update}/{num_updates}", flush=True)
 
-    print(f"Starting training ({num_updates} updates)...", flush=True)
+    train_run_id = resume.train_run_id if resume is not None else None
+
+    def export_checkpoint(env_steps, is_final, *, save_state=True):
+        paths = _export_checkpoint(
+            save_dir,
+            tag,
+            recipe,
+            args.seed,
+            env_steps,
+            is_final,
+            train_run_id,
+            {
+                "blue": PolicyBundleEntry(
+                    weights=train_state.params,
+                    team="blue",
+                    obs_dim=recipe_blue_obs_size(recipe),
+                    action_dim=action_dim,
+                    arch=recipe["arch"],
+                    trainable=True,
+                    source={"kind": "fresh", "seed": int(args.seed)}
+                    if resume is None
+                    else {"kind": "training_resume", "path": str(resume.path.resolve()), "training_state_reset": False},
+                )
+            },
+        )
+        if not save_state:
+            return paths
+        state_path = save_training_checkpoint(
+            save_dir / LATEST_CHECKPOINT,
+            recipe=recipe,
+            seed=args.seed,
+            completed_updates=env_steps // (num_steps * num_envs),
+            rollout_steps=num_steps * num_envs,
+            state=(train_state, env_state, obs, rng, reward_norm_state),
+            train_run_id=train_run_id,
+        )
+        mlflow.log_artifact(str(state_path), artifact_path="training")
+        return paths
+
+    metrics_path = save_dir / "metrics.jsonl"
+    if resume is not None:
+        preserve_resume_metrics(metrics_path, start_update * num_steps * num_envs)
+    if start_update == num_updates:
+        final_model, _ = export_checkpoint(start_update * num_steps * num_envs, True, save_state=False)
+        print(f"Training already complete at update {start_update}; exported {final_model}", flush=True)
+        from jaxborg.evaluation.post_training import run_configured_evaluations_after_training
+
+        run_configured_evaluations_after_training(final_model, recipe)
+        return
+    train_run_id = _start_training_run(recipe, args.seed, resume)
+    metrics_file = open(metrics_path, "a" if resume is not None else "w")
+
+    print(f"Starting training ({num_updates - start_update} remaining updates)...", flush=True)
     start = time.perf_counter()
     final_metric = None
 
-    for update_idx in range(num_updates):
+    for update_idx in range(start_update, num_updates):
         train_state, env_state, obs, rng, reward_norm_state, metric = collect_and_update(
             train_state, env_state, obs, rng, reward_norm_state
         )
         metric = jax.device_get(metric)
         final_metric = metric
-        if update_idx == 0:
+        if update_idx == start_update:
             print(f"  first update compiled+ran in {time.perf_counter() - start:.1f}s", flush=True)
 
         env_steps = (update_idx + 1) * num_steps * num_envs
         elapsed = time.perf_counter() - start
-        sps = env_steps / elapsed if elapsed > 0 else 0.0
+        sps = (env_steps - start_update * num_steps * num_envs) / elapsed if elapsed > 0 else 0.0
 
         row = make_row(
             update_idx=update_idx + 1,
@@ -1010,37 +1105,7 @@ def main(*, expected_algorithm: str | None = None):
         eval_due = checkpoint_evaluator.due(previous_steps, env_steps, final=is_final)
         periodic_checkpoint = ckpt_every > 0 and (update_idx + 1) % ckpt_every == 0
         if periodic_checkpoint or is_final or eval_due:
-            ckpt_path = save_dir / (f"model_{tag}.safetensors" if is_final else f"checkpoint_{env_steps}.safetensors")
-            save_jax_bundle(
-                ckpt_path,
-                {
-                    "blue": PolicyBundleEntry(
-                        weights=train_state.params,
-                        team="blue",
-                        obs_dim=recipe_blue_obs_size(recipe),
-                        action_dim=action_dim,
-                        arch=dict(recipe["arch"]),
-                        trainable=True,
-                        source={"kind": "fresh", "seed": int(args.seed)},
-                    )
-                },
-                provenance={
-                    "recipe": recipe["meta"]["name"],
-                    "seed": int(args.seed),
-                    "total_steps": int(env_steps),
-                    "train_run_id": train_run_id,
-                },
-            )
-            sidecar_name = f"recipe_{tag}.yaml" if is_final else f"recipe_checkpoint_{env_steps}.yaml"
-            sidecar_path = write_sidecar(
-                save_dir / sidecar_name,
-                recipe,
-                seed=args.seed,
-                total_steps=env_steps,
-                backend="jax",
-                train_run_id=train_run_id,
-                extra={"trainable_teams": ["blue"], "model": ckpt_path.name},
-            )
+            ckpt_path, sidecar_path = export_checkpoint(env_steps, is_final)
             if eval_due:
                 print(
                     f"  MLflow checkpoint evaluation at step {env_steps:,}; "
@@ -1067,7 +1132,7 @@ def main(*, expected_algorithm: str | None = None):
 
     metrics_file.close()
     elapsed = time.perf_counter() - start
-    sps = int(config["TOTAL_TIMESTEPS"]) / elapsed if elapsed > 0 else 0.0
+    sps = (num_updates - start_update) * num_steps * num_envs / elapsed if elapsed > 0 else 0.0
     final_reward = float(final_metric["raw_rollout_return"]) if final_metric is not None else float("nan")
     mlflow.log_metrics({"wall_time_sec": elapsed, "steps_per_second": sps, "final_reward": final_reward})
     mlflow.log_artifact(str(metrics_path))

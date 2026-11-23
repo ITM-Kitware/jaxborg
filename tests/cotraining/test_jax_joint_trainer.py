@@ -349,90 +349,134 @@ def test_adaptive_red_updates_freeze_optimizer_and_use_current_raw_return(tiny_j
             assert float(metrics["blue"]["raw_rollout_return"]) == -800.0
 
 
-@pytest.mark.parametrize("resume_update", [0, 2, 4])
-def test_training_resume_restores_both_policies_and_remaining_budget(tiny_joint, monkeypatch, tmp_path, resume_update):
-    from jaxborg.checkpoint import ModelBundle, PolicyBundleEntry
+@pytest.mark.parametrize("mode", ["annealed", "lstm", "adaptive_population", "frozen_red", "mappo", "recurrent_mappo"])
+def test_training_resume_matches_uninterrupted_run(tiny_joint, monkeypatch, tmp_path, mode):
+    from jaxborg.training_resume import LATEST_CHECKPOINT, select_training_resume
     from scripts.train.algorithms import ippo_jax as trainer
 
     networks, configs = tiny_joint
-    for config in configs.values():
-        config.update(TOTAL_TIMESTEPS=8, UPDATE_EVERY=1)
+    arch = {"name": "separate", "hidden_dim": 8, "hidden_layers": 1}
+    settings = None
+    if mode in ("mappo", "recurrent_mappo"):
+        env = _TinyMAPPOJointEnv(blue_obs_dim=4, red_obs_dim=6, blue_actions=3, red_actions=5)
+        monkeypatch.setattr(joint, "make_joint_jax_env", lambda *_a, **_kw: env)
+        arch = {"name": mode, "hidden_dim": 8, "hidden_layers": 1}
+        networks = {
+            team: policy_from_arch({**arch, "team": team}, action_dim=actions)
+            for team, actions in (("blue", 3), ("red", 5))
+        }
+    if mode == "lstm":
+        networks = _recurrent_networks(3, 5, cell="lstm")
+        arch = {"name": "recurrent", "hidden_dim": 8, "hidden_layers": 1, "cell": "lstm"}
+    if mode == "adaptive_population":
+        settings = {
+            "phase_switch_blue_updates": 1,
+            "reward_threshold": 3.0,
+            "window_blue_updates": 2,
+            "max_frozen_blue_rollouts": 2,
+        }
+        population = _population_test_config(preserve=True)
+        monkeypatch.setattr(joint, "PopulationCC4Env", lambda variant, settings, **kw: _TinyPopulationEnv(settings))
+        for config in configs.values():
+            config.update(OPPONENT_POPULATION=population, NUM_ENVS=4, ADAPTIVE_UPDATES=settings)
+    for team, config in configs.items():
+        config.update(
+            TOTAL_TIMESTEPS=4 * config["NUM_ENVS"] * config["NUM_STEPS"],
+            UPDATE_EVERY=2 if team == "red" else 1,
+            CHECKPOINT_EVERY_UPDATES=2,
+            NORM_REWARDS=True,
+            ANNEAL_LR=mode == "annealed",
+        )
     recipe = {
         "meta": {"name": "tiny_resume"},
         "algorithm": "ippo",
-        "core": {"lr": 1e-2},
-        "train": {"teams": "both"},
-        "arch": {"name": "shared"},
-    }
-    _, _, _, init_states, _ = joint.make_joint_train(configs, networks, trainable_teams=("blue", "red"))
-    saved_states = init_states(jax.random.PRNGKey(123))
-    bundle = ModelBundle(
-        backend="jax",
-        policies={
-            team: PolicyBundleEntry(
-                weights=state.params,
-                team=team,
-                obs_dim=4 if team == "blue" else 6,
-                action_dim=3 if team == "blue" else 5,
-                arch=recipe["arch"],
-            )
-            for team, state in saved_states.items()
+        "core": {"lr": 1e-2, "anneal_lr": mode == "annealed"},
+        "train": {
+            "teams": "blue" if mode == "frozen_red" else "both",
+            "total_timesteps": configs["blue"]["TOTAL_TIMESTEPS"],
         },
-    )
+        "arch": arch,
+    }
+    if mode in ("mappo", "recurrent_mappo"):
+        recipe["algorithm"] = "mappo"
+        recipe["train"]["team_overrides"] = {"red": {"arch": {"team": "red"}}}
+    trainable = ("blue",) if mode == "frozen_red" else ("blue", "red")
     monkeypatch.setattr(trainer, "recipe_blue_obs_size", lambda _: 4)
     monkeypatch.setattr(trainer, "BLUE_ALLOW_TRAFFIC_END", 3)
     monkeypatch.setattr(trainer, "RED_OBS_SIZE", 6)
     monkeypatch.setattr(trainer, "RED_POLICY_ACTION_DIM", 5)
     monkeypatch.setattr(trainer, "project_jax", lambda _, *, team: configs[team])
-    monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_a, **_kw: {})
     monkeypatch.setattr(trainer, "_network_from_arch", lambda _, dim: networks["blue" if dim == 3 else "red"])
-    monkeypatch.setattr(
-        trainer,
-        "select_joint_resume",
-        lambda *_a: (
-            (
-                tmp_path / ("model_tiny_resume.safetensors" if resume_update == 4 else "checkpoint_4.safetensors"),
-                bundle,
-                resume_update,
-            )
-            if resume_update
-            else None
-        ),
-    )
     monkeypatch.setattr(trainer, "MlflowCheckpointEvaluator", lambda _: SimpleNamespace(due=lambda *_a, **_kw: False))
     monkeypatch.setattr(trainer, "start_run", lambda *_a, **_kw: SimpleNamespace(info=SimpleNamespace(run_id="test")))
-    for name in ("log_metrics", "log_artifact", "end_run"):
+    artifacts = []
+    monkeypatch.setattr(trainer.mlflow, "log_artifact", lambda path, **kw: artifacts.append((Path(path).name, kw)))
+    for name in ("log_metrics", "end_run"):
         monkeypatch.setattr(trainer.mlflow, name, lambda *_a, **_kw: None)
-    bundles = []
-    monkeypatch.setattr(trainer, "save_jax_bundle", lambda path, policies, **kw: bundles.append((policies, kw)))
-    monkeypatch.setattr(trainer, "write_sidecar", lambda path, *_a, **_kw: path)
     monkeypatch.setattr("jaxborg.evaluation.post_training.run_configured_evaluations_after_training", lambda *_a: None)
+
+    # Use a real frozen-opponent bundle, then remove it before resume: the full
+    # snapshot must carry the frozen policy too, including its architecture.
+    if mode == "frozen_red":
+        from jaxborg.checkpoint import PolicyBundleEntry, save_jax_bundle
+
+        _, _, _, init, _ = joint.make_joint_train(configs, networks, trainable_teams=trainable)
+        opponent = tmp_path / "opponent.safetensors"
+        save_jax_bundle(
+            opponent, {"red": PolicyBundleEntry(init(jax.random.PRNGKey(7))["red"].params, "red", 6, 5, arch)}
+        )
+        monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_a, **_kw: {"red": opponent})
+    else:
+        monkeypatch.setattr(trainer, "resolve_train_opponents", lambda *_a, **_kw: {})
+
+    uninterrupted = tmp_path / "uninterrupted"
+    interrupted = tmp_path / "interrupted"
+    uninterrupted.mkdir()
+    interrupted.mkdir()
+    trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_resume", uninterrupted)
+    rollout_steps = configs["blue"]["NUM_ENVS"] * 2
+    expected = select_training_resume(uninterrupted, recipe, 42, rollout_steps, 4, "latest")
     seen_updates = []
 
     def make_train(*args, **kwargs):
-        if resume_update:
-            for team in ("blue", "red"):
-                _assert_tree_exact(kwargs["initial_params"][team], saved_states[team].params)
         env, obs, env_state, init, update = joint.make_joint_train(*args, **kwargs)
 
         def record_update(*args, **kwargs):
             seen_updates.append(kwargs["update_idx"])
+            if kwargs["update_idx"] == 2 and not recipe["train"].get("resume"):
+                raise RuntimeError("interrupted")
             return update(*args, **kwargs)
 
         return env, obs, env_state, init, record_update
 
     monkeypatch.setattr(trainer, "make_joint_train", make_train)
-    trainer._run_joint_training(SimpleNamespace(seed=42, resume="latest"), recipe, "tiny_resume", tmp_path)
-    assert seen_updates == list(range(resume_update, 4))
-    if resume_update == 4:
-        assert not bundles
-        assert not (tmp_path / "metrics.jsonl").exists()
-        return
-    rows = [json.loads(line) for line in (tmp_path / "metrics.jsonl").read_text().splitlines()]
-    assert [row["env_steps"] for row in rows] == list(range((resume_update + 1) * 2, 9, 2))
-    assert bundles[-1][1]["provenance"]["total_steps"] == 8
-    if resume_update:
-        assert bundles[-1][0]["blue"].source["training_state_reset"] is True
+    with pytest.raises(RuntimeError, match="interrupted"):
+        trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_resume", interrupted)
+    assert select_training_resume(interrupted, recipe, 42, rollout_steps, 4, "latest").completed_updates == 2
+    if mode == "frozen_red":
+        opponent.unlink()
+    recipe["train"]["resume"] = "latest"
+    seen_updates.clear()
+    trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_resume", interrupted)
+    assert seen_updates == [2, 3]
+    actual = select_training_resume(interrupted, recipe, 42, rollout_steps, 4, "latest")
+    _assert_tree_exact(expected.state, actual.state)
+    assert (LATEST_CHECKPOINT, {"artifact_path": "training"}) in artifacts
+    expected_rows = [json.loads(line) for line in (uninterrupted / "metrics.jsonl").read_text().splitlines()]
+    actual_rows = [json.loads(line) for line in (interrupted / "metrics.jsonl").read_text().splitlines()]
+    assert [row["env_steps"] for row in actual_rows] == [rollout_steps * i for i in range(1, 5)]
+    for expected_row, actual_row in zip(expected_rows, actual_rows):
+        for key in expected_row:
+            if key.startswith(("team.", "loss_", "ppo_")):
+                assert actual_row[key] == pytest.approx(expected_row[key], nan_ok=True)
+    # A completed resume recreates missing final exports without any PPO work.
+    final = interrupted / "model_tiny_resume.safetensors"
+    final.unlink()
+    seen_updates.clear()
+    monkeypatch.setattr(trainer, "start_run", lambda *_a, **_kw: pytest.fail("completed resume started an empty run"))
+    trainer._run_joint_training(SimpleNamespace(seed=42), recipe, "tiny_resume", interrupted)
+    assert seen_updates == []
+    assert final.is_file()
 
 
 def test_adaptive_update_requires_explicit_schedule_state(tiny_joint):

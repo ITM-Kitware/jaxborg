@@ -47,6 +47,7 @@ arch:
   activation: tanh
 
 train:
+  resume: false             # JAX: latest, or a path to training_latest.msgpack.
   episode_length: 500
   buffer_size: 5120000        # 1024 envs * 500 steps * 10 agents flat (informational)
   minibatch_size: 320000

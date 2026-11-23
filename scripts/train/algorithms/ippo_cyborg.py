@@ -1379,6 +1379,8 @@ def main():
     args = parser.parse_args()
 
     recipe = copy.deepcopy(load_recipe(args.recipe))
+    if recipe["train"].get("resume"):
+        parser.error("train.resume is supported by the JAX trainer only; CybORG cannot restore environment state")
     if args.total_timesteps is not None:
         recipe["train"]["total_timesteps"] = int(args.total_timesteps)
     if args.num_envs is not None:
