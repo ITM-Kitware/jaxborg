@@ -1,0 +1,38 @@
+{
+  "source_revision": "45957e2e18fea380bb81d2a62cb2c7ddb5c2034e",
+  "jax_version": "0.10.2",
+  "checkpoint_step": 49920000,
+  "training_seeds": [42, 100],
+  "episode_seeds": [1000, 1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1009],
+  "familiar_topology_seed": 0,
+  "familiar_topology_fingerprint": "e37a466cc72c67dc502e013d3e81fce1eb39fcfce4744053c4a92eac9ac426bc",
+  "held_out": {
+    "first_seed": 100,
+    "count": 10,
+    "selection": "Use the first ten distinct stock layouts with at least three eligible operational servers for fixed CIA roles. Skip ineligible seeds before any policy runs. Use stock generator settings for all layouts."
+  },
+  "scripted_reds": ["cia_c", "cia_i", "cia_a", "aggressive", "stealthy", "impact"],
+  "learned_red_selection": "For each Blue training seed, use the other training seed's frozen Red team from each layout condition. Use the same Red checkpoints for both Blue conditions and both evaluation panels.",
+  "checkpoints": {
+    "one": {
+      "42": {
+        "relative_directory": "cotraining_lstm_separate_seed42",
+        "sha256": "14cd8bd2ef499f66e998ace8530420344667cf50b81c5ce31cad76d4b7037356"
+      },
+      "100": {
+        "relative_directory": "cotraining_lstm_separate_seed100",
+        "sha256": "08229b1ee97c680effc8d1eb7525a50cb9b2f8656cd9664fefbdf1c623563c51"
+      }
+    },
+    "hundred": {
+      "42": {
+        "relative_directory": "cotraining_lstm_env_diversity_separate_seed42",
+        "sha256": "393faf71eae3598b91e47d5830990de38daf951400f0f94ee164f2831abf2d30"
+      },
+      "100": {
+        "relative_directory": "cotraining_lstm_env_diversity_separate_seed100",
+        "sha256": "073b427bcaa578b1ea6cf0a6263dbffe14d017c7f0cbb0a9887fea4f86c59525"
+      }
+    }
+  }
+}
