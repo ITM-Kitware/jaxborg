@@ -29,6 +29,7 @@ existing code.
 
 | Study | What it illustrates |
 | --- | --- |
+| [Familiar-layout defender transfer](familiar-layout-transfer/README.md) | Comparing saved defenders across matched opponent and episode panels on familiar and held-out layouts. |
 | [Defender transfer](defender-transfer/README.md) | Comparing archived policies across attacker and layout panels, with learning references and explicit limits on familiarity. |
 | [LSTM competence against fixed FSM Red](lstm-fsm-competence/README.md) | Separating a primary training budget from an extension and relating score panels to exploratory behavior checks. |
 | [LSTM adaptive robustness](lstm-adaptive-robustness/README.md) | Training fresh attackers against frozen defenders and comparing finite-budget responses and saved-policy cross-play. |
