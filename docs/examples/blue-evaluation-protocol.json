@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "kind": "protocol",
+  "id": "blue-checkpoint:protocol:1",
+  "study_id": "blue-checkpoint",
+  "revision": "1",
+  "selection_rule": "explicit",
+  "required_facts": {
+    "attempt": [
+      "resolved_config",
+      "source_files"
+    ],
+    "evaluation": [
+      "resolved_config"
+    ]
+  },
+  "trials": [
+    {
+      "id": "blue-1",
+      "condition_id": "saved-blue",
+      "replicate_id": "train-1",
+      "matched_unit_id": null
+    }
+  ],
+  "metric_definitions": [
+    {
+      "name": "blue_return",
+      "unit": "score",
+      "direction": "higher",
+      "aggregation": "arithmetic mean",
+      "sampling_unit": "episode conditional on fixed policy",
+      "uncertainty": "none"
+    }
+  ]
+}

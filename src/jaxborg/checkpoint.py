@@ -107,8 +107,8 @@ def load_jax_params(path: str | Path) -> tuple[dict, int]:
     return params, action_dim
 
 
-def read_sidecar(model_path: str | Path) -> dict[str, Any]:
-    """Load `recipe_<tag>.{yaml|yml}` adjacent to `model_path`."""
+def sidecar_path(model_path: str | Path) -> Path:
+    """Locate the recipe for a saved policy."""
     model_path = Path(model_path)
     name = model_path.name
     if name.startswith("model_"):
@@ -122,5 +122,9 @@ def read_sidecar(model_path: str | Path) -> dict[str, Any]:
     ]
     for c in candidates:
         if c.exists():
-            return yaml.safe_load(c.read_text())
+            return c
     raise FileNotFoundError(f"No recipe sidecar found next to {model_path} (looked for {[str(c) for c in candidates]})")
+
+
+def read_sidecar(model_path: str | Path) -> dict[str, Any]:
+    return yaml.safe_load(sidecar_path(model_path).read_text())
