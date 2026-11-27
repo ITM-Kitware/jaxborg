@@ -1,34 +1,44 @@
 # Record and replay a Blue evaluation
 
-Use a serial Torch Blue checkpoint evaluation when a reported mean needs a link back to the policy and individual episodes. The recorder retains the checkpoint and adjacent recipe, resolved settings, source revision and files, reset topologies, and each completed episode's reward.
+Use the recorder to link a serial Torch Blue evaluation to its policy, resolved settings and individual episode rewards.
 
 ## Record
 
-Copy the [example protocol](examples/blue-evaluation-protocol.json) and declare the expected training replicates and conditions for your study. Choose a clean checkout, an evidence directory outside it, an MLflow tracking URI and an experiment name. Seeds below are explicit ordered environment seeds. Stochastic sampling uses consecutive policy seeds starting at 700. Add `--deterministic` for argmax.
+Copy the [example protocol](examples/blue-evaluation-protocol.json) and declare the conditions and training replicates. Start from a clean checkout and choose an evidence directory outside it.
 
 ```sh
 export MLFLOW_TRACKING_URI="$TRACKING_SERVICE"
 export MLFLOW_EXPERIMENT_NAME="jaxborg/$STUDY"
 uv run python -m jaxborg.evaluation.capture run \
-  --model "$MODEL" --protocol "$PROTOCOL" --trial blue-1 \
-  --root "$EVIDENCE_ROOT" --revision "$(git rev-parse HEAD)" \
+  --model "$MODEL" --protocol "$PROTOCOL" --root "$EVIDENCE_ROOT" \
   --seeds 42 43 --policy-seed 700 --horizon 500
 ```
 
-The command returns the attempt and evaluation IDs and the MLflow run ID when tracking starts. Save the run ID and service beside the study result. One run owns the attempt's artifacts under `evidence/`. Check the `jaxborg.discovery.evidence_path` tag for successful delivery. A local attempt can finish while tracking fails. If a run exists and delivery failed, use the same tracking URI and run `uv run python -m jaxborg.evaluation.capture sync --root "$EVIDENCE_ROOT" --attempt "$ATTEMPT_ID"`. A retry takes `--retry-of` with the previous attempt ID.
+- **Trial and revision.** A single-trial protocol supplies the trial ID. Pass `--trial` for multiple trials. The recorder captures the checkout commit. Pass `--revision "$PLANNED_COMMIT"` to enforce a pin.
+- **Episode choices.** Supply ordered environment seeds. Sampling uses consecutive policy seeds starting at 700 in this example. Add `--deterministic` for argmax.
+- **Training lineage.** To verify the checkpoint and recipe hashes against a training run in this service, pass `--producer-run-id "$TRAIN_RUN_ID"`.
 
-## Identify the policy and simulator
+## Find the evidence
 
-In the evaluation run, look under MLflow Tags for `jaxborg.discovery.trained_backend` (training simulator), `jaxborg.discovery.checkpoint_format` (policy payload), and `jaxborg.discovery.eval_env` (evaluation simulator). A missing training simulator means the retained recipe did not identify one. The recipe evaluator writes the same three fields into its result JSON, including when a JAX policy plays in CybORG. For a linked training run, open Artifacts → `evaluations/` and select that evaluation’s JSON.
+Link the evaluation run from the study result. In MLflow, the `jaxborg.discovery.evidence_path` tag points to delivered artifacts. Under Tags, `trained_backend`, `checkpoint_format` and `eval_env` share the `jaxborg.discovery.` prefix. The training simulator comes from the saved recipe when available. The evaluator identifies the format it loads and the simulator it runs.
+
+| IPPO filename | Contents |
+| --- | --- |
+| `model_*.pt` | Torch policy weights for evaluation |
+| `checkpoint_*.pt` | Torch training state for resuming, including policy and optimizer |
+| `model_*.safetensors` | Flax policy parameters. For a multi-team bundle, consult its embedded policy metadata. |
+
+The recipe evaluator also writes these fields to its result JSON. For a linked training run, open **Artifacts** and select the JSON under `evaluations/`.
 
 ## Rebuild a mean
 
-From a fresh checkout with access to the service, use the run ID selected by the study and a new download directory.
+With the tracking service selected, pass the recorded run ID and a new download directory.
 
 ```sh
 uv run python -m jaxborg.evaluation.replay \
-  --tracking-uri "$MLFLOW_TRACKING_URI" --run-id "$RUN_ID" \
-  --destination "$NEW_DOWNLOAD_DIRECTORY"
+  --run-id "$RUN_ID" --destination "$NEW_DOWNLOAD_DIRECTORY"
 ```
 
-Replay verifies retained record relationships, file sizes and hashes, including checkpoint dependencies. It then reads the selected evaluation's episode rewards, computes their arithmetic mean and checks it against the recorded value. It works with compatible historical Jaxborg evaluation stores, including stores with training parents. Record the source revision of the replay alongside the result. This command rebuilds a single evaluation mean. Cross-run contrasts and uncertainty estimates use the study's own saved selection and analyzer.
+Replay verifies the retained files and hashes, rebuilds the arithmetic mean from episode rewards, and compares it with the saved metric. Cross-run comparisons use the study's selection and analyzer.
+
+**Repair delivery.** If a run exists but evidence delivery failed, run `uv run python -m jaxborg.evaluation.capture sync --root "$EVIDENCE_ROOT" --attempt "$ATTEMPT_ID"` against the same service. For a new execution, pass `--retry-of "$ATTEMPT_ID"` to the recorder.

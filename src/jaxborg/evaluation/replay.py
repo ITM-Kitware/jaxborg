@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 from statistics import mean
 
@@ -43,10 +44,14 @@ def rebuild_blue_return(client, run_id, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--tracking-uri", required=True)
+    parser.add_argument(
+        "--tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI"), help="Override MLFLOW_TRACKING_URI"
+    )
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--destination", required=True, type=Path)
     args = parser.parse_args()
+    if not args.tracking_uri:
+        parser.error("Set MLFLOW_TRACKING_URI or pass --tracking-uri")
     result = rebuild_blue_return(MlflowClient(tracking_uri=args.tracking_uri), args.run_id, args.destination)
     print(json.dumps(result, sort_keys=True))
 

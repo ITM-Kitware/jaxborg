@@ -443,7 +443,6 @@ def main():
                     total_steps=env_steps,
                     backend="jax",
                     train_run_id=train_run_id,
-                    extra={"checkpoint_format": JAX_POLICY_FORMAT},
                 )
 
     metrics_file.close()

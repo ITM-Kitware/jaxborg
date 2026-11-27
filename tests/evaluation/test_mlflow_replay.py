@@ -35,7 +35,6 @@ def test_saved_blue_evaluation_survives_producer_relocation(tmp_path, monkeypatc
     run = run_evaluation(
         root=store,
         protocol=json.loads(protocol.read_text()),
-        trial_id="blue-1",
         model=model,
         seeds=[42, 43],
         horizon=6,
@@ -43,6 +42,7 @@ def test_saved_blue_evaluation_survives_producer_relocation(tmp_path, monkeypatc
         allow_dirty=True,
     )
     tags = client.get_run(run.tracking.run_id).data.tags
+    assert tags["jaxborg.discovery.trial_id"] == "blue-1"
     assert tags["jaxborg.discovery.eval_env"] == "cyborg"
     assert tags["jaxborg.discovery.checkpoint_format"] == "pytorch_state_dict"
     assert tags.get("jaxborg.discovery.trained_backend") == training_simulator
@@ -55,3 +55,12 @@ def test_saved_blue_evaluation_survives_producer_relocation(tmp_path, monkeypatc
     assert result["evaluation_id"] == run.evaluation_id
     assert result["episodes"] == 2
     assert result["blue_return"] == sum(expected) / 2
+
+
+def test_multiple_trials_require_an_explicit_choice(tmp_path):
+    protocol_path = Path(__file__).resolve().parents[2] / "docs/examples/blue-evaluation-protocol.json"
+    protocol = json.loads(protocol_path.read_text())
+    protocol["trials"].append({**protocol["trials"][0], "id": "blue-2", "replicate_id": "train-2"})
+    with pytest.raises(ValueError, match="--trial"):
+        run_evaluation(root=tmp_path / "store", protocol=protocol, model=tmp_path / "model.pt", seeds=[42], horizon=1)
+    assert not (tmp_path / "store").exists()

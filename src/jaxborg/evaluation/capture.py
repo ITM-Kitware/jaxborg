@@ -74,7 +74,7 @@ def run_evaluation(
     *,
     root: Path,
     protocol: dict,
-    trial_id: str,
+    trial_id: str | None = None,
     model: Path,
     seeds: list[int],
     horizon: int,
@@ -111,6 +111,11 @@ def run_evaluation(
     if len(set(seeds)) != len(seeds):
         raise ValueError("Environment seeds must be unique")
     _integer(policy_seed + len(seeds) - 1, "last policy seed", maximum=2**63 - 1)
+    if trial_id is None:
+        trials = protocol.get("trials", [])
+        if len(trials) != 1:
+            raise ValueError("Select a trial with --trial when the protocol does not declare exactly one")
+        trial_id = trials[0]["id"]
     _metric_contract(protocol)
     recipe_path = sidecar_path(model)
     recipe = _read_recipe(recipe_path)
@@ -147,15 +152,12 @@ def run_evaluation(
     }
     facts = {
         **provenance.facts,
-        "eval_env": _fact("cyborg"),
-        "policy_backend": _fact("torch"),
-        "checkpoint_format": _fact(metadata["checkpoint_format"]),
+        **{key: _fact(config[key]) for key in ("eval_env", "policy_backend", "checkpoint_format", "policy_device")},
         "game_contract": _fact(asdict(variant)),
         "seeds": _fact(list(seeds)),
         "policy_seeds": _fact(policy_seeds),
         "policies": _fact({"blue": {"checkpoint_role": _CHECKPOINT_ROLE}, "red": {"scripted": variant.red_agent}}),
         "step_accounting": _fact("Step counts cover completed episodes; partial episode steps are not retained"),
-        "policy_device": _fact("cpu"),
     }
     if metadata["trained_backend"] is not None:
         facts["trained_backend"] = _fact(metadata["trained_backend"], "retained recipe run.backend")
@@ -349,14 +351,14 @@ def main(argv=None):
     run = commands.add_parser("run", help="Record a Blue checkpoint evaluation")
     run.add_argument("--root", required=True, type=Path)
     run.add_argument("--protocol", required=True, type=Path)
-    run.add_argument("--trial", required=True)
+    run.add_argument("--trial", help="Trial ID (defaults to the only trial in the protocol)")
     run.add_argument("--model", required=True, type=Path)
     run.add_argument("--seeds", required=True, nargs="+", type=int)
     run.add_argument("--horizon", default=500, type=int)
     run.add_argument("--policy-seed", required=True, type=int)
     run.add_argument("--deterministic", action="store_true")
     run.add_argument("--producer-run-id", help="Verify the retained policy against this training run")
-    run.add_argument("--revision", required=True)
+    run.add_argument("--revision", help="Require the checkout to match this commit before recording")
     run.add_argument("--retry-of")
     sync = commands.add_parser("sync", help="Refresh delivery for an existing MLflow run")
     sync.add_argument("--root", required=True, type=Path)

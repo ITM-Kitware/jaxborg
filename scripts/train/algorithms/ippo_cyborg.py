@@ -469,7 +469,6 @@ def train(args, recipe, cfg):
         total_steps=total_steps,
         backend="cyborg",
         train_run_id=train_run_id,
-        extra={"checkpoint_format": TORCH_POLICY_FORMAT},
     )
 
     final_reward = float(np.mean(completed_rewards[-50:])) if completed_rewards else float("nan")
