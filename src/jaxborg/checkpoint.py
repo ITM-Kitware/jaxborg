@@ -29,6 +29,17 @@ from safetensors import safe_open
 from safetensors.flax import load_file, save_file
 
 _FLAX_KEY_SEP = "/"
+TORCH_POLICY_FORMAT = "pytorch_state_dict"
+JAX_POLICY_FORMAT = "safetensors_flax_params"
+
+
+def policy_metadata(recipe: dict, loader_format: str) -> dict:
+    """Describe the policy accepted by the loader and its documented training simulator."""
+    run = recipe.get("run", {})
+    declared = run.get("checkpoint_format")
+    if declared is not None and declared != loader_format:
+        raise ValueError(f"Recipe declares checkpoint format {declared!r}, loader expects {loader_format!r}")
+    return {"trained_backend": run.get("backend"), "checkpoint_format": loader_format}
 
 
 def _git_commit() -> str:

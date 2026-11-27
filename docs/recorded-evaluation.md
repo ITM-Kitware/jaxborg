@@ -17,6 +17,10 @@ uv run python -m jaxborg.evaluation.capture run \
 
 The command returns the attempt and evaluation IDs and the MLflow run ID when tracking starts. Save the run ID and service beside the study result. One run owns the attempt's artifacts under `evidence/`. Check the `jaxborg.discovery.evidence_path` tag for successful delivery. A local attempt can finish while tracking fails. If a run exists and delivery failed, use the same tracking URI and run `uv run python -m jaxborg.evaluation.capture sync --root "$EVIDENCE_ROOT" --attempt "$ATTEMPT_ID"`. A retry takes `--retry-of` with the previous attempt ID.
 
+## Identify the policy and simulator
+
+In the evaluation run, look under MLflow Tags for `jaxborg.discovery.trained_backend` (training simulator), `jaxborg.discovery.checkpoint_format` (policy payload), and `jaxborg.discovery.eval_env` (evaluation simulator). A missing training simulator means the retained recipe did not identify one. The recipe evaluator writes the same three fields into its result JSON, including when a JAX policy plays in CybORG. For a linked training run, open Artifacts → `evaluations/` and select that evaluation’s JSON.
+
 ## Rebuild a mean
 
 From a fresh checkout with access to the service, use the run ID selected by the study and a new download directory.

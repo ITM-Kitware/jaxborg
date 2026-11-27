@@ -92,7 +92,7 @@ def run_evaluation(
     declared. Once started, input-copy, model-load, and rollout failures are
     retained. The protocol's trial identities and selection remain explicit.
     """
-    from jaxborg.checkpoint import sidecar_path
+    from jaxborg.checkpoint import TORCH_POLICY_FORMAT, policy_metadata, sidecar_path
     from jaxborg.evaluation.cyborg_runner import resolve_torch_evaluation_settings
     from jaxborg.evaluation.provenance import collect_provenance
 
@@ -114,6 +114,7 @@ def run_evaluation(
     _metric_contract(protocol)
     recipe_path = sidecar_path(model)
     recipe = _read_recipe(recipe_path)
+    metadata = policy_metadata(recipe, TORCH_POLICY_FORMAT)
     settings = resolve_torch_evaluation_settings(recipe, deterministic=deterministic, horizon=horizon)
     variant = settings.variant
     provenance = collect_provenance(allow_dirty=allow_dirty, entrypoint=entrypoint, expected_revision=expected_revision)
@@ -122,6 +123,7 @@ def run_evaluation(
         "schema_version": 1,
         "eval_env": "cyborg",
         "policy_backend": "torch",
+        **metadata,
         "model_filename": model.name,
         "recipe_filename": recipe_path.name,
         "recipe": recipe,
@@ -147,6 +149,7 @@ def run_evaluation(
         **provenance.facts,
         "eval_env": _fact("cyborg"),
         "policy_backend": _fact("torch"),
+        "checkpoint_format": _fact(metadata["checkpoint_format"]),
         "game_contract": _fact(asdict(variant)),
         "seeds": _fact(list(seeds)),
         "policy_seeds": _fact(policy_seeds),
@@ -154,6 +157,9 @@ def run_evaluation(
         "step_accounting": _fact("Step counts cover completed episodes; partial episode steps are not retained"),
         "policy_device": _fact("cpu"),
     }
+    if metadata["trained_backend"] is not None:
+        facts["trained_backend"] = _fact(metadata["trained_backend"], "retained recipe run.backend")
+
     from jaxborg.evaluation.tracking import destination_configured
 
     capture = start_evaluation(

@@ -42,7 +42,7 @@ def execution_tags(record, records):
         if isinstance(value, str):
             tags[TAG_PREFIX + key] = value
     facts = record["facts"]
-    for key in ("policy_backend", "eval_env"):
+    for key in ("policy_backend", "trained_backend", "checkpoint_format", "eval_env"):
         fact = facts.get(key)
         if fact and isinstance(fact.get("value"), (str, int, float, bool)):
             tags[TAG_PREFIX + key] = str(fact["value"])

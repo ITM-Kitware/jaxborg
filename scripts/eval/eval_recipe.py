@@ -33,12 +33,13 @@ import sys
 import time
 from pathlib import Path
 from statistics import mean, stdev
+from uuid import uuid4
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from jaxborg.checkpoint import read_sidecar
+from jaxborg.checkpoint import JAX_POLICY_FORMAT, TORCH_POLICY_FORMAT, policy_metadata, read_sidecar
 from jaxborg.mlflow_setup import attach_eval_metrics
 
 EXP_DIR = Path(os.environ.get("JAXBORG_EXP_DIR", "jaxborg-exp")).resolve()
@@ -67,13 +68,13 @@ def _git_commit() -> str:
         return ""
 
 
-def _detect_trained_backend(model_path: Path) -> str:
-    """Determine which trainer produced this model from the file suffix."""
+def _loader_format(model_path: Path) -> str:
+    """Select the policy reader for the given filename."""
     if model_path.suffix == ".pt":
-        return "cyborg"
+        return TORCH_POLICY_FORMAT
     if model_path.suffix in (".safetensors", ".flax", ".orbax"):
-        return "jax"
-    raise ValueError(f"Cannot detect trained backend from suffix: {model_path}")
+        return JAX_POLICY_FORMAT
+    raise ValueError(f"No policy loader for suffix: {model_path}")
 
 
 def main():
@@ -99,18 +100,19 @@ def main():
     if not model_path.exists():
         raise FileNotFoundError(f"Model not found: {model_path}")
 
-    trained_backend = _detect_trained_backend(model_path)
+    loader_format = _loader_format(model_path)
+    recipe = read_sidecar(model_path)
+    metadata = policy_metadata(recipe, loader_format)
     seeds = _parse_seeds(args.seeds)
 
-    if trained_backend == "cyborg":
+    if loader_format == TORCH_POLICY_FORMAT:
         from jaxborg.evaluation.cyborg_runner import evaluate_on_cyborg
         from jaxborg.recipe import eval_variant
 
-        recipe = read_sidecar(model_path)
         variant = eval_variant(recipe)
         print(f"Loaded recipe sidecar: {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
-            f"  trained=cyborg arch={recipe['arch']['name']} seeds={seeds} "
+            f"  format={loader_format} arch={recipe['arch']['name']} seeds={seeds} "
             f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
             flush=True,
         )
@@ -129,7 +131,6 @@ def main():
         from jaxborg.evaluation.jax_runner import evaluate_jax_on_cyborg
         from jaxborg.recipe import eval_variant
 
-        recipe = read_sidecar(model_path)
         variant = eval_variant(recipe)
 
         t0 = time.perf_counter()
@@ -144,7 +145,7 @@ def main():
         wall = time.perf_counter() - t0
         print(f"Loaded recipe (sidecar or fallback): {recipe.get('meta', {}).get('name', '?')}", flush=True)
         print(
-            f"  trained=jax arch={recipe['arch']['name']} seeds={seeds} "
+            f"  format={loader_format} arch={recipe['arch']['name']} seeds={seeds} "
             f"eps/seed={args.episodes} variant={variant.name} workers={args.workers}",
             flush=True,
         )
@@ -152,14 +153,14 @@ def main():
     m = mean(rewards)
     s = stdev(rewards) if len(rewards) > 1 else 0.0
 
-    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{seeds[0]}"
+    eval_id = f"{time.strftime('%Y%m%d_%H%M%S')}_{seeds[0]}_{uuid4().hex}"
     train_run_id = recipe.get("run", {}).get("train_run_id")
     row = {
         "eval_id": eval_id,
         "model": str(model_path),
         "recipe_name": recipe.get("meta", {}).get("name", ""),
         "recipe_path": recipe.get("meta", {}).get("source_path") or recipe.get("__source_path__", ""),
-        "trained_backend": trained_backend,
+        **metadata,
         "eval_env": "cyborg",
         "variant": variant.name,
         "red_agent": variant.red_agent,
@@ -195,6 +196,7 @@ def main():
                     "eval.cyborg.std": s,
                     "eval.cyborg.episodes": len(rewards),
                 },
+                result=row,
             )
             print(f"attached eval metrics to MLflow run {train_run_id}", flush=True)
         except Exception as e:

@@ -36,7 +36,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from jaxborg.checkpoint import write_sidecar
+from jaxborg.checkpoint import TORCH_POLICY_FORMAT, write_sidecar
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
@@ -197,7 +197,7 @@ def train(args, recipe, cfg):
     values_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS))
     masks_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, ACT_DIM))
 
-    run = start_run(recipe, backend="cyborg", seed=args.seed)
+    run = start_run(recipe, backend="cyborg", seed=args.seed, extra_tags={"checkpoint_format": TORCH_POLICY_FORMAT})
     train_run_id = run.info.run_id
     mlflow.set_tags({"jaxborg.kind": "training", "jaxborg.trainable_teams": "blue"})
     mlflow.log_dict({**cfg, "TRAIN_VARIANT": asdict(variant)}, "training-settings.json")
@@ -469,6 +469,7 @@ def train(args, recipe, cfg):
         total_steps=total_steps,
         backend="cyborg",
         train_run_id=train_run_id,
+        extra={"checkpoint_format": TORCH_POLICY_FORMAT},
     )
 
     final_reward = float(np.mean(completed_rewards[-50:])) if completed_rewards else float("nan")
