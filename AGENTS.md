@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+For study planning, execution, analysis or reporting, follow the [study guide](studies/README.md).
+
 ## Commands
 
 ```bash
