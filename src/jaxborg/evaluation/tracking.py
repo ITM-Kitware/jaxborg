@@ -124,6 +124,10 @@ class ExecutionRun:
                 self.client.log_dict(self.run_id, self.configuration, "configuration.json")
             self.client.log_dict(self.run_id, {"protocol": self.protocol, "records": records}, "execution.json")
             if attempt["status"] != "running":
+                if len(records) > 1 and records[1]["kind"] == "evaluation":
+                    for metric in records[1]["metrics"]:
+                        if self.client.get_run(self.run_id).data.metrics.get(metric["name"]) != metric["value"]:
+                            self.client.log_metric(self.run_id, metric["name"], metric["value"])
                 self.upload_evidence(attempt["id"])
                 tags[TAG_PREFIX + "evidence_path"] = "evidence"
             self.client.log_batch(self.run_id, tags=[RunTag(key, value) for key, value in tags.items()])

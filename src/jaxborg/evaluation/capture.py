@@ -82,6 +82,7 @@ def run_evaluation(
     deterministic: bool = False,
     policy_seed: int = 0,
     allow_dirty: bool = False,
+    producer_run_id: str | None = None,
     entrypoint: Path | None = None,
     expected_revision: str | None = None,
 ) -> Capture:
@@ -171,6 +172,37 @@ def run_evaluation(
         retained_hashes = json.loads((capture.directory / "source-files.json").read_text())
         if retained_hashes != provenance.hashes:
             raise ValueError("Retained evaluation source differs from its captured identity")
+        if producer_run_id is not None:
+            import mlflow
+
+            from jaxborg.evaluation.capture_store import record_facts
+            from jaxborg.policy_artifacts import verify_policy_origin
+
+            training = recipe.get("run", {})
+            if training.get("train_run_id") != producer_run_id or type(training.get("total_steps")) is not int:
+                raise ValueError("Selected training run differs from the retained sidecar")
+            origin = verify_policy_origin(
+                mlflow.MlflowClient(),
+                producer_run_id,
+                team="blue",
+                step=training["total_steps"],
+                model=capture.inputs[_CHECKPOINT_ROLE],
+                sidecar=capture.inputs[_RECIPE_ROLE],
+            )
+            record_facts(
+                capture,
+                {
+                    "blue_policy_origin": {
+                        "value": origin,
+                        "source": "training checkpoint descriptor and retained bytes",
+                    }
+                },
+            )
+            if capture.tracking is not None:
+                capture.tracking.client.set_tag(
+                    capture.tracking.run_id, "jaxborg.blue_training_run_id", producer_run_id
+                )
+
         if _read_recipe(capture.inputs[_RECIPE_ROLE]) != recipe:
             raise ValueError("Recipe sidecar changed while its input bytes were retained")
 
@@ -317,6 +349,7 @@ def main(argv=None):
     run.add_argument("--horizon", default=500, type=int)
     run.add_argument("--policy-seed", required=True, type=int)
     run.add_argument("--deterministic", action="store_true")
+    run.add_argument("--producer-run-id", help="Verify the retained policy against this training run")
     run.add_argument("--revision", required=True)
     run.add_argument("--retry-of")
     sync = commands.add_parser("sync", help="Refresh delivery for an existing MLflow run")
@@ -340,6 +373,7 @@ def main(argv=None):
                 deterministic=args.deterministic,
                 policy_seed=args.policy_seed,
                 expected_revision=args.revision,
+                producer_run_id=args.producer_run_id,
             )
             result = {"attempt_id": capture.attempt_id, "evaluation_id": capture.evaluation_id}
             if capture.tracking is not None:
