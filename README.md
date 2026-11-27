@@ -73,6 +73,8 @@ uv sync --extra cuda         # GPU support (training on NVIDIA Linux hosts)
 
 ## Usage
 
+[Record a Blue checkpoint evaluation and rebuild its score from MLflow](docs/recorded-evaluation.md).
+
 ```bash
 # Tests (fast suite ~7 min; slow L3 fuzz excluded by default)
 uv run pytest            # default: -n auto -m 'not slow'

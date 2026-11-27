@@ -14,7 +14,8 @@ class EvalRow(TypedDict, total=False):
     model: str
     recipe_name: str
     recipe_path: str
-    trained_backend: str  # "cyborg" or "jax" — which trainer produced the model
+    trained_backend: str | None  # Training simulator from the policy recipe, when known
+    checkpoint_format: str
     eval_env: str  # always "cyborg" today (CC4 contract eval)
     seeds: list[int]
     episodes_per_seed: int

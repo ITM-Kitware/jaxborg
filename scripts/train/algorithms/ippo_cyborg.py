@@ -22,6 +22,7 @@ import os
 import signal
 import sys
 import time
+from dataclasses import asdict
 from multiprocessing import Pipe, Process
 from pathlib import Path
 
@@ -35,11 +36,12 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
-from jaxborg.checkpoint import write_sidecar
+from jaxborg.checkpoint import TORCH_POLICY_FORMAT, write_sidecar
 from jaxborg.constants import BLUE_OBS_SIZE
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
 from jaxborg.policies import make_torch_policy
+from jaxborg.policy_artifacts import log_policy_checkpoint
 from jaxborg.recipe import load as load_recipe
 from jaxborg.recipe import project_cleanrl
 from jaxborg.scenarios.cc4.game_variant import GameVariant
@@ -195,8 +197,10 @@ def train(args, recipe, cfg):
     values_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS))
     masks_buf = torch.zeros((num_steps, num_envs, NUM_AGENTS, ACT_DIM))
 
-    run = start_run(recipe, backend="cyborg", seed=args.seed)
+    run = start_run(recipe, backend="cyborg", seed=args.seed, extra_tags={"checkpoint_format": TORCH_POLICY_FORMAT})
     train_run_id = run.info.run_id
+    mlflow.set_tags({"jaxborg.kind": "training", "jaxborg.trainable_teams": "blue"})
+    mlflow.log_dict({**cfg, "TRAIN_VARIANT": asdict(variant)}, "training-settings.json")
 
     metrics_path = save_dir / "metrics.jsonl"
     metrics_file = open(metrics_path, "w")
@@ -474,11 +478,20 @@ def train(args, recipe, cfg):
             finals["final_episode_reward_mean"] = final_reward
         finals["total_episodes"] = len(completed_rewards)
         mlflow.log_metrics(finals)
+        log_policy_checkpoint(
+            mlflow.MlflowClient(),
+            train_run_id,
+            team="blue",
+            step=total_steps,
+            model=save_dir / f"model_{tag}.pt",
+            sidecar=save_dir / f"recipe_{tag}.yaml",
+        )
         mlflow.log_artifact(str(metrics_path))
         mlflow.log_artifact(str(save_dir / f"recipe_{tag}.yaml"))
         mlflow.end_run()
     except Exception as e:
-        print(f"MLflow finalize warning: {e}")
+        mlflow.end_run(status="FAILED")
+        raise RuntimeError(f"Could not deliver training artifacts for {train_run_id}") from e
 
     metrics_file.close()
     envs.close()

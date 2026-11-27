@@ -35,8 +35,14 @@ def _git(arg: str) -> str:
         return ""
 
 
-def configure(experiment: str | None = None) -> Path:
-    """Point MLflow at $JAXBORG_EXP_DIR/mlflow.db. Return the db path."""
+def configure(experiment: str | None = None) -> Path | str:
+    """Select the tracking service or the local database used for standalone runs."""
+    uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if uri:
+        mlflow.set_tracking_uri(uri)
+        if experiment:
+            mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME") or experiment)
+        return uri
     exp_dir = _exp_dir()
     exp_dir.mkdir(parents=True, exist_ok=True)
     db_path = exp_dir / "mlflow.db"
@@ -106,8 +112,12 @@ def start_run(
 def attach_eval_metrics(
     train_run_id: str,
     metrics: dict[str, float],
+    *,
+    result: dict[str, Any] | None = None,
 ) -> None:
-    """Append eval metrics to the train run (used by eval_recipe.py)."""
+    """Attach evaluation metrics and the corresponding result to the training run."""
     configure()
     with mlflow.start_run(run_id=train_run_id):
+        if result is not None:
+            mlflow.log_dict(result, f"evaluations/{result['eval_id']}.json")
         mlflow.log_metrics({k: float(v) for k, v in metrics.items()})

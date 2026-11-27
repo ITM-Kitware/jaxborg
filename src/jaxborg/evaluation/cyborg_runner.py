@@ -11,6 +11,7 @@ from __future__ import annotations
 import concurrent.futures
 import multiprocessing as mp
 import os
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -43,11 +44,23 @@ def _pad_obs_mask(obs_dict, info_dict):
     return obs, mask
 
 
-def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, deterministic: bool) -> float:
+def rollout_episode(
+    env,
+    variant: GameVariant,
+    ep_seed: int,
+    agent,
+    *,
+    deterministic: bool,
+    horizon=EPISODE_LENGTH,
+    on_reset=None,
+    on_complete=None,
+) -> float:
     r = reset_cyborg_env(env, variant, ep_seed=ep_seed)
+    if on_reset is not None:
+        on_reset(env, r)
     obs_d, info_d = r.obs, r.info
     total = 0.0
-    for _ in range(EPISODE_LENGTH):
+    for step in range(1, horizon + 1):
         obs, mask = _pad_obs_mask(obs_d, info_d)
         with torch.no_grad():
             obs_t = torch.from_numpy(obs)
@@ -62,18 +75,48 @@ def rollout_episode(env, variant: GameVariant, ep_seed: int, agent, *, determini
         total += float(rew_d[AGENT_IDS[0]])
         if any(term_d.values()) or any(trunc_d.values()):
             break
+    if on_complete is not None:
+        on_complete(total, step)
     return total
 
 
-def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, torch.Tensor]):
+def torch_policy_configuration(recipe: dict[str, Any]) -> dict[str, Any]:
+    """Resolve exactly the factory arguments consumed by the checkpoint loader."""
     arch = recipe["arch"]
-    agent = make_torch_policy(
-        arch["name"],
-        obs_dim=OBS_DIM,
-        action_dim=ACT_DIM,
-        hidden_dim=int(arch.get("hidden_dim", 256)),
-        hidden_layers=int(arch.get("hidden_layers", 2)),
-    )
+    return {
+        "name": arch["name"],
+        "obs_dim": OBS_DIM,
+        "action_dim": ACT_DIM,
+        "hidden_dim": int(arch.get("hidden_dim", 256)),
+        "hidden_layers": int(arch.get("hidden_layers", 2)),
+    }
+
+
+@dataclass(frozen=True)
+class TorchEvaluationSettings:
+    variant: GameVariant
+    policy: dict[str, Any]
+    deterministic: bool
+
+
+def resolve_torch_evaluation_settings(
+    recipe: dict[str, Any], *, deterministic: bool = False, horizon: int | None = None
+) -> TorchEvaluationSettings:
+    """Resolve native evaluation settings using the existing recipe contract."""
+    from jaxborg.recipe import eval_variant
+
+    if not isinstance(deterministic, bool):
+        raise ValueError("deterministic must be a boolean")
+    variant = eval_variant(recipe)
+    if horizon is not None:
+        if isinstance(horizon, bool) or not isinstance(horizon, int) or not 1 <= horizon <= 500:
+            raise ValueError("horizon must be an integer between 1 and 500")
+        variant = replace(variant, num_steps=horizon)
+    return TorchEvaluationSettings(variant, torch_policy_configuration(recipe), deterministic)
+
+
+def load_torch_policy_from_recipe(recipe: dict[str, Any], state_dict: dict[str, torch.Tensor]):
+    agent = make_torch_policy(**torch_policy_configuration(recipe))
     agent.load_state_dict(state_dict)
     agent.eval()
     return agent
@@ -114,6 +157,29 @@ def load_torch_policy(model_path: str | Path):
         }
     agent = load_torch_policy_from_recipe(recipe, state_dict)
     return agent, recipe
+
+
+def run_torch_episodes(
+    model_path, *, variant, episode_seeds, deterministic, policy_seeds, on_policy, on_reset, on_complete
+):
+    """Record serial episodes with an explicit environment seed and policy seed per case."""
+    with torch.random.fork_rng(devices=[]):
+        torch.random.default_generator.manual_seed(policy_seeds[0])
+        policy, recipe = load_torch_policy(model_path)
+        on_policy(policy, recipe)
+        for index, (seed, policy_seed) in enumerate(zip(episode_seeds, policy_seeds, strict=True)):
+            torch.random.default_generator.manual_seed(policy_seed)
+            env = make_cyborg_env(variant, seed, wrapper_class=EnterpriseMAE)
+            rollout_episode(
+                env,
+                variant,
+                seed,
+                policy,
+                deterministic=deterministic,
+                horizon=variant.num_steps,
+                on_reset=lambda env, reset: on_reset(index, seed, env, reset),
+                on_complete=lambda reward, steps: on_complete(index, seed, policy_seed, reward, steps),
+            )
 
 
 def _cyborg_worker(args):

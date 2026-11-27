@@ -46,7 +46,7 @@ if str(_REPO_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from jaxborg.actions.masking import compute_blue_action_mask
-from jaxborg.checkpoint import save_jax_params, write_sidecar
+from jaxborg.checkpoint import JAX_POLICY_FORMAT, save_jax_params, write_sidecar
 from jaxborg.evaluation.jax_env_factory import make_jax_env
 from jaxborg.metrics_schema import make_row
 from jaxborg.mlflow_setup import start_run
@@ -356,7 +356,7 @@ def main():
     print(f"  arch={recipe['arch']['name']} hidden_dim={config['HIDDEN_DIM']}")
     print("=" * 60, flush=True)
 
-    run = start_run(recipe, backend="jax", seed=args.seed)
+    run = start_run(recipe, backend="jax", seed=args.seed, extra_tags={"checkpoint_format": JAX_POLICY_FORMAT})
     train_run_id = run.info.run_id
 
     t0 = time.perf_counter()
