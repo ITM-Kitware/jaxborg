@@ -35,8 +35,14 @@ def _git(arg: str) -> str:
         return ""
 
 
-def configure(experiment: str | None = None) -> Path:
-    """Point MLflow at $JAXBORG_EXP_DIR/mlflow.db. Return the db path."""
+def configure(experiment: str | None = None) -> Path | str:
+    """Select the tracking service or the local database used for standalone runs."""
+    uri = os.environ.get("MLFLOW_TRACKING_URI")
+    if uri:
+        mlflow.set_tracking_uri(uri)
+        if experiment:
+            mlflow.set_experiment(os.environ.get("MLFLOW_EXPERIMENT_NAME") or experiment)
+        return uri
     exp_dir = _exp_dir()
     exp_dir.mkdir(parents=True, exist_ok=True)
     db_path = exp_dir / "mlflow.db"
