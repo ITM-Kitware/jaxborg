@@ -16,7 +16,7 @@ Use these headings. Put the important words first. Aim for one or two sentences 
 | --- | --- |
 | Abstract | Answer the question and give its scope. For ongoing work, state the question and what is pending. |
 | Background and motivation | Link the earlier claim and explain what this comparison resolves. |
-| Methods | Say what changed, what stayed fixed and how performance was measured. Link the full protocol or recipe. |
+| Methods | Name the comparison and how performance was measured. Link the protocol or resolved recipe for settings. |
 | Results | Lead with the difference and comparator. Give completed versus planned independent runs when known. Explain meaningful exclusions and what varies in any interval. Link the selected measurements beside the claim. |
 | Conclusions | State what the finding supports and what remains open for the decision. Put any qualification that changes the meaning of a number beside that number. |
 
@@ -27,6 +27,6 @@ Read the resolved settings and the analyzer. In Jaxborg, check checkpoint and tr
 ## Keep results reproducible
 
 - **In Git** keep the question, protocol, recipe or configuration, analysis code and rebuild command. Put lengthy execution instructions in a linked file when needed.
-- **In shared storage** keep selected checkpoints, resolved settings and per-episode measurements. Retain traces or logs used to support a finding. Link a shared location or MLflow run ID and artifact path, with hashes for selected inputs.
-- **For each reported version** record the producing and analysis revisions and exact input selection. Give a changed selection or calculation a new report, link the prior version and say what changed.
+- **In shared storage** keep selected checkpoints, resolved settings and per-episode measurements. Retain traces or logs used to support a finding. Link the selected run or versioned artifact manifest. Keep filenames, hashes and run settings there.
+- **For each reported version** link the exact input selection and both code revisions, using the run record where available. Give a changed selection or calculation a new report, link the prior version and say what changed.
 - **Before handoff** retrieve the selected inputs in a fresh directory and rebuild one reported value. Disclose any unavailable evidence or unverified result.
